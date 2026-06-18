@@ -259,66 +259,48 @@ export class SourceExecutor {
         const jsonObj = JSON.parse(body) as Record<string, unknown>;
         const results = this.parseJsonResults(jsonObj, source, baseUrl, 0);
         if (results.length > 0) {
-          console.info('[SrcEx] JSON parse OK:', results.length, 'results from', source.sourceName);
+          console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
           return results;
         }
       } catch (_e) { /* not JSON */ }
 
-      // === 第二步：尝试用书源规则提取（CSS/JS） ===
-      if (source.ruleSearchList) {
-        try {
-          const results = this.extractHtmlSearchResults(
-            body, source, baseUrl,
-            source.ruleSearchList,
-            source.ruleSearchName || '',
-            source.ruleSearchAuthor || '',
-            source.ruleSearchCover || '',
-            source.ruleSearchNoteUrl || ''
-          );
-          if (results.length > 0) {
-            console.info('[SrcEx] HTML extract:', results.length, 'results from', source.sourceName);
-            return results;
+      // === 第二步：通用 HTML 书名提取（兼容所有网站，无需 CSS 规则） ===
+      console.info('[SrcEx] Extracting book names from HTML for', source.sourceName);
+      const items = this.extractBookNamesFromHtml(body, baseUrl);
+      if (items.length > 0) {
+        console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName,
+          'first:', items[0].name);
+        return items.map((item, idx: number): SearchResult => {
+          // 提取封面（在链接附近找图片）
+          let coverUrl = '';
+          if (item.url) {
+            const pos = body.indexOf(item.url.replace(baseUrl, ''));
+            const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
+            const ctxEnd = Math.min(body.length, (pos >= 0 ? pos : idx * 200) + 1200);
+            const ctx = body.substring(ctxStart, ctxEnd);
+            const imgM = ctx.match(/<img[^>]*(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["'][^>]*>/i);
+            coverUrl = imgM ? imgM[1] : '';
+            if (!coverUrl) {
+              const bgM = ctx.match(/background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
+              coverUrl = bgM ? bgM[1] : '';
+            }
+            if (coverUrl && !coverUrl.startsWith('http')) {
+              coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
+            }
           }
-        } catch (_e) {
-          console.warn('[SrcEx] HTML extract error:', (_e as Error).message);
-        }
+          return {
+            key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
+            name: item.name, author: '',
+            coverUrl: coverUrl || '', noteUrl: item.url || '',
+            origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
+            kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
+            duration: 0, searchTime: Date.now(),
+            sourceCount: 1, sourceOrigins: [],
+          };
+        });
       }
 
-      // === 第三步：通用模式匹配（兼容所有 HTML 网站） ===
-      {
-        const items = this.extractBookNamesFromHtml(body, baseUrl);
-        if (items.length > 0) {
-          console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
-          return items.map((item, idx: number): SearchResult => {
-            let coverUrl = '';
-            if (item.url) {
-              const pos = body.indexOf(item.url.replace(baseUrl, ''));
-              const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
-              const ctxEnd = Math.min(body.length, (pos >= 0 ? pos : idx * 200) + 1200);
-              const ctx = body.substring(ctxStart, ctxEnd);
-              const imgM = ctx.match(/<img[^>]*(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["'][^>]*>/i);
-              coverUrl = imgM ? imgM[1] : '';
-              if (!coverUrl) {
-                const bgM = ctx.match(/background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
-                coverUrl = bgM ? bgM[1] : '';
-              }
-              if (coverUrl && !coverUrl.startsWith('http')) {
-                coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
-              }
-            }
-            return {
-              key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
-              name: item.name, author: '',
-              coverUrl: coverUrl || '', noteUrl: item.url || '',
-              origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
-              kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
-              duration: 0, searchTime: Date.now(),
-              sourceCount: 1, sourceOrigins: [],
-            };
-          });
-        }
-      }
-      console.warn('[SrcEx] No parse method worked for', source.sourceName);
+      console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', body.length);
       return [];
     } catch (err) {
       const msg = (err as Error).message;
