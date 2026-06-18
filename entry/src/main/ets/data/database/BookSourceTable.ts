@@ -44,6 +44,7 @@ export const BookSourceTableCreate = `
     rule_review TEXT DEFAULT '',
     script TEXT DEFAULT '',
     header TEXT DEFAULT '',
+    raw_json TEXT DEFAULT '',
     create_time INTEGER DEFAULT 0,
     update_time INTEGER DEFAULT 0
   );
@@ -115,7 +116,9 @@ export class BookSourceTable {
     let count = 0;
     for (let i = 0; i < sources.length; i++) {
       const s = sources[i];
+      const rawJson = JSON.stringify(s); // 保存原始 JSON 用于后续重新解析
       const source = parseBookSource(s);
+      setSourceRawJson(source, rawJson);
       // 去重
       const exists = await this.getSourceByUrl(source.sourceUrl);
       if (exists) {
@@ -250,7 +253,7 @@ export class BookSourceTable {
   private toSources(rs: relationalStore.ResultSet): BookSource[] {
     const sources: BookSource[] = [];
     while (rs.goToNextRow()) {
-      sources.push({
+      let source: BookSource = {
         id: rs.getLong(rs.getColumnIndex('id')),
         sourceName: rs.getString(rs.getColumnIndex('source_name')) || '',
         sourceUrl: rs.getString(rs.getColumnIndex('source_url')) || '',
@@ -291,7 +294,28 @@ export class BookSourceTable {
         header: rs.getString(rs.getColumnIndex('header')) || '',
         createTime: rs.getLong(rs.getColumnIndex('create_time')),
         updateTime: rs.getLong(rs.getColumnIndex('update_time')),
-      });
+      };
+
+      // 如果平铺规则为空，尝试从 raw_json 重新解析嵌套格式
+      if (!source.ruleSearchList && !source.ruleSearchName) {
+        const rawJson = rs.getString(rs.getColumnIndex('raw_json')) || '';
+        if (rawJson) {
+          try {
+            const parsed = JSON.parse(rawJson);
+            const fixed = parseBookSource(parsed);
+            if (fixed.ruleSearchList) {
+              source.ruleSearchList = fixed.ruleSearchList;
+              source.ruleSearchName = fixed.ruleSearchName;
+              source.ruleSearchAuthor = fixed.ruleSearchAuthor;
+              source.ruleSearchCover = fixed.ruleSearchCover;
+              source.ruleSearchNoteUrl = fixed.ruleSearchNoteUrl;
+              source.ruleSearchUrl = source.ruleSearchUrl || fixed.ruleSearchUrl;
+            }
+          } catch (_e) { /* ignore parse errors */ }
+        }
+      }
+
+      sources.push(source);
     }
     rs.close();
     return sources;
@@ -336,8 +360,13 @@ export class BookSourceTable {
       'rule_review': source.ruleReview,
       'script': source.script,
       'header': source.header,
+      'raw_json': (source as any).rawJson || '',
       'create_time': source.createTime,
       'update_time': source.updateTime,
     };
   }
+}
+
+export function setSourceRawJson(source: BookSource, rawJson: string): void {
+  (source as any).rawJson = rawJson;
 }
