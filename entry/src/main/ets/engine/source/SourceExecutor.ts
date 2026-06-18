@@ -579,7 +579,12 @@ export class SourceExecutor {
 
     // 用 ruleSearchList 查找结果列表
     const items = parser.querySelectorAll(doc, source.ruleSearchList);
-    if (!items || items.length === 0) return [];
+    if (!items || items.length === 0) {
+      console.info('[SrcEx] CSS list rule found 0 items for', source.sourceName,
+        'rule:', source.ruleSearchList);
+      return [];
+    }
+    console.info('[SrcEx] CSS list rule found', items.length, 'items for', source.sourceName);
 
     const results: SearchResult[] = [];
     const nameRule = source.ruleSearchName || '';
@@ -614,6 +619,10 @@ export class SourceExecutor {
       let author = '';
       if (authorRule) {
         author = parser.extractAttr(item, authorRule);
+      }
+      if (!author && idx === 0) {
+        console.info('[SrcEx] Author not found for', source.sourceName,
+          'authorRule:', authorRule);
       }
 
       // 封面
