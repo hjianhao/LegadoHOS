@@ -112,25 +112,36 @@ export class SourceExecutor {
             // 拷贝一份新数组，避免原地修改
             sourceOrigins: [...existing.sourceOrigins],
           };
-          // 将新源合并到新对象的 sourceOrigins（如已有则跳过）
-          if (r.origin && !merged.sourceOrigins.includes(r.origin)) {
-            merged.sourceOrigins.push(r.origin);
-            merged.sourceCount = merged.sourceOrigins.length;
+          // ★ 用 originUrl（书源 URL，永远唯一）做去重判断
+          //    origin（书源名称）可能为空导致多个源均为 '未知'
+          if (r.originUrl && !merged.sourceOrigins.some(s => s.startsWith('__url@' + r.originUrl))) {
+            // 存 URL 标记用于后续去重
+            merged.sourceOrigins.push('__url@' + r.originUrl);
+            // 存可读的书源名（用于 Toast 展示）
+            if (r.origin) {
+              merged.sourceOrigins.push(r.origin);
+            }
+            merged.sourceCount = merged.sourceOrigins.filter(s => !s.startsWith('__url@')).length;
           }
           // 用新对象替换 Map 中的旧对象
           mergedMap.set(key, merged);
-          console.info('[SrcEx] Merged source:', r.origin, 'into', merged.name,
-            'sources:', merged.sourceOrigins.join(','));
+          if (merged.sourceCount > 1) {
+            console.info('[SrcEx] Merged source:', r.origin || r.originUrl, 'into', merged.name,
+              'count:', merged.sourceCount);
+          }
         } else {
           mergedMap.set(key, {
             key: r.key, name: r.name, author: r.author,
             coverUrl: r.coverUrl, noteUrl: r.noteUrl,
-            origin: r.origin, originUrl: r.originUrl,
+            origin: r.origin || '', originUrl: r.originUrl || '',
             kind: r.kind, wordCount: r.wordCount, lastUpdateTime: r.lastUpdateTime,
             introduce: r.introduce, helperMsg: r.helperMsg,
             duration: r.duration, searchTime: r.searchTime,
             sourceCount: 1,
-            sourceOrigins: r.origin ? [r.origin] : []
+            // 初始条目：存 URL 标记 + 可读名称
+            sourceOrigins: (r.originUrl ? ['__url@' + r.originUrl] : []).concat(
+              r.origin ? [r.origin] : []
+            ),
           });
         }
       }
