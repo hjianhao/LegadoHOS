@@ -11,6 +11,7 @@ import { getPolyfillScript, buildRuleExecutorScriptWithHtml } from './ScriptApi'
 import { RuleParser } from './RuleParser';
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
+import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
 
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
@@ -264,12 +265,24 @@ export class SourceExecutor {
         }
       } catch (_e) { /* not JSON */ }
 
-      // === 第二步：通用 HTML 书名提取（兼容所有网站，无需 CSS 规则） ===
-      console.info('[SrcEx] Extracting book names from HTML for', source.sourceName);
+      // === 第二步：用 HtmlParser + CSS 选择器提取（使用书源规则） ===
+      if (source.ruleSearchList) {
+        try {
+          const results = this.extractWithParser(body, source, baseUrl);
+          if (results.length > 0) {
+            console.info('[SrcEx] Parser CSS:', results.length, 'from', source.sourceName);
+            return results;
+          }
+        } catch (_e) {
+          console.warn('[SrcEx] Parser error:', (_e as Error).message);
+        }
+      }
+
+      // === 第三步：通用 HTML 书名提取（兜底） ===
+      console.info('[SrcEx] Fallback extract for', source.sourceName);
       const items = this.extractBookNamesFromHtml(body, baseUrl);
       if (items.length > 0) {
-        console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName,
-          'first:', items[0].name);
+        console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
         return items.map((item, idx: number): SearchResult => {
           // 提取封面（在链接附近找图片）
           let coverUrl = '';
@@ -457,6 +470,104 @@ export class SourceExecutor {
       source.ruleBookContent || '',
     );
     await globalScriptEngine.loadSourceScript(wrapperScript);
+  }
+
+  // ============ HtmlParser + CSS 选择器提取 ============
+
+  /**
+   * 使用 HtmlParser 解析 HTML，通过 CSS 选择器提取搜索结果
+   * 替代之前损坏的 RuleParser 和正则方案
+   */
+  private extractWithParser(body: string, source: BookSource, baseUrl: string): SearchResult[] {
+    if (!body || !source.ruleSearchList) return [];
+
+    const parser = getHtmlParser();
+    const doc = parser.parse(body);
+
+    // 用 ruleSearchList 查找结果列表
+    const items = parser.querySelectorAll(doc, source.ruleSearchList);
+    if (!items || items.length === 0) return [];
+
+    const results: SearchResult[] = [];
+    const nameRule = source.ruleSearchName || '';
+    const authorRule = source.ruleSearchAuthor || '';
+    const coverRule = source.ruleSearchCover || '';
+    const noteUrlRule = source.ruleSearchNoteUrl || '';
+
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      if (!item) continue;
+
+      // 提取字段
+      let name = '';
+      if (nameRule) {
+        name = parser.extractAttr(item, nameRule);
+      }
+
+      // 书名兜底：取元素内的第一个 <a> 文本
+      if (!name) {
+        const links = parser.querySelectorAll(item, 'a');
+        if (links.length > 0) {
+          name = links[0].text.trim();
+        }
+      }
+      // 再兜底：取元素自身文本
+      if (!name) {
+        name = item.text.trim();
+      }
+      if (!name || name.length < 1) continue;
+
+      // 作者
+      let author = '';
+      if (authorRule) {
+        author = parser.extractAttr(item, authorRule);
+      }
+
+      // 封面
+      let coverUrl = '';
+      if (coverRule) {
+        coverUrl = parser.extractAttr(item, coverRule);
+      }
+      if (!coverUrl) {
+        // 取第一个图片
+        const imgs = parser.querySelectorAll(item, 'img');
+        if (imgs.length > 0) {
+          coverUrl = parser.getAttr(imgs[0], 'src') || parser.getAttr(imgs[0], 'data-src') || '';
+        }
+      }
+
+      // 详情页 URL
+      let noteUrl = '';
+      if (noteUrlRule) {
+        noteUrl = parser.extractAttr(item, noteUrlRule);
+      }
+      if (!noteUrl) {
+        const links = parser.querySelectorAll(item, 'a');
+        if (links.length > 0) {
+          noteUrl = parser.getAttr(links[0], 'href') || '';
+        }
+      }
+
+      // 相对路径转绝对
+      if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
+        noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+      }
+      if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
+        coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
+      }
+
+      results.push({
+        key: (source.sourceUrl || '') + '|' + noteUrl + '|' + idx,
+        name: name, author: author || '',
+        coverUrl: coverUrl || '', noteUrl: noteUrl || '',
+        origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
+        kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
+        duration: 0, searchTime: Date.now(),
+        sourceCount: 1, sourceOrigins: [],
+      });
+    }
+
+    return results;
   }
 
   // ============ JSON 解析 ============
