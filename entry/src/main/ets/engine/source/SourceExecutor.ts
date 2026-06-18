@@ -90,23 +90,37 @@ export class SourceExecutor {
         const key = getBookMergeKey(r.name, r.author);
         const existing = mergedMap.get(key);
         if (existing) {
-          // 合并来源列表（去重）
-          if (r.origin && !existing.sourceOrigins.includes(r.origin)) {
-            existing.sourceOrigins.push(r.origin);
-            existing.sourceCount = existing.sourceOrigins.length;
+          // ★ 创建新对象而非原地修改，确保 ArkUI ForEach 检测到引用变化
+          //    参考 legado-with-MD3 的 upsertBooks 模式
+          const merged: SearchResult = {
+            key: existing.key,
+            name: existing.name,
+            author: existing.author,
+            coverUrl: existing.coverUrl || r.coverUrl,
+            noteUrl: existing.noteUrl || r.noteUrl,
+            origin: existing.origin,      // 保留第一个源的显示名
+            originUrl: existing.originUrl,
+            kind: existing.kind || r.kind,
+            wordCount: existing.wordCount || r.wordCount,
+            lastUpdateTime: existing.lastUpdateTime || r.lastUpdateTime,
+            introduce: (r.introduce || '').length > (existing.introduce || '').length
+              ? r.introduce : existing.introduce,
+            helperMsg: existing.helperMsg || r.helperMsg,
+            duration: existing.duration,
+            searchTime: existing.searchTime,
+            sourceCount: existing.sourceCount,
+            // 拷贝一份新数组，避免原地修改
+            sourceOrigins: [...existing.sourceOrigins],
+          };
+          // 将新源合并到新对象的 sourceOrigins（如已有则跳过）
+          if (r.origin && !merged.sourceOrigins.includes(r.origin)) {
+            merged.sourceOrigins.push(r.origin);
+            merged.sourceCount = merged.sourceOrigins.length;
           }
-          // 保留更完整的封面
-          if (!existing.coverUrl && r.coverUrl) {
-            existing.coverUrl = r.coverUrl;
-          }
-          // 保留更长简介
-          if ((r.introduce || '').length > (existing.introduce || '').length) {
-            existing.introduce = r.introduce;
-          }
-          // 保留非空 lastUpdateTime
-          if (r.lastUpdateTime && !existing.lastUpdateTime) {
-            existing.lastUpdateTime = r.lastUpdateTime;
-          }
+          // 用新对象替换 Map 中的旧对象
+          mergedMap.set(key, merged);
+          console.info('[SrcEx] Merged source:', r.origin, 'into', merged.name,
+            'sources:', merged.sourceOrigins.join(','));
         } else {
           mergedMap.set(key, {
             key: r.key, name: r.name, author: r.author,
