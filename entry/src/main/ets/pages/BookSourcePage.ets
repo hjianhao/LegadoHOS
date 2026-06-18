@@ -72,7 +72,7 @@ export struct BookSourcePage {
   @State sortMode: SortMode = SortMode.WEIGHT;
   @State sortAsc: boolean = false;
   @State showManage: boolean = false;
-  @State selectedIds: Set<number> = new Set();
+  @State selectedIds: number[] = [];
   @State groups: string[] = [];
   @State activeGroup: string = '';
   @State showGroupManage: boolean = false;
@@ -155,7 +155,7 @@ export struct BookSourcePage {
   onSearchChange(value: string): void {
     this.searchText = value;
     this.applyFilters();
-    this.selectedIds.clear();
+    this.selectedIds = [];
   }
 
   onFilterChange(filter: SourceFilter): void {
@@ -187,21 +187,21 @@ export struct BookSourcePage {
   }
 
   toggleSelect(id: number): void {
-    if (this.selectedIds.has(id)) {
-      this.selectedIds.delete(id);
+    const idx = this.selectedIds.indexOf(id);
+    if (idx >= 0) {
+      this.selectedIds.splice(idx, 1);
     } else {
-      this.selectedIds.add(id);
+      this.selectedIds.push(id);
     }
-    this.selectedIds = new Set(this.selectedIds);
+    this.selectedIds = [...this.selectedIds];
   }
 
   selectAll(): void {
-    if (this.selectedIds.size === this.filteredSources.length) {
-      this.selectedIds.clear();
+    if (this.selectedIds.length === this.filteredSources.length) {
+      this.selectedIds = [];
     } else {
-      this.selectedIds = new Set(this.filteredSources.map(s => s.id));
+      this.selectedIds = this.filteredSources.map(s => s.id);
     }
-    this.selectedIds = new Set(this.selectedIds);
   }
 
   async toggleSourceEnabled(source: BookSource): Promise<void> {
@@ -218,8 +218,8 @@ export struct BookSourcePage {
     try {
       const db = AppDatabase.getInstance().rdbStore;
       const dao = new BookSourceTable(db);
-      await dao.batchSetEnabled(Array.from(this.selectedIds), enabled);
-      this.selectedIds.clear();
+      await dao.batchSetEnabled(this.selectedIds, enabled);
+      this.selectedIds = [];
       this.loadSources();
       promptAction.showToast({ message: enabled ? '已启用' : '已禁用', duration: 1500 });
     } catch (_e) { /* ignore */ }
@@ -228,7 +228,7 @@ export struct BookSourcePage {
   async batchDelete(): Promise<void> {
     AlertDialog.show({
       title: '批量删除',
-      message: '确定删除选中的 ' + this.selectedIds.size + ' 个书源？',
+      message: '确定删除选中的 ' + this.selectedIds.length + ' 个书源？',
       primaryButton: {
         value: '取消', action: (): void => {}
       },
@@ -238,8 +238,8 @@ export struct BookSourcePage {
           try {
             const db = AppDatabase.getInstance().rdbStore;
             const dao = new BookSourceTable(db);
-            await dao.batchDelete(Array.from(this.selectedIds));
-            this.selectedIds.clear();
+            await dao.batchDelete(this.selectedIds);
+            this.selectedIds = [];
             this.loadSources();
             promptAction.showToast({ message: '已删除', duration: 1500 });
           } catch (_e) { /* ignore */ }
@@ -460,13 +460,13 @@ export struct BookSourcePage {
       if (this.showManage) {
         Row() {
           Button() {
-            Text(this.selectedIds.size === this.filteredSources.length ? '取消全选' : '全选')
+            Text(this.selectedIds.length === this.filteredSources.length ? '取消全选' : '全选')
               .fontSize(12).fontColor('#0078D7')
           }.height(28).backgroundColor('transparent')
           .onClick(() => { this.selectAll(); })
 
-          if (this.selectedIds.size > 0) {
-            Text(this.selectedIds.size + ' 选中').fontSize(12).fontColor('#888').margin({ left: 8 })
+          if (this.selectedIds.length > 0) {
+            Text(this.selectedIds.length + ' 选中').fontSize(12).fontColor('#888').margin({ left: 8 })
 
             Button('启用').fontSize(12).height(28)
               .backgroundColor('#4CAF50').fontColor('#FFF').borderRadius(14)
@@ -523,7 +523,7 @@ export struct BookSourcePage {
       // 选择框（管理模式下）
       if (this.showManage) {
         Checkbox()
-          .select(this.selectedIds.has(source.id))
+          .select(this.selectedIds.includes(source.id))
           .onChange(() => { this.toggleSelect(source.id); })
           .margin({ right: 8 })
       }
