@@ -221,10 +221,10 @@ export struct ExplorePage {
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(item.author || '未知作者').fontSize(12).fontColor('#888')
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
-                  // 来源行：书源名 + 来源计数
+                  // 来源行：书源名 + 来源计数（始终显示）
                   Row() {
                     Text(item.origin).fontSize(11).fontColor('#AAA')
-                    if (item.sourceCount > 1) {
+                    if (item.sourceCount >= 1) {
                       Text(item.sourceCount + '个源').fontSize(10).fontColor('#FFF')
                         .padding({ left: 4, right: 4, top: 1, bottom: 1 })
                         .backgroundColor('#5C6BC0').borderRadius(4)
@@ -232,7 +232,7 @@ export struct ExplorePage {
                         .onClick(() => {
                           const sources = item.sourceOrigins.join(', ');
                           promptAction.showToast({
-                            message: '来源: ' + sources,
+                            message: '来源: ' + (sources || item.origin),
                             duration: 3000
                           });
                         })
