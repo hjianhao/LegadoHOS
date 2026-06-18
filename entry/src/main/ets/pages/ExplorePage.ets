@@ -82,11 +82,18 @@ export struct ExplorePage {
     const searchPromise = globalSourceExecutor.search(
       this.keyword, searchable,
       (merged: SearchResult[], processed: number, total: number) => {
+        // 调试：检查合并结果中的来源计数
+        if (merged.length > 0) {
+          const maxSrc = Math.max(...merged.map(r => r.sourceCount));
+          if (maxSrc > 1) {
+            console.info('[Explore] MERGED: max sourceCount=' + maxSrc,
+              'book=', merged.find(r => r.sourceCount > 1)?.name);
+          }
+        }
         this.results = merged;
         this.searchProcessed = processed;
         this.searchTotal = total;
         this.searchProgress = '正在搜索 ' + processed + '/' + total + ' 个书源';
-        console.info('[Explore] Progress:', processed + '/' + total, 'results:', merged.length);
       }
     );
 

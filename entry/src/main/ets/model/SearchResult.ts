@@ -39,10 +39,34 @@ export interface SearchResult {
 /**
  * 获取书籍合并键（用于去重）
  * 相同 书名+作者 视为同一本书
+ *
+ * 归一化处理（兼容多书源对同一本书的不同命名）：
+ * 1. 移除括号内内容：（）、【】、[]、《》、「」
+ * 2. 移除常见后缀：全集、全本、全文、正文、完整版、精校版
+ * 3. 移除所有空白字符
+ * 4. 转小写、截断
  */
 export function getBookMergeKey(name: string, author: string): string {
-  const n = name.replace(/[\s·・]/g, '').substring(0, 20).toLowerCase();
-  const a = (author || '').replace(/[\s·・]/g, '').substring(0, 10).toLowerCase();
+  let n = (name || '').toLowerCase();
+  let a = (author || '').toLowerCase();
+
+  // 1. 移除成对括号及其内容
+  n = n.replace(/[（(【\[][^）)】\]]*[）)】\]]/g, '');
+  n = n.replace(/[《〈「『][^》〉」』]*[》〉」』]/g, '');
+  // 移除残余的单个括号字符
+  n = n.replace(/[（(）)【】\[\]《》〈〉「」『』]/g, '');
+
+  // 2. 移除常见后缀
+  n = n.replace(/[（(]?(全集|全本|全文|正文|完整版|精校版|精修版|无删减|未删减|插图版|珍藏版|修订版)[）)]?$/g, '');
+
+  // 3. 移除所有空白和特殊字符
+  n = n.replace(/[\s·・•:：,，。！？、…—\-_~～]+/g, '');
+  a = a.replace(/[\s·・•:：,，。！？、…—\-_~～]+/g, '');
+
+  // 4. 截断
+  n = n.substring(0, 20);
+  a = a.substring(0, 10);
+
   return n + '|' + a;
 }
 
