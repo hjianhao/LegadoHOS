@@ -142,6 +142,8 @@ function toRuleString(val: unknown): string {
  * 兼容 Legado 书源 JSON 格式的多种字段名
  */
 export function parseBookSource(json: any): BookSource {
+  // 兼容嵌套格式: ruleSearch.bookList 或 ruleSearchList
+  const rs = json.ruleSearch || {};
   return {
     id: json.id || 0,
     sourceName: json.sourceName || json.bookSourceName || '',
@@ -152,16 +154,16 @@ export function parseBookSource(json: any): BookSource {
     weight: json.weight || 0,
     customOrder: json.customOrder || 0,
     // 兼容多种搜索URL字段名
-    ruleSearchUrl: toRuleString(json.ruleSearchUrl || json.searchUrl || json.search_url || ''),
-    ruleSearchList: toRuleString(json.ruleSearchList || json.searchList || json.search_list || ''),
-    ruleSearchName: toRuleString(json.ruleSearchName),
-    ruleSearchAuthor: toRuleString(json.ruleSearchAuthor),
-    ruleSearchCover: toRuleString(json.ruleSearchCover),
-    ruleSearchNoteUrl: toRuleString(json.ruleSearchNoteUrl),
-    ruleSearchKind: toRuleString(json.ruleSearchKind),
-    ruleSearchWordCount: toRuleString(json.ruleSearchWordCount),
-    ruleSearchLastUpdateTime: toRuleString(json.ruleSearchLastUpdateTime),
-    ruleSearchIntroduce: toRuleString(json.ruleSearchIntroduce),
+    ruleSearchUrl: toRuleString(json.ruleSearchUrl || rs.searchUrl || json.searchUrl || json.search_url || ''),
+    ruleSearchList: toRuleString(json.ruleSearchList || rs.bookList || json.searchList || json.search_list || ''),
+    ruleSearchName: toRuleString(json.ruleSearchName || rs.name || ''),
+    ruleSearchAuthor: toRuleString(json.ruleSearchAuthor || rs.author || ''),
+    ruleSearchCover: toRuleString(json.ruleSearchCover || rs.coverUrl || ''),
+    ruleSearchNoteUrl: toRuleString(json.ruleSearchNoteUrl || rs.bookUrl || ''),
+    ruleSearchKind: toRuleString(json.ruleSearchKind || rs.kind || ''),
+    ruleSearchWordCount: toRuleString(json.ruleSearchWordCount || rs.wordCount || ''),
+    ruleSearchLastUpdateTime: toRuleString(json.ruleSearchLastUpdateTime || rs.lastUpdateTime || ''),
+    ruleSearchIntroduce: toRuleString(json.ruleSearchIntroduce || rs.intro || rs.introduce || ''),
     ruleBookInfoInit: toRuleString(json.ruleBookInfoInit),
     ruleBookInfoName: toRuleString(json.ruleBookInfoName),
     ruleBookInfoAuthor: toRuleString(json.ruleBookInfoAuthor),
