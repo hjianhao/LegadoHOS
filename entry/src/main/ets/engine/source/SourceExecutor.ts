@@ -40,13 +40,24 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     url = url.replace(pageGroupMatch[0], items[idx].trim());
   }
 
-  // 处理 URL 末尾的 JSON 选项: url,{"method":"POST","body":"..."}
+  // 处理 URL 末尾的 JSON 选项: url,{"method":"POST","body":"..."} 或 url{"method":"POST",...}
   let method = 'GET';
   let body = '';
   let charset = '';
-  const jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{.*\})$/);
+
+  // 先尝试匹配带逗号的: url,{...}
+  let jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{.*\})$/);
+  if (!jsonOptMatch) {
+    // 再尝试不用逗号的: url{...}（某些源省略了逗号）
+    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)(\{.*\})$/);
+  }
+  if (!jsonOptMatch) {
+    // 最后尝试: url#xxx{...} (有 # 选择器后跟 JSON)
+    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)#[^,]*?,?(\{.*\})$/);
+  }
+
   if (jsonOptMatch) {
-    url = jsonOptMatch[1];
+    url = jsonOptMatch[1].replace(/#.*$/, ''); // 去掉 # 选择器部分
     try {
       const opts = JSON.parse(jsonOptMatch[2]);
       if (opts.method) method = opts.method.toUpperCase();
