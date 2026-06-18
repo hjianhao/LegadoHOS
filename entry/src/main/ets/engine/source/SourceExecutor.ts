@@ -127,15 +127,20 @@ export class SourceExecutor {
     const seenUrlsByKey = new Map<string, Set<string>>();
 
     /**
-     * 格式化书名：移除 "作者:XXX"、"XX 著" 等噪声
+     * 格式化书名：移除 "作者:XXX"、"XX 著"、"最新章节" 等噪声
      * 参考 legado-with-MD3 BookHelp.formatBookName()
      */
     function formatBookName(raw: string): string {
-      return raw
+      let n = raw
         .replace(/\s+作\s*者[:：\s].*$/g, '')
         .replace(/\s+\S+\s+著\s*$/g, '')
         .replace(/[-—·・][\s]*作\s*者[:：\s].*$/g, '')
         .trim();
+      // 移除 "最新章节" / "最后更新" / "今日更新" 及后续内容
+      n = n.replace(/(最新章节|最后更新|今日更新).*$/g, '');
+      // 移除开头结尾的 《》『』""「」
+      n = n.replace(/^[《『""「」''【[（(]+|[》』""「」''】\])）]+$/g, '');
+      return n.trim();
     }
 
     /**
@@ -338,6 +343,40 @@ export class SourceExecutor {
       if (items.length > 0) {
         console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
         return items.map((item, idx: number): SearchResult => {
+          // 从书名中分离作者（常见格式: "书名 作者：XXX"）
+          let name = item.name;
+          let author = '';
+
+          // 尝试从书名文本中提取作者
+          const authorMatch = name.match(/^(.+?)[\s]*[-—·・][\s]*作\s*者[:：\s](.+)$/);
+          if (authorMatch) {
+            name = authorMatch[1].trim();
+            author = authorMatch[2].trim();
+          } else {
+            const simpleMatch = name.match(/^(.+?)[\s]+([\u4e00-\u9fff]{2,4})$/);
+            if (simpleMatch) {
+              // 仅当末尾2-4字看起来像中文名（非书名后缀）才分割
+              const potentialAuthor = simpleMatch[2];
+              if (!/^(全集|全本|全文|正文|完整版|精校版)$/.test(potentialAuthor)) {
+                name = simpleMatch[1].trim();
+                author = potentialAuthor;
+              }
+            }
+          }
+
+          // 尝试从链接上下文提取作者
+          if (!author && item.url) {
+            const pos = bodyText.indexOf(item.url.replace(baseUrl, ''));
+            if (pos >= 0) {
+              const ctxStart = Math.max(0, pos - 200);
+              const ctx = bodyText.substring(ctxStart, pos + 100);
+              // 匹配 "作者：XXX" 或 "/XXX" 等模式（在链接附近）
+              const nearbyAuthor = ctx.match(/作\s*者[：:]\s*([^\s<&]{2,8})/);
+              if (nearbyAuthor) {
+                author = nearbyAuthor[1].trim();
+              }
+            }
+          }
           // 提取封面（在链接附近找图片）
           let coverUrl = '';
           if (item.url) {
@@ -357,7 +396,7 @@ export class SourceExecutor {
           }
           return {
             key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
-            name: item.name, author: '',
+            name: name || item.name, author: author || '',
             coverUrl: coverUrl || '', noteUrl: item.url || '',
             origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
             kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
