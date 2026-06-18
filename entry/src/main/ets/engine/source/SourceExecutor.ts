@@ -18,7 +18,7 @@ function getBaseUrl(rawUrl: string): string {
   return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
 }
 
-function buildUrl(template: string, keyword: string, page: number, baseUrl: string): string {
+function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string } {
   const encoded = encodeURIComponent(keyword);
   let url = template
     .replace(/\{\{key\}\}/g, encoded)
@@ -27,18 +27,46 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     .replace(/\{\{pageNum\}\}/g, String(page + 1));
   // 移除剩余未处理的 {{}} JS 表达式
   url = url.replace(/\{\{[^}]*\}\}/g, '');
+
+  // 处理 <js>...</js> 和 @js: — 移除（无法执行 JS 时只能兜底）
+  url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
+  url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
+
+  // 处理页码分组 <选项1,选项2,...>
   const pageGroupMatch = url.match(/<([^<>]+)>/);
   if (pageGroupMatch) {
     const items = pageGroupMatch[1].split(',');
     const idx = Math.min(page - 1, items.length - 1);
     url = url.replace(pageGroupMatch[0], items[idx].trim());
   }
+
+  // 处理 URL 末尾的 JSON 选项: url,{"method":"POST","body":"..."}
+  let method = 'GET';
+  let body = '';
+  let charset = '';
+  const jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{.*\})$/);
+  if (jsonOptMatch) {
+    url = jsonOptMatch[1];
+    try {
+      const opts = JSON.parse(jsonOptMatch[2]);
+      if (opts.method) method = opts.method.toUpperCase();
+      if (opts.body) body = opts.body
+        .replace(/\{\{key\}\}/g, encoded)
+        .replace(/\{\{keyword\}\}/g, encoded)
+        .replace(/\{\{page\}\}/g, String(page));
+      if (opts.charset) charset = opts.charset;
+    } catch (_e) { /* ignore parse errors */ }
+  }
+
   // 相对路径处理
   if (!url.startsWith('http://') && !url.startsWith('https://') && baseUrl) {
     const base = baseUrl.replace(/\/+$/, '');
     url = base + (url.startsWith('/') ? url : '/' + url);
   }
-  return url;
+  // 清理多余的空白
+  url = url.trim();
+
+  return { url, method, body, charset };
 }
 
 function parseHeader(headerStr: string): Record<string, string> {
@@ -239,7 +267,12 @@ export class SourceExecutor {
   private async searchSingle(keyword: string, source: BookSource): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     const baseUrl = getBaseUrl(source.sourceUrl);
-    const url = buildUrl(source.ruleSearchUrl, keyword, 1, baseUrl);
+    const { url, method, body, charset } = buildUrl(source.ruleSearchUrl, keyword, 1, baseUrl);
+
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      console.warn('[SrcEx] Invalid URL for', source.sourceName, ':', url);
+      return [];
+    }
 
     try {
       const headers: Record<string, string> = {
@@ -247,17 +280,27 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      console.info('[SrcEx] Fetching:', url.substring(0, 80));
-      const body = await NetUtil.httpGet(url, headers);
-      if (!body) {
+      if (charset) {
+        headers['Accept-Charset'] = charset;
+      }
+
+      console.info('[SrcEx] Fetching:', (method || 'GET'), url.substring(0, 80));
+
+      let bodyText = '';
+      if (method === 'POST') {
+        bodyText = await NetUtil.httpPost(url, body || '', headers);
+      } else {
+        bodyText = await NetUtil.httpGet(url, headers);
+      }
+      if (!bodyText) {
         console.warn('[SrcEx] Empty response from', source.sourceName);
         return [];
       }
-      console.info('[SrcEx] Got', body.length, 'bytes from', source.sourceName);
+      console.info('[SrcEx] Got', bodyText.length, 'bytes from', source.sourceName);
 
       // === 第一步：JSON 直接解析（API 类书源） ===
       try {
-        const jsonObj = JSON.parse(body) as Record<string, unknown>;
+        const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
         const results = this.parseJsonResults(jsonObj, source, baseUrl, 0);
         if (results.length > 0) {
           console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
@@ -268,7 +311,7 @@ export class SourceExecutor {
       // === 第二步：用 HtmlParser + CSS 选择器提取（使用书源规则） ===
       if (source.ruleSearchList) {
         try {
-          const results = this.extractWithParser(body, source, baseUrl);
+          const results = this.extractWithParser(bodyText, source, baseUrl);
           if (results.length > 0) {
             console.info('[SrcEx] Parser CSS:', results.length, 'from', source.sourceName);
             return results;
@@ -280,17 +323,17 @@ export class SourceExecutor {
 
       // === 第三步：通用 HTML 书名提取（兜底） ===
       console.info('[SrcEx] Fallback extract for', source.sourceName);
-      const items = this.extractBookNamesFromHtml(body, baseUrl);
+      const items = this.extractBookNamesFromHtml(bodyText, baseUrl);
       if (items.length > 0) {
         console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
         return items.map((item, idx: number): SearchResult => {
           // 提取封面（在链接附近找图片）
           let coverUrl = '';
           if (item.url) {
-            const pos = body.indexOf(item.url.replace(baseUrl, ''));
+            const pos = bodyText.indexOf(item.url.replace(baseUrl, ''));
             const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
-            const ctxEnd = Math.min(body.length, (pos >= 0 ? pos : idx * 200) + 1200);
-            const ctx = body.substring(ctxStart, ctxEnd);
+            const ctxEnd = Math.min(bodyText.length, (pos >= 0 ? pos : idx * 200) + 1200);
+            const ctx = bodyText.substring(ctxStart, ctxEnd);
             const imgM = ctx.match(/<img[^>]*(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["'][^>]*>/i);
             coverUrl = imgM ? imgM[1] : '';
             if (!coverUrl) {
@@ -313,7 +356,7 @@ export class SourceExecutor {
         });
       }
 
-      console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', body.length);
+      console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', bodyText.length);
       return [];
     } catch (err) {
       const msg = (err as Error).message;
