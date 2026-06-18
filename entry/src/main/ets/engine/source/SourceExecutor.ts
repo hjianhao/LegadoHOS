@@ -274,18 +274,19 @@ export class SourceExecutor {
         }
       } catch (_e) { /* not JSON */ }
 
-      // JS 规则解析（可能 QuickJS 不可用，走直接解析）
+      // HTML 搜索结果提取（使用改进的 CSS 选择器实现）
       if (source.ruleSearchList) {
-        console.info('[SrcEx] Direct HTML parse for', source.sourceName);
-        const results = this.parseSearchFromRules(body, {
-          'list': source.ruleSearchList,
-          'name': source.ruleSearchName || '',
-          'author': source.ruleSearchAuthor || '',
-          'cover': source.ruleSearchCover || '',
-          'noteUrl': source.ruleSearchNoteUrl || ''
-        }, source, baseUrl);
+        console.info('[SrcEx] Extracting HTML search results for', source.sourceName);
+        const results = this.extractHtmlSearchResults(
+          body, source, baseUrl,
+          source.ruleSearchList,
+          source.ruleSearchName || '',
+          source.ruleSearchAuthor || '',
+          source.ruleSearchCover || '',
+          source.ruleSearchNoteUrl || ''
+        );
         if (results.length > 0) {
-          console.info('[SrcEx] Direct parse:', results.length, 'results');
+          console.info('[SrcEx] HTML extract:', results.length, 'results from', source.sourceName);
           return results;
         }
       }
@@ -331,17 +332,18 @@ export class SourceExecutor {
         }
       }
 
-      // 最后尝试：直接用规则解析（不通过 QuickJS，避免大数据传参溢出）
+      // 最后尝试：用新的 HTML 提取再试一次
       if (source.ruleSearchList) {
-        const results = this.parseSearchFromRules(body, {
-          list: source.ruleSearchList,
-          name: source.ruleSearchName || '',
-          author: source.ruleSearchAuthor || '',
-          cover: source.ruleSearchCover || '',
-          noteUrl: source.ruleSearchNoteUrl || ''
-        }, source, baseUrl);
+        const results = this.extractHtmlSearchResults(
+          body, source, baseUrl,
+          source.ruleSearchList,
+          source.ruleSearchName || '',
+          source.ruleSearchAuthor || '',
+          source.ruleSearchCover || '',
+          source.ruleSearchNoteUrl || ''
+        );
         if (results.length > 0) {
-          console.info('[SrcEx] Rule parse:', results.length, 'results');
+          console.info('[SrcEx] HTML extract (retry):', results.length, 'results');
           return results;
         }
       }
@@ -569,35 +571,223 @@ export class SourceExecutor {
     return '';
   }
 
-  // ============ 规则解析 ============
+  // ============ HTML 搜索结果提取（绕过损坏的 RuleParser） ============
 
-  private parseSearchFromRules(html: string, rules: Record<string, string>, source: BookSource, baseUrl: string): SearchResult[] {
-    const listRule = rules['list'] || '';
-    if (!listRule) return [];
-    const items = RuleParser.parse(html, listRule) as unknown[];
-    if (!items || !Array.isArray(items)) return [];
+  /**
+   * 从 HTML 中提取搜索结果（支持真实书源的 CSS 选择器规则）
+   *
+   * 不依赖 RuleParser（其 CSS 解析有 bug, .class 被提前去掉前缀），
+   * 直接在 SourceExecutor 层面实现正确的 CSS 元素匹配。
+   *
+   * @param html 书源搜索返回的 HTML
+   * @param source 书源
+   * @param baseUrl 基准 URL
+   * @param listRule  列表选择器，如 .result-item / div.book-list > .item / #list
+   * @param nameRule  书名选择器，如 h3.title a / .book-name@text
+   * @param authorRule 作者选择器
+   * @param coverRule  封面选择器
+   * @param noteUrlRule 详情页 URL 选择器
+   */
+  private extractHtmlSearchResults(
+    html: string, source: BookSource, baseUrl: string,
+    listRule: string, nameRule: string, authorRule: string,
+    coverRule: string, noteUrlRule: string
+  ): SearchResult[] {
+    if (!listRule || !html) return [];
 
-    return items.map((item: unknown, idx: number): SearchResult => {
-      const itemStr = typeof item === 'string' ? item : JSON.stringify(item);
-      const name = ((RuleParser.parse(itemStr, rules['name'] || '') as string[])?.[0]) || '';
-      const author = ((RuleParser.parse(itemStr, rules['author'] || '') as string[])?.[0]) || '';
-      const coverUrl = ((RuleParser.parse(itemStr, rules['cover'] || '') as string[])?.[0])
-        || extractFirstImgSrc(itemStr) || '';
-      let noteUrl = ((RuleParser.parse(itemStr, rules['noteUrl'] || '') as string[])?.[0]) || '';
-      if (noteUrl && !noteUrl.startsWith('http')) {
+    // 1) 解析 listRule 找到所有结果条目
+    const items = this.findElementsByCss(html, listRule);
+    if (items.length === 0) return [];
+
+    const results: SearchResult[] = [];
+
+    for (let idx = 0; idx < items.length; idx++) {
+      const itemHtml = items[idx];
+      if (!itemHtml || itemHtml.length < 10) continue;
+
+      // 2) 从每个条目中提取字段
+      const name = this.extractFieldByCss(itemHtml, nameRule) || '';
+      const author = this.extractFieldByCss(itemHtml, authorRule) || '';
+      const coverRaw = this.extractFieldByCss(itemHtml, coverRule) || '';
+      let noteUrl = this.extractFieldByCss(itemHtml, noteUrlRule) || '';
+
+      // 封面兜底：从 HTML 中提取第一张图片
+      let coverUrl = coverRaw;
+      if (!coverUrl) {
+        const imgM = itemHtml.match(/<img[^>]*(?:src|data-src|data-original)=["']([^"']+)["'][^>]*>/i);
+        coverUrl = imgM ? imgM[1] : '';
+      }
+
+      // 相对路径处理
+      if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
         noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
       }
-      return {
+      if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://')) {
+        coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
+      }
+
+      if (!name) continue; // 无书名则跳过
+
+      results.push({
         key: (source.sourceUrl || '') + '|' + noteUrl + '|' + idx,
-        name: name || '未知书名', author: author || '', coverUrl: coverUrl || '',
-        noteUrl: noteUrl || '', origin: source.sourceName || '未知',
+        name: name, author: author || '',
+        coverUrl: coverUrl || '',
+        noteUrl: noteUrl || '',
+        origin: source.sourceName || '未知',
         originUrl: source.sourceUrl || '',
         kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
         duration: 0, searchTime: Date.now(),
-      sourceCount: 1,
-      sourceOrigins: []
-      };
-    });
+        sourceCount: 1,
+        sourceOrigins: [],
+      });
+    }
+    return results;
+  }
+
+  /**
+   * 用简化 CSS 选择器在 HTML 中查找匹配元素
+   *
+   * 支持的选择器模式：
+   *   .class         → 类选择器
+   *   tag.class      → 标签+类
+   *   #id            → ID 选择器
+   *   ancestor > desc → 子元素
+   *   ancestor desc   → 后代元素
+   *
+   * @returns 匹配元素的内层 HTML 字符串数组
+   */
+  private findElementsByCss(html: string, selector: string): string[] {
+    if (!selector || !html) return [];
+
+    const s = selector.trim();
+
+    // 处理后代/子选择器 ul.list > li 或 ul.list li
+    if (s.includes('>') || s.includes(' ')) {
+      // 先找祖先，再找后代
+      const parts = s.split(/\s*>\s*|\s+/).filter(p => p.trim());
+      let currentHtml = html;
+
+      for (let i = 0; i < parts.length - 1; i++) {
+        const matched = this.findElementsByCss(currentHtml, parts[i]);
+        if (matched.length > 0) {
+          // 取最后一个匹配的祖先
+          currentHtml = matched[matched.length - 1];
+        } else {
+          return [];
+        }
+      }
+
+      // 最后的子选择器
+      const lastSelector = parts[parts.length - 1];
+      return this.findElementsByCss(currentHtml, lastSelector);
+    }
+
+    // 解析选择器：tag.class#id
+    const tagMatch = s.match(/^(\w+)/);
+    const classMatch = s.match(/\.([\w-]+)/);
+    const idMatch = s.match(/#([\w-]+)/);
+
+    const tag = tagMatch ? tagMatch[1] : '';
+    const cls = classMatch ? classMatch[1] : '';
+    const id = idMatch ? idMatch[1] : '';
+
+    // 构建匹配正则
+    let pattern: string;
+
+    if (id) {
+      // ID 选择器: #id
+      pattern = `<[^>]*id=["']${this.escapeRegex(id)}["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`;
+    } else if (tag && cls) {
+      // tag.class 选择器
+      pattern = `<${tag}[^>]*class=["'][^"']*${this.escapeRegex(cls)}[^"']*["'][^>]*>([\\s\\S]*?)<\\/${tag}>`;
+    } else if (cls) {
+      // .class 选择器
+      pattern = `<([a-zA-Z0-9]+)[^>]*class=["'][^"']*${this.escapeRegex(cls)}[^"']*["'][^>]*>([\\s\\S]*?)<\\/\\1>`;
+    } else if (tag) {
+      // tag 选择器
+      pattern = `<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`;
+    } else {
+      return [];
+    }
+
+    const regex = new RegExp(pattern, 'gi');
+    const results: string[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(html)) !== null) {
+      // .class 模式: match[1] = tagName, match[2] = innerHTML
+      // tag.class 模式: match[1] = innerHTML
+      // #id 模式: match[1] = innerHTML
+      const innerHtml = cls && !tag ? match[2] : match[1];
+      if (innerHtml && innerHtml.trim()) {
+        results.push(innerHtml.trim());
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * 从 HTML 片段中用 CSS 选择器提取字段值
+   *
+   * 支持 @text / @href / @src / @html 后缀
+   */
+  private extractFieldByCss(html: string, rule: string): string {
+    if (!rule || !html) return '';
+
+    const s = rule.trim();
+
+    // 提取属性后缀: @text, @href, @src, @html
+    let attr = 'text';
+    let selector = s;
+    const attrMatch = s.match(/^(.*?)@(text|href|src|html)$/i);
+    if (attrMatch) {
+      selector = attrMatch[1].trim();
+      attr = attrMatch[2].toLowerCase();
+    }
+
+    // 没有选择器部分 → 当前元素的属性
+    if (!selector) {
+      if (attr === 'text') return this.stripHtml(html.substring(0, 200));
+      const aMatch = html.match(new RegExp(`${attr}=["']([^"']+)["']`, 'i'));
+      return aMatch ? aMatch[1] : '';
+    }
+
+    // 有选择器 → 在 html 中查找匹配元素
+    const elements = this.findElementsByCss(html, selector);
+    if (elements.length === 0) return '';
+
+    const elHtml = elements[0];
+
+    if (attr === 'text' || attr === 'html') {
+      if (attr === 'text') {
+        return this.stripHtml(elHtml.substring(0, 200));
+      }
+      return elHtml;
+    }
+
+    // @href / @src: 从原始 html 中查找属性
+    // 在原始的匹配位置附近查找
+    const fullMatch = html.match(new RegExp(
+      `<[^>]*${this.escapeRegex(selector.replace(/[.#]/g, ''))}[^>]*>`,
+      'i'
+    ));
+    if (fullMatch) {
+      const attrValue = fullMatch[0].match(new RegExp(`${attr}=["']([^"']+)["']`, 'i'));
+      if (attrValue) return attrValue[1];
+    }
+
+    return '';
+  }
+
+  /** 转义正则特殊字符 */
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** 简化 HTML 清理（仅剥离标签） */
+  private stripHtml(html: string): string {
+    return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
   }
 
   private parseContentFromRules(html: string, rules: Record<string, string>): string {
