@@ -92,6 +92,7 @@ export class AppDatabase {
 
     // 数据库迁移：为已有表添加新列
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN raw_json TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE search_results ADD COLUMN source_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
