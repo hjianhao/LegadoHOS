@@ -274,9 +274,8 @@ export class SourceExecutor {
         }
       } catch (_e) { /* not JSON */ }
 
-      // HTML 搜索结果提取（使用改进的 CSS 选择器实现）
+      // === 第 1 步：用改进的 CSS 提取 HTML 搜索结果 ===
       if (source.ruleSearchList) {
-        console.info('[SrcEx] Extracting HTML search results for', source.sourceName);
         const results = this.extractHtmlSearchResults(
           body, source, baseUrl,
           source.ruleSearchList,
@@ -289,16 +288,16 @@ export class SourceExecutor {
           console.info('[SrcEx] HTML extract:', results.length, 'results from', source.sourceName);
           return results;
         }
+        console.warn('[SrcEx] HTML extract returned 0 for', source.sourceName, '- trying fallback');
       }
 
-      // 兜底：ruleSearchList 为空时尝试简单文本提取
-      if (!source.ruleSearchList) {
-        console.info('[SrcEx] No ruleSearchList, trying fallback extraction');
+      // === 第 2 步：兜底提取（即使有 ruleSearchList 也尝试，作为备份） ===
+      {
+        console.info('[SrcEx] Fallback extraction for', source.sourceName);
         const items = this.extractBookNamesFromHtml(body, baseUrl);
         if (items.length > 0) {
           console.info('[SrcEx] Fallback extracted', items.length, 'items');
           return items.map((item, idx: number): SearchResult => {
-            // 尝试从该链接附近提取封面（支持 <img> 和 CSS background-image）
             let coverUrl = '';
             if (item.url) {
               const relPath = item.url.replace(baseUrl, '');
@@ -306,10 +305,8 @@ export class SourceExecutor {
               const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
               const ctxEnd = Math.min(body.length, (pos >= 0 ? pos : idx * 200) + 1200);
               const ctx = body.substring(ctxStart, ctxEnd);
-              // 优先 <img> 标签
               const imgM = ctx.match(/<img[^>]*(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["'][^>]*>/i);
               coverUrl = imgM ? imgM[1] : '';
-              // 其次 CSS background-image（常见于小说站）
               if (!coverUrl) {
                 const bgM = ctx.match(/background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
                 coverUrl = bgM ? bgM[1] : '';
@@ -319,20 +316,19 @@ export class SourceExecutor {
               }
             }
             return {
-              key: (source.sourceUrl || '') + '|' + idx,
-              name: item.name, author: '', coverUrl: coverUrl,
-              noteUrl: item.url || url, origin: source.sourceName || '未知',
+              key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
+              name: item.name || '未知书名', author: '', coverUrl: coverUrl || '',
+              noteUrl: item.url || '', origin: source.sourceName || '未知',
               originUrl: source.sourceUrl || '',
               kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
               duration: 0, searchTime: Date.now(),
-              sourceCount: 1,
-              sourceOrigins: []
+              sourceCount: 1, sourceOrigins: [],
             };
           });
         }
       }
 
-      // 最后尝试：用新的 HTML 提取再试一次
+      // === 第 3 步：最后再试一次 HTML 提取 ===
       if (source.ruleSearchList) {
         const results = this.extractHtmlSearchResults(
           body, source, baseUrl,
