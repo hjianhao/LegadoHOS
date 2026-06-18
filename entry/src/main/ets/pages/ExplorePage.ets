@@ -4,6 +4,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { searchBooks } from '../engine/search/SearchEngine';
 import { WebViewFetchDialog } from './WebViewFetchDialog';
 import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
@@ -113,7 +114,6 @@ export struct ExplorePage {
   /** 兜底：旧版搜索引擎 */
   private async tryFallbackSearch(searchable: BookSource[]): Promise<void> {
     try {
-      const { searchBooks } = await import('../engine/search/SearchEngine');
       const fallback = await searchBooks(searchable, this.keyword);
       if (fallback.length > 0) {
         this.results = fallback;
