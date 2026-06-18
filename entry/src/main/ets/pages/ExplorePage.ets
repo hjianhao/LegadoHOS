@@ -2,9 +2,8 @@ import { AppTheme } from '../theme/AppTheme';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
-import { SearchResult, mergeSearchResults } from '../model/SearchResult';
+import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
-import { searchBooks } from '../engine/search/SearchEngine';
 import { WebViewFetchDialog } from './WebViewFetchDialog';
 import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
@@ -20,7 +19,8 @@ export struct ExplorePage {
   @State sources: BookSource[] = [];
   @State pendingWebViewUrl: string = '';
   @State searchProgress: string = '';
-  @State searchUpdateTick: number = 0;
+  @State searchTotal: number = 0;      // 总书源数
+  @State searchProcessed: number = 0;  // 已搜索书源数
 
   webViewDialog: CustomDialogController = new CustomDialogController({
     builder: WebViewFetchDialog({
@@ -54,7 +54,8 @@ export struct ExplorePage {
     this.isSearching = true;
     this.hasSearched = true;
     this.results = [];
-    this.searchUpdateTick = 0;
+    this.searchProcessed = 0;
+    this.searchTotal = 0;
     globalSourceExecutor.lastBlockedUrl = '';
 
     try {
@@ -72,25 +73,23 @@ export struct ExplorePage {
       return;
     }
 
+    this.searchTotal = searchable.length;
     this.searchProgress = '正在搜索 ' + searchable.length + ' 个书源...';
 
-    // 用共享数组 + setInterval 轮询的方式实现增量显示
-    // setInterval 的回调在 ArkUI 中能正常触发 @State 更新
-    const pendingResults: SearchResult[] = [];
-
-    const searchPromise = globalSourceExecutor.search(this.keyword, searchable, (currentMerged) => {
-      while (pendingResults.length > 0) pendingResults.pop();
-      for (const r of currentMerged) pendingResults.push(r);
-    });
-
-    const pollTimer = setInterval(() => {
-      if (pendingResults.length > 0) {
-        this.results = pendingResults.slice();
+    // ★ 增量搜索：每完成一个书源，SourceExecutor 回调 onProgress
+    //   直接在回调中更新 @State results，ArkUI 会触发重渲染
+    const searchPromise = globalSourceExecutor.search(
+      this.keyword, searchable,
+      (merged: SearchResult[], processed: number, total: number) => {
+        this.results = merged;
+        this.searchProcessed = processed;
+        this.searchTotal = total;
+        this.searchProgress = '正在搜索 ' + processed + '/' + total + ' 个书源';
+        console.info('[Explore] Progress:', processed + '/' + total, 'results:', merged.length);
       }
-    }, 250);
+    );
 
     searchPromise.then((merged) => {
-      clearInterval(pollTimer);
       console.info('[Explore] Search completed,', merged.length, 'merged results');
       this.results = merged;
       this.isSearching = false;
@@ -98,13 +97,7 @@ export struct ExplorePage {
 
       if (merged.length === 0) {
         console.info('[Explore] No results, trying fallback SearchEngine');
-        searchBooks(searchable, this.keyword).then((fallback) => {
-          if (fallback.length > 0) {
-            const fallbackMerged = mergeSearchResults(fallback);
-            this.results = fallbackMerged;
-            console.info('[Explore] Fallback got', fallbackMerged.length, 'merged results');
-          }
-        }).catch(() => {});
+        this.tryFallbackSearch(searchable);
       }
 
       if (this.results.length === 0 && globalSourceExecutor.lastBlockedUrl) {
@@ -112,10 +105,21 @@ export struct ExplorePage {
         this.pendingWebViewUrl = globalSourceExecutor.lastBlockedUrl;
       }
     }).catch(() => {
-      clearInterval(pollTimer);
       this.isSearching = false;
       this.searchProgress = '';
     });
+  }
+
+  /** 兜底：旧版搜索引擎 */
+  private async tryFallbackSearch(searchable: BookSource[]): Promise<void> {
+    try {
+      const { searchBooks } = await import('../engine/search/SearchEngine');
+      const fallback = await searchBooks(searchable, this.keyword);
+      if (fallback.length > 0) {
+        this.results = fallback;
+        console.info('[Explore] Fallback got', fallback.length, 'results');
+      }
+    } catch (_e) { /* ignore */ }
   }
   handleWebViewResult(content: string, url: string): void {
     if (content && content.length > 100) {
@@ -165,12 +169,13 @@ export struct ExplorePage {
           .onClick((): void => { this.doSearch(); })
       }.padding({ left: 12, right: 12 })
 
-      if (this.isSearching) {
+      if (this.isSearching && this.results.length === 0 && this.searchProcessed === 0) {
+        // 搜索刚开始，还没有任何结果 → 显示加载动画
         Column() {
           LoadingProgress().color('#0078D7').margin({ top: 40 })
           Text('搜索中...').fontSize(14).fontColor('#888').margin({ top: 8 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
-      } else if (this.hasSearched && this.results.length === 0) {
+      } else if (this.hasSearched && this.results.length === 0 && !this.isSearching) {
         Column() {
           Text('\uD83D\uDD0D').fontSize(48).margin({ top: 80 })
           Text('没有找到结果').fontSize(16).fontColor('#888').margin({ top: 8 })

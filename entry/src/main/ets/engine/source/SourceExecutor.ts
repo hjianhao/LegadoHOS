@@ -5,7 +5,7 @@
  * 预取 HTML 后传给 QuickJS 引擎进行规则解析。
  */
 import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../../model/BookSource';
-import { SearchResult, mergeSearchResults, createSearchResult } from '../../model/SearchResult';
+import { SearchResult, getBookMergeKey } from '../../model/SearchResult';
 import { globalScriptEngine } from './ScriptEngine';
 import { getPolyfillScript, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
@@ -61,30 +61,83 @@ export class SourceExecutor {
 
   // ============ 搜索 ============
 
-  async search(keyword: string, sources: BookSource[], onResult?: (merged: SearchResult[]) => void): Promise<SearchResult[]> {
+  /**
+   * 搜索（支持增量回调）
+   *
+   * @param keyword  搜索词
+   * @param sources  要搜索的书源列表
+   * @param onProgress  进度回调：(当前合并结果, 已处理源数, 总源数) => void
+   * @returns 最终合并结果
+   */
+  async search(
+    keyword: string, sources: BookSource[],
+    onProgress?: (merged: SearchResult[], processed: number, total: number) => void
+  ): Promise<SearchResult[]> {
     if (!this.engineInitialized) await this.initialize();
     if (sources.length === 0) return [];
 
     const concurrency = AppStorage.get<number>('searchConcurrency') || 16;
-    const allResults: SearchResult[] = [];
     const total = sources.length;
+    let processedCount = 0;
+
+    // 持久合并 Map（参考 legado-with-MD3 的 LinkedHashMap 方案）
+    // 每完成一个源，只增量合并该源的结果，无需全量重算
+    const mergedMap = new Map<string, SearchResult>();
+
+    /** 将新一批结果增量合并到持久 Map 中 */
+    function incrementMerge(newResults: SearchResult[]): void {
+      for (const r of newResults) {
+        const key = getBookMergeKey(r.name, r.author);
+        const existing = mergedMap.get(key);
+        if (existing) {
+          // 合并来源列表（去重）
+          if (r.origin && !existing.sourceOrigins.includes(r.origin)) {
+            existing.sourceOrigins.push(r.origin);
+            existing.sourceCount = existing.sourceOrigins.length;
+          }
+          // 保留更完整的封面
+          if (!existing.coverUrl && r.coverUrl) {
+            existing.coverUrl = r.coverUrl;
+          }
+          // 保留更长简介
+          if ((r.introduce || '').length > (existing.introduce || '').length) {
+            existing.introduce = r.introduce;
+          }
+          // 保留非空 lastUpdateTime
+          if (r.lastUpdateTime && !existing.lastUpdateTime) {
+            existing.lastUpdateTime = r.lastUpdateTime;
+          }
+        } else {
+          mergedMap.set(key, {
+            key: r.key, name: r.name, author: r.author,
+            coverUrl: r.coverUrl, noteUrl: r.noteUrl,
+            origin: r.origin, originUrl: r.originUrl,
+            kind: r.kind, wordCount: r.wordCount, lastUpdateTime: r.lastUpdateTime,
+            introduce: r.introduce, helperMsg: r.helperMsg,
+            duration: r.duration, searchTime: r.searchTime,
+            sourceCount: 1,
+            sourceOrigins: r.origin ? [r.origin] : []
+          });
+        }
+      }
+    }
 
     // 每个源独立搜索，每完成一个就触发回调
     const runOneSource = async (source: BookSource): Promise<void> => {
       if (!source.enabled || !source.ruleSearchUrl) return;
       try {
         const results = await this.searchSingle(keyword, source);
-        if (results.length > 0) {
-          for (const r of results) {
-            allResults.push(r);
-          }
-          // 每次有结果都立即触发合并和回调
-          if (onResult) {
-            const merged = mergeSearchResults(allResults);
-            onResult(merged);
-          }
+        // 增量合并该源的结果到持久 Map
+        incrementMerge(results);
+      } catch (_e) {
+        // 单个源失败不影响其他源
+      } finally {
+        processedCount++;
+        // 每完成一个源都回调（无论是否有结果）
+        if (onProgress) {
+          onProgress(Array.from(mergedMap.values()), processedCount, total);
         }
-      } catch (_e) { /* ignore single source failure */ }
+      }
     };
 
     // 并发池：逐个启动源，每完成一个就立即回调
@@ -105,7 +158,8 @@ export class SourceExecutor {
 
     // 等待所有 worker 完成，返回最终合并结果
     return Promise.all(workers).then((): SearchResult[] => {
-      return mergeSearchResults(allResults);
+      processedCount = total;
+      return Array.from(mergedMap.values());
     });
   }
   
