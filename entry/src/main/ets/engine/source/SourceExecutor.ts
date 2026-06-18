@@ -99,29 +99,19 @@ export class SourceExecutor {
     }
 
     /**
-     * 判断一个搜索结果是否有效（参考 legado-with-MD3 classifyBucket）
-     * 过滤掉明显不是书籍的条目：网站名、分类名、章节标题
+     * 判断一个搜索结果是否有效（放宽过滤，只排除明显不是书籍的条目）
      */
-    function isValidBookName(name: string, keyword: string): boolean {
-      if (!name || name.length < 2 || name.length > 40) return false;
-      // 章节标题：包含"第X章"、"最新"、"更新"、"连载"等
+    function isValidBookName(name: string): boolean {
+      if (!name || name.length < 2 || name.length > 50) return false;
+      // 章节标题
       if (/^第[一二三四五六七八九十\d零○\s、.．]/.test(name)) return false;
       if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新)/.test(name)) return false;
-      // 网站名/分类名：不含中文或全是常见非书籍词
-      const cjkCount = (name.match(/[\u4e00-\u9fff]/g) || []).length;
-      if (cjkCount === 0) return false;
-      const commonNonBook = [
-        '首页', '书架', '分类', '排行', '榜单', '完本', '全本', '免费',
-        '会员', '充值', '登录', '注册', '关于', '帮助', '联系我们',
-        '投稿', '我的', '个人中心', '手机版', '电脑版', '客户端',
-        '推荐', '公告', '活动', '合作', '广告', '联系', 'QQ群',
-        '意见反馈', '用户协议', '隐私政策', '免责声明', '网站地图',
-        '友情链接', '设为首页', '收藏本站', 'RSS', '订阅',
-        '热门', '随机', '标签', '热门标签',
-      ];
-      if (commonNonBook.some(w => name === w)) return false;
-      // 纯数字/标点/符号
-      if (/^[\d\s.．\-—·,，。、：:？?!！…]+$/.test(name)) return false;
+      // 常见非书籍名（精确匹配）
+      const commonNonBook = new Set([
+        '首页','书架','分类','排行','完本','免费','登录','注册',
+        '关于','帮助','联系我们','网站地图','友情链接','设为首页','收藏本站',
+      ]);
+      if (commonNonBook.has(name)) return false;
       return true;
     }
 
@@ -135,7 +125,7 @@ export class SourceExecutor {
         const cleanName = formatBookName(rawName);
 
         // 2. 过滤无效结果
-        if (!isValidBookName(cleanName, keyword)) {
+        if (!isValidBookName(cleanName)) {
           continue;
         }
 
@@ -264,7 +254,7 @@ export class SourceExecutor {
       }
       console.info('[SrcEx] Got', body.length, 'bytes from', source.sourceName);
 
-      // JSON 直接解析
+      // === 第一步：JSON 直接解析（API 类书源） ===
       try {
         const jsonObj = JSON.parse(body) as Record<string, unknown>;
         const results = this.parseJsonResults(jsonObj, source, baseUrl, 0);
@@ -274,34 +264,35 @@ export class SourceExecutor {
         }
       } catch (_e) { /* not JSON */ }
 
-      // === 第 1 步：用改进的 CSS 提取 HTML 搜索结果 ===
+      // === 第二步：尝试用书源规则提取（CSS/JS） ===
       if (source.ruleSearchList) {
-        const results = this.extractHtmlSearchResults(
-          body, source, baseUrl,
-          source.ruleSearchList,
-          source.ruleSearchName || '',
-          source.ruleSearchAuthor || '',
-          source.ruleSearchCover || '',
-          source.ruleSearchNoteUrl || ''
-        );
-        if (results.length > 0) {
-          console.info('[SrcEx] HTML extract:', results.length, 'results from', source.sourceName);
-          return results;
+        try {
+          const results = this.extractHtmlSearchResults(
+            body, source, baseUrl,
+            source.ruleSearchList,
+            source.ruleSearchName || '',
+            source.ruleSearchAuthor || '',
+            source.ruleSearchCover || '',
+            source.ruleSearchNoteUrl || ''
+          );
+          if (results.length > 0) {
+            console.info('[SrcEx] HTML extract:', results.length, 'results from', source.sourceName);
+            return results;
+          }
+        } catch (_e) {
+          console.warn('[SrcEx] HTML extract error:', (_e as Error).message);
         }
-        console.warn('[SrcEx] HTML extract returned 0 for', source.sourceName, '- trying fallback');
       }
 
-      // === 第 2 步：兜底提取（即使有 ruleSearchList 也尝试，作为备份） ===
+      // === 第三步：通用模式匹配（兼容所有 HTML 网站） ===
       {
-        console.info('[SrcEx] Fallback extraction for', source.sourceName);
         const items = this.extractBookNamesFromHtml(body, baseUrl);
         if (items.length > 0) {
-          console.info('[SrcEx] Fallback extracted', items.length, 'items');
+          console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
           return items.map((item, idx: number): SearchResult => {
             let coverUrl = '';
             if (item.url) {
-              const relPath = item.url.replace(baseUrl, '');
-              const pos = body.indexOf(relPath);
+              const pos = body.indexOf(item.url.replace(baseUrl, ''));
               const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
               const ctxEnd = Math.min(body.length, (pos >= 0 ? pos : idx * 200) + 1200);
               const ctx = body.substring(ctxStart, ctxEnd);
@@ -317,30 +308,14 @@ export class SourceExecutor {
             }
             return {
               key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
-              name: item.name || '未知书名', author: '', coverUrl: coverUrl || '',
-              noteUrl: item.url || '', origin: source.sourceName || '未知',
-              originUrl: source.sourceUrl || '',
+              name: item.name, author: '',
+              coverUrl: coverUrl || '', noteUrl: item.url || '',
+              origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
               kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
               duration: 0, searchTime: Date.now(),
               sourceCount: 1, sourceOrigins: [],
             };
           });
-        }
-      }
-
-      // === 第 3 步：最后再试一次 HTML 提取 ===
-      if (source.ruleSearchList) {
-        const results = this.extractHtmlSearchResults(
-          body, source, baseUrl,
-          source.ruleSearchList,
-          source.ruleSearchName || '',
-          source.ruleSearchAuthor || '',
-          source.ruleSearchCover || '',
-          source.ruleSearchNoteUrl || ''
-        );
-        if (results.length > 0) {
-          console.info('[SrcEx] HTML extract (retry):', results.length, 'results');
-          return results;
         }
       }
       console.warn('[SrcEx] No parse method worked for', source.sourceName);
