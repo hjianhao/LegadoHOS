@@ -230,11 +230,9 @@ export struct ExplorePage {
                         .backgroundColor('#5C6BC0').borderRadius(4)
                         .margin({ left: 4 })
                         .onClick(() => {
-                          const sources = item.sourceOrigins
-                            .filter(s => !s.startsWith('__url@'))
-                            .join(', ');
+                          const sources = item.sourceOrigins.join(', ');
                           promptAction.showToast({
-                            message: '来源: ' + (sources || item.origin || '未知'),
+                            message: '来源: ' + (sources || '未知'),
                             duration: 3000
                           });
                         })

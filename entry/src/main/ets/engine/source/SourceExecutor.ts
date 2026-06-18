@@ -83,65 +83,122 @@ export class SourceExecutor {
     // 持久合并 Map（参考 legado-with-MD3 的 LinkedHashMap 方案）
     // 每完成一个源，只增量合并该源的结果，无需全量重算
     const mergedMap = new Map<string, SearchResult>();
+    // 追踪每个合并 key 已见过的 originUrl，用于去重
+    const seenUrlsByKey = new Map<string, Set<string>>();
 
-    /** 将新一批结果增量合并到持久 Map 中 */
+    /**
+     * 格式化书名：移除 "作者:XXX"、"XX 著" 等噪声
+     * 参考 legado-with-MD3 BookHelp.formatBookName()
+     */
+    function formatBookName(raw: string): string {
+      return raw
+        .replace(/\s+作\s*者[:：\s].*$/g, '')
+        .replace(/\s+\S+\s+著\s*$/g, '')
+        .replace(/[-—·・][\s]*作\s*者[:：\s].*$/g, '')
+        .trim();
+    }
+
+    /**
+     * 判断一个搜索结果是否有效（参考 legado-with-MD3 classifyBucket）
+     * 过滤掉明显不是书籍的条目：网站名、分类名、章节标题
+     */
+    function isValidBookName(name: string, keyword: string): boolean {
+      if (!name || name.length < 2 || name.length > 40) return false;
+      // 章节标题：包含"第X章"、"最新"、"更新"、"连载"等
+      if (/^第[一二三四五六七八九十\d零○\s、.．]/.test(name)) return false;
+      if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新)/.test(name)) return false;
+      // 网站名/分类名：不含中文或全是常见非书籍词
+      const cjkCount = (name.match(/[\u4e00-\u9fff]/g) || []).length;
+      if (cjkCount === 0) return false;
+      const commonNonBook = [
+        '首页', '书架', '分类', '排行', '榜单', '完本', '全本', '免费',
+        '会员', '充值', '登录', '注册', '关于', '帮助', '联系我们',
+        '投稿', '我的', '个人中心', '手机版', '电脑版', '客户端',
+        '推荐', '公告', '活动', '合作', '广告', '联系', 'QQ群',
+        '意见反馈', '用户协议', '隐私政策', '免责声明', '网站地图',
+        '友情链接', '设为首页', '收藏本站', 'RSS', '订阅',
+        '热门', '随机', '标签', '热门标签',
+      ];
+      if (commonNonBook.some(w => name === w)) return false;
+      // 纯数字/标点/符号
+      if (/^[\d\s.．\-—·,，。、：:？?!！…]+$/.test(name)) return false;
+      return true;
+    }
+
+    /** 将新一批结果增量合并到持久 Map 中（参考 legado-with-MD3 SearchResultMerger） */
     function incrementMerge(newResults: SearchResult[]): void {
       for (const r of newResults) {
-        const key = getBookMergeKey(r.name, r.author);
+        const rawName = r.name || '';
+        const rawAuthor = r.author || '';
+
+        // 1. 清洗书名（formatBookName）
+        const cleanName = formatBookName(rawName);
+
+        // 2. 过滤无效结果
+        if (!isValidBookName(cleanName, keyword)) {
+          continue;
+        }
+
+        // 3. 用清洗后的名字计算 merge key
+        const key = getBookMergeKey(cleanName, rawAuthor);
+
+        // 4. 追踪已见过的 originUrl（去重依据）
+        if (!seenUrlsByKey.has(key)) {
+          seenUrlsByKey.set(key, new Set<string>());
+        }
+        const urlSet = seenUrlsByKey.get(key)!;
+
+        // 5. 检查这个源是否已经贡献过这本书
+        const isNewSource = r.originUrl && !urlSet.has(r.originUrl);
+
         const existing = mergedMap.get(key);
         if (existing) {
-          // ★ 创建新对象而非原地修改，确保 ArkUI ForEach 检测到引用变化
-          //    参考 legado-with-MD3 的 upsertBooks 模式
-          const merged: SearchResult = {
-            key: existing.key,
-            name: existing.name,
-            author: existing.author,
-            coverUrl: existing.coverUrl || r.coverUrl,
-            noteUrl: existing.noteUrl || r.noteUrl,
-            origin: existing.origin,      // 保留第一个源的显示名
-            originUrl: existing.originUrl,
-            kind: existing.kind || r.kind,
-            wordCount: existing.wordCount || r.wordCount,
-            lastUpdateTime: existing.lastUpdateTime || r.lastUpdateTime,
-            introduce: (r.introduce || '').length > (existing.introduce || '').length
-              ? r.introduce : existing.introduce,
-            helperMsg: existing.helperMsg || r.helperMsg,
-            duration: existing.duration,
-            searchTime: existing.searchTime,
-            sourceCount: existing.sourceCount,
-            // 拷贝一份新数组，避免原地修改
-            sourceOrigins: [...existing.sourceOrigins],
-          };
-          // ★ 用 originUrl（书源 URL，永远唯一）做去重判断
-          //    origin（书源名称）可能为空导致多个源均为 '未知'
-          if (r.originUrl && !merged.sourceOrigins.some(s => s.startsWith('__url@' + r.originUrl))) {
-            // 存 URL 标记用于后续去重
-            merged.sourceOrigins.push('__url@' + r.originUrl);
-            // 存可读的书源名（用于 Toast 展示）
-            if (r.origin) {
-              merged.sourceOrigins.push(r.origin);
-            }
-            merged.sourceCount = merged.sourceOrigins.filter(s => !s.startsWith('__url@')).length;
-          }
-          // 用新对象替换 Map 中的旧对象
-          mergedMap.set(key, merged);
-          if (merged.sourceCount > 1) {
-            console.info('[SrcEx] Merged source:', r.origin || r.originUrl, 'into', merged.name,
+          if (isNewSource) {
+            // 新来源 → 记录 URL 并合并
+            urlSet.add(r.originUrl!);
+            const merged: SearchResult = {
+              key: existing.key,
+              name: existing.name,
+              author: existing.author,
+              coverUrl: existing.coverUrl || r.coverUrl,
+              noteUrl: existing.noteUrl || r.noteUrl,
+              origin: existing.origin,       // 保留第一个源的显示名
+              originUrl: existing.originUrl,
+              kind: existing.kind || r.kind,
+              wordCount: existing.wordCount || r.wordCount,
+              lastUpdateTime: existing.lastUpdateTime || r.lastUpdateTime,
+              introduce: (r.introduce || '').length > (existing.introduce || '').length
+                ? r.introduce : existing.introduce,
+              helperMsg: existing.helperMsg || r.helperMsg,
+              duration: existing.duration,
+              searchTime: existing.searchTime,
+              sourceCount: existing.sourceCount + 1,
+              sourceOrigins: [...existing.sourceOrigins, r.origin || r.originUrl || '未知'],
+            };
+            mergedMap.set(key, merged);
+            console.info('[SrcEx] Merged:', r.origin || r.originUrl, '→', cleanName,
               'count:', merged.sourceCount);
           }
         } else {
+          urlSet.add(r.originUrl || '');
+          // 新书籍
           mergedMap.set(key, {
-            key: r.key, name: r.name, author: r.author,
-            coverUrl: r.coverUrl, noteUrl: r.noteUrl,
-            origin: r.origin || '', originUrl: r.originUrl || '',
-            kind: r.kind, wordCount: r.wordCount, lastUpdateTime: r.lastUpdateTime,
-            introduce: r.introduce, helperMsg: r.helperMsg,
-            duration: r.duration, searchTime: r.searchTime,
+            key: r.key,
+            name: cleanName,           // 使用清洗后的书名
+            author: rawAuthor,
+            coverUrl: r.coverUrl || '',
+            noteUrl: r.noteUrl || '',
+            origin: r.origin || '',
+            originUrl: r.originUrl || '',
+            kind: r.kind || '',
+            wordCount: r.wordCount || '',
+            lastUpdateTime: r.lastUpdateTime || '',
+            introduce: r.introduce || '',
+            helperMsg: r.helperMsg || '',
+            duration: r.duration || 0,
+            searchTime: r.searchTime || Date.now(),
             sourceCount: 1,
-            // 初始条目：存 URL 标记 + 可读名称
-            sourceOrigins: (r.originUrl ? ['__url@' + r.originUrl] : []).concat(
-              r.origin ? [r.origin] : []
-            ),
+            sourceOrigins: [r.origin || r.originUrl || '未知'],
           });
         }
       }
@@ -690,13 +747,49 @@ export class SourceExecutor {
       return /(?:\/book\/|\/novel\/|\/read\/|\/txt\/|\/info\/|\/chapter\/|\d{5,})/i.test(url);
     }
 
-    // 判断文本是否像书名（中文书名通常4-20字，不含特殊符号）
+    /**
+     * 判断文本是否像书名（增强版）
+     * 参考 legado-with-MD3 classifyBucket + formatBookName
+     */
     function isBookTitle(text: string): boolean {
-      if (text.length < 2 || text.length > 40) return false;
-      if (/^(首页|书库|书架|分类|排行|完本|会员|充值|登录|注册|关于|帮助|联系我们|设为首页|收藏本站|RSS|订阅|投稿|我的|个人中心|作者专区|作家专区|手机版|电脑版|客户端|APP下载|返回|上一页|下一页|尾页|跳到页|第.*页|网站地图|友情链接|TAG|标签云|随机|热门|最新|更新|推荐|公告|活动|合作|广告|联系|QQ群|微信|微博|意见反馈|用户协议|隐私政策|免责声明)$/i.test(text)) return false;
+      if (!text || text.length < 2 || text.length > 40) return false;
+
+      // 先清洗再判断
+      const cleaned = text
+        .replace(/\s+作\s*者[:：\s].*$/g, '')
+        .replace(/\s+\S+\s+著\s*$/g, '')
+        .trim();
+
+      if (!cleaned) return false;
+
+      // 章节标题：包含"第X章"、"最新：第"等
+      if (/^第[一二三四五六七八九十\d零○\s、.．]/.test(cleaned)) return false;
+      if (/最新[：:]\s*第/.test(cleaned) || /^(最新章节|最后更新|今日更新)/.test(cleaned)) return false;
+
+      // 精确匹配常见非书籍词
+      const commonNonBook = [
+        '首页', '书架', '分类', '排行', '榜单', '完本', '全本', '免费',
+        '会员', '充值', '登录', '注册', '关于', '帮助', '联系我们',
+        '投稿', '我的', '个人中心', '手机版', '电脑版', '客户端',
+        '推荐', '公告', '活动', '合作', '广告', '联系', 'QQ群',
+        '意见反馈', '用户协议', '隐私政策', '免责声明', '网站地图',
+        '友情链接', '设为首页', '收藏本站', 'RSS', '订阅',
+        '热门', '随机', '标签', '热门标签',
+        '玄幻小说', '武侠小说', '仙侠小说', '都市小说', '言情小说',
+        '历史小说', '军事小说', '游戏小说', '科幻小说', '悬疑小说',
+        '女生小说', '男生小说', '全部小说', '完本小说', '最新小说',
+        '热门小说', '推荐小说', '连载小说', '免费小说',
+      ];
+      if (commonNonBook.some(w => cleaned === w)) return false;
+
       // 书名应当以中文为主
-      const cjkCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-      return cjkCount >= text.length * 0.5;
+      const cjkCount = (cleaned.match(/[\u4e00-\u9fff]/g) || []).length;
+      if (cjkCount === 0) return false;
+
+      // 纯数字/纯标点标题
+      if (/^[\d\s.．\-—·,，。、：:？?!！…]+$/.test(cleaned)) return false;
+
+      return true;
     }
 
     // 优先：从 <h2>/<h3> 标题中提取（更可能是书名）
