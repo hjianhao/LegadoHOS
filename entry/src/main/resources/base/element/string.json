@@ -1,0 +1,8 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "鸿蒙版 Legado 阅读器" },
+    { "name": "reason_read_media", "value": "用于导入本地书籍和封面" },
+    { "name": "reason_write_media", "value": "用于缓存书籍和导出备份" },
+    { "name": "reason_background", "value": "用于后台朗读和下载服务" }
+  ]
+}

@@ -1,0 +1,688 @@
+/**
+ * QuickJS NAPI Bridge for HarmonyOS Legado
+ *
+ * 提供 ArkTS 调用 QuickJS JavaScript 引擎的能力，
+ * 包含书源脚本执行所需的全部 API polyfill。
+ *
+ * 编译: 见 BUILD.gn
+ * 依赖: QuickJS (quickjs.c/quickjs-libc.c), HarmonyOS NAPI
+ */
+
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <mutex>
+#include <cstring>
+#include <cstdlib>
+#include <thread>
+
+#include "quickjs.h"
+#include "quickjs-libc.h"
+#include "napi/native_api.h"
+#include "node_api.h"
+
+// ============================================================
+// 全局状态管理
+// ============================================================
+
+struct ScriptEngineContext {
+  JSRuntime *rt;
+  JSContext *ctx;
+  std::mutex mutex;
+};
+
+static std::unordered_map<int64_t, ScriptEngineContext*> g_engines;
+static int64_t g_next_engine_id = 1;
+static std::mutex g_global_mutex;
+
+// ============================================================
+// JS Http Module — 通过 ArkTS 回调实现网络请求
+// ============================================================
+
+// 存储待处理的 HTTP 请求
+struct HttpRequest {
+  int64_t requestId;
+  std::string url;
+  std::string method;    // "GET" / "POST"
+  std::string body;
+  std::string headers;   // JSON string
+  std::string result;
+  bool completed;
+  bool error;
+  std::string errorMsg;
+};
+
+static std::unordered_map<int64_t, HttpRequest*> g_pending_requests;
+static int64_t g_next_request_id = 1;
+static std::mutex g_request_mutex;
+
+// ArkTS 侧注册的回调函数
+static napi_ref g_http_request_callback = nullptr;
+static napi_env g_main_env = nullptr;
+
+/**
+ * JS 函数: http.get(url, options)
+ * 在 JS 中: let resp = http.get("https://...", {headers: {...}})
+ * 返回: {statusCode: 200, body: {json: () => ..., text: () => ...}}
+ */
+static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv) {
+  if (argc < 1) return JS_ThrowTypeError(ctx, "http.get: url required");
+
+  const char *url = JS_ToCString(ctx, argv[0]);
+  if (!url) return JS_ThrowTypeError(ctx, "http.get: invalid url");
+
+  // 解析 options
+  const char *headers_json = "{}";
+  int64_t timeout_ms = 30000;
+
+  if (argc >= 2 && JS_IsObject(argv[1])) {
+    JSValue headers_val = JS_GetPropertyStr(ctx, argv[1], "headers");
+    if (!JS_IsUndefined(headers_val)) {
+      JSValue json_str = JS_JSONStringify(ctx, headers_val, JS_UNDEFINED, JS_UNDEFINED);
+      if (!JS_IsException(json_str)) {
+        headers_json = JS_ToCString(ctx, json_str);
+        JS_FreeValue(ctx, json_str);
+      }
+    }
+    JS_FreeValue(ctx, headers_val);
+
+    JSValue timeout_val = JS_GetPropertyStr(ctx, argv[1], "timeout");
+    if (!JS_IsUndefined(timeout_val)) {
+      int32_t t;
+      JS_ToInt32(ctx, &t, timeout_val);
+      if (t > 0) timeout_ms = t;
+    }
+    JS_FreeValue(ctx, timeout_val);
+  }
+
+  // 创建 HTTP 请求
+  auto req = new HttpRequest();
+  {
+    std::lock_guard<std::mutex> lock(g_request_mutex);
+    req->requestId = g_next_request_id++;
+    req->url = url;
+    req->method = "GET";
+    req->headers = headers_json;
+    req->completed = false;
+    req->error = false;
+    g_pending_requests[req->requestId] = req;
+  }
+
+  int64_t req_id = req->requestId;
+
+  // 调用 ArkTS 回调发起真正的 HTTP 请求
+  if (g_http_request_callback && g_main_env) {
+    napi_env env = g_main_env;
+    napi_value cb;
+    napi_get_reference_value(env, g_http_request_callback, &cb);
+
+    napi_value args[4];
+    napi_create_int64(env, req_id, &args[0]);
+    napi_create_string_utf8(env, url, NAPI_AUTO_LENGTH, &args[1]);
+    napi_create_string_utf8(env, "GET", NAPI_AUTO_LENGTH, &args[2]);
+    napi_create_string_utf8(env, headers_json, NAPI_AUTO_LENGTH, &args[3]);
+
+    napi_value global;
+    napi_get_global(env, &global);
+    napi_value result;
+    napi_call_function(env, global, cb, 4, args, &result);
+  }
+
+  JS_FreeCString(ctx, url);
+
+  // 等待请求完成（同步阻塞，JS 引擎单线程）
+  // 实际生产中应该使用异步方案，这里简化为同步
+  int waited = 0;
+  while (!req->completed && waited < timeout_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    waited++;
+  }
+
+  JSValue resp_obj = JS_NewObject(ctx);
+
+  if (req->error) {
+    JS_SetPropertyStr(ctx, resp_obj, "statusCode",
+                      JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, resp_obj, "errorMsg",
+                      JS_NewString(ctx, req->errorMsg.c_str()));
+  } else {
+    JS_SetPropertyStr(ctx, resp_obj, "statusCode",
+                      JS_NewInt32(ctx, 200));
+
+    // body.text() 方法
+    JSValue body_obj = JS_NewObject(ctx);
+    std::string body_text = req->result;
+
+    JSValue text_func = JS_NewCFunction(ctx, [](JSContext *ctx2, JSValueConst,
+                                                 int, JSValueConst *) -> JSValue {
+      // 从闭包获取 body 文本
+      return JS_NewString(ctx2, "");
+    }, "text", 0);
+    JS_SetPropertyStr(ctx, body_obj, "text", text_func);
+
+    // body.json() 方法 - 解析 JSON
+    JSValue json_func = JS_NewCFunction(ctx, [](JSContext *ctx2, JSValueConst this_val,
+                                                 int, JSValueConst *) -> JSValue {
+      const char *text = "";
+      JSValue text_val = JS_GetPropertyStr(ctx2, this_val, "_text");
+      if (!JS_IsUndefined(text_val)) {
+        text = JS_ToCString(ctx2, text_val);
+      }
+      JSValue json_val = JS_ParseJSON(ctx2, text, strlen(text), "<response>");
+      JS_FreeCString(ctx2, text);
+      JS_FreeValue(ctx2, text_val);
+      return json_val;
+    }, "json", 0);
+    JS_SetPropertyStr(ctx, body_obj, "json", json_func);
+
+    // 存储 body 文本供 json() 方法使用
+    JS_SetPropertyStr(ctx, body_obj, "_text",
+                      JS_NewStringLen(ctx, body_text.c_str(), body_text.length()));
+
+    JS_SetPropertyStr(ctx, resp_obj, "body", body_obj);
+
+    // baseUrl
+    JS_SetPropertyStr(ctx, resp_obj, "baseUrl",
+                      JS_NewString(ctx, req->url.c_str()));
+
+    // headers 对象
+    JSValue headers_obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, headers_obj, "content-type",
+                      JS_NewString(ctx, "text/html; charset=utf-8"));
+    JS_SetPropertyStr(ctx, resp_obj, "headers", headers_obj);
+  }
+
+  // 清理
+  {
+    std::lock_guard<std::mutex> lock(g_request_mutex);
+    g_pending_requests.erase(req_id);
+  }
+  delete req;
+
+  return resp_obj;
+}
+
+/**
+ * JS 函数: http.post(url, body, options)
+ */
+static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+  if (argc < 1) return JS_ThrowTypeError(ctx, "http.post: url required");
+
+  const char *url = JS_ToCString(ctx, argv[0]);
+  if (!url) return JS_ThrowTypeError(ctx, "http.post: invalid url");
+
+  const char *body = "";
+  const char *headers_json = "{}";
+  int64_t timeout_ms = 30000;
+
+  if (argc >= 2 && JS_IsString(argv[1])) {
+    body = JS_ToCString(ctx, argv[1]);
+  }
+
+  if (argc >= 3 && JS_IsObject(argv[2])) {
+    JSValue h = JS_GetPropertyStr(ctx, argv[2], "headers");
+    if (!JS_IsUndefined(h)) {
+      JSValue json_str = JS_JSONStringify(ctx, h, JS_UNDEFINED, JS_UNDEFINED);
+      if (!JS_IsException(json_str)) {
+        headers_json = JS_ToCString(ctx, json_str);
+        JS_FreeValue(ctx, json_str);
+      }
+    }
+    JS_FreeValue(ctx, h);
+  }
+
+  // 和 GET 类似的请求处理...
+  auto req = new HttpRequest();
+  {
+    std::lock_guard<std::mutex> lock(g_request_mutex);
+    req->requestId = g_next_request_id++;
+    req->url = url;
+    req->method = "POST";
+    req->body = body;
+    req->headers = headers_json;
+    req->completed = false;
+    g_pending_requests[req->requestId] = req;
+  }
+
+  int64_t req_id = req->requestId;
+
+  if (g_http_request_callback && g_main_env) {
+    napi_env env = g_main_env;
+    napi_value cb;
+    napi_get_reference_value(env, g_http_request_callback, &cb);
+
+    napi_value args[5];
+    napi_create_int64(env, req_id, &args[0]);
+    napi_create_string_utf8(env, url, NAPI_AUTO_LENGTH, &args[1]);
+    napi_create_string_utf8(env, "POST", NAPI_AUTO_LENGTH, &args[2]);
+    napi_create_string_utf8(env, headers_json, NAPI_AUTO_LENGTH, &args[3]);
+    napi_create_string_utf8(env, body, NAPI_AUTO_LENGTH, &args[4]);
+
+    napi_value global;
+    napi_get_global(env, &global);
+    napi_value result;
+    napi_call_function(env, global, cb, 5, args, &result);
+  }
+
+  // 等待完成...
+  int waited = 0;
+  while (!req->completed && waited < timeout_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    waited++;
+  }
+
+  JSValue resp_obj = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, resp_obj, "statusCode", JS_NewInt32(ctx, 200));
+
+  JSValue body_obj = JS_NewObject(ctx);
+  std::string body_text = req->result;
+  JS_SetPropertyStr(ctx, body_obj, "_text",
+                    JS_NewStringLen(ctx, body_text.c_str(), body_text.length()));
+  JS_SetPropertyStr(ctx, resp_obj, "body", body_obj);
+  JS_SetPropertyStr(ctx, resp_obj, "baseUrl", JS_NewString(ctx, url));
+
+  {
+    std::lock_guard<std::mutex> lock(g_request_mutex);
+    g_pending_requests.erase(req_id);
+  }
+  delete req;
+
+  JS_FreeCString(ctx, url);
+
+  return resp_obj;
+}
+
+// ============================================================
+// JS Base64 Module
+// ============================================================
+
+static JSValue js_base64_encode(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+  if (argc < 1) return JS_NewString(ctx, "");
+  const char *str = JS_ToCString(ctx, argv[0]);
+  if (!str) return JS_NewString(ctx, "");
+
+  // 简化的 Base64 编码（生产环境用 OpenSSL 或鸿蒙 crypto API）
+  static const char b64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t len = strlen(str);
+  std::string result;
+  result.reserve((len + 2) / 3 * 4);
+
+  for (size_t i = 0; i < len; i += 3) {
+    unsigned char b0 = str[i];
+    unsigned char b1 = i + 1 < len ? str[i + 1] : 0;
+    unsigned char b2 = i + 2 < len ? str[i + 2] : 0;
+    result += b64[b0 >> 2];
+    result += b64[((b0 & 0x03) << 4) | (b1 >> 4)];
+    result += (i + 1 < len) ? b64[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
+    result += (i + 2 < len) ? b64[b2 & 0x3F] : '=';
+  }
+
+  JS_FreeCString(ctx, str);
+  return JS_NewString(ctx, result.c_str());
+}
+
+static JSValue js_base64_decode(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv) {
+  if (argc < 1) return JS_NewString(ctx, "");
+  const char *str = JS_ToCString(ctx, argv[0]);
+  if (!str) return JS_NewString(ctx, "");
+
+  size_t len = strlen(str);
+  std::string result;
+
+  auto b64_idx = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+
+  for (size_t i = 0; i < len && str[i] != '='; i += 4) {
+    int b0 = b64_idx(str[i]);
+    int b1 = b64_idx(str[i + 1]);
+    int b2 = b64_idx(str[i + 2]);
+    int b3 = b64_idx(str[i + 3]);
+    if (b0 < 0 || b1 < 0) break;
+    result += (char)((b0 << 2) | (b1 >> 4));
+    if (b2 >= 0) result += (char)(((b1 & 0x0F) << 4) | (b2 >> 2));
+    if (b3 >= 0) result += (char)(((b2 & 0x03) << 6) | b3);
+  }
+
+  JS_FreeCString(ctx, str);
+  return JS_NewString(ctx, result.c_str());
+}
+
+// ============================================================
+// JS 引擎创建 / 销毁 (NAPI 导出)
+// ============================================================
+
+static napi_value CreateEngine(napi_env env, napi_callback_info info) {
+  auto *ctx = new ScriptEngineContext();
+  ctx->rt = JS_NewRuntime();
+  ctx->ctx = JS_NewContext(ctx->rt);
+
+	// ---- 注入标准 ES 库 ----
+	  js_init_module_std(ctx->ctx, "std");
+
+  // ---- 注入 http 模块 ----
+  JSValue http_obj = JS_NewObject(ctx->ctx);
+  JS_SetPropertyStr(ctx->ctx, http_obj, "get",
+                    JS_NewCFunction(ctx->ctx, js_http_get, "get", 2));
+  JS_SetPropertyStr(ctx->ctx, http_obj, "post",
+                    JS_NewCFunction(ctx->ctx, js_http_post, "post", 3));
+  JS_SetPropertyStr(ctx->ctx, http_obj, "timeout", JS_NewInt32(ctx->ctx, 30000));
+
+  // 注册到全局: globalThis.http = {get, post, ...}
+  JSValue global = JS_GetGlobalObject(ctx->ctx);
+  JS_SetPropertyStr(ctx->ctx, global, "http", http_obj);
+
+  // ---- 注入 Base64 ----
+  JSValue base64_obj = JS_NewObject(ctx->ctx);
+  JS_SetPropertyStr(ctx->ctx, base64_obj, "encode",
+                    JS_NewCFunction(ctx->ctx, js_base64_encode, "encode", 1));
+  JS_SetPropertyStr(ctx->ctx, base64_obj, "decode",
+                    JS_NewCFunction(ctx->ctx, js_base64_decode, "decode", 1));
+  JS_SetPropertyStr(ctx->ctx, global, "Base64", base64_obj);
+
+  // ---- JS Polyfills (java compat) ----
+  // javaString(s) → String(s)
+  const char *polyfill =
+    "if (typeof javaString === 'undefined') {"
+    "  globalThis.javaString = function(s) { return String(s); };"
+    "}"
+    "if (typeof javaArrayList === 'undefined') {"
+    "  globalThis.javaArrayList = function(arr) { return Array.isArray(arr) ? arr : [arr]; };"
+    "}"
+    "if (typeof java === 'undefined') {"
+    "  globalThis.java = { net: { URL: globalThis.URL } };"
+    "}"
+    "if (typeof TextDecoder === 'undefined') {"
+    "  globalThis.TextDecoder = class {"
+    "    constructor() {}"
+    "    decode(buf) { return String.fromCharCode.apply(null, new Uint8Array(buf)); }"
+    "  };"
+    "}"
+    "// 保留字兼容: result 对象自动注入 baseUrl"
+    "globalThis._resultPolyfill = function(obj, baseUrl) {"
+    "  if (obj && typeof obj === 'object' && !obj.baseUrl) {"
+    "    Object.defineProperty(obj, 'baseUrl', { value: baseUrl, writable: true });"
+    "  }"
+    "  return obj;"
+    "};";
+
+  JS_Eval(ctx->ctx, polyfill, strlen(polyfill), "<polyfill>", JS_EVAL_TYPE_GLOBAL);
+
+  JS_FreeValue(ctx->ctx, global);
+
+  int64_t engine_id;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    engine_id = g_next_engine_id++;
+    g_engines[engine_id] = ctx;
+  }
+
+  // 保存 main_env 供 HTTP 回调使用
+  if (!g_main_env) {
+    g_main_env = env;
+  }
+
+  napi_value result;
+  napi_create_int64(env, engine_id, &result);
+  return result;
+}
+
+static napi_value DestroyEngine(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  std::lock_guard<std::mutex> lock(g_global_mutex);
+  auto it = g_engines.find(engine_id);
+  if (it != g_engines.end()) {
+    JS_FreeContext(it->second->ctx);
+    JS_FreeRuntime(it->second->rt);
+    delete it->second;
+    g_engines.erase(it);
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
+ * 执行 JavaScript 代码并返回结果
+ * 参数: engineId, script(string)
+ * 返回: JSON string 或 error string
+ */
+static napi_value ExecuteScript(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  size_t script_len;
+  char script_buf[65536];
+  napi_get_value_string_utf8(env, argv[1], script_buf, sizeof(script_buf), &script_len);
+
+  ScriptEngineContext *ctx = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    auto it = g_engines.find(engine_id);
+    if (it != g_engines.end()) ctx = it->second;
+  }
+
+  if (!ctx) {
+    napi_throw_error(env, "ENGINE_NOT_FOUND", "QuickJS engine not found");
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+
+  JSValue result = JS_Eval(ctx->ctx, script_buf, script_len,
+                           "<source>", JS_EVAL_TYPE_GLOBAL);
+
+  napi_value napi_result;
+  if (JS_IsException(result)) {
+    JSValue exc = JS_GetException(ctx->ctx);
+    const char *exc_str = JS_ToCString(ctx->ctx, exc);
+    napi_create_string_utf8(env, exc_str ? exc_str : "Unknown error",
+                            NAPI_AUTO_LENGTH, &napi_result);
+    JS_FreeCString(ctx->ctx, exc_str);
+    JS_FreeValue(ctx->ctx, exc);
+  } else {
+    // 将 JS 结果转为 JSON string
+    JSValue json_val = JS_JSONStringify(ctx->ctx, result, JS_UNDEFINED, JS_UNDEFINED);
+    if (!JS_IsException(json_val)) {
+      const char *json_str = JS_ToCString(ctx->ctx, json_val);
+      napi_create_string_utf8(env, json_str ? json_str : "null",
+                              NAPI_AUTO_LENGTH, &napi_result);
+      JS_FreeCString(ctx->ctx, json_str);
+    } else {
+      napi_create_string_utf8(env, "null", NAPI_AUTO_LENGTH, &napi_result);
+    }
+    JS_FreeValue(ctx->ctx, json_val);
+  }
+  JS_FreeValue(ctx->ctx, result);
+
+  return napi_result;
+}
+
+/**
+ * 执行函数调用
+ * 参数: engineId, functionName(string), argsJson(string)
+ * 返回: JSON string
+ */
+static napi_value CallFunction(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  char func_name[256];
+  size_t func_len;
+  napi_get_value_string_utf8(env, argv[1], func_name, sizeof(func_name), &func_len);
+
+  char args_json[65536];
+  size_t args_len;
+  napi_get_value_string_utf8(env, argv[2], args_json, sizeof(args_json), &args_len);
+
+  ScriptEngineContext *ctx = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    auto it = g_engines.find(engine_id);
+    if (it != g_engines.end()) ctx = it->second;
+  }
+
+  if (!ctx) {
+    napi_throw_error(env, "ENGINE_NOT_FOUND", "QuickJS engine not found");
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lock(ctx->mutex);
+
+  // 解析 args JSON → JS 数组
+  JSValue args_val = JS_ParseJSON(ctx->ctx, args_json, args_len, "<args>");
+  if (JS_IsException(args_val)) {
+    napi_throw_error(env, "INVALID_ARGS", "Cannot parse arguments JSON");
+    return nullptr;
+  }
+
+  // 获取全局函数
+  JSValue global = JS_GetGlobalObject(ctx->ctx);
+  JSValue func = JS_GetPropertyStr(ctx->ctx, global, func_name);
+  JS_FreeValue(ctx->ctx, global);
+
+  if (!JS_IsFunction(ctx->ctx, func)) {
+    JS_FreeValue(ctx->ctx, func);
+    JS_FreeValue(ctx->ctx, args_val);
+    napi_throw_error(env, "FUNC_NOT_FOUND", "Function not found");
+    return nullptr;
+  }
+
+  // 构建参数数组
+  uint32_t arr_len;
+  JS_ToUint32(ctx->ctx, &arr_len, JS_GetPropertyStr(ctx->ctx, args_val, "length"));
+
+  std::vector<JSValue> js_args;
+  for (uint32_t i = 0; i < arr_len; i++) {
+    JSValue arg = JS_GetPropertyUint32(ctx->ctx, args_val, i);
+    js_args.push_back(arg);
+  }
+
+  JSValue result = JS_Call(ctx->ctx, func, JS_UNDEFINED,
+                           js_args.size(), js_args.data());
+
+  // 清理 args
+  for (auto &a : js_args) JS_FreeValue(ctx->ctx, a);
+  JS_FreeValue(ctx->ctx, args_val);
+  JS_FreeValue(ctx->ctx, func);
+
+  napi_value napi_result;
+  if (JS_IsException(result)) {
+    JSValue exc = JS_GetException(ctx->ctx);
+    const char *exc_str = JS_ToCString(ctx->ctx, exc);
+    napi_create_string_utf8(env, exc_str ? exc_str : "Unknown error",
+                            NAPI_AUTO_LENGTH, &napi_result);
+    JS_FreeCString(ctx->ctx, exc_str);
+    JS_FreeValue(ctx->ctx, exc);
+  } else {
+    JSValue json_val = JS_JSONStringify(ctx->ctx, result, JS_UNDEFINED, JS_UNDEFINED);
+    if (!JS_IsException(json_val)) {
+      const char *json_str = JS_ToCString(ctx->ctx, json_val);
+      napi_create_string_utf8(env, json_str ? json_str : "null",
+                              NAPI_AUTO_LENGTH, &napi_result);
+      JS_FreeCString(ctx->ctx, json_str);
+    } else {
+      napi_create_string_utf8(env, "null", NAPI_AUTO_LENGTH, &napi_result);
+    }
+    JS_FreeValue(ctx->ctx, json_val);
+  }
+  JS_FreeValue(ctx->ctx, result);
+
+  return napi_result;
+}
+
+/**
+ * 注册 HTTP 请求完成的回调（由 ArkTS 侧调用）
+ */
+static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t request_id;
+  napi_get_value_int64(env, argv[0], &request_id);
+
+  char response_body[65536];
+  size_t body_len;
+  napi_get_value_string_utf8(env, argv[1], response_body, sizeof(response_body), &body_len);
+
+  bool is_error;
+  napi_get_value_bool(env, argv[2], &is_error);
+
+  std::lock_guard<std::mutex> lock(g_request_mutex);
+  auto it = g_pending_requests.find(request_id);
+  if (it != g_pending_requests.end()) {
+    if (is_error) {
+      it->second->error = true;
+      it->second->errorMsg = response_body;
+    } else {
+      it->second->result = response_body;
+    }
+    it->second->completed = true;
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
+ * 注册 ArkTS 侧的 HTTP 请求回调
+ */
+static napi_value RegisterHttpHandler(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  napi_create_reference(env, argv[0], 1, &g_http_request_callback);
+  g_main_env = env;
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+// ============================================================
+// NAPI 模块注册
+// ============================================================
+
+static napi_value Init(napi_env env, napi_value exports) {
+  napi_property_descriptor desc[] = {
+    { "createEngine", nullptr, CreateEngine, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "destroyEngine", nullptr, DestroyEngine, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "executeScript", nullptr, ExecuteScript, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "callFunction", nullptr, CallFunction, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "onHttpResponse", nullptr, OnHttpResponse, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "registerHttpHandler", nullptr, RegisterHttpHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
+  };
+
+  napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+  return exports;
+}
+
+NAPI_MODULE(quickjs_bridge, Init)

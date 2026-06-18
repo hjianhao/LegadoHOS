@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Legado HOS 远程管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;padding:16px;max-width:1000px;margin:0 auto}
+h1{color:#00d4ff;margin:8px 0 16px;font-size:22px}
+h2{color:#00d4ff;margin:16px 0 8px;font-size:16px;border-bottom:1px solid #333;padding-bottom:4px}
+.card{background:#16213e;border:1px solid #333;border-radius:10px;padding:16px;margin-bottom:12px}
+.card h3{color:#00d4ff;font-size:14px;margin-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.stat{text-align:center;padding:12px;background:#0f3460;border-radius:8px}
+.stat .v{font-size:24px;font-weight:bold;color:#00d4ff}
+.stat .l{font-size:11px;color:#888;margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #2a2a4a}
+th{background:#0f3460;color:#00d4ff;font-weight:600}
+td{color:#ccc}
+tr:hover{background:#1a2744}
+.btn{display:inline-block;padding:8px 16px;background:#0078D7;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin:4px}
+.btn:hover{background:#005BB5}
+.btn.danger{background:#D32F2F}
+.btn.danger:hover{background:#B71C1C}
+input,select{padding:6px 10px;border-radius:6px;border:1px solid #444;background:#1a1a2e;color:#e0e0e0;font-size:13px;width:100%;margin:4px 0}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.status-dot.online{background:#4CAF50}
+.status-dot.offline{background:#F44336}
+#searchResults{max-height:400px;overflow-y:auto}
+.book-item{display:flex;align-items:center;padding:8px;border-bottom:1px solid #333;cursor:pointer}
+.book-item:hover{background:#1a2744}
+.book-cover{width:40px;height:56px;background:#455A64;border-radius:4px;display:flex;align-items:center;justify-content:center;margin-right:12px;font-size:18px;color:#fff;flex-shrink:0}
+.book-info{flex:1;min-width:0}
+.book-info .title{font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.book-info .author{font-size:11px;color:#888;margin-top:2px}
+footer{text-align:center;color:#555;margin-top:32px;font-size:11px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#323232;color:#fff;padding:10px 24px;border-radius:6px;font-size:13px;opacity:0;transition:opacity 0.3s;z-index:999}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<h1>📚 Legado HOS 远程管理</h1>
+<div class="grid" id="stats">
+  <div class="stat"><div class="v" id="statBooks">-</div><div class="l">书籍数</div></div>
+  <div class="stat"><div class="v" id="statSources">-</div><div class="l">书源数</div></div>
+  <div class="stat"><div class="v" id="statStatus">-</div><div class="l">状态</div></div>
+  <div class="stat"><div class="v" id="statUptime">-</div><div class="l">运行时间</div></div>
+</div>
+
+<div class="card">
+  <h3>🔍 搜索</h3>
+  <div style="display:flex;gap:8px">
+    <input type="text" id="searchInput" placeholder="搜索书名或作者..." style="flex:1" onkeydown="if(event.key==='Enter')searchBooks()">
+    <button class="btn" onclick="searchBooks()">搜索</button>
+  </div>
+  <div id="searchResults"></div>
+</div>
+
+<div class="card">
+  <h3>📖 书架</h3>
+  <div id="bookshelfList">加载中...</div>
+</div>
+
+<div class="card">
+  <h3>🔗 书源</h3>
+  <div id="sourceList">加载中...</div>
+</div>
+
+<footer>Legado HOS v1.0 · <span id="footerTime">-</span></footer>
+<div id="toast" class="toast"></div>
+
+<script>
+const API = '';
+let toastTimer = null;
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+async function api(path) {
+  const resp = await fetch(`${API}${path}`);
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+async function loadStats() {
+  try {
+    const status = await api('/api/status');
+    document.getElementById('statStatus').textContent = status.status || 'running';
+    document.getElementById('statUptime').textContent = Math.floor((status.uptime || 0) / 60) + 'm';
+  } catch {}
+}
+
+async function loadBookshelf() {
+  try {
+    const books = await api('/api/bookshelf');
+    document.getElementById('statBooks').textContent = books.length;
+    const list = document.getElementById('bookshelfList');
+    if (books.length === 0) { list.innerHTML = '<p style="color:#888;text-align:center;padding:16px">书架是空的</p>'; return; }
+    list.innerHTML = books.map(b => `
+      <div class="book-item" onclick="showToast('打开: ${b.name}')">
+        <div class="book-cover">${(b.name||'?').charAt(0)}</div>
+        <div class="book-info">
+          <div class="title">${b.name}</div>
+          <div class="author">${b.author || '未知作者'} · 进度 ${Math.round((b.durChapterProgress||0)*100)}%</div>
+        </div>
+        <span style="color:#888;font-size:11px">${b.origin||''}</span>
+      </div>
+    `).join('');
+  } catch(err) { document.getElementById('bookshelfList').innerHTML = `<p style="color:#F44336">加载失败: ${err.message}</p>`; }
+}
+
+async function loadSources() {
+  try {
+    const sources = await api('/api/sources');
+    document.getElementById('statSources').textContent = sources.length;
+    const list = document.getElementById('sourceList');
+    if (sources.length === 0) { list.innerHTML = '<p style="color:#888;text-align:center;padding:16px">没有书源</p>'; return; }
+    const enabled = sources.filter(s => s.enabled).length;
+    list.innerHTML = `<p style="color:#888;font-size:12px;margin-bottom:8px">共 ${sources.length} 个, ${enabled} 个启用</p>
+    <table><tr><th>书源</th><th>网址</th><th>状态</th></tr>
+    ${sources.slice(0,50).map(s => `<tr><td>${s.sourceName}</td><td style="font-size:10px;color:#888">${(s.sourceUrl||'').slice(0,40)}</td><td><span class="status-dot ${s.enabled?'online':'offline'}"></span>${s.enabled?'启用':'禁用'}</td></tr>`).join('')}
+    </table>`;
+  } catch(err) { document.getElementById('sourceList').innerHTML = `<p style="color:#F44336">加载失败: ${err.message}</p>`; }
+}
+
+async function searchBooks() {
+  const keyword = document.getElementById('searchInput').value.trim();
+  if (!keyword) return;
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '<p style="color:#888;padding:8px">搜索中...</p>';
+  try {
+    const resp = await fetch(`${API}/api/search?keyword=${encodeURIComponent(keyword)}`);
+    const data = await resp.json();
+    const results = data.results || data.books || [];
+    if (results.length === 0) { el.innerHTML = '<p style="color:#888;padding:8px">未找到结果</p>'; return; }
+    el.innerHTML = results.slice(0,30).map(r => `
+      <div class="book-item" onclick="showToast('查看详情: ${r.name}')">
+        <div class="book-cover">${(r.name||'?').charAt(0)}</div>
+        <div class="book-info">
+          <div class="title">${r.name}</div>
+          <div class="author">${r.author||''} · ${r.origin||''}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(err) { el.innerHTML = `<p style="color:#F44336">搜索失败: ${err.message}</p>`; }
+}
+
+function updateTime() {
+  document.getElementById('footerTime').textContent = new Date().toLocaleString();
+}
+
+loadStats(); loadBookshelf(); loadSources();
+setInterval(() => { loadStats(); updateTime(); }, 30000);
+updateTime();
+</script>
+</body>
+</html>

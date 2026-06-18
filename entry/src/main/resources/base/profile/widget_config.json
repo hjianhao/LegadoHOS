@@ -1,0 +1,48 @@
+{
+  "widgets": [
+    {
+      "name": "BookmarksWidget",
+      "description": "最近阅读 - 快速进入",
+      "type": "form",
+      "module": "entry",
+      "ability": ".MainAbility",
+      "forms": [
+        {
+          "name": "最近阅读",
+          "description": "显示正在阅读的书籍",
+          "src": "widget/pages/RecentReadWidget.ets",
+          "window": {
+            "designWidth": 720,
+            "autoDesignWidth": true
+          },
+          "formConfigAbility": "ability://.MainAbility",
+          "isDefault": true,
+          "updateDuration": 30,
+          "formVisibleNotify": true,
+          "supportDimensions": [
+            "1*2",
+            "2*2"
+          ],
+          "defaultDimension": "2*2"
+        },
+        {
+          "name": "快速搜索",
+          "description": "一键搜索书籍",
+          "src": "widget/pages/SearchWidget.ets",
+          "window": {
+            "designWidth": 720,
+            "autoDesignWidth": true
+          },
+          "formConfigAbility": "ability://.MainAbility",
+          "isDefault": false,
+          "updateDuration": 0,
+          "formVisibleNotify": false,
+          "supportDimensions": [
+            "1*2"
+          ],
+          "defaultDimension": "1*2"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+# QuickJS NAPI 桥接库构建配置
+import("//build/ohos.gni")
+
+ohos_shared_library("quickjs_bridge") {
+  sources = [
+    "src/quickjs.c",
+    "src/quickjs-libc.c",
+    "src/napi_bridge.cpp",
+  ]
+
+  include_dirs = [
+    "src",
+    "include",
+  ]
+
+  cflags = [
+    "-DCONFIG_BIGNUM",
+    "-DCONFIG_VERSION=\"2024-01-13\"",
+    "-O2",
+    "-fno-strict-aliasing",
+    "-fomit-frame-pointer",
+  ]
+
+  # For arm64-v8a only
+  if (target_cpu == "arm64") {
+    cflags += [ "-march=armv8-a+crypto" ]
+  }
+
+  ldflags = [
+    "-Wl,-soname,libquickjs_bridge.z.so",
+  ]
+
+  subsystem_name = "legado"
+  part_name = "legado_part"
+
+  # HarmonyOS NAPI dependency
+  deps = [
+    "//foundation/ace/napi:ace_napi",
+  ]
+
+  # NAPI headers
+  external_deps = [
+    "ace_napi:ace_napi",
+  ]
+
+  # Output
+  output_name = "libquickjs_bridge.z.so"
+}
