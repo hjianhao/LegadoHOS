@@ -1,0 +1,4 @@
+{
+  "name": "libquickjs_bridge.so",
+  "types": "./index.d.ts"
+}
