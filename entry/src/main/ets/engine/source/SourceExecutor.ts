@@ -785,11 +785,6 @@ export class SourceExecutor {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  /** 简化 HTML 清理（仅剥离标签） */
-  private stripHtml(html: string): string {
-    return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
-  }
-
   private parseContentFromRules(html: string, rules: Record<string, string>): string {
     const contentParts = RuleParser.parse(html, rules['content'] || '') as string[];
     if (contentParts && Array.isArray(contentParts)) {
