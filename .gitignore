@@ -12,3 +12,6 @@
 /.appanalyzer
 .DS_Store
 /libs
+/test
+/.claude
+/.codegraph
