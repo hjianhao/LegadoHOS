@@ -61,6 +61,72 @@ export interface BookSource {
   // 自定义请求头（JSON 字符串，如 {"device":"xxx"}）
   header: string;
 
+  // --- 编辑页需要的扩展字段 ---
+  ruleSearchCheckKeyWord: string;
+  ruleSearchLastChapter: string;
+  ruleBookInfoLastChapter: string;
+  ruleBookInfoTocUrl: string;
+  ruleBookInfoCanReName: string;
+  ruleBookInfoDownloadUrls: string;
+  ruleBookInfoRelatedBooks: string;
+  ruleTocPreUpdateJs: string;
+  ruleTocFormatJs: string;
+  ruleTocIsVolume: string;
+  ruleTocIsVip: string;
+  ruleTocIsPay: string;
+  ruleTocUpdateTime: string;
+  ruleTocNextTocUrl: string;
+  ruleBookContentSubContent: string;
+  ruleBookContentTitle: string;
+  ruleBookContentWebJs: string;
+  ruleBookContentSourceRegex: string;
+  ruleBookContentReplaceRegex: string;
+  ruleBookContentImageStyle: string;
+  ruleBookContentImageDecode: string;
+  ruleBookContentPayAction: string;
+  ruleBookContentCallBackJs: string;
+  respondTime: number;
+  concurrentRate: string;
+  bookSourceComment: string;
+  variableComment: string;
+  coverDecodeJs: string;
+  loginUrl: string;
+  loginCheckJs: string;
+  jsLib: string;
+  bookUrlPattern: string;
+  respond: number;
+  ruleExploreScreen: string;
+  ruleExploreList: string;
+  ruleExploreName: string;
+  ruleExploreAuthor: string;
+  ruleExploreCover: string;
+  ruleExploreKind: string;
+  ruleExploreWordCount: string;
+  ruleExploreLastChapter: string;
+  ruleExploreLastUpdateTime: string;
+  ruleExploreNoteUrl: string;
+  ruleExploreIntroduce: string;
+  exploreUrl: string;
+  loginUi: string;
+  eventListener: boolean;
+  customButton: boolean;
+  homepageModules: string;
+  enabledCookieJar: boolean;
+  enabledExplore: boolean;
+  exploreScreen: string;
+  review: string;
+  ruleReviewUrl: string;
+  ruleReviewAvatar: string;
+  ruleReviewContent: string;
+  ruleReviewPostTime: string;
+  ruleReviewQuoteUrl: string;
+  reviewUrl: string;
+  reviewAvatar: string;
+  reviewContent: string;
+  reviewPostTime: string;
+  reviewQuoteUrl: string;
+  rawJson: string;
+
   // 时间
   createTime: number;
   updateTime: number;
@@ -184,6 +250,70 @@ export function parseBookSource(json: any): BookSource {
     ruleReview: toRuleString(json.ruleReview),
     script: toRuleString(json.script),
     header: toRuleString(json.header || ''),
+    ruleSearchCheckKeyWord: json.ruleSearchCheckKeyWord || json.checkKeyWord || '',
+    ruleSearchLastChapter: json.ruleSearchLastChapter || '',
+    ruleBookInfoLastChapter: json.ruleBookInfoLastChapter || '',
+    ruleBookInfoTocUrl: json.ruleBookInfoTocUrl || json.tocUrl || '',
+    ruleBookInfoCanReName: json.ruleBookInfoCanReName || '',
+    ruleBookInfoDownloadUrls: json.ruleBookInfoDownloadUrls || '',
+    ruleBookInfoRelatedBooks: json.ruleBookInfoRelatedBooks || '',
+    ruleTocPreUpdateJs: json.ruleTocPreUpdateJs || '',
+    ruleTocFormatJs: json.ruleTocFormatJs || '',
+    ruleTocIsVolume: json.ruleTocIsVolume || '',
+    ruleTocIsVip: json.ruleTocIsVip || '',
+    ruleTocIsPay: json.ruleTocIsPay || '',
+    ruleTocUpdateTime: json.ruleTocUpdateTime || '',
+    ruleTocNextTocUrl: json.ruleTocNextTocUrl || '',
+    ruleBookContentSubContent: json.ruleBookContentSubContent || '',
+    ruleBookContentTitle: json.ruleBookContentTitle || '',
+    ruleBookContentWebJs: json.ruleBookContentWebJs || '',
+    ruleBookContentSourceRegex: json.ruleBookContentSourceRegex || '',
+    ruleBookContentReplaceRegex: json.ruleBookContentReplaceRegex || '',
+    ruleBookContentImageStyle: json.ruleBookContentImageStyle || '',
+    ruleBookContentImageDecode: json.ruleBookContentImageDecode || '',
+    ruleBookContentPayAction: json.ruleBookContentPayAction || '',
+    ruleBookContentCallBackJs: json.ruleBookContentCallBackJs || '',
+    respondTime: json.respondTime || 0,
+    concurrentRate: json.concurrentRate || '',
+    bookSourceComment: json.bookSourceComment || '',
+    variableComment: json.variableComment || '',
+    coverDecodeJs: json.coverDecodeJs || '',
+    loginUrl: json.loginUrl || '',
+    loginCheckJs: json.loginCheckJs || '',
+    jsLib: json.jsLib || '',
+    bookUrlPattern: json.bookUrlPattern || '',
+    respond: json.respond || 0,
+    ruleExploreScreen: json.ruleExploreScreen || '',
+    ruleExploreList: json.ruleExploreList || '',
+    ruleExploreName: json.ruleExploreName || '',
+    ruleExploreAuthor: json.ruleExploreAuthor || '',
+    ruleExploreCover: json.ruleExploreCover || '',
+    ruleExploreKind: json.ruleExploreKind || '',
+    ruleExploreWordCount: json.ruleExploreWordCount || '',
+    ruleExploreLastChapter: json.ruleExploreLastChapter || '',
+    ruleExploreLastUpdateTime: json.ruleExploreLastUpdateTime || '',
+    ruleExploreNoteUrl: json.ruleExploreNoteUrl || '',
+    ruleExploreIntroduce: json.ruleExploreIntroduce || '',
+    exploreUrl: json.exploreUrl || '',
+    loginUi: json.loginUi || '',
+    eventListener: json.eventListener || false,
+    customButton: json.customButton || false,
+    homepageModules: json.homepageModules || '',
+    enabledCookieJar: json.enabledCookieJar !== false,
+    enabledExplore: json.enabledExplore !== false,
+    exploreScreen: json.exploreScreen || '',
+    review: json.review || '',
+    reviewUrl: json.reviewUrl || '',
+    ruleReviewUrl: json.ruleReviewUrl || '',
+    ruleReviewAvatar: json.ruleReviewAvatar || '',
+    ruleReviewContent: json.ruleReviewContent || '',
+    ruleReviewPostTime: json.ruleReviewPostTime || '',
+    ruleReviewQuoteUrl: json.ruleReviewQuoteUrl || '',
+    reviewAvatar: json.reviewAvatar || '',
+    reviewContent: json.reviewContent || '',
+    reviewPostTime: json.reviewPostTime || '',
+    reviewQuoteUrl: json.reviewQuoteUrl || '',
+    rawJson: json.rawJson || '',
     createTime: json.createTime || 0,
     updateTime: json.updateTime || 0,
   };
