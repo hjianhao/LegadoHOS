@@ -99,6 +99,22 @@ export class BookSourceTable {
     await this.rdbStore.delete(predicates);
   }
 
+  async toggleByUrl(url: string, enabled: boolean): Promise<void> {
+    const p = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
+    p.equalTo('source_url', url);
+    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, p);
+  }
+
+  async deleteByUrl(url: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
+    p.equalTo('source_url', url);
+    await this.rdbStore.delete(p);
+  }
+
+  async batchDeleteByUrl(urls: string[]): Promise<void> {
+    for (const u of urls) await this.deleteByUrl(u);
+  }
+
   async toggleEnabled(id: number, enabled: boolean): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', id);
