@@ -63,8 +63,12 @@ export class SettingsStore {
     return JSON.parse(val as string) as T;
   }
 
-  async put(key: string, value: any): Promise<void> {
+  async put(key: string, value: Object): Promise<void> {
     await this.store.put(key, JSON.stringify(value));
     await this.store.flush();
   }
+
+  // ---- 搜索历史 ----
+  async getSearchHistory(): Promise<string[]> { return await this.get<string[]>('search_history', []); }
+  async setSearchHistory(history: string[]): Promise<void> { await this.put('search_history', history); }
 }

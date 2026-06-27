@@ -1,5 +1,7 @@
 import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
+import { NetUtil } from '../util/NetUtil';
+import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 
 interface SettingItem { icon: string; title: string; key: string; }
 
@@ -9,15 +11,32 @@ export struct SettingsPage {
   @State currentSection: string = 'main';
   @State isDark: boolean = false;
   @State searchConcurrency: number = 16;
+  @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
+  @State dnsEnabled: boolean = true;
+  @State proxyHost: string = '';
+  @State proxyPort: string = '';
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
     this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
+    this.dnsServers = AppStorage.get<string>('dnsServers') || '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
+    this.dnsEnabled = AppStorage.get<boolean>('dnsEnabled') !== false;
+    this.proxyHost = AppStorage.get<string>('proxyHost') || '';
+    this.proxyPort = AppStorage.get<string>('proxyPort') || '';
+    NetUtil.setDns(this.dnsServers, this.dnsEnabled);
+    if (this.proxyHost && this.proxyPort) {
+      NetUtil.setProxy(this.proxyHost, parseInt(this.proxyPort));
+    }
+    this.syncWebViewNetwork();
+  }
+
+  private syncWebViewNetwork(): void {
+    const proxyUrl = this.proxyHost && this.proxyPort ? 'http://' + this.proxyHost + ':' + this.proxyPort : '';
+    WebViewFetcher.configureNetwork(this.dnsEnabled ? this.dnsServers : '', proxyUrl);
   }
 
   build() {
     Column() {
-      // 顶部栏
       Row() {
         if (this.currentSection !== 'main') {
           Text('< 返回').fontSize(16).fontColor('#0078D7').padding({ right: 12 })
@@ -35,6 +54,8 @@ export struct SettingsPage {
         this.buildReadSettings();
       } else if (this.currentSection === 'theme') {
         this.buildThemeSettings();
+      } else if (this.currentSection === 'network') {
+        this.buildNetSettings();
       } else if (this.currentSection === 'about') {
         this.buildAboutPage();
       }
@@ -48,6 +69,7 @@ export struct SettingsPage {
       ForEach([
         { icon: '\uD83D\uDCD6', title: '阅读设置', key: 'read' },
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
+        { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
         { icon: '\u2139\uFE0F', title: '关于', key: 'about' },
       ] as SettingItem[], (item: SettingItem) => {
@@ -129,6 +151,68 @@ export struct SettingsPage {
       }.padding(16).width('100%')
     }
     .width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  buildNetSettings() {
+    Column() {
+      Text('\uD83C\uDF10 网络设置').fontSize(16).fontWeight(FontWeight.Medium).padding(16).alignSelf(ItemAlign.Start)
+
+      // DNS 开关
+      Row() { Text('启用自定义 DNS').fontSize(15).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.dnsEnabled }).onChange((v: boolean) => {
+          this.dnsEnabled = v; AppStorage.set<boolean>('dnsEnabled', v);
+          NetUtil.setDns(this.dnsServers, v);
+          this.syncWebViewNetwork();
+        })
+      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+
+      // DNS 服务器
+      TextInput({ text: this.dnsServers, placeholder: '逗号分隔多个 DNS，如 8.8.8.8,114.114.114.114' })
+        .height(36).fontSize(13).layoutWeight(1).margin({ left: 16, right: 16 })
+        .onChange((v: string) => { this.dnsServers = v; })
+      Button('保存 DNS').fontSize(12).height(28).margin({ left: 16, top: 4 }).onClick(() => {
+        AppStorage.set<string>('dnsServers', this.dnsServers);
+        NetUtil.setDns(this.dnsServers, this.dnsEnabled);
+        this.syncWebViewNetwork();
+        promptAction.showToast({ message: 'DNS 已保存', duration: 1500 });
+      })
+
+      // 代理
+      Divider().margin({ top: 16 })
+      Text('HTTP 代理').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 12, bottom: 4 })
+
+      Row() {
+        TextInput({ text: this.proxyHost, placeholder: '代理地址 如 127.0.0.1' })
+          .height(36).fontSize(13).layoutWeight(1).margin({ left: 16 })
+          .onChange((v: string) => { this.proxyHost = v; })
+        TextInput({ text: this.proxyPort, placeholder: '端口' })
+          .height(36).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
+          .onChange((v: string) => { this.proxyPort = v; })
+      }.width('100%').margin({ top: 4 })
+
+      Row() {
+        Button('保存代理').fontSize(12).height(28).margin({ left: 16 }).onClick(() => {
+          AppStorage.set<string>('proxyHost', this.proxyHost);
+          AppStorage.set<string>('proxyPort', this.proxyPort);
+          const port = parseInt(this.proxyPort);
+          if (this.proxyHost && port > 0) NetUtil.setProxy(this.proxyHost, port);
+          else NetUtil.clearProxy();
+          this.syncWebViewNetwork();
+          promptAction.showToast({ message: '代理已保存', duration: 1500 });
+        })
+        Button('清除').fontSize(12).height(28).margin({ left: 8 }).backgroundColor('#FF5722').fontColor('#FFF').onClick(() => {
+          this.proxyHost = ''; this.proxyPort = '';
+          AppStorage.set<string>('proxyHost', '');
+          AppStorage.set<string>('proxyPort', '');
+          NetUtil.clearProxy();
+          this.syncWebViewNetwork();
+          promptAction.showToast({ message: '代理已清除', duration: 1500 });
+        })
+      }.margin({ top: 4 })
+
+      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor('#888').padding(16)
+    }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
   @Builder

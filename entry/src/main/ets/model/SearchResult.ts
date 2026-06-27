@@ -63,10 +63,10 @@ export function getBookMergeKey(name: string, author: string): string {
   n = n.replace(/[\s·・•:：,，。！？、…—\-_~～]+/g, '');
   a = a.replace(/[\s·・•:：,，。！？、…—\-_~～]+/g, '');
 
-  // 4. 截断
-  n = n.substring(0, 20);
-  a = a.substring(0, 10);
-
+  // 4. 作者为空时不参与匹配，避免因作者缺失导致同名书不归并
+  if (a.length === 0) {
+    return n;
+  }
   return n + '|' + a;
 }
 

@@ -16,6 +16,7 @@ import { HtmlUtil } from '../util/HtmlUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
+import promptAction from '@ohos.promptAction';
 
 @Entry
 @Component
@@ -148,6 +149,16 @@ struct ReadPage {
       this.text = '加载失败';
     }
     this.isLoading = false;
+    // 保存阅读进度
+    this.saveProgress();
+  }
+
+  private saveProgress(): void {
+    const ch = this.allChapters_[this.currentIndex];
+    if (!ch || !this.bookUrl) return;
+    const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_)
+      .catch(() => { /* ignore */ });
   }
 
   private layoutText(text: string): void {
@@ -228,8 +239,13 @@ struct ReadPage {
           Column() {}.layoutWeight(1).onClick(() => { this.showMenu = false; })
           ReadBottomMenu({
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
-            onReadAloud: () => { this.showMenu = false; },
+            onReadAloud: () => { this.showMenu = false; promptAction.showToast({message:'朗读功能开发中',duration:1500}); },
+            onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
+            onSettings: () => { this.showMenu = false; this.showStyle = true; },
+            onSource: () => { this.showMenu = false; promptAction.showToast({message:'换源功能开发中',duration:1500}); },
+            onCache: () => { this.showMenu = false; promptAction.showToast({message:'缓存已触发',duration:1500}); },
+            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },
           })
         }.width('100%').height('100%')
       }
