@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge, chrome=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes" />
+    <meta name="applicable-device" content="pc,mobile" />
+    <title>我的-小说搜索-饿狼小说</title>
+    <meta name="keywords" content="小说,小说网,免费小说,饿狼小说" />
+    <meta name="description" content="相关书籍作品展示。" />
+</head>
+
+<body>
+    
+<link rel="stylesheet" href="/static/css/sweet-alert.css" />
+<link rel="stylesheet" href="/static/css/style.css"/>
+<script src="/static/js/jquery.min.js"></script>
+<script src="/static/js/sweet-alert.min.js"></script>
+<script src="/static/js/novel.js"></script>
+<script src="/js/elkopartsnet.js"></script>
+
+  <div class="topbar">
+    <div class="topbar-con">
+      <div class="topbar-sethome">
+        <a href="javascript:winSetHP();">将本站设为首页</a>
+      </div>
+      <div class="topbar-addfavorite">
+        <a href="javascript:winAddFav()">收藏饿狼小说</a>
+      </div>
+      <div class="topbar-right">
+         <script>PCLogin()</script>
+      </div>
+    </div>
+  </div>
+
+  <div class="header">
+    <div class="logo"><a href="/" title="饿狼小说">饿狼小说</a></div>
+    <form action="/search.php" class="search-form" id="form">
+        <input class="input-text input-key" id="keyWord" name="keyWord" type="text" maxlength="30"
+            placeholder="可搜书名和作者，请您少字也别输错字。" />
+        <input type="submit" class="btn-tosearch" value="搜索" title="搜索"/>
+    </form>
+    <div class="m-user" style="color:#fff">
+       <script>MLogin()</script>
+    </div>
+  </div>
+
+  <ul class="nav">
+    <li><a href="/">首页</a></li>
+    <li><a rel="nofollow" href="/bookcase.php">永久书架</a></li>
+<li><a href="/ksl/1/1.html">玄幻奇幻</a></li>
+<li><a href="/ksl/2/1.html">武侠仙侠</a></li>
+<li><a href="/ksl/3/1.html">都市言情</a></li>
+<li><a href="/ksl/4/1.html">历史军事</a></li>
+<li><a href="/ksl/5/1.html">网游竞技</a></li>
+<li><a href="/ksl/6/1.html">科幻灵异</a></li>
+<li><a href="/ksl/7/1.html">女生频道</a></li>
+    <li><a href="/ph/">排行榜单</a></li>
+    <li><a href="/collect/">收藏榜单</a></li>
+    <li><a href="/wanbenxiaoshuo/">完本小说</a></li>
+    <li><a rel="nofollow" href="/reader/case.php">阅读记录</a></li>
+  </ul>
+  <ul class="m-nav">
+    <li><a href="/ph/">排行</a></li>
+    <li><a href="/collect/">收藏</a></li>
+    <li><a href="/wanbenxiaoshuo/">完本</a></li>
+    <li><a href="/reader/case.php">阅读记录</a></li>
+    <li><a href="/bookcase.php"  rel="nofollow">书架</a></li>
+  </ul>
+
+    <div class="container">
+        <div class="row">
+            <div class="layout layout2 layout-co18">
+                <h2 class="layout-tit">搜素""相关小说</h2>
+                
+        <ul class="txt-list txt-list-row5">
+            <li><span class="s1"><b>作品分类</b></span>
+                <span class="s2"><b>作品名称</b></span>
+                <span class="s3"><b>最新章节</b></span>
+                <span class="s4"><b>作者</b></span>
+                <span class="s5"><b>更新时间</b></span>
+            </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/70/70179/" >冲出四合院</a>
+                </span>
+                <span class="s3"><a href="/kanshu/70/70179/44804646.html" >完本感言</a></span>
+                <span class="s4">七五三幺</span>
+                <span class="s5">03-04</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/67/67451/" >方家四合院</a>
+                </span>
+                <span class="s3"><a href="/kanshu/67/67451/35610208.html" >第102章 赎妓女传宗接代 犯糊涂觉阙杀妻</a></span>
+                <span class="s4">笑着人生</span>
+                <span class="s5">06-27</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/68/68584/" >四合院之光</a>
+                </span>
+                <span class="s3"><a href="/kanshu/68/68584/39681872.html" >番外：最成功的奥运会！</a></span>
+                <span class="s4">一斤五百克</span>
+                <span class="s5">04-02</span>
+                </li>
+                 <li>
+                <span class="s1">[都市言情]</span>
+                <span class="s2">
+                    <a href="/kanshu/17/17516/" >开局签到四合院</a>
+                </span>
+                <span class="s3"><a href="/kanshu/17/17516/43031376.html" >第五百三十三章 旧金山（求订阅!!!）</a></span>
+                <span class="s4">吃好睡吧</span>
+                <span class="s5">01-31</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/62/62992/" >四合院之首富</a>
+                </span>
+                <span class="s3"><a href="/kanshu/62/62992/29595892.html" >20 找关系</a></span>
+                <span class="s4">金一丹</span>
+                <span class="s5">11-07</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63134/" >四合院：飞扬人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63134/29630294.html" >第四百九十八章 清风徐徐</a></span>
+                <span class="s4">腐竹人生</span>
+                <span class="s5">08-08</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/58/58322/" >四合院的生活</a>
+                </span>
+                <span class="s3"><a href="/kanshu/58/58322/30063669.html" >第五百五十二章 人哪有这么娇气</a></span>
+                <span class="s4">缺点东西</span>
+                <span class="s5">10-06</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/71/71081/" >四合院重生1960</a>
+                </span>
+                <span class="s3"><a href="/kanshu/71/71081/34632421.html" >第271章七年后</a></span>
+                <span class="s4">淡品人生</span>
+                <span class="s5">04-30</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63703/" >四合院：垃圾王</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63703/44319529.html" >第一百九十章 浮出水面（三）</a></span>
+                <span class="s4">骑龙的虾</span>
+                <span class="s5">01-30</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/77/77672/" >四合院回到五零</a>
+                </span>
+                <span class="s3"><a href="/kanshu/77/77672/39315618.html" >番外 ：结束亦是开始</a></span>
+                <span class="s4">南京香烟</span>
+                <span class="s5">03-13</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/114/114072/" >四合院：婴儿报到</a>
+                </span>
+                <span class="s3"><a href="/kanshu/114/114072/46109378.html" >第166章 第166章</a></span>
+                <span class="s4">枕月清禾</span>
+                <span class="s5">05-27</span>
+                </li>
+                 <li>
+                <span class="s1">[女生小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/21/21764/" >燃烧我的四合院</a>
+                </span>
+                <span class="s3"><a href="/kanshu/21/21764/11186614.html" >大结局 终章 大团圆</a></span>
+                <span class="s4">爱读个书</span>
+                <span class="s5">04-30</span>
+                </li>
+                 <li>
+                <span class="s1">[都市言情]</span>
+                <span class="s2">
+                    <a href="/kanshu/83/83506/" >乱世四合院，护花狂士</a>
+                </span>
+                <span class="s3"><a href="/kanshu/83/83506/36271442.html" >第6章 七十二变的分身法</a></span>
+                <span class="s4">解释心</span>
+                <span class="s5">08-12</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/68/68820/" >四合院的钓鱼佬</a>
+                </span>
+                <span class="s3"><a href="/kanshu/68/68820/36355641.html" >第870章 每个人都有光明的未来！（完）</a></span>
+                <span class="s4">酒阑牵丝戏</span>
+                <span class="s5">08-18</span>
+                </li>
+                 <li>
+                <span class="s1">[历史军事]</span>
+                <span class="s2">
+                    <a href="/kanshu/88/88416/" >四合院之魏晋风流</a>
+                </span>
+                <span class="s3"><a href="/kanshu/88/88416/37748215.html" >AAAAA 第45章  宣传是什么？</a></span>
+                <span class="s4">闹闹</span>
+                <span class="s5">11-18</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/62/62177/" >四合院之生活不易</a>
+                </span>
+                <span class="s3"><a href="/kanshu/62/62177/29387207.html" >第三章 这事应该找三大爷</a></span>
+                <span class="s4">野菜拌饭</span>
+                <span class="s5">10-02</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/62/62939/" >四合院之笑看风云</a>
+                </span>
+                <span class="s3"><a href="/kanshu/62/62939/29580645.html" >014章淮如芳心暗许，遇野猪</a></span>
+                <span class="s4">香菇朵朵</span>
+                <span class="s5">11-11</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63722/" >四合院：我的世界</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63722/29797179.html" >第七章</a></span>
+                <span class="s4">可可逗逗</span>
+                <span class="s5">12-17</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/64/64462/" >四合院之傻柱</a>
+                </span>
+                <span class="s3"><a href="/kanshu/64/64462/30008565.html" >第十六章 撕开面具</a></span>
+                <span class="s4">虹猫啊</span>
+                <span class="s5">02-10</span>
+                </li>
+                 <li>
+                <span class="s1">[玄幻小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/58/58334/" >四合院之无节操系统</a>
+                </span>
+                <span class="s3"><a href="/kanshu/58/58334/28471368.html" >第二百六十八章 最后的选择（大结局）</a></span>
+                <span class="s4">第四架</span>
+                <span class="s5">12-10</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/60/60925/" >四合院：最后的赢家</a>
+                </span>
+                <span class="s3"><a href="/kanshu/60/60925/29081111.html" >新书：激情澎湃的青春</a></span>
+                <span class="s4">曹丞相大人</span>
+                <span class="s5">03-30</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/52/52309/" >聚宝盆从四合院开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/52/52309/26913080.html" >五百二十八章、全书完</a></span>
+                <span class="s4">漫步的乌龟</span>
+                <span class="s5">05-31</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/114/114405/" >四合院之全员恶人</a>
+                </span>
+                <span class="s3"><a href="/kanshu/114/114405/46563589.html" >第528章 摔门而出</a></span>
+                <span class="s4">梅子酒0623</span>
+                <span class="s5">06-25</span>
+                </li>
+                 <li>
+                <span class="s1">[都市言情]</span>
+                <span class="s2">
+                    <a href="/kanshu/37/37005/" >我们四合院的故事</a>
+                </span>
+                <span class="s3"><a href="/kanshu/37/37005/18906688.html" >第八十六章扒四合院</a></span>
+                <span class="s4">金朋飞</span>
+                <span class="s5">05-18</span>
+                </li>
+                 <li>
+                <span class="s1">[都市言情]</span>
+                <span class="s2">
+                    <a href="/kanshu/79/79941/" >四合院的红火人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/79/79941/46560909.html" >第1076章 各自的忙碌</a></span>
+                <span class="s4">北湖的芦苇</span>
+                <span class="s5">06-25</span>
+                </li>
+                 <li>
+                <span class="s1">[都市言情]</span>
+                <span class="s2">
+                    <a href="/kanshu/82/82122/" >四合院：开局得到系统</a>
+                </span>
+                <span class="s3"><a href="/kanshu/82/82122/36918643.html" >第160章最后的最后</a></span>
+                <span class="s4">作家一片枫叶</span>
+                <span class="s5">09-25</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/62/62881/" >四合院之低调生活</a>
+                </span>
+                <span class="s3"><a href="/kanshu/62/62881/29562357.html" >第18章 许大茂相亲</a></span>
+                <span class="s4">逝流光</span>
+                <span class="s5">11-29</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63578/" >四合院：霸道的人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63578/46274025.html" >第一千五百四十六章 杨柳登门说项</a></span>
+                <span class="s4">天青无尘</span>
+                <span class="s5">06-06</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63629/" >四合院：美好人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63629/38159427.html" >第913章 棒梗入职！</a></span>
+                <span class="s4">夜的邂逅</span>
+                <span class="s5">12-22</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63839/" >四合院之游戏人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63839/29822253.html" >0009章 全院大会结束，上秦家村提亲</a></span>
+                <span class="s4">香蕉米粉</span>
+                <span class="s5">12-16</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/64/64426/" >四合院之精彩人生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/64/64426/33258557.html" >第二百五十七章 结局</a></span>
+                <span class="s4">舞平生</span>
+                <span class="s5">02-14</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/64/64603/" >四合院：请老祖升天</a>
+                </span>
+                <span class="s3"><a href="/kanshu/64/64603/30045181.html" >第12章：根本不会怕你</a></span>
+                <span class="s4">水的一塌糊涂</span>
+                <span class="s5">02-06</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/66/66815/" >四合院之随身农场</a>
+                </span>
+                <span class="s3"><a href="/kanshu/66/66815/37166570.html" >第205章蓝血公主</a></span>
+                <span class="s4">岭南醉客</span>
+                <span class="s5">10-06</span>
+                </li>
+                 <li>
+                <span class="s1">[科幻小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/51/51432/" >从四合院开始新生</a>
+                </span>
+                <span class="s3"><a href="/kanshu/51/51432/37213128.html" >新书：诸天之两界珠</a></span>
+                <span class="s4">下乡寻萝</span>
+                <span class="s5">10-10</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/54/54219/" >四合院的生活日常</a>
+                </span>
+                <span class="s3"><a href="/kanshu/54/54219/31244842.html" >第367章 真真假假又有何妨</a></span>
+                <span class="s4">正经胖哥</span>
+                <span class="s5">12-02</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/54/54294/" >四合院之好好活着</a>
+                </span>
+                <span class="s3"><a href="/kanshu/54/54294/34610754.html" >新书</a></span>
+                <span class="s4">我是小木子</span>
+                <span class="s5">04-28</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/54/54788/" >诸天：从四合院开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/54/54788/27540189.html" >第二百六十二章 完</a></span>
+                <span class="s4">灭了的星</span>
+                <span class="s5">04-30</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/55/55269/" >四合院：拯救各位邻居</a>
+                </span>
+                <span class="s3"><a href="/kanshu/55/55269/27682408.html" >这本书成绩不好，明天停了！</a></span>
+                <span class="s4">冷公子哇</span>
+                <span class="s5">05-25</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/57/57048/" >四合院：神级木匠</a>
+                </span>
+                <span class="s3"><a href="/kanshu/57/57048/28118962.html" >第九九零章 十年后归来，依然如故（大结局）</a></span>
+                <span class="s4">金刀巫妖皇</span>
+                <span class="s5">06-03</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/57/57579/" >四合院：全听我的！</a>
+                </span>
+                <span class="s3"><a href="/kanshu/57/57579/28268340.html" >125、大结局【写得不好，提前落幕】</a></span>
+                <span class="s4">独孤十九</span>
+                <span class="s5">07-31</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/60/60413/" >四合院从恋爱开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/60/60413/28949443.html" >第277章幸福生活( 大结局)</a></span>
+                <span class="s4">月光很白</span>
+                <span class="s5">12-31</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/113/113763/" >四合院：何家老幺</a>
+                </span>
+                <span class="s3"><a href="/kanshu/113/113763/45932346.html" >第155章 易中海被抓【完】</a></span>
+                <span class="s4">一v瞬v间</span>
+                <span class="s5">04-04</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/114/114006/" >四合院：摊牌易中海</a>
+                </span>
+                <span class="s3"><a href="/kanshu/114/114006/46016010.html" >第295章 完结</a></span>
+                <span class="s4">浮夸DW</span>
+                <span class="s5">05-12</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/108/108655/" >逆袭从四合院开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/108/108655/45260032.html" >第一卷 第135章 老东西你想害我</a></span>
+                <span class="s4">夜梦凡尘</span>
+                <span class="s5">04-06</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/70/70206/" >四合院：刚醒就让我转业</a>
+                </span>
+                <span class="s3"><a href="/kanshu/70/70206/33893294.html" >第216章 结局</a></span>
+                <span class="s4">一口肥肉都不吃</span>
+                <span class="s5">03-15</span>
+                </li>
+                 <li>
+                <span class="s1">[女生频道]</span>
+                <span class="s2">
+                    <a href="/kanshu/104/104151/" >规则怪谈，从四合院开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/104/104151/42871730.html" >第78章 不会改变</a></span>
+                <span class="s4">珍妮马戴劲</span>
+                <span class="s5">10-31</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/62/62153/" >四合院：快意人生的日子</a>
+                </span>
+                <span class="s3"><a href="/kanshu/62/62153/35682153.html" >第 753 章未完待续</a></span>
+                <span class="s4">野生屑作者</span>
+                <span class="s5">07-02</span>
+                </li>
+                 <li>
+                <span class="s1">[其他小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63112/" >四合院之我爱我家</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63112/29621205.html" >第421章幸福的四合院(大结局)</a></span>
+                <span class="s4">茶水很甜</span>
+                <span class="s5">09-04</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/63/63407/" >影视融合从四合院开始</a>
+                </span>
+                <span class="s3"><a href="/kanshu/63/63407/33398109.html" >第487章：</a></span>
+                <span class="s4">离开的狐狸</span>
+                <span class="s5">02-19</span>
+                </li>
+                 <li>
+                <span class="s1">[都市小说]</span>
+                <span class="s2">
+                    <a href="/kanshu/64/64276/" >四合院之从钳工做起</a>
+                </span>
+                <span class="s3"><a href="/kanshu/64/64276/29959920.html" >完本感言</a></span>
+                <span class="s4">西北老顽童</span>
+                <span class="s5">07-20</span>
+                </li>
+        </ul>
+    
+        <ul class="txt-list txt-list-row5">
+            
+</ul>
+    
+            </div>
+        </div>
+    </div>
+
+    
+<div class="footer" id="footer">
+    <div class="pc-footer">
+        <p>本站所有小说为转载作品，所有章节均由网友上传，转载至本站只是为了宣传本书让更多读者欣赏。</p>
+    </div>
+    <div class="m-footer">
+        <a href="/">首页</a>
+        <a href="/bookcase.php" rel="nofollow">我的书架</a>
+        <a href="/reader/case.php" rel="nofollow">阅读记录</a>
+        <a href="#">顶部↑</a>
+    </div>
+</div>
+</body>
+<script>tj();</script>
+</html>
