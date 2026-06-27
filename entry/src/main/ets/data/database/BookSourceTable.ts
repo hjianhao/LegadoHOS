@@ -50,6 +50,15 @@ export const BookSourceTableCreate = `
   );
 `;
 
+export interface PreviewItem {
+  name: string;
+  url: string;
+  status: 'new' | 'update' | 'existing';
+  source: BookSource;
+  rawJson: string;
+  checked: boolean;
+}
+
 export class BookSourceTable {
   static readonly TABLE_NAME = 'book_sources';
   private rdbStore: relationalStore.RdbStore;
@@ -175,6 +184,39 @@ export class BookSourceTable {
       ruleExplores: s.ruleExplores,
       script: s.script,
     })), null, 2);
+  }
+
+  // ---- 预览式导入 ----
+
+  async importSourcesPreview(jsonText: string): Promise<PreviewItem[]> {
+    const parsed = JSON.parse(jsonText);
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    const result: PreviewItem[] = [];
+    for (let i = 0; i < arr.length; i++) {
+      const src = parseBookSource(arr[i]);
+      const raw = JSON.stringify(arr[i]);
+      const exist = await this.getSourceByUrl(src.sourceUrl);
+      const status = exist ? ((exist.updateTime || 0) < (src.updateTime || 0) ? 'update' : 'existing') : 'new';
+      result.push({ name: src.sourceName, url: src.sourceUrl, status, source: src, rawJson: raw, checked: status !== 'existing' });
+    }
+    return result;
+  }
+
+  async importSelected(items: PreviewItem[], keepName: boolean, keepGroup: boolean, keepEnabled: boolean, customGroup: string): Promise<number> {
+    let count = 0;
+    for (const item of items) {
+      if (!item.checked) continue;
+      const src = item.source;
+      if (keepName) { const exist = await this.getSourceByUrl(src.sourceUrl); if (exist) src.sourceName = exist.sourceName; }
+      if (!keepGroup) src.group = customGroup || src.group;
+      if (keepEnabled) { const exist = await this.getSourceByUrl(src.sourceUrl); if (exist) src.enabled = exist.enabled; }
+      setSourceRawJson(src, item.rawJson);
+      const exist = await this.getSourceByUrl(src.sourceUrl);
+      if (exist) { src.id = exist.id; await this.updateSource(src); }
+      else { await this.insertSource(src); }
+      count++;
+    }
+    return count;
   }
 
   // ---- 搜索与过滤 ----
