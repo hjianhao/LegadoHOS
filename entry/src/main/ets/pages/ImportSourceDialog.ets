@@ -24,18 +24,39 @@ export struct ImportSourceDialog {
       if (!uris || uris.length === 0) return;
       this.isLoading = true;
       const uri: string = uris[0];
+      console.info('[Import] selected URI:', uri);
+      // open file and read as text
       const file: fileIo.File = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
-      const buf: ArrayBuffer = new ArrayBuffer(1024 * 1024);
-      const len: number = fileIo.readSync(file.fd, buf);
-      fileIo.closeSync(file);
-      const bytes: Uint8Array = new Uint8Array(buf, 0, len);
-      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
-      const json: string = decoder.decodeWithStream(bytes, { stream: false });
-      await this.importJson_(json);
+      try {
+        const stat: fileIo.Stat = fileIo.statSync(file.fd);
+        const size: number = stat.size;
+        const buf: ArrayBuffer = new ArrayBuffer(size);
+        const len: number = fileIo.readSync(file.fd, buf);
+        // 使用 TextDecoder（UTF-8 正确解码中文）
+        const td: util.TextDecoder = util.TextDecoder.create('utf-8');
+        const json: string = td.decodeWithStream(new Uint8Array(buf, 0, len), { stream: false });
+        await this.importJson_(json);
+      } finally { fileIo.closeSync(file); }
     } catch (e) {
-      promptAction.showToast({ message: '文件读取失败', duration: 1500 });
+      const msg: string = (e as Error).message || String(e);
+      console.error('[Import] error:', msg);
+      promptAction.showToast({ message: '读取失败: ' + msg.substring(0, 40), duration: 2000 });
       this.isLoading = false;
     }
+  }
+
+  private arrayBufferToString(buf: ArrayBuffer): string {
+    const bytes: Uint8Array = new Uint8Array(buf);
+    // 跳过 UTF-8 BOM
+    let start = 0;
+    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+      start = 3;
+    }
+    let result: string = '';
+    for (let i = start; i < bytes.length; i++) {
+      result += String.fromCharCode(bytes[i]);
+    }
+    return result;
   }
 
   /** 离线导入：粘贴 JSON 内容 */
@@ -59,7 +80,8 @@ export struct ImportSourceDialog {
       this.controller.close();
       if (this.onImportSuccess) this.onImportSuccess();
     } catch (e) {
-      promptAction.showToast({ message: 'JSON格式错误', duration: 2000 });
+      const msg: string = (e as Error).message || String(e);
+      promptAction.showToast({ message: 'JSON格式错误: ' + msg.substring(0, 30), duration: 2500 });
       this.isLoading = false;
     }
   }
