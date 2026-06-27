@@ -109,7 +109,7 @@ struct ReadPage {
           }
         }
       }
-      if (chapters.length === 0) { this.text = '无目录'; this.isLoading = false; return; }
+      if (chapters.length === 0) { this.text = '无目录'; this.isLoading = false; console.info('[ReadPage] no chapters'); return; }
       this.allChapters_ = chapters;
       this.totalChapters_ = chapters.length;
       this.currentIndex = this.targetIdx_ >= 0 && this.targetIdx_ < chapters.length ? this.targetIdx_ : 0;
