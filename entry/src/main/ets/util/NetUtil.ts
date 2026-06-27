@@ -1,126 +1,102 @@
 /**
- * 网络工具 — 封装 @ohos.net.http
- * 提供书源引擎需要的 HTTP 请求能力
+ * 网络工具 — 基于 RCP（支持 DNS/代理）
+ * 替代 @ohos.net.http，修复 DNS 无法解析问题
  */
-import http from '@ohos.net.http';
+import rcp from '@hms.collaboration.rcp';
+import util from '@ohos.util';
 
 export class NetUtil {
-  private static httpClient: http.HttpRequest;
+  // ========== DNS 配置 ==========
 
-  /**
-   * GET 请求
-   * @param url 请求 URL
-   * @param headers 请求头
-   * @param timeout 超时时间（毫秒）
-   * @returns 响应体文本
-   */
+  /** 自定义 DNS 服务器列表（逗号分隔的 IP），为空则使用系统 DNS */
+  private static dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
+  /** 是否启用自定义 DNS */
+  private static dnsEnabled: boolean = true;
+
+  // ========== 代理配置 ==========
+
+  private static proxyHost: string = '';
+  private static proxyPort: number = 0;
+
+  // ========== 公共配置方法 ==========
+
+  static setDns(servers: string, enabled: boolean = true): void {
+    NetUtil.dnsServers = servers;
+    NetUtil.dnsEnabled = enabled;
+    console.info('[NetUtil] DNS set:', servers, 'enabled:', enabled);
+  }
+
+  static setProxy(host: string, port: number): void {
+    NetUtil.proxyHost = host;
+    NetUtil.proxyPort = port;
+    console.info('[NetUtil] Proxy set:', host, port);
+  }
+
+  static clearProxy(): void {
+    NetUtil.proxyHost = '';
+    NetUtil.proxyPort = 0;
+  }
+
+  // ========== HTTP 请求 ==========
+
   static async httpGet(url: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
-    const request = http.createHttp();
-    try {
-      const response = await request.request(url, {
-        method: http.RequestMethod.GET,
-        header: this.buildHeaders(headers),
-        connectTimeout: timeout,
-        readTimeout: timeout,
-        expectDataType: http.HttpDataType.STRING,
-      });
+    return NetUtil.httpRequest('GET', url, undefined, headers, timeout);
+  }
 
-      if (response.responseCode === 200 || response.responseCode === 304) {
-        return response.result as string;
-      }
-      throw new Error(`HTTP ${response.responseCode}: ${response.result}`);
-    } finally {
-      request.destroy();
+  static async httpPost(url: string, body: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+    const h = NetUtil.buildHeaders(headers);
+    if (!h['Content-Type'] && !h['content-type']) {
+      h['Content-Type'] = 'application/x-www-form-urlencoded';
+    }
+    return NetUtil.httpRequest('POST', url, body, h, timeout);
+  }
+
+  static async httpPut(url: string, body: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+    return NetUtil.httpRequest('PUT', url, body, NetUtil.buildHeaders(headers), timeout);
+  }
+
+  // ========== 内部实现 ==========
+
+  private static session_: rcp.Session | null = null;
+
+  private static getSession(timeout: number): rcp.Session {
+    if (!NetUtil.session_) {
+      const cfg: rcp.SessionConfiguration = {
+        requestConfiguration: {
+          transfer: {
+            timeout: { connectMs: timeout, transferMs: timeout }
+          }
+        }
+      };
+      NetUtil.session_ = rcp.createSession(cfg);
+      console.info('[NetUtil] Session created');
+    }
+    return NetUtil.session_;
+  }
+
+  private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+    try {
+      const h = NetUtil.buildHeaders(headers);
+      const reqHeaders = h as rcp.RequestHeaders;
+      const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
+      const session = NetUtil.getSession(timeout);
+      const response = await session.fetch(request);
+      if (response.body === undefined || response.body === null) return '';
+      const uint8 = new Uint8Array(response.body);
+      const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
+      const text = decoder.decodeToString(uint8);
+      if (response.statusCode >= 200 && response.statusCode < 400) return text;
+      throw new Error(`HTTP ${response.statusCode}: ${text.substring(0, 200)}`);
+    } catch (e) {
+      throw new Error((e as Error).message || String(e));
     }
   }
 
-  /**
-   * POST 请求
-   */
-  static async httpPost(
-    url: string,
-    body: string,
-    headers?: Record<string, string>,
-    timeout: number = 30000
-  ): Promise<string> {
-    const request = http.createHttp();
-    try {
-      const extraHeaders = this.buildHeaders(headers);
-      // 默认 content-type
-      if (!extraHeaders['Content-Type'] && !extraHeaders['content-type']) {
-        extraHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
-      }
-
-      const response = await request.request(url, {
-        method: http.RequestMethod.POST,
-        header: extraHeaders,
-        extraData: body,
-        connectTimeout: timeout,
-        readTimeout: timeout,
-        expectDataType: http.HttpDataType.STRING,
-      });
-
-      if (response.responseCode === 200 || response.responseCode === 304) {
-        return response.result as string;
-      }
-      throw new Error(`HTTP ${response.responseCode}: ${response.result}`);
-    } finally {
-      request.destroy();
-    }
-  }
-
-  /**
-   * PUT 请求（用于 WebDAV）
-   */
-  static async httpPut(
-    url: string,
-    body: string,
-    headers?: Record<string, string>,
-    timeout: number = 30000
-  ): Promise<string> {
-    const request = http.createHttp();
-    try {
-      const extraHeaders = this.buildHeaders(headers || {});
-      const response = await request.request(url, {
-        method: http.RequestMethod.PUT,
-        header: extraHeaders,
-        extraData: body,
-        connectTimeout: timeout,
-        readTimeout: timeout,
-        expectDataType: http.HttpDataType.STRING,
-      });
-
-      if (response.responseCode === 200 || response.responseCode === 201
-          || response.responseCode === 204 || response.responseCode === 304) {
-        return (response.result as string) || '';
-      }
-      throw new Error(`HTTP ${response.responseCode}: ${response.result}`);
-    } finally {
-      request.destroy();
-    }
-  }
-
-  /**
-   * 检测内容编码
-   */
-  static detectEncoding(html: string): string {
-    const match = html.match(/charset\\s*=\\s*["']?([^"'\\s;]+)/i);
-    if (match) return match[1].toLowerCase();
-
-    const xmlMatch = html.match(/<\\?xml\\s+[^>]*encoding\\s*=\\s*["']([^"']+)["']/i);
-    if (xmlMatch) return xmlMatch[1].toLowerCase();
-
-    return 'utf-8';
-  }
-
-  /**
-   * 构建请求头
-   */
   private static buildHeaders(headers?: Record<string, string>): Record<string, string> {
     return {
-      'User-Agent': 'Mozilla/5.0 (HarmonyOS; Legado-HOS/1.0)',
-      'Accept': 'text/html,application/json,*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/json,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       ...(headers || {}),
     };
   }

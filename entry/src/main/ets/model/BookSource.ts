@@ -180,6 +180,7 @@ export interface BookSourceChapter {
   title: string;
   url: string;
   index: number;
+  isVolume?: boolean;  // 是否是卷标题
 }
 
 /**

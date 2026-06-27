@@ -35,6 +35,7 @@ export struct ChapterListPage {
   @State displayChapters: BookSourceChapter[] = [];  // 排序后的显示列表
   @State isAscending: boolean = true;      // 是否正序（默认正序）
   @State isLoading: boolean = true;
+  @State showVolumes: boolean = false;      // 是否检测到卷分组
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, string>;
@@ -104,8 +105,28 @@ export struct ChapterListPage {
         'ch' + (this.chapters.length - 1) + '=' + this.chapters[this.chapters.length - 1].title.substring(0, 20));
     }
     this.ensureAscendingOrder();
+    this.detectVolumes();
     this.applySort(this.isAscending);
     this.isLoading = false;
+  }
+
+  /** 检测卷标题：标题不含数字或含"卷"字的视为卷标题 */
+  private detectVolumes(): void {
+    let volumeCount = 0;
+    for (const ch of this.chapters) {
+      const t = ch.title.trim();
+      if (t.length < 1) continue;
+      const hasDigits = /\d/.test(t);
+      const hasVol = /卷|部分|篇\s*$|部\s*$/.test(t);
+      if ((!hasDigits && t.length <= 10) || hasVol) {
+        ch.isVolume = true;
+        volumeCount++;
+      } else {
+        ch.isVolume = false;
+      }
+    }
+    this.showVolumes = volumeCount > 0;
+    if (volumeCount > 0) console.info('[ChapterList] Detected', volumeCount, 'volumes');
   }
 
   /** 按章节数字强制升序排列（无数字的章节排最后） */
@@ -242,30 +263,38 @@ export struct ChapterListPage {
         List({ space: 0 }) {
           ForEach(this.displayChapters, (ch: BookSourceChapter, idx?: number) => {
             ListItem() {
-              Row() {
-                // 序号
-                Text(String(ch.index + 1)).fontSize(12)
-                  .fontColor(this.isDark ? '#666' : '#BBB')
-                  .width(36).textAlign(TextAlign.End)
-                  .margin({ right: 8 })
-                // 标题
-                Text(ch.title).fontSize(14)
-                  .fontColor(ch.index === this.durChapterIndex
-                    ? '#0078D7'
-                    : (this.isDark ? '#CCC' : '#444'))
-                  .fontWeight(ch.index === this.durChapterIndex
-                    ? FontWeight.Bold
-                    : FontWeight.Normal)
-                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .layoutWeight(1)
+              if (ch.isVolume) {
+                // 卷标题
+                Row() {
+                  Text(ch.title).fontSize(15).fontWeight(FontWeight.Bold)
+                    .fontColor(this.isDark ? '#0078D7' : '#0078D7')
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .width('100%').padding({ top: 12, bottom: 12, left: 16, right: 16 })
+                .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD')
+              } else {
+                Row() {
+                  Text(String(ch.index + 1)).fontSize(12)
+                    .fontColor(this.isDark ? '#666' : '#BBB')
+                    .width(36).textAlign(TextAlign.End)
+                    .margin({ right: 8 })
+                  Text(ch.title).fontSize(14)
+                    .fontColor(ch.index === this.durChapterIndex
+                      ? '#0078D7'
+                      : (this.isDark ? '#CCC' : '#444'))
+                    .fontWeight(ch.index === this.durChapterIndex
+                      ? FontWeight.Bold
+                      : FontWeight.Normal)
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .layoutWeight(1)
+                }
+                .width('100%').padding({ top: 10, bottom: 10, left: 16, right: 16 })
+                .backgroundColor(ch.index === this.durChapterIndex
+                  ? (this.isDark ? '#1A2A3A' : '#E8F4FD')
+                  : 'transparent')
               }
-              .width('100%')
-              .padding({ top: 10, bottom: 10, left: 16, right: 16 })
-              .backgroundColor(ch.index === this.durChapterIndex
-                ? (this.isDark ? '#1A2A3A' : '#E8F4FD')
-                : 'transparent')
             }
-            .onClick(() => { this.onChapterClick(ch); })
+            .onClick(() => { if (!ch.isVolume) this.onChapterClick(ch); })
           }, (ch: BookSourceChapter) => ch.index.toString())
         }
         .layoutWeight(1).width('100%')

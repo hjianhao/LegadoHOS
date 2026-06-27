@@ -5,10 +5,12 @@ import { BookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ImportSourceDialog } from './ImportSourceDialog';
+import { SourceChecker, CheckResult, CheckDetail } from '../service/SourceChecker';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
+import { WebViewEngine } from '../components/WebViewEngine';
 
 @Entry
 @Component
@@ -26,6 +28,12 @@ struct BookSourcePage {
   @State showImport: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuIdx: number = -1;
+  @State isChecking: boolean = false;
+  @State checkProgress: number = 0;
+  @State checkTotal: number = 0;
+  @State checkResults: CheckResult[] = [];
+  @State checkResByUrl: Map<string, CheckResult> = new Map();
+  @State showCheckSummary: boolean = false;
 
   private dao_: BookSourceTable | null = null;
   private groups_: string[] = [];
@@ -121,6 +129,39 @@ struct BookSourcePage {
     this.dao_?.batchDeleteByUrl?.(urls).then(() => { this.load(); this.selectMode = false; promptAction.showToast({message:'已删除 '+urls.length+' 个',duration:1500}); });
   }
 
+  private getCheckDetails(url: string): CheckDetail[] {
+    const res: CheckResult | undefined = this.checkResByUrl.get(url);
+    if (res !== undefined && res.details) {
+      return res.details;
+    }
+    return [];
+  }
+
+  private startCheck(): void {
+    const toCheck: BookSource[] = [];
+    for (let i = 0; i < this.filtered.length; i++) if (this.selected[i]) toCheck.push(this.filtered[i]);
+    if (toCheck.length === 0) { promptAction.showToast({message:'请先选择书源',duration:1500}); return; }
+
+    this.isChecking = true;
+    this.checkTotal = toCheck.length;
+    this.checkProgress = 0;
+    this.checkResults = [];
+    this.checkResByUrl = new Map();
+    this.showCheckSummary = false;
+    this.selectMode = false;
+
+    const checker = new SourceChecker({keyword:'凡人修仙传',timeout:20000,checkSearch:true,checkDiscovery:false,checkInfo:false,checkCategory:true,checkContent:true});
+    checker.checkSources(toCheck, (completed: number, total: number, result: CheckResult) => {
+      this.checkProgress = completed;
+      this.checkTotal = total;
+      this.checkResults.push(result);
+      this.checkResByUrl.set(result.sourceUrl, result);
+    }).then(() => {
+      this.isChecking = false;
+      this.showCheckSummary = true;
+    });
+  }
+
   private getSelCount(): number { return this.selected.filter(Boolean).length; }
 
   build() {
@@ -172,11 +213,36 @@ struct BookSourcePage {
       else { List(){ForEach(this.getDisplayList(),(s:BookSource,idx:number)=>{ListItem(){this.item(s,idx)}.border({width:{bottom:1},color:this.isDark?'#333':'#E8E8E8'})})}.layoutWeight(1) }
 
       // 批量操作栏（复刻 Android SelectActionBar）
-      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(12).fontColor('#666').margin({left:8}).layoutWeight(1);Button('全选').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{for(let i=0;i<this.selected.length;i++)this.selected[i]=true});Button('启用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(false)});Button('分组').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{promptAction.showToast({message:'分组功能待实现',duration:1500})});Button('校验').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).backgroundColor('#FF9800').fontColor('#FFF').onClick(()=>{promptAction.showToast({message:'校验功能待实现',duration:1500})});Button('导出').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(11).height(28).padding({left:6,right:6}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(42).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
+      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(12).fontColor('#666').margin({left:8}).layoutWeight(1);Button(this.getSelCount()===this.selected.length?'取消':'全选').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{const all=this.getSelCount()===this.selected.length;for(let i=0;i<this.selected.length;i++)this.selected[i]=!all});Button('启用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(false)});Button('分组').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{promptAction.showToast({message:'分组功能待实现',duration:1500})});Button('校验').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).backgroundColor('#FF9800').fontColor('#FFF').onClick(()=>{this.startCheck()}).enabled(!this.isChecking);Button('导出').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(11).height(28).padding({left:6,right:6}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(42).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
+
+      // 校验进度条
+      if (this.isChecking) {
+        Column() {
+          Progress({value:this.checkProgress,total:Math.max(1,this.checkTotal),type:ProgressType.Linear}).width('100%').color('#FF9800').style({strokeWidth:4})
+          Text(this.checkProgress + '/' + this.checkTotal + ' 已完成').fontSize(11).fontColor('#888').margin({top:3})
+        }.width('100%').padding({left:12,right:12,top:6,bottom:6})
+      }
+
+      // 校验结果摘要
+      if (this.showCheckSummary && this.checkResults.length > 0) {
+        Column() {
+          Row() {
+            Text('校验结果').fontSize(13).fontWeight(FontWeight.Medium).layoutWeight(1)
+            Text('关闭').fontSize(12).fontColor('#0078D7').onClick(()=>{this.showCheckSummary=false})
+          }.width('100%').padding({left:12,right:12,top:8,bottom:4})
+          Row() {
+            Text('通过: '+this.checkResults.filter((r:CheckResult)=>r.status==='success').length).fontSize(11).fontColor('#4CAF50').margin({right:12})
+            Text('部分: '+this.checkResults.filter((r:CheckResult)=>r.status==='partial').length).fontSize(11).fontColor('#FF9800').margin({right:12})
+            Text('失败: '+this.checkResults.filter((r:CheckResult)=>r.status==='fail').length).fontSize(11).fontColor('#FF5722')
+          }.padding({left:12,right:12,bottom:8})
+        }.width('100%').backgroundColor(this.isDark?'#1A1A1A':'#FFF').margin({top:4}).borderRadius(8)
+      }
     }.width('100%').height('100%').backgroundColor(this.isDark?'#121212':'#F5F5F5').onClick(()=>{this.showSortMenu=false;this.contextMenuIdx=-1})
 
     // 导入弹窗
     if (this.showImport) { Column(){}.layoutWeight(1).onClick(()=>{this.showImport=false}); ImportSourceDialog({controller:new CustomDialogController({builder:ImportSourceDialog({}),autoCancel:true}),onImportSuccess:()=>{this.showImport=false;this.load()}}) }
+    // 隐藏 WebView（Cloudflare 兜底）
+    WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
     }.width('100%').height('100%')
   }
 
@@ -186,16 +252,27 @@ struct BookSourcePage {
       Column() {
         Row() {
           Text(s.sourceName||'未命名').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.isDark?'#E0E0E0':'#333').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
-          .onClick(()=>{if(!this.selectMode)router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}})})
           if (!this.selectMode) { Toggle({type:ToggleType.Switch,isOn:s.enabled}).width(36).height(20).margin({left:6}).onChange((v:boolean)=>{s.enabled=v;this.dao_?.toggleByUrl?.(s.sourceUrl,v)}) }
         }.width('100%')
         Text(s.sourceUrl).fontSize(11).fontColor(this.isDark?'#888':'#AAA').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).width('100%').margin({top:2})
+        // 校验结果标签（仿 Android）
+        if (!this.selectMode && this.checkResByUrl.has(s.sourceUrl)) {
+          Row() {
+            ForEach(this.getCheckDetails(s.sourceUrl), (d: CheckDetail, i: number) => {
+              this.checkBadge(d)
+            }, (d: CheckDetail): string => d.name)
+            Blank()
+          }.width('100%').margin({top:4})
+        }
         Row() {
           if (s.group) { Text(s.group).fontSize(10).fontColor('#0078D7').padding({left:6,right:6,top:1,bottom:1}).backgroundColor('#0078D71A').borderRadius(8).margin({right:6}) }
           Text('权重:'+(s.weight||0)).fontSize(10).fontColor('#999').margin({right:8})
           if (s.ruleSearchUrl) { Text('🔍').fontSize(10).fontColor('#4CAF50') }
           Blank()
           if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).select(this.selected[idx]||false).selectedColor('#0078D7').margin({left:4}).onChange((v:boolean)=>{this.selected[idx]=v}) }
+          if (!this.selectMode) {
+            Text('✎').fontSize(16).fontColor('#0078D7').margin({left:6}).onClick(()=>{router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}})})
+          }
         }.width('100%').margin({top:3})
       }.layoutWeight(1)
       .onClick(() => { if (this.selectMode) this.toggleSelect(idx); })
@@ -225,5 +302,18 @@ struct BookSourcePage {
       .position({x:'calc(100% - 140)',y:40}).zIndex(100)
     }
     }.width('100%')
+  }
+
+  @Builder checkBadge(d: CheckDetail) {
+    Row() {
+      Circle({width:6,height:6}).fill(d.passed?'#4CAF50':'#FF5722')
+      if (d.passed) {
+        Text(d.name + (d.duration > 0 ? ' ' + d.duration + 'ms' : ''))
+          .fontSize(10).fontColor('#4CAF50').margin({left:3})
+      } else {
+        Text(d.name + ': ' + d.message)
+          .fontSize(10).fontColor('#FF5722').margin({left:3}).maxLines(1)
+      }
+    }.padding({left:5,right:5,top:2,bottom:2}).backgroundColor(d.passed?'#4CAF5018':'#FF572218').borderRadius(4).margin({right:4})
   }
 }

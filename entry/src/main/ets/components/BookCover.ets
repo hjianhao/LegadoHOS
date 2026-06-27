@@ -1,8 +1,5 @@
 /**
  * 书籍封面组件
- *
- * 优先加载网络封面图，加载失败时降级显示首字母色块
- * 用于书架列表/网格和搜索结果
  */
 @Component
 export struct BookCover {
@@ -11,10 +8,20 @@ export struct BookCover {
   @Prop coverWidth: number = 52;
   @Prop coverHeight: number = 70;
   @State imgFailed: boolean = false;
+  @State useNetwork: boolean = true;
+
+  aboutToAppear(): void {
+    // 过滤无效封面 URL（数字、空、非 http/data 开头）
+    if (this.coverUrl && !/^(https?:\/\/|\/\/|data:)/.test(this.coverUrl)) {
+      this.coverUrl = '';
+    }
+    this.useNetwork = !!this.coverUrl;
+    console.info('[BookCover] init name=' + (this.name||'').substring(0,10) + ' url=' + (this.coverUrl||'').substring(0,50));
+  }
 
   build() {
     Stack() {
-      // 降级色块（始终渲染）
+      // 降级色块
       Column() {
         Text(this.name ? this.name.charAt(0) : '?')
           .fontSize(this.coverWidth > 50 ? 22 : 18)
@@ -26,12 +33,13 @@ export struct BookCover {
       .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
 
       // 网络封面
-      if (this.coverUrl && !this.imgFailed) {
+      if (this.useNetwork && this.coverUrl && !this.imgFailed) {
         Image(this.coverUrl)
           .width(this.coverWidth).height(this.coverHeight)
           .borderRadius(6)
           .objectFit(ImageFit.Cover)
-          .onError(() => {
+          .onError((err: ImageError) => {
+            console.warn('[BookCover] img failed url=' + (this.coverUrl||'').substring(0,50) + ' err=' + (err?.message || ''));
             this.imgFailed = true;
           })
       }

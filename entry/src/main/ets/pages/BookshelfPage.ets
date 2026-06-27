@@ -33,6 +33,7 @@ export struct BookshelfPage {
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
+    this.sortMode = AppStorage.get<number>('shelfSortMode') || 0;
     this.loadBooks();
   }
 
@@ -105,6 +106,7 @@ export struct BookshelfPage {
 
   onSortToggle(): void {
     this.sortMode = (this.sortMode + 1) % 3;
+    AppStorage.set<number>('shelfSortMode', this.sortMode);
     this.applyFilters();
   }
 
@@ -143,6 +145,30 @@ export struct BookshelfPage {
     } catch (e) {
       console.error('[Bookshelf] remove error:', e);
     }
+  }
+
+  /** 长按菜单 */
+  showContextMenu(book: Book): void {
+    promptAction.showDialog({
+      title: book.name,
+      message: '作者: ' + (book.author || '未知'),
+      buttons: [
+        { text: '详情', color: '#0078D7' },
+        { text: '删除', color: '#FF5722' },
+        { text: '取消', color: '#888' }
+      ]
+    }).then((res: Object) => {
+      const idx = (res as Record<string, Object>)['index'] as number;
+      if (idx === 0) {
+        router.pushUrl({ url: 'pages/BookInfoPage', params: {
+          name: book.name, author: book.author, coverUrl: book.coverUrl,
+          noteUrl: book.bookUrl, origin: book.origin, originUrl: book.originUrl,
+          introduce: book.introduce || '', kind: book.kind || ''
+        }});
+      } else if (idx === 1) {
+        this.confirmRemove(book);
+      }
+    });
   }
 
   confirmRemove(book: Book): void {
@@ -264,15 +290,19 @@ export struct BookshelfPage {
         }.width('100%').alignItems(HorizontalAlign.Center).layoutWeight(1)
       } else if (this.isListView) {
         // ----- 列表视图 -----
-        List() {
-          ForEach(this.filteredBooks, (book: Book) => {
-            ListItem() {
-              this.buildListItem(book)
-            }
-            .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
-            .onClick(() => { this.continueRead(book); })
-          })
-        }.width('100%').layoutWeight(1).margin({ top: 4 })
+        Refresh({ refreshing: this.isLoading }) {
+          List() {
+            ForEach(this.filteredBooks, (book: Book) => {
+              ListItem() {
+                this.buildListItem(book)
+              }
+              .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+              .onClick(() => { this.continueRead(book); })
+              .gesture(LongPressGesture().onAction(() => { this.showContextMenu(book); }))
+            })
+          }.width('100%').layoutWeight(1).margin({ top: 4 })
+        }
+        .onRefreshing(() => { this.loadBooks(); })
       } else {
         // ----- 网格视图 -----
         Grid() {

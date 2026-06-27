@@ -12,13 +12,14 @@ import { RuleParser } from './RuleParser';
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
+import { WebViewFetcher } from '../web/WebViewFetcher';
 
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
 }
 
-function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string } {
+function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
   const encoded = encodeURIComponent(keyword);
   let url = template
     .replace(/\{\{key\}\}/g, encoded)
@@ -40,24 +41,38 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     url = url.replace(pageGroupMatch[0], items[idx].trim());
   }
 
+  // 相对路径处理 — 必须在 JSON 选项提取之前，保证 URL 以 http(s):// 开头
+  if (!url.startsWith('http://') && !url.startsWith('https://') && baseUrl) {
+    const base = baseUrl.replace(/\/+$/, '');
+    url = base + (url.startsWith('/') ? url : '/' + url);
+  }
+
   // 处理 URL 末尾的 JSON 选项: url,{"method":"POST","body":"..."} 或 url{"method":"POST",...}
   let method = 'GET';
   let body = '';
   let charset = '';
+  let webView = false;
 
   // 先尝试匹配带逗号的: url,{...}
-  let jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{.*\})$/);
+  let jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
   if (!jsonOptMatch) {
     // 再尝试不用逗号的: url{...}（某些源省略了逗号）
-    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)(\{.*\})$/);
+    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)(\{[\s\S]*\})$/);
   }
   if (!jsonOptMatch) {
     // 最后尝试: url#xxx{...} (有 # 选择器后跟 JSON)
-    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)#[^,]*?,?(\{.*\})$/);
+    jsonOptMatch = url.match(/^(https?:\/\/[^#]+)#[^,]*?,?(\{[\s\S]*\})$/);
+  }
+
+  /** 从 JSON 字符串中提取 webView/webview 标志 */
+  function extractWebView(jsonStr: string): boolean {
+    return /"web\s*[Vv]iew"\s*:\s*true/i.test(jsonStr) ||
+      /'web\s*[Vv]iew'\s*:\s*true/i.test(jsonStr);
   }
 
   if (jsonOptMatch) {
-    url = jsonOptMatch[1].replace(/#.*$/, ''); // 去掉 # 选择器部分
+    url = jsonOptMatch[1].replace(/#.*$/, '');
+    webView = extractWebView(jsonOptMatch[2]);
     try {
       const opts = JSON.parse(jsonOptMatch[2]);
       if (opts.method) method = opts.method.toUpperCase();
@@ -66,18 +81,41 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
         .replace(/\{\{keyword\}\}/g, encoded)
         .replace(/\{\{page\}\}/g, String(page));
       if (opts.charset) charset = opts.charset;
-    } catch (_e) { /* ignore parse errors */ }
+      if (opts.webView !== undefined) webView = !!opts.webView;
+      if (opts.webview !== undefined) webView = !!opts.webview;
+    } catch (_e) {
+      const raw = jsonOptMatch[2].replace(/\n/g, ' ');
+      const methodMatch = raw.match(/'method'\s*:\s*'([^']*)'/i);
+      if (methodMatch) method = methodMatch[1].toUpperCase();
+      const charsetMatch = raw.match(/'charset'\s*:\s*'([^']*)'/i);
+      if (charsetMatch) charset = charsetMatch[1];
+      const bodyMatch = raw.match(/'body'\s*:\s*'(.*)'\s*[,}]?\s*$/);
+      if (bodyMatch) {
+        body = bodyMatch[1].replace(/\{\{key\}\}/g, encoded).replace(/\{\{keyword\}\}/g, encoded).replace(/\{\{page\}\}/g, String(page));
+      } else {
+        const bodyMatch2 = raw.match(/'body'\s*:\s*'(.*)'\s*[,}]/);
+        if (bodyMatch2) body = bodyMatch2[1].replace(/\{\{key\}\}/g, encoded).replace(/\{\{keyword\}\}/g, encoded).replace(/\{\{page\}\}/g, String(page));
+      }
+    }
   }
 
-  // 相对路径处理
-  if (!url.startsWith('http://') && !url.startsWith('https://') && baseUrl) {
-    const base = baseUrl.replace(/\/+$/, '');
-    url = base + (url.startsWith('/') ? url : '/' + url);
+  // 检查是否有第二层 ,{"webView": true} — 去掉它
+  const secondJsonMatch = url.match(/^(https?:\/\/[^#]+?),(\{[\s\S]*\})$/);
+  if (secondJsonMatch) {
+    url = secondJsonMatch[1];
+    if (!webView) webView = extractWebView(secondJsonMatch[2]);
   }
+
+  // ##webView 后缀
+  if (/##web\s*[Vv]iew/i.test(url)) {
+    webView = true;
+    url = url.replace(/##web\s*[Vv]iew/i, '');
+  }
+
   // 清理多余的空白
   url = url.trim();
 
-  return { url, method, body, charset };
+  return { url, method, body, charset, webView };
 }
 
 function parseHeader(headerStr: string): Record<string, string> {
@@ -132,25 +170,52 @@ export class SourceExecutor {
      */
     function formatBookName(raw: string): string {
       let n = raw
+        .replace(/\s*[|｜]\s*作\s*者[:：\s].*$/g, '')
         .replace(/\s+作\s*者[:：\s].*$/g, '')
         .replace(/\s+\S+\s+著\s*$/g, '')
         .replace(/[-—·・][\s]*作\s*者[:：\s].*$/g, '')
+        // 拆分符：书名 第X章 → 只留书名
+        .replace(/\s+第[一二三四五六七八九十\d零○百千]+\s*[章节回卷].*$/g, '')
+        .replace(/\s+第[一二三四五六七八九十\d零○百千]+.*$/g, '')
+        // 分类标签
+        .replace(/\s*[（(]?(全本|全文|完结|完本|连载|连载中|已完结|已完本|精校|精校版|无错版|无删减|未删减|珍藏版|修订版|校对版)[）)]?\s*$/g, '')
+        .replace(/\s*[（(]?(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|其他|男频|女频|修真|修真小说|竞技|网游|悬疑|推理|恐怖|冒险|穿越|重生|系统|末世|废土|异界|异能|进化|无限|洪荒|西游|水浒|三国|红楼|聊斋|封神|神话|民间|传奇|传说)[）)]?\s*$/g, '')
+        // 去掉末尾的 | 或空括号
+        .replace(/[\s]*[|｜][\s]*$/g, '')
+        .replace(/[\s]*[\[【（(][\]】）)]*$/g, '')
+        // 去掉末尾逗号及之后
+        .replace(/[\s]*[，,].*$/g, '')
+        .replace(/[\s]*[-—]\s*[^-—]+$/g, '')  // "书名 - 网站名"
         .trim();
-      // 移除 "最新章节" / "最后更新" / "今日更新" 及后续内容
-      n = n.replace(/(最新章节|最后更新|今日更新).*$/g, '');
-      // 移除开头结尾的 《》『』""「」
+      n = n.replace(/(最新章节|最后更新|今日更新|本站推荐).*$/g, '');
       n = n.replace(/^[《『""「」''【[（(]+|[》』""「」''】\])）]+$/g, '');
       return n.trim();
     }
 
-    /**
-     * 判断一个搜索结果是否有效（放宽过滤，只排除明显不是书籍的条目）
-     */
     function isValidBookName(name: string): boolean {
-      if (!name || name.length < 2 || name.length > 50) return false;
+      if (!name || name.length < 2 || name.length > 80) return false;
       // 章节标题
-      if (/^第[一二三四五六七八九十\d零○\s、.．]/.test(name)) return false;
-      if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新)/.test(name)) return false;
+      if (/^第[一二三四五六七八九十\d零○百千]+\s*[章节回卷]/.test(name)) return false;
+      if (/^第[一二三四五六七八九十\d零○百千]+$/.test(name)) return false;
+      // 新闻/标签类
+      if (/^(最新章节|最后更新|今日更新|本站推荐|热门推荐|本页推荐|精品推荐|推荐阅读|最新入库)$/.test(name)) return false;
+      // 纯数字/日期
+      if (/^\d{4}-\d{2}(-\d{2})?$/.test(name)) return false;
+      if (/^[0-9\-\.]+$/.test(name)) return false;
+      // 单个分类词
+      if (/^(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|男频|女频|完本|全本|连载|排行榜|热门|推荐|最新|免费|VIP|完结|全本)$/.test(name)) return false;
+      if (/^(网游|网游竞技|网游小说|竞技|体育竞技|体育小说)$/.test(name)) return false;
+      // 网站导航关键词
+      if (/^(首页|书架|分类|排行|完本|免费|登录|注册|关于|帮助|联系我们|网站地图|设为首页|收藏本站)$/.test(name)) return false;
+      // 短分类词（2字且全汉字，很可能是分类标签）
+      if (name.length === 2 && /^[\u4e00-\u9fff]{2}$/.test(name)) {
+        const commonCategories = ['玄幻','奇幻','仙侠','武侠','都市','言情','历史','军事','科幻',
+          '灵异','游戏','体育','同人','竞技','悬疑','推理','恐怖','冒险','穿越','重生','系统',
+          '网游','末世','废土','修真','修仙','异界','异能','进化','无限','洪荒','西游','水浒',
+          '三国','红楼','聊斋','封神','神话','民间','传奇','传说','下载','完本','全本','免费'];
+        if (commonCategories.includes(name)) return false;
+      }
+      if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新|本站推荐|热门推荐)/.test(name)) return false;
       // 常见非书籍名（精确匹配）
       const commonNonBook = new Set([
         '首页','书架','分类','排行','完本','免费','登录','注册',
@@ -239,15 +304,14 @@ export class SourceExecutor {
       }
     }
 
-    // 每个源独立搜索，每完成一个就触发回调
+    // 每个源独立搜索，每完成一个就触发回调（加超时兜底）
     const runOneSource = async (source: BookSource): Promise<void> => {
       if (!source.enabled || !source.ruleSearchUrl) return;
       try {
-        const results = await this.searchSingle(keyword, source);
-        // 增量合并该源的结果到持久 Map
+        const results = await this.searchWithTimeout(keyword, source, 20000);
         incrementMerge(results);
       } catch (_e) {
-        // 单个源失败不影响其他源
+        // 单个源失败/超时不影响其他源
       } finally {
         processedCount++;
         // 每完成一个源都回调（无论是否有结果）
@@ -283,11 +347,24 @@ export class SourceExecutor {
   private async searchSingle(keyword: string, source: BookSource): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     const baseUrl = getBaseUrl(source.sourceUrl);
-    const { url, method, body, charset } = buildUrl(source.ruleSearchUrl, keyword, 1, baseUrl);
+    const { url, method, body, charset, webView } = buildUrl(source.ruleSearchUrl, keyword, 1, baseUrl);
 
     if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       console.warn('[SrcEx] Invalid URL for', source.sourceName, ':', url);
       return [];
+    }
+
+    // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
+    if (webView && WebViewFetcher.isReady() && method !== 'POST') {
+      console.info('[SrcEx] WebView request (source config) for', source.sourceName);
+      try {
+        const wvResult = await WebViewFetcher.fetch(url, 30000);
+        const bodyText = wvResult.html;
+        if (bodyText && bodyText.length > 100) {
+          console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
+          return this.parseResponse(bodyText, source, baseUrl, 0);
+        }
+      } catch (_wv) { /* WebView failed, try direct */ }
     }
 
     try {
@@ -304,9 +381,9 @@ export class SourceExecutor {
 
       let bodyText = '';
       if (method === 'POST') {
-        bodyText = await NetUtil.httpPost(url, body || '', headers);
+        bodyText = await NetUtil.httpPost(url, body || '', headers, 15000);
       } else {
-        bodyText = await NetUtil.httpGet(url, headers);
+        bodyText = await NetUtil.httpGet(url, headers, 15000);
       }
       if (!bodyText) {
         console.warn('[SrcEx] Empty response from', source.sourceName);
@@ -314,108 +391,144 @@ export class SourceExecutor {
       }
       console.info('[SrcEx] Got', bodyText.length, 'bytes from', source.sourceName);
 
-      // === 第一步：JSON 直接解析（API 类书源） ===
-      try {
-        const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
-        const results = this.parseJsonResults(jsonObj, source, baseUrl, 0);
-        if (results.length > 0) {
-          console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
-          return results;
-        }
-      } catch (_e) { /* not JSON */ }
-
-      // === 第二步：用 HtmlParser + CSS 选择器提取（使用书源规则） ===
-      if (source.ruleSearchList) {
-        try {
-          const results = this.extractWithParser(bodyText, source, baseUrl);
-          if (results.length > 0) {
-            console.info('[SrcEx] Parser CSS:', results.length, 'from', source.sourceName);
-            return results;
-          }
-        } catch (_e) {
-          console.warn('[SrcEx] Parser error:', (_e as Error).message);
-        }
-      }
-
-      // === 第三步：通用 HTML 书名提取（兜底） ===
-      console.info('[SrcEx] Fallback extract for', source.sourceName);
-      const items = this.extractBookNamesFromHtml(bodyText, baseUrl);
-      if (items.length > 0) {
-        console.info('[SrcEx] Fallback:', items.length, 'items from', source.sourceName);
-        return items.map((item, idx: number): SearchResult => {
-          // 从书名中分离作者（常见格式: "书名 作者：XXX"）
-          let name = item.name;
-          let author = '';
-
-          // 尝试从书名文本中提取作者
-          const authorMatch = name.match(/^(.+?)[\s]*[-—·・][\s]*作\s*者[:：\s](.+)$/);
-          if (authorMatch) {
-            name = authorMatch[1].trim();
-            author = authorMatch[2].trim();
-          } else {
-            const simpleMatch = name.match(/^(.+?)[\s]+([\u4e00-\u9fff]{2,4})$/);
-            if (simpleMatch) {
-              // 仅当末尾2-4字看起来像中文名（非书名后缀）才分割
-              const potentialAuthor = simpleMatch[2];
-              if (!/^(全集|全本|全文|正文|完整版|精校版)$/.test(potentialAuthor)) {
-                name = simpleMatch[1].trim();
-                author = potentialAuthor;
-              }
-            }
-          }
-
-          // 尝试从链接上下文提取作者
-          if (!author && item.url) {
-            const pos = bodyText.indexOf(item.url.replace(baseUrl, ''));
-            if (pos >= 0) {
-              const ctxStart = Math.max(0, pos - 200);
-              const ctx = bodyText.substring(ctxStart, pos + 100);
-              // 匹配 "作者：XXX" 或 "/XXX" 等模式（在链接附近）
-              const nearbyAuthor = ctx.match(/作\s*者[：:]\s*([^\s<&]{2,8})/);
-              if (nearbyAuthor) {
-                author = nearbyAuthor[1].trim();
-              }
-            }
-          }
-          // 提取封面（在链接附近找图片）
-          let coverUrl = '';
-          if (item.url) {
-            const pos = bodyText.indexOf(item.url.replace(baseUrl, ''));
-            const ctxStart = Math.max(0, (pos >= 0 ? pos : 0) - 800);
-            const ctxEnd = Math.min(bodyText.length, (pos >= 0 ? pos : idx * 200) + 1200);
-            const ctx = bodyText.substring(ctxStart, ctxEnd);
-            const imgM = ctx.match(/<img[^>]*(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["'][^>]*>/i);
-            coverUrl = imgM ? imgM[1] : '';
-            if (!coverUrl) {
-              const bgM = ctx.match(/background-image:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
-              coverUrl = bgM ? bgM[1] : '';
-            }
-            if (coverUrl && !coverUrl.startsWith('http')) {
-              coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
-            }
-          }
-          return {
-            key: (source.sourceUrl || '') + '|' + item.url + '|' + idx,
-            name: name || item.name, author: author || '',
-            coverUrl: coverUrl || '', noteUrl: item.url || '',
-            origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
-            kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
-            duration: 0, searchTime: Date.now(),
-            sourceCount: 1, sourceOrigins: [],
-          };
-        });
-      }
-
-      console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', bodyText.length);
-      return [];
+      return this.parseResponse(bodyText, source, baseUrl, 0);
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg.includes('403') || msg.includes('Cloudflare')) {
+      if ((msg.includes('403') || msg.includes('Cloudflare')) && WebViewFetcher.isReady()) {
         this.lastBlockedUrl = url;
-        console.info('[SrcEx] 403/Cloudflare detected for', source.sourceName, url.substring(0, 60));
+        console.info('[SrcEx] 403/Cloudflare detected, trying WebView for', source.sourceName);
+        try {
+          const wvResult = await WebViewFetcher.fetch(url, 20000);
+          const wvHtml = wvResult.html;
+          if (wvHtml && wvHtml.length > 100) {
+            console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);
+            return this.parseResponse(wvHtml, source, baseUrl, Date.now() - Date.now());
+          }
+        } catch (_wv) { /* WebView fallback also failed */ }
       }
       console.warn('[SrcEx] Search failed', source.sourceName, ':', msg);
       return [];
+    }
+  }
+
+  /** 带超时的搜索（20s 总超时，兜底 WebView hang 等） */
+  private searchWithTimeout(keyword: string, source: BookSource, timeoutMs: number): Promise<SearchResult[]> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('搜索超时')), timeoutMs);
+      this.searchSingle(keyword, source).then(r => { clearTimeout(timer); resolve(r); }).catch(e => { clearTimeout(timer); reject(e); });
+    });
+  }
+
+  /** 将搜索 HTML dump 到日志（用于诊断） */
+  private dumpHtml(sourceName: string, html: string): void {
+    // 分段输出（每段 500 字符，避免单行过长）
+    const chunkSize = 500;
+    console.info('[SrcEx] HTML DUMP START:', sourceName, 'len=', html.length);
+    for (let i = 0; i < Math.min(html.length, 5000); i += chunkSize) {
+      console.info('[SrcEx] HTML', sourceName, i, html.substring(i, i + chunkSize));
+    }
+    console.info('[SrcEx] HTML DUMP END:', sourceName);
+  }
+
+  /** 解析搜索响应：先 JSON，再 HTML，再 Fallback */
+  private parseResponse(bodyText: string, source: BookSource, baseUrl: string, duration: number): SearchResult[] {
+    // JSON 直接解析（API 类书源）
+    try {
+      const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
+      const results = this.parseJsonResults(jsonObj, source, baseUrl, duration);
+      if (results.length > 0) {
+        console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
+        return results;
+      }
+    } catch (_e) { /* not JSON */ }
+
+    // HtmlParser + CSS 选择器
+    if (source.ruleSearchList) {
+      const results = this.extractWithParser(bodyText, source, baseUrl);
+      if (results.length > 0) {
+        console.info('[SrcEx] Parser CSS:', results.length, 'from', source.sourceName);
+        return results;
+      }
+    }
+
+    // Fallback
+    return this.fallbackExtract(bodyText, source, baseUrl);
+  }
+
+  private fallbackExtract(html: string, source: BookSource, baseUrl: string): SearchResult[] {
+    const parser = getHtmlParser();
+    const doc = parser.parse(html);
+    const links = parser.querySelectorAll(doc, 'a[href]');
+    const results: SearchResult[] = [];
+    const seen = new Set<string>();
+    for (const a of links) {
+      const name = a.text.trim();
+      if (!name || name.length < 2 || name.length > 50) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      let href = a.attributes['href'] || '';
+      if (href && !href.startsWith('http')) {
+        href = (baseUrl || '') + (href.startsWith('/') ? href : '/' + href);
+      }
+      results.push({
+        key: (source.sourceUrl || '') + '|' + href, name: name, author: '',
+        coverUrl: '', noteUrl: href || '', origin: source.sourceName || '未知',
+        originUrl: source.sourceUrl || '', kind: '', wordCount: '', lastUpdateTime: '',
+        introduce: '', helperMsg: '', duration: 0, searchTime: Date.now(),
+        sourceCount: 1, sourceOrigins: source.sourceName ? [source.sourceName] : []
+      });
+    }
+    if (results.length > 0) {
+      console.info('[SrcEx] Fallback:', results.length, 'items from', source.sourceName);
+    } else {
+      console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', html.length);
+    }
+    return results;
+  }
+
+  // ============ 书籍详情 ============
+
+  /**
+   * 获取书籍详情信息（名称、作者、封面、简介等）
+   * 使用书源的 ruleBookInfo* 规则解析详情页 HTML
+   */
+  async getBookInfo(source: BookSource, noteUrl: string): Promise<BookSourceBookInfo> {
+    if (!noteUrl || !source) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
+    const baseUrl = getBaseUrl(source.sourceUrl);
+    if (!noteUrl.startsWith('http')) {
+      noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+    }
+    try {
+      const headers: Record<string, string> = {
+        'Accept': 'text/html,application/json,*/*',
+        'Referer': source.sourceUrl || '',
+        ...parseHeader(source.header)
+      };
+      const body = await NetUtil.httpGet(noteUrl, headers);
+      if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
+
+      const parser = getHtmlParser();
+      const doc = parser.parse(body);
+      const root: unknown = doc; // HtmlElement
+
+      const extractField = (rule: string): string => {
+        if (!rule) return '';
+        const normalized = this.normalizeCssRule(rule);
+        return parser.extractAttr(doc, normalized);
+      };
+
+      return {
+        name: extractField(source.ruleBookInfoName) || '',
+        author: extractField(source.ruleBookInfoAuthor) || '',
+        coverUrl: extractField(source.ruleBookInfoCover) || '',
+        introduce: extractField(source.ruleBookInfoIntroduce) || '',
+        kind: extractField(source.ruleBookInfoKind) || '',
+        wordCount: extractField(source.ruleBookInfoWordCount) || '',
+        lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
+        chapters: [],
+      };
+    } catch (_e) {
+      return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
     }
   }
 
@@ -568,6 +681,34 @@ export class SourceExecutor {
   // ============ HtmlParser + CSS 选择器提取 ============
 
   /**
+   * 将 Legado Default 规则语法转换为标准 CSS
+   * - id.xxx → #xxx
+   * - .class@tag → .class tag (后代)
+   * - tag@tag → tag tag (后代)
+   * - @@class → .class (简写)
+   * 仅当 @ 后为已知 HTML 标签名或 .class 时才展开，避免误转换 @js: @put: 等
+   */
+  private normalizeCssRule(rule: string): string {
+    if (!rule) return '';
+    const htmlTags = new Set<string>(['div','span','a','p','li','ul','ol','tr','td','th','table','tbody','thead',
+      'tfoot','h1','h2','h3','h4','h5','h6','img','dl','dt','dd','em','strong','b','i','u','s','br','hr',
+      'form','input','button','select','option','textarea','label','pre','code','blockquote','section','nav',
+      'header','footer','article','aside','main','figure','figcaption','video','audio','source','iframe']);
+    // 1. id.xxx → #xxx
+    let normalized = rule.replace(/\bid\.([\w-]+)/g, '#$1');
+    // 2. @@class →  .class (Legado 简写)
+    normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
+    // 3. @后跟标签名 → 空格 + 标签名（后代）
+    normalized = normalized.replace(/@(\w[\w-]*)/g, (match: string, afterAt: string) => {
+      if (htmlTags.has(afterAt.toLowerCase())) return ' ' + afterAt;
+      if (afterAt.startsWith('.')) return ' ' + afterAt;
+      if (afterAt.startsWith('#')) return ' ' + afterAt;
+      return match;
+    });
+    return normalized;
+  }
+
+  /**
    * 使用 HtmlParser 解析 HTML，通过 CSS 选择器提取搜索结果
    * 替代之前损坏的 RuleParser 和正则方案
    */
@@ -577,8 +718,9 @@ export class SourceExecutor {
     const parser = getHtmlParser();
     const doc = parser.parse(body);
 
-    // 用 ruleSearchList 查找结果列表
-    const items = parser.querySelectorAll(doc, source.ruleSearchList);
+    // 用 ruleSearchList 查找结果列表（规则标准化）
+    const listRule = this.normalizeCssRule(source.ruleSearchList);
+    const items = parser.querySelectorAll(doc, listRule);
     if (!items || items.length === 0) {
       console.info('[SrcEx] CSS list rule found 0 items for', source.sourceName,
         'rule:', source.ruleSearchList);
@@ -586,11 +728,12 @@ export class SourceExecutor {
     }
     console.info('[SrcEx] CSS list rule found', items.length, 'items for', source.sourceName);
 
+    const nameRule = this.normalizeCssRule(source.ruleSearchName || '');
+    const authorRule = this.normalizeCssRule(source.ruleSearchAuthor || '');
+    const coverRule = this.normalizeCssRule(source.ruleSearchCover || '');
+    const noteUrlRule = this.normalizeCssRule(source.ruleSearchNoteUrl || '');
+
     const results: SearchResult[] = [];
-    const nameRule = source.ruleSearchName || '';
-    const authorRule = source.ruleSearchAuthor || '';
-    const coverRule = source.ruleSearchCover || '';
-    const noteUrlRule = source.ruleSearchNoteUrl || '';
 
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -631,11 +774,20 @@ export class SourceExecutor {
         coverUrl = parser.extractAttr(item, coverRule);
       }
       if (!coverUrl) {
-        // 取第一个图片
+        // 取第一个图片（尝试多种 src 属性）
         const imgs = parser.querySelectorAll(item, 'img');
         if (imgs.length > 0) {
-          coverUrl = parser.getAttr(imgs[0], 'src') || parser.getAttr(imgs[0], 'data-src') || '';
+          for (const img of imgs) {
+            coverUrl = parser.getAttr(img, 'src') || parser.getAttr(img, 'data-src') ||
+              parser.getAttr(img, 'data-original') || parser.getAttr(img, 'data-lazy-src') || '';
+            if (coverUrl && !/\.(gif|svg|ico)(\b|$)/i.test(coverUrl)) break;
+          }
         }
+      }
+      // 还找不到？试试背景图
+      if (!coverUrl) {
+        const bgMatch = item.innerHtml.match(/background(?:-image)?\s*:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
+        if (bgMatch) coverUrl = bgMatch[1];
       }
 
       // 详情页 URL
@@ -651,8 +803,11 @@ export class SourceExecutor {
       }
 
       // 相对路径转绝对
-      if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
-        noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+      if (coverUrl && coverUrl.startsWith('//')) {
+        coverUrl = (baseUrl ? 'https:' : 'https:') + coverUrl;
+      }
+      if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
+        coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
       }
       if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
         coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
@@ -692,7 +847,12 @@ export class SourceExecutor {
       const itemObj = item as Record<string, unknown>;
       const name = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
       const author = this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author');
-      const coverUrl = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'pic', 'img', 'imageUrl', 'imgUrl', 'thumbnail', 'poster', 'sImg');
+      let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
+      // 过滤非 URL 的封面值（数字 ID 等）
+      const coverUrl = (rawCover && /^(https?:\/\/|\/\/|data:)/.test(rawCover)) ? rawCover : '';
+      if (!coverUrl && rawCover) {
+        console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
+      }
       let noteUrl = this.firstStr(itemObj, source.ruleSearchNoteUrl, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
@@ -717,20 +877,61 @@ export class SourceExecutor {
 
   private getPath(obj: Record<string, unknown>, path: string): unknown {
     if (!path) return undefined;
-    const parts = path.split('.');
+    // 处理 || 备用规则：尝试每个备选，返回第一个有值的
+    const alternatives = path.split('||');
+    for (const alt of alternatives) {
+      const val = this.getSinglePath(obj, alt.trim());
+      if (val !== undefined && val !== null) return val;
+    }
+    return undefined;
+  }
+
+  private getSinglePath(obj: Record<string, unknown>, path: string): unknown {
+    if (!path) return undefined;
+    // 去掉 $. 前缀（JSONPath root）
+    let cleanPath = path.replace(/^\$\.?/, '');
+    if (!cleanPath) return obj;
+
+    const parts = cleanPath.split('.');
     let current: unknown = obj;
     for (const part of parts) {
       if (current === null || current === undefined) return undefined;
+      // 数组索引: [0], [*] 或 key[0], key[*]
+      const wildMatch = part.match(/^(\w+)?\[(\d+|\*)\]$/);
+      if (wildMatch) {
+        const keyName = wildMatch[1];
+        const index = wildMatch[2];
+        if (keyName) {
+          const c = current as Record<string, unknown>;
+          if (typeof current === 'object' && keyName in c) { current = c[keyName]; } else { return undefined; }
+        }
+        if (index === '*') {
+          // [*] 返回数组本身，后面不再访问
+          return Array.isArray(current) ? current : undefined;
+        }
+        if (Array.isArray(current)) {
+          current = (current as unknown[])[parseInt(index)];
+          continue;
+        }
+        return undefined;
+      }
       const c = current as Record<string, unknown>;
       if (typeof current === 'object' && part in c) { current = c[part]; } else { return undefined; }
     }
     return current;
   }
 
+  /** 去掉规则末尾的 @put:... / @js:... 等后缀，只保留 JSONPath 部分 */
+  private cleanRule(rule: string): string {
+    const idx = rule.search(/@(put|js|get|data-)/);
+    return idx >= 0 ? rule.substring(0, idx) : rule;
+  }
+
   private firstStr(item: Record<string, unknown>, ...paths: (string | undefined)[]): string {
     for (const p of paths) {
       if (!p) continue;
-      const val = this.getPath(item, p);
+      const cleaned = this.cleanRule(p);
+      const val = this.getPath(item, cleaned);
       if (typeof val === 'string' && val) return val;
       if (typeof val === 'number') return String(val);
     }
@@ -787,6 +988,9 @@ export class SourceExecutor {
       // 相对路径处理
       if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
         noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+      }
+      if (coverUrl && coverUrl.startsWith('//')) {
+        coverUrl = 'https:' + coverUrl;
       }
       if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://')) {
         coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);

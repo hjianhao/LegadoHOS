@@ -191,7 +191,25 @@ export class BookTable {
       'last_update_time': book.lastUpdateTime,
       'last_open_time': book.lastOpenTime,
       'create_time': book.createTime,
-      'update_time': book.updateTime,
+      'update_time': book.lastOpenTime, // 用最后阅读时间同时作为 update_time
     };
+  }
+
+  /** 快速更新阅读进度（无需构造完整 Book 对象） */
+  async updateReadingProgress(bookUrl: string, chapterIndex: number, chapterTitle: string, totalChapters: number): Promise<void> {
+    const now = Date.now();
+    const row: relationalStore.ValuesBucket = {
+      'dur_chapter_index': chapterIndex,
+      'dur_chapter_title': chapterTitle,
+      'last_open_time': now,
+      'update_time': now,
+    };
+    if (totalChapters > 0) {
+      row['total_chapter_num'] = totalChapters;
+      row['chapter_count'] = totalChapters;
+    }
+    const pred = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    pred.equalTo('book_url', bookUrl);
+    await this.rdbStore.update(row, pred);
   }
 }

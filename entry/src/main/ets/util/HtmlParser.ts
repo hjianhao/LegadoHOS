@@ -288,7 +288,10 @@ export class HtmlParser {
         el.text += child.ownText;
       }
     }
-    // ownText already set during parsing
+    // 叶子元素的 ownText 也要赋给 text（extractAttr 读的是 el.text）
+    if (el.ownText && !el.text) {
+      el.text = el.ownText;
+    }
   }
 
   private buildHtml(el: HtmlElement): void {
@@ -330,17 +333,38 @@ export class HtmlParser {
     // 分割组合器: ' ' (descendant) or '>' (child)
     const parts = this.splitSelector(selector);
     if (parts.length === 1) {
-      // 单个选择器
       const sel = parts[0];
       if (sel === '*') return this.allElements(root);
       return this.matchSimple(root, sel);
+    }
+
+    // 检查最后一段是否有排除索引 !N 或 !N:M，或者位置索引 .N
+    const lastIdx = parts.length - 1;
+    const lastPart = parts[lastIdx];
+    let exclStart = -1;
+    let exclEnd = -1;
+    let posIndex = -1;
+    // 排除先处理（可与位置索引共存）
+    let workPart = lastPart;
+    const exclMatch = lastPart.match(/^(.*?)!(-?\d+)(?::(-?\d+))?$/);
+    if (exclMatch) {
+      workPart = exclMatch[1];
+      exclStart = parseInt(exclMatch[2]);
+      exclEnd = exclMatch[3] !== undefined ? parseInt(exclMatch[3]) : exclStart;
+    }
+    // 位置索引: tag.N 或 tag.-N（如 a.0, td.2, p.-1）
+    const posMatch = workPart.match(/^([a-zA-Z][\w-]*)(?:\.(-?\d+))$/);
+    if (posMatch) {
+      parts[lastIdx] = posMatch[1]; // 去掉 .N
+      posIndex = parseInt(posMatch[2]);
+    } else if (exclStart >= 0) {
+      parts[lastIdx] = workPart; // 只去掉 ! 部分
     }
 
     // 组合选择器
     const results: HtmlElement[] = [];
 
     if (parts.length === 2 && parts[1] === '>') {
-      // parent>child
       const parents = this.findElements(root, parts[0]);
       for (const p of parents) {
         for (const child of p.children) {
@@ -350,19 +374,38 @@ export class HtmlParser {
         }
       }
     } else if (parts[1] === '>') {
-      // 多级 >
       const ancestors = this.findElements(root, parts[0]);
       for (const a of ancestors) {
         const children = this.findElementsInChildren(a, parts.slice(2));
         results.push(...children);
       }
     } else {
-      // 空格: ancestor descendant
       const ancestors = this.findElements(root, parts[0]);
       for (const a of ancestors) {
         const descendants = this.findAllDescendants(a, parts.slice(1).join(' '));
         results.push(...descendants);
       }
+    }
+
+    // 应用排除索引
+    if (exclStart >= 0 && results.length > 0) {
+      const filtered: HtmlElement[] = [];
+      for (let i = 0; i < results.length; i++) {
+        if (i < exclStart || i > exclEnd) {
+          filtered.push(results[i]);
+        }
+      }
+      // 再应用位置索引
+      if (posIndex >= 0 && posIndex < filtered.length) return [filtered[posIndex]];
+      if (posIndex < 0 && filtered.length + posIndex >= 0) return [filtered[filtered.length + posIndex]];
+      return filtered;
+    }
+
+    // 应用位置索引
+    if (posIndex >= 0 && results.length > 0) {
+      if (posIndex < results.length) return [results[posIndex]];
+      if (posIndex < 0 && results.length + posIndex >= 0) return [results[results.length + posIndex]];
+      return [];
     }
 
     return results;
@@ -418,15 +461,64 @@ export class HtmlParser {
    * 在 root 及其所有后代中查找
    */
   private matchSimple(root: HtmlElement, selector: string): HtmlElement[] {
+    // 排除索引: selector!N 或 selector!N:M (如 tr!0, li!0:2, a!-1)
+    let exclSelector = selector;
+    let exclStart = -1;
+    let exclEnd = -1;
+    const exclMatch = selector.match(/^(.*?)!(-?\d+)(?::(-?\d+))?$/);
+    if (exclMatch) {
+      exclSelector = exclMatch[1];
+      exclStart = parseInt(exclMatch[2]);
+      exclEnd = exclMatch[3] !== undefined ? parseInt(exclMatch[3]) : exclStart;
+    }
+
+    // 位置索引: tag.N 或 tag.-N (如 a.0, td.2, p.-1)
+    const posMatch = exclSelector.match(/^([a-zA-Z][\w-]*)(?:\.(-?\d+))$/);
+    if (posMatch) {
+      const baseSel = posMatch[1];
+      const position = parseInt(posMatch[2]);
+      const allMatches: HtmlElement[] = [];
+      const queue = [root];
+      while (queue.length > 0) {
+        const el = queue.shift()!;
+        if (el.tagName !== '#root' && this.matchesSelector(el, baseSel)) {
+          allMatches.push(el);
+        }
+        queue.push(...el.children);
+      }
+      // 正数索引
+      if (position >= 0 && position < allMatches.length) {
+        return [allMatches[position]];
+      }
+      // 负数索引（倒数）
+      if (position < 0 && allMatches.length + position >= 0) {
+        return [allMatches[allMatches.length + position]];
+      }
+      return [];
+    }
+
     const results: HtmlElement[] = [];
     const queue = [root];
     while (queue.length > 0) {
       const el = queue.shift()!;
-      if (el.tagName !== '#root' && this.matchesSelector(el, selector)) {
+      if (el.tagName !== '#root' && this.matchesSelector(el, exclSelector)) {
         results.push(el);
       }
       queue.push(...el.children);
     }
+
+    // 应用排除索引
+    if (exclStart >= 0) {
+      const filtered: HtmlElement[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const normalized = exclStart >= 0 ? i : results.length + i;
+        if (normalized < exclStart || normalized > exclEnd) {
+          filtered.push(results[i]);
+        }
+      }
+      return filtered;
+    }
+
     return results;
   }
 
@@ -436,7 +528,10 @@ export class HtmlParser {
    */
   private matchesSelector(el: HtmlElement, selector: string): boolean {
     if (!selector) return false;
-    const s = selector.trim();
+    // 去掉位置索引 .N 和排除索引 !N（单独的位置/排除由 findElements/matchSimple 处理）
+    let s = selector.trim();
+    s = s.replace(/!(-?\d+)(?::(-?\d+))?$/, '');  // 去掉 !N
+    s = s.replace(/\.(-?\d+)$/, '');               // 去掉 .N 位置
 
     // 属性选择器 [attr] 或 [attr=value]
     if (s.startsWith('[')) {
