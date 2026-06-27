@@ -1,388 +1,253 @@
 /**
- * 阅读页 — 参照 legado-with-MD3 阅读体验
- *
- * 功能：
- * - 自动获取目录，选择第一章
- * - 检测目录反转（某些网站最新章在首位）
- * - 目录列表跳转
- * - 字体大小、行高调节
- * - 阅读位置记忆（当前章节索引）
+ * 阅读页
  */
-import { AppTheme } from '../theme/AppTheme';
-import { AppDatabase } from '../data/database/AppDatabase';
-import { BookSourceTable } from '../data/database/BookSourceTable';
-import { BookTable } from '../data/database/BookTable';
-import { BookSource, BookSourceChapter } from '../model/BookSource';
-import { NetUtil } from '../util/NetUtil';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
-import { HtmlUtil } from '../util/HtmlUtil';
 import router from '@ohos.router';
-
-/** 判断标题是否为第一章 */
-function isFirstChapter(title: string): boolean {
-  const t = title.trim();
-  // 匹配 "第一章"、"第1章"、"第 一 章"、"引子"、"序章"、"楔子"、"序幕"、"序言"
-  return /(^第[\s]*[一1][\s]*章)|(^引子)|(^序[章言曲])|(^楔子)|(^序幕)/.test(t);
-}
-
-/** 检测章节列表是否反转（最新章在首位） */
-function isReversedOrder(chapters: BookSourceChapter[]): boolean {
-  if (chapters.length < 3) return false;
-  const first = chapters[0].title;
-  const mid = chapters[Math.floor(chapters.length / 2)].title;
-  const last = chapters[chapters.length - 1].title;
-
-  const firstIsEnd = /(大结局|尾声|后记|完本|完|最终章|最后一章)/.test(first);
-  const firstIsStart = isFirstChapter(first);
-  const midIsStart = isFirstChapter(mid);
-  const lastIsStart = isFirstChapter(last);
-
-  // 检查章节数字：如果第一个章节号很大（如1032），最后一个很小（如1），说明反转
-  const firstNum = first.match(/(\d+)/);
-  const lastNum = last.match(/(\d+)/);
-  const firstNumVal = firstNum ? parseInt(firstNum[1]) : 0;
-  const lastNumVal = lastNum ? parseInt(lastNum[1]) : 0;
-
-  if (firstIsEnd && lastIsStart) return true;
-  if (midIsStart && !firstIsStart) return true;
-  if (lastIsStart && !firstIsStart) return true;
-  // 第一个章节号远大于最后一个（如1032 vs 1），说明是反转
-  if (firstNumVal > lastNumVal && firstNumVal > 50) return true;
-
-  return false;
-}
+import { BookSource, BookSourceChapter } from '../model/BookSource';
+import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { SettingsStore } from '../data/preferences/SettingsStore';
+import { ChapterCache } from '../util/ChapterCache';
+import { TextLayout, LayoutConfig, LayoutPage, DEFAULT_LAYOUT_CONFIG } from '../engine/book/TextLayout';
+import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../components/reader/PageView';
+import { ClickAction, DEFAULT_ZONE_ACTIONS } from '../components/reader/ClickAction';
+import { StylePanel } from '../components/reader/StylePanel';
+import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
+import { NetUtil } from '../util/NetUtil';
+import { HtmlUtil } from '../util/HtmlUtil';
+import { AppDatabase } from '../data/database/AppDatabase';
+import { BookTable } from '../data/database/BookTable';
+import { BookSourceTable } from '../data/database/BookSourceTable';
 
 @Entry
 @Component
-export struct ReadPage {
-  @State text: string = '';
-  @State isDark: boolean = false;
+struct ReadPage {
+  @StorageLink('isDark') isDark: boolean = false;
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State bookUrl: string = '';
   @State originUrl: string = '';
-
-  @State isLoading: boolean = true;
+  @State origin: string = '';
+  @State tocUrl: string = '';
+  @State pageMode: boolean = true;
   @State chapters: BookSourceChapter[] = [];
   @State currentIndex: number = 0;
-  @State totalChapters: number = 0;
-
-  // 阅读设置
-  @State fontSize: number = 20;
-  @State lineHeight: number = 36;
-  @State showSettings: boolean = false;
-  @State showToc: boolean = false;
-  @State progress: string = '';
-
-  private source: BookSource | null = null;
+  @State pageIndex: number = 0;
+  @State text: string = '';
+  @State isLoading: boolean = true;
+  @State pages: LayoutPage[] = [];
+  @State scrollText: string = '';
+  @State showMenu: boolean = false;
+  @State showStyle: boolean = false;
+  @State readBgColor: string = '#F5F0E8';
+  @State readTextColor: string = '#333333';
+  @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
+  @State cfg: PageViewConfig = {
+    animType: PageTurnAnim.SLIDE, bgColor: '#F5F0E8', textColor: '#333333', titleColor: '#999',
+    fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans', lineHeight: 1.6,
+    letterSpacing: 0.5, paragraphSpacing: 10, textAlign: 'justify', indentSize: 2,
+    paddingTop: 24, paddingBottom: 24, paddingLeft: 20, paddingRight: 20,
+    showHeader: false, showFooter: true, headerContent: '', footerContent: '',
+    brightness: 80, zhFormat: true, chineseMode: 'original',
+  };
+  @State pageW: number = 360;
+  @State pageH: number = 640;
+  private source_: BookSource | null = null;
+  private targetIdx_: number = -1;
+  private allChapters_: BookSourceChapter[] = [];
+  private totalChapters_: number = 0;
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
-    const params = router.getParams() as Record<string, string>;
-    if (params) {
-      this.bookName = params['name'] || '';
-      this.bookAuthor = params['author'] || '';
-      this.bookUrl = params['bookUrl'] || '';
-      this.originUrl = params['originUrl'] || params['origin'] || '';
-    }
-    console.info('[Read] Book URL:', this.bookUrl, 'Source:', this.originUrl);
+    const p = router.getParams() as Record<string, Object>;
+    this.bookName = String(p['bookName'] || p['name'] || '');
+    this.bookAuthor = String(p['bookAuthor'] || p['author'] || '');
+    this.bookUrl = String(p['bookUrl'] || '');
+    this.originUrl = String(p['originUrl'] || '');
+    this.origin = String(p['origin'] || '');
+    this.tocUrl = String(p['tocUrl'] || '');
+    if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
+    if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
+    this.loadSettings();
+  }
+
+  onPageShow(): void {
+    if (!this.isLoading) return;
     this.loadContent();
   }
 
-  async loadContent(): Promise<void> {
-    if (!this.bookUrl) {
-      this.text = '暂无内容';
-      this.isLoading = false;
-      return;
-    }
-    if (!this.bookUrl.startsWith('http://') && !this.bookUrl.startsWith('https://')) {
-      this.text = '无法获取内容';
-      this.isLoading = false;
-      return;
-    }
-
+  private async loadSettings(): Promise<void> {
     try {
-      // 查找书源
-      if (this.originUrl) {
-        await AppDatabase.getInstance().waitForInit();
-        const db = AppDatabase.getInstance().rdbStore;
-        const dao = new BookSourceTable(db);
-        const sources = await dao.getAllSources();
-        const matched = sources.find(s => s.sourceUrl === this.originUrl);
-        if (matched) {
-          this.source = matched;
-          console.info('[Read] Source:', this.source.sourceName);
-        }
-      }
-
-      if (this.source) {
-        // ---- 第一步：获取目录 ----
-        const chapters = await globalSourceExecutor.getToc(this.source, this.bookUrl);
-        if (chapters.length > 0) {
-          console.info('[Read] Got', chapters.length, 'chapters');
-
-          // ---- 检测反转 ----
-          if (isReversedOrder(chapters)) {
-            console.info('[Read] Chapter list reversed, correcting order');
-            chapters.reverse();
-            // 反转后重新设 index
-            chapters.forEach((ch, i) => ch.index = i);
-          }
-
-          this.chapters = chapters;
-          this.totalChapters = chapters.length;
-
-          // ---- 找第一章 ----
-          let firstIdx = 0;
-          for (let i = 0; i < chapters.length; i++) {
-            if (isFirstChapter(chapters[i].title)) {
-              firstIdx = i;
-              break;
-            }
-          }
-          this.currentIndex = firstIdx;
-
-          // ---- 第二步：加载正文 ----
-          await this.loadChapter(firstIdx);
-        } else {
-          console.info('[Read] No TOC, loading book URL directly');
-          this.totalChapters = 0;
-          const content = await globalSourceExecutor.getContent(this.source, this.bookUrl, this.bookUrl);
-          this.text = content || '（正文提取中...）';
-        }
-      } else {
-        // 无书源直连
-        console.info('[Read] No source, direct fetch');
-        const html = await NetUtil.httpGet(this.bookUrl, {
-          'Accept': 'text/html,application/json,*/*',
-          'Referer': this.bookUrl
-        });
-        this.text = this.stripHtml(html).substring(0, 5000);
-      }
-    } catch (err) {
-      console.error('[Read] Error:', (err as Error).message);
-      this.text = '无法获取正文内容';
-    }
-    this.isLoading = false;
+      const s = SettingsStore.getInstance();
+      await s.init(getContext());
+      this.pageMode = (await s.getPageMode()) !== 0;
+      this.cfg.fontSize = await s.getFontSize();
+      this.cfg.fontFamily = await s.getFontFamily();
+      this.cfg.lineHeight = await s.getLineHeight();
+      this.readBgColor = await s.getReadBgColor();
+      this.readTextColor = await s.getReadTextColor();
+      this.cfg.bgColor = this.readBgColor;
+      this.cfg.textColor = this.readTextColor;
+    } catch (_e) { /* ignore */ }
   }
 
-  /** 加载指定章节 */
-  async loadChapter(index: number): Promise<void> {
-    if (!this.source || index < 0 || index >= this.chapters.length) return;
+  private async loadContent(): Promise<void> {
     this.isLoading = true;
-
-    const chapter = this.chapters[index];
-    this.currentIndex = index;
-    this.progress = `${index + 1}/${this.chapters.length}`;
-    console.info('[Read] Loading chapter', index + 1, ':', chapter.title, 'URL:', (chapter.url || '').substring(0, 60));
-
-    try {
-      // 如果章节 URL 为空，用书 URL 兜底
-      const url = chapter.url || this.bookUrl;
-      const content = await globalSourceExecutor.getContent(this.source, url, this.bookUrl);
-      this.text = content || '（正文提取中...）';
-      this.bookName = this.bookName.replace(/ - .*$/, '') + ' - ' + chapter.title;
-      console.info('[Read] Content:', this.text.length, 'chars');
-
-      // 保存阅读进度
-      this.saveReadingProgress();
-    } catch (err) {
-      console.error('[Read] Chapter load failed:', err);
-      this.text = '加载章节失败';
-    }
-    this.isLoading = false;
-  }
-
-  /** 上一章 */
-  async prevChapter(): Promise<void> {
-    if (this.currentIndex > 0) {
-      await this.loadChapter(this.currentIndex - 1);
-    }
-  }
-
-  /** 下一章 */
-  async nextChapter(): Promise<void> {
-    if (this.currentIndex < this.chapters.length - 1) {
-      await this.loadChapter(this.currentIndex + 1);
-    }
-  }
-
-  /** 保存阅读进度到数据库 */
-  private async saveReadingProgress(): Promise<void> {
-    if (!this.source) return;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
-      const bookTable = new BookTable(db);
-      const existing = await bookTable.getBookByName(this.bookName.replace(/ - .*$/, ''), this.bookAuthor);
-      if (existing) {
-        existing.durChapterIndex = this.currentIndex;
-        existing.durChapterTitle = this.chapters[this.currentIndex]?.title || '';
-        existing.totalChapterNum = this.chapters.length;
-        // 最新章节标题 = 章节列表最后一个
-        existing.latestChapterTitle = this.chapters.length > 0
-          ? this.chapters[this.chapters.length - 1].title : '';
-        existing.lastOpenTime = Date.now();
-        existing.isShelf = true;
-        await bookTable.updateBook(existing);
-        console.info('[Read] Progress saved:', existing.durChapterTitle,
-          'latest:', existing.latestChapterTitle, 'total:', existing.totalChapterNum);
+      const srcDao = new BookSourceTable(db);
+      const sources = await srcDao.getAllSources();
+      const norm = this.originUrl.replace(/\/+$/, '');
+      this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
+        sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
+        sources.find(s => s.sourceName === this.origin) || null;
+
+      let chapters = ChapterCache.chapters;
+      if (!chapters || chapters.length === 0) {
+        if (this.source_) {
+          chapters = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
+          if (chapters.length === 0 && this.tocUrl && this.tocUrl !== this.bookUrl) {
+            chapters = await globalSourceExecutor.getToc(this.source_, this.tocUrl);
+          }
+        }
       }
+      if (chapters.length === 0) { this.text = '无目录'; this.isLoading = false; return; }
+      this.allChapters_ = chapters;
+      this.totalChapters_ = chapters.length;
+      this.currentIndex = this.targetIdx_ >= 0 && this.targetIdx_ < chapters.length ? this.targetIdx_ : 0;
+      this.chapters = chapters;
+      await this.loadChapter(this.currentIndex);
     } catch (e) {
-      console.warn('[Read] Save progress failed:', e);
+      this.text = '加载失败';
+      this.isLoading = false;
     }
   }
 
-  private stripHtml(html: string): string {
-    return HtmlUtil.stripHtml(html);
+  private async loadChapter(idx: number): Promise<void> {
+    if (idx < 0 || idx >= this.allChapters_.length) return;
+    this.isLoading = true;
+    this.currentIndex = idx;
+    this.pageIndex = 0;
+    const ch = this.allChapters_[idx];
+    const url = ch.url || this.bookUrl;
+    try {
+      let content = '';
+      if (this.source_) {
+        content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
+      }
+      if (!content && url && url.startsWith('http')) {
+        const r = await NetUtil.httpGet(url);
+        if (r) content = HtmlUtil.stripHtml(r);
+      }
+      if (content && content.length > 50) {
+        this.text = content;
+        this.layoutText(content);
+      } else {
+        this.text = content || '加载失败';
+        this.layoutText(this.text);
+      }
+    } catch (e) {
+      this.text = '加载失败';
+    }
+    this.isLoading = false;
+  }
+
+  private layoutText(text: string): void {
+    const lc: LayoutConfig = {
+      fontFamily: this.cfg.fontFamily,
+      fontSize: this.cfg.fontSize,
+      fontBold: this.cfg.fontWeight >= 2,
+      fontWeight: this.cfg.fontWeight,
+      lineHeightMultiplier: this.cfg.lineHeight,
+      paragraphSpacing: this.cfg.paragraphSpacing,
+      letterSpacing: this.cfg.letterSpacing,
+      textAlign: this.cfg.textAlign as 'left' | 'justify',
+      firstLineIndent: this.cfg.indentSize > 0,
+      indentSize: this.cfg.indentSize,
+      pagePadding: 20,
+      pagePaddingTop: this.cfg.paddingTop,
+      pagePaddingBottom: this.cfg.paddingBottom,
+      pagePaddingLeft: this.cfg.paddingLeft,
+      pagePaddingRight: this.cfg.paddingRight,
+      zhFormat: this.cfg.zhFormat,
+      chineseMode: this.cfg.chineseMode,
+      measuredCharWidth: 0,
+      measuredLineHeight: 0,
+    };
+    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH);
+    if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
+    if (this.pageIndex >= this.pages.length) this.pageIndex = 0;
+    this.scrollText = text;
+  }
+
+  private onStyleChange(c: PageViewConfig): void {
+    this.cfg = c;
+    this.readBgColor = c.bgColor;
+    this.readTextColor = c.textColor;
+    this.layoutText(this.text);
+  }
+
+  private onPageTurn(ev: PageTurnEvent): void { this.pageIndex = ev.currentPage; }
+  private onPrevChapter(): void {
+    if (this.currentIndex > 0) { this.loadChapter(this.currentIndex - 1).then(() => { this.pageIndex = Math.max(0, this.pages.length - 1); }); }
+  }
+  private onNextChapter(): void {
+    const n = this.currentIndex + 1;
+    if (n < this.totalChapters_) this.loadChapter(n);
+  }
+  private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
+  private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
+
+  private onOpenToc(): void {
+    ChapterCache.chapters = this.allChapters_;
+    ChapterCache.bookUrl = this.bookUrl;
+    router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
   }
 
   build() {
-    Column() {
-      // ===== 顶部导航 =====
-      Row() {
-        Button() { Text('←').fontSize(18) }
-          .width(40).height(40).backgroundColor('transparent')
-          .onClick(() => { router.back(); })
-        Text(this.bookName).fontSize(15).fontWeight(FontWeight.Bold)
-          .margin({ left: 8 }).layoutWeight(1).maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.totalChapters > 0) {
-          Text(this.progress).fontSize(12).fontColor('#888').margin({ right: 4 })
-        }
-        Button() { Text('☰').fontSize(18) }
-          .width(40).height(40).backgroundColor('transparent')
-          .onClick(() => { this.showToc = !this.showToc; this.showSettings = false; })
-        Button() { Text('⚙').fontSize(18) }
-          .width(40).height(40).backgroundColor('transparent')
-          .onClick(() => { this.showSettings = !this.showSettings; this.showToc = false; })
-      }.padding({ left: 8, right: 8 }).width('100%').height(48)
-
-      // ===== 正文区域 =====
+    Stack() {
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 100 })
-      } else {
-        Scroll() {
-          Text(this.text)
-            .fontSize(this.fontSize)
-            .lineHeight(this.lineHeight)
-            .fontColor(this.isDark ? '#C0C0C0' : '#333')
-            .padding({ left: 20, right: 20 })
-            .width('100%')
-        }
-        .layoutWeight(1).width('100%')
-        // 翻页通过底部按钮操作
+        Column() { LoadingProgress().width(40).height(40).color('#0078D7') }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+      } else if (!this.pageMode && this.scrollText) {
+        Scroll(new Scroller()) {
+          Text(this.scrollText).fontSize(this.cfg.fontSize).fontColor(this.readTextColor).width('100%').padding(16)
+        }.width('100%').height('100%').backgroundColor(this.readBgColor).onClick(() => { this.showMenu = true; })
+      } else if (this.pages.length > 0) {
+        PageView({
+          pages: this.pages, chapterTitle: this.allChapters_[this.currentIndex]?.title || '',
+          chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
+          zoneActions: this.zoneActions, config: this.cfg,
+          onPageTurn: (ev: PageTurnEvent) => { this.onPageTurn(ev); },
+          onPrevChapter: () => { this.onPrevChapter(); },
+          onNextChapter: () => { this.onNextChapter(); },
+          onShowMenu: () => { this.showMenu = true; },
+          onShowToc: () => { this.onOpenToc(); },
+        }).width('100%').height('100%')
       }
-
-      // ===== 底部导航（翻页按钮） =====
-      if (this.chapters.length > 0 && !this.isLoading) {
-        Row() {
-          Button('上一章').fontSize(13).height(36)
-            .backgroundColor('#555').fontColor('#FFF').borderRadius(18)
-            .layoutWeight(1).margin({ right: 4 })
-            .enabled(this.currentIndex > 0)
-            .onClick(() => { this.prevChapter(); })
-
-          Button('下一章').fontSize(13).height(36)
-            .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
-            .layoutWeight(1).margin({ left: 4 })
-            .enabled(this.currentIndex < this.chapters.length - 1)
-            .onClick(() => { this.nextChapter(); })
-        }.padding(8).width('100%')
-      }
-
-      // ===== 目录弹窗 =====
-      if (this.showToc && this.chapters.length > 0) {
+      if (this.showMenu) {
         Column() {
-          Row() {
-            Text('目录').fontSize(16).fontWeight(FontWeight.Bold)
-            Blank()
-            Button('✕').fontSize(14).backgroundColor('transparent')
-              .onClick(() => { this.showToc = false; })
-          }.padding(12).width('100%')
-
-          List({ space: 0 }) {
-            ForEach(this.chapters, (ch: BookSourceChapter) => {
-              ListItem() {
-                Text(ch.title)
-                  .fontSize(14)
-                  .fontColor(ch.index === this.currentIndex ? '#0078D7' : (this.isDark ? '#CCC' : '#444'))
-                  .fontWeight(ch.index === this.currentIndex ? FontWeight.Bold : FontWeight.Normal)
-                  .padding({ top: 8, bottom: 8, left: 16 })
-                  .width('100%')
-                  .backgroundColor(ch.index === this.currentIndex
-                    ? (this.isDark ? '#2A3A4A' : '#E8F4FD')
-                    : 'transparent')
-              }
-              .onClick(() => {
-                this.showToc = false;
-                this.loadChapter(ch.index);
-              })
-            })
-          }.layoutWeight(1).width('100%')
-        }
-        .width('100%').height('60%')
-        .backgroundColor(this.isDark ? '#1E1E1E' : '#FFF')
-        .border({ radius: { topLeft: 16, topRight: 16 } })
-        .shadow({ radius: 8, color: '#00000044' })
-        .position({ bottom: 0 })
+          Column() {}.layoutWeight(1).onClick(() => { this.showMenu = false; })
+          ReadBottomMenu({
+            onToc: () => { this.showMenu = false; this.onOpenToc(); },
+            onReadAloud: () => { this.showMenu = false; },
+            onStyle: () => { this.showMenu = false; this.showStyle = true; },
+          })
+        }.width('100%').height('100%')
       }
-
-      // ===== 设置面板 =====
-      if (this.showSettings) {
+      if (this.showStyle) {
         Column() {
-          Row() {
-            Text('阅读设置').fontSize(16).fontWeight(FontWeight.Bold)
-            Blank()
-            Button('✕').fontSize(14).backgroundColor('transparent')
-              .onClick(() => { this.showSettings = false; })
-          }.padding(12).width('100%')
-
-          // 字体大小
-          Row() {
-            Text('A').fontSize(14)
-            Slider({ value: this.fontSize, min: 14, max: 32, step: 1 })
-              .layoutWeight(1).height(40)
-              .onChange((v: number) => { this.fontSize = v; })
-            Text('A').fontSize(24)
-          }.padding({ left: 16, right: 16 })
-
-          // 行高
-          Row() {
-            Text('行距').fontSize(14)
-            Slider({ value: this.lineHeight, min: 24, max: 52, step: 2 })
-              .layoutWeight(1).height(40)
-              .onChange((v: number) => { this.lineHeight = v; })
-            Text(this.lineHeight + '').fontSize(14).fontColor('#888')
-          }.padding({ left: 16, right: 16 }).margin({ top: 8 })
-
-          // 背景色
-          Row() {
-            Text('背景').fontSize(14)
-            ForEach(['#F5F0E8', '#F0F0F0', '#CCE8CF', '#F5E6D0', '#1E1E1E'], (color: string) => {
-              Column()
-                .width(36).height(36)
-                .backgroundColor(color)
-                .border({ radius: 18, width: 2, color: this.isDark && color === '#1E1E1E' ? '#666' : '#DDD' })
-                .margin({ right: 8 })
-                .onClick(() => {
-                  if (color === '#1E1E1E') {
-                    this.isDark = true;
-                  } else {
-                    this.isDark = false;
-                  }
-                })
-            })
-          }.padding({ left: 16, right: 16 }).margin({ top: 12, bottom: 20 })
-        }
-        .width('100%')
-        .backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')
-        .border({ radius: { topLeft: 16, topRight: 16 } })
-        .shadow({ radius: 8, color: '#00000044' })
-        .position({ bottom: 0 })
+          Column() {}.layoutWeight(1).onClick(() => { this.showStyle = false; })
+          StylePanel({
+            cfg: this.cfg, onChange: (c: PageViewConfig) => { this.onStyleChange(c); },
+            onDismiss: () => { this.showStyle = false; },
+          })
+        }.width('100%').height('100%')
       }
     }
-    .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#1E1E1E' : '#F5F0E8')
+    .width('100%').height('100%').backgroundColor(this.readBgColor)
+    .onAreaChange((_old: Area, n: Area) => {
+      const w = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
+      const h = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
+      if (w > 0 && h > 0) { this.pageW = w; this.pageH = h; if (this.text) this.layoutText(this.text); }
+    })
   }
 }
