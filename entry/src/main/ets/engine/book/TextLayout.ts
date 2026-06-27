@@ -7,14 +7,24 @@
 
 export interface LayoutConfig {
   fontFamily: string;
-  fontSize: number;            // sp
+  fontSize: number;
   fontBold: boolean;
-  lineHeightMultiplier: number; // 1.0 ~ 2.0
-  paragraphSpacing: number;    // sp
-  letterSpacing: number;       // sp
+  fontWeight: number;
+  lineHeightMultiplier: number;
+  paragraphSpacing: number;
+  letterSpacing: number;
   textAlign: 'left' | 'justify';
-  firstLineIndent: boolean;    // 首行缩进2字符
-  pagePadding: number;         // px
+  firstLineIndent: boolean;
+  indentSize: number;
+  pagePadding: number;
+  pagePaddingTop: number;
+  pagePaddingBottom: number;
+  pagePaddingLeft: number;
+  pagePaddingRight: number;
+  zhFormat: boolean;
+  chineseMode: string;
+  measuredCharWidth: number;
+  measuredLineHeight: number;
 }
 
 export interface LayoutPage {
@@ -32,15 +42,13 @@ export interface LayoutLine {
 }
 
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
-  fontFamily: '默认',
-  fontSize: 18,
-  fontBold: false,
-  lineHeightMultiplier: 1.6,
-  paragraphSpacing: 10,
-  letterSpacing: 0.5,
-  textAlign: 'justify',
-  firstLineIndent: true,
-  pagePadding: 24,
+  fontFamily: '默认', fontSize: 18, fontBold: false, fontWeight: 1,
+  lineHeightMultiplier: 1.6, paragraphSpacing: 10, letterSpacing: 0.5,
+  textAlign: 'justify', firstLineIndent: true, indentSize: 2,
+  pagePadding: 20,
+  pagePaddingTop: 24, pagePaddingBottom: 24, pagePaddingLeft: 20, pagePaddingRight: 20,
+  zhFormat: true, chineseMode: 'original',
+  measuredCharWidth: 0, measuredLineHeight: 0,
 };
 
 export class TextLayout {
