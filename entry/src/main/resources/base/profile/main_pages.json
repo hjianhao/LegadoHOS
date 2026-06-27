@@ -6,6 +6,7 @@
     "pages/ReadPage",
     "pages/BookInfoPage",
     "pages/BookSourcePage",
+    "pages/BookSourceEditPage",
     "pages/ChapterListPage",
     "pages/ReadRecordPage",
     "pages/BookmarkPage",

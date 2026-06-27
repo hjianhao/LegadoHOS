@@ -89,10 +89,19 @@ struct BookSourcePage {
     return list;
   }
 
-  private doExport(): void {
+  private async doExport(): Promise<void> {
     if (this.filtered.length === 0) { promptAction.showToast({message:'无书源',duration:1500}); return; }
-    const json = JSON.stringify(this.filtered);
-    promptAction.showToast({message:'已导出 '+this.filtered.length+' 条',duration:2000});
+    try {
+      const dp = new picker.DocumentViewPicker();
+      const uris = await dp.save({ newFileNames: ['bookSources.json'] });
+      if (uris && uris.length > 0) {
+        const json = JSON.stringify(this.filtered);
+        const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
+        fileIo.writeSync(f.fd, json);
+        fileIo.closeSync(f);
+        promptAction.showToast({message:'已导出 '+this.filtered.length+' 条',duration:2000});
+      }
+    } catch (_e) { promptAction.showToast({message:'导出失败',duration:1500}); }
   }
 
   private toggleSelect(idx: number): void {
@@ -162,9 +171,9 @@ struct BookSourcePage {
       else if (this.filtered.length===0) { Text('无书源').fontSize(14).fontColor('#888').margin({top:60}) }
       else { List(){ForEach(this.getDisplayList(),(s:BookSource,idx:number)=>{ListItem(){this.item(s,idx)}.border({width:{bottom:1},color:this.isDark?'#333':'#E8E8E8'})})}.layoutWeight(1) }
 
-      // 批量操作栏
-      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(13).fontColor('#666').margin({left:12}).layoutWeight(1);Button('启用').fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.batchEnable(false)});Button('导出',{type:ButtonType.Capsule}).fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(12).height(30).padding({left:8,right:8}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(44).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
-    }.width('100%').height('100%').backgroundColor(this.isDark?'#121212':'#F5F5F5').onClick(()=>{if(this.showSortMenu)this.showSortMenu=false})
+      // 批量操作栏（复刻 Android SelectActionBar）
+      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(12).fontColor('#666').margin({left:8}).layoutWeight(1);Button('全选').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{for(let i=0;i<this.selected.length;i++)this.selected[i]=true});Button('启用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(false)});Button('分组').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{promptAction.showToast({message:'分组功能待实现',duration:1500})});Button('校验').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).backgroundColor('#FF9800').fontColor('#FFF').onClick(()=>{promptAction.showToast({message:'校验功能待实现',duration:1500})});Button('导出').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(11).height(28).padding({left:6,right:6}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(42).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
+    }.width('100%').height('100%').backgroundColor(this.isDark?'#121212':'#F5F5F5').onClick(()=>{this.showSortMenu=false;this.contextMenuIdx=-1})
 
     // 导入弹窗
     if (this.showImport) { Column(){}.layoutWeight(1).onClick(()=>{this.showImport=false}); ImportSourceDialog({controller:new CustomDialogController({builder:ImportSourceDialog({}),autoCancel:true}),onImportSuccess:()=>{this.showImport=false;this.load()}}) }
@@ -174,39 +183,46 @@ struct BookSourcePage {
   @Builder item(s:BookSource,idx:number) {
     Stack() {
     Row() {
-      if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).select(this.selected[idx]||false).selectedColor('#0078D7').margin({right:8}).onChange((v:boolean)=>{this.selected[idx]=v}) }
       Column() {
         Row() {
-          Button(s.sourceName||'未命名').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.isDark?'#E0E0E0':'#333').backgroundColor('transparent').height('auto')
-          if (!this.selectMode) { Toggle({type:ToggleType.Switch,isOn:s.enabled}).width(36).height(20).onChange((v:boolean)=>{s.enabled=v;this.dao_?.toggleByUrl?.(s.sourceUrl,v)}) }
+          Text(s.sourceName||'未命名').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.isDark?'#E0E0E0':'#333').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
+          .onClick(()=>{if(!this.selectMode)router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}})})
+          if (!this.selectMode) { Toggle({type:ToggleType.Switch,isOn:s.enabled}).width(36).height(20).margin({left:6}).onChange((v:boolean)=>{s.enabled=v;this.dao_?.toggleByUrl?.(s.sourceUrl,v)}) }
         }.width('100%')
         Text(s.sourceUrl).fontSize(11).fontColor(this.isDark?'#888':'#AAA').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).width('100%').margin({top:2})
         Row() {
           if (s.group) { Text(s.group).fontSize(10).fontColor('#0078D7').padding({left:6,right:6,top:1,bottom:1}).backgroundColor('#0078D71A').borderRadius(8).margin({right:6}) }
           Text('权重:'+(s.weight||0)).fontSize(10).fontColor('#999').margin({right:8})
           if (s.ruleSearchUrl) { Text('🔍').fontSize(10).fontColor('#4CAF50') }
+          Blank()
+          if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).select(this.selected[idx]||false).selectedColor('#0078D7').margin({left:4}).onChange((v:boolean)=>{this.selected[idx]=v}) }
         }.width('100%').margin({top:3})
       }.layoutWeight(1)
-      .onClick(() => { if (!this.selectMode) router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}}); else this.toggleSelect(idx); })
+      .onClick(() => { if (this.selectMode) this.toggleSelect(idx); })
+      // 更多按钮（⋮ 竖向三点）
       if (!this.selectMode) {
-        Button('⋮').fontSize(18).fontColor('#888').width(32).height(32).backgroundColor('transparent')
+        Text('⋮').fontSize(22).fontColor(this.isDark?'#AAA':'#666').width(32).height(32).textAlign(TextAlign.Center)
           .onClick(() => { this.contextMenuIdx = (this.contextMenuIdx === idx ? -1 : idx); })
       }
-    }.width('100%').padding({left:12,right:4,top:10,bottom:10})
+    }.width('100%').padding({left:12,right:8,top:10,bottom:10})
     .gesture(LongPressGesture().onAction(()=>{this.selectMode=true;this.selected[idx]=true}))
     // 更多菜单
     if (this.contextMenuIdx === idx) {
       Column() {
-        Text('删除').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor('#FF5722')
+        Text('置顶').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
+          .onClick(()=>{this.contextMenuIdx=-1;this.applyFilters()})
+        Text('置底').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
+          .onClick(()=>{this.contextMenuIdx=-1;this.applyFilters()})
+        Text('启用发现').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#4CAF50')
+          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'发现功能待实现',duration:1500})})
+        Text('搜索测试').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
+          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'搜索测试待实现',duration:1500})})
+        Text('调试').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#FF9800')
+          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'调试待实现',duration:1500})})
+        Text('删除').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#FF5722')
           .onClick(()=>{this.contextMenuIdx=-1;this.dao_?.deleteByUrl?.(s.sourceUrl);this.load()})
-        Text('置顶').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
-          .onClick(()=>{this.contextMenuIdx=-1;s.customOrder=-1;this.dao_?.toggleByUrl?.(s.sourceUrl,s.enabled);this.applyFilters()})
-        Text('置底').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
-          .onClick(()=>{this.contextMenuIdx=-1;s.customOrder=9999;this.applyFilters()})
-        Text('取消').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor('#888')
-          .onClick(()=>{this.contextMenuIdx=-1})
       }.width(120).backgroundColor(this.isDark?'#2A2A2A':'#FFF').borderRadius(12).shadow({radius:8,color:'#20000000',offsetY:2})
-      .position({x:'60%',y:0}).zIndex(100)
+      .position({x:'calc(100% - 140)',y:40}).zIndex(100)
     }
     }.width('100%')
   }
