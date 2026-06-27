@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "domhandler": "^6.0.1",
+    "domutils": "^4.0.2",
+    "harmonyos-best-practices-mcp": "^0.2.2",
+    "harmonyos-guides-mcp": "^0.2.2",
+    "htmlparser2": "^12.0.0",
+    "typescript": "^6.0.3"
+  }
+}
