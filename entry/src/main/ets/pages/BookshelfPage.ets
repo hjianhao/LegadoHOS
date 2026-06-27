@@ -193,6 +193,12 @@ export struct BookshelfPage {
         if (this.filteredBooks.length > 0) {
           Text(this.filteredBooks.length + '本').fontSize(13).fontColor('#888').margin({ right: 8 })
         }
+        // 在线搜索
+        Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor('#FFF')
+          .height(32).padding({ left: 10, right: 10 })
+          .backgroundColor('#0078D7').borderRadius(16)
+          .margin({ right: 6 })
+          .onClick(() => { router.pushUrl({ url: 'pages/SearchPage' }); })
         // 布局切换
         Button() {
           Text(this.isListView ? '▦' : '☰').fontSize(16).fontColor('#666')
