@@ -47,8 +47,7 @@ const TAB_SEARCH: FieldGroup[] = [
   { key: 'ruleSearchWordCount', label: '字数规则', placeholder: '' },
   { key: 'ruleSearchLastUpdateTime', label: '最后更新时间规则', placeholder: '' },
   { key: 'ruleSearchIntroduce', label: '简介规则', placeholder: '' },
-  { key: 'ruleSearchLastChapter', label: '最新章节规则', placeholder: '' },
-  { key: 'ruleSearchCheckKeyWord', label: '校验关键词', placeholder: '搜索测试关键词' },
+  { key: 'ruleSearchIntroduce', label: '简介规则', placeholder: '' },
 ];
 
 const TAB_BOOKINFO_TOC: FieldGroup[] = [
@@ -186,8 +185,6 @@ export struct BookSourceEditPage {
       ruleSearchWordCount: '',
       ruleSearchLastUpdateTime: '',
       ruleSearchIntroduce: '',
-      ruleSearchLastChapter: '',
-      ruleSearchCheckKeyWord: '',
       // 详情规则
       ruleBookInfoInit: '',
       ruleBookInfoName: '',
@@ -266,6 +263,15 @@ export struct BookSourceEditPage {
       eventListener: false,
       customButton: false,
       homepageModules: '',
+      ruleBookInfoFrom: '',
+      ruleSearchCheckKeyWord: '',
+      ruleSearchLastChapter: '',
+      respond: 0,
+      reviewUrl: '',
+      ruleReviewAvatar: '',
+      ruleReviewContent: '',
+      ruleReviewPostTime: '',
+      ruleReviewQuoteUrl: '',
       // 时间
       createTime: Date.now(),
       updateTime: Date.now(),

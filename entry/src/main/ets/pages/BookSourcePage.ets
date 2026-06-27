@@ -24,6 +24,8 @@ struct BookSourcePage {
   @State selectMode: boolean = false;
   @State selected: boolean[] = [];
   @State showImport: boolean = false;
+  @State showSortMenu: boolean = false;
+  @State contextMenuIdx: number = -1;
 
   private dao_: BookSourceTable | null = null;
   private groups_: string[] = [];
@@ -127,11 +129,27 @@ struct BookSourcePage {
         }
       }.padding({left:12,right:12,top:44}).width('100%')
 
-      // 搜索 + 排序
+      // 搜索 + 排序下拉
       Row() {
         TextInput({placeholder:'搜索书源...',text:this.searchText}).height(36).layoutWeight(1).backgroundColor(this.isDark?'#333':'#F0F0F0').borderRadius(18).padding({left:16}).fontSize(14).onChange((v:string)=>{this.searchText=v;this.applyFilters()})
-        Row(){Text(this.sortLabels_[this.sortMode]).fontSize(12).fontColor('#666').margin({right:4});Text('▾').fontSize(10).fontColor('#666')}.padding({left:8,right:8}).height(32).backgroundColor(this.isDark?'#333':'#E0E0E0').borderRadius(16).margin({left:6}).onClick(()=>{this.sortMode=(this.sortMode+1)%7;this.applyFilters()})
+        Row() {
+          Text(this.sortLabels_[this.sortMode] + ' ▾').fontSize(12).fontColor('#666')
+        }.padding({left:8,right:8}).height(32).backgroundColor(this.isDark?'#333':'#E0E0E0').borderRadius(16).margin({left:6})
+        .onClick(()=>{this.showSortMenu=!this.showSortMenu})
       }.padding({left:12,right:12,top:8}).width('100%')
+
+      // 排序下拉菜单
+      if (this.showSortMenu) {
+        Column() {
+          ForEach(this.sortLabels_, (label:string, idx:number) => {
+            Text(label).fontSize(13).fontColor(idx===this.sortMode?'#0078D7':this.isDark?'#CCC':'#333')
+              .padding({left:16,right:16,top:10,bottom:10}).width('100%')
+              .backgroundColor(idx===this.sortMode?(this.isDark?'#1A3A5A':'#E8F0FE'):'transparent')
+              .onClick(()=>{this.sortMode=idx;this.showSortMenu=false;this.applyFilters()})
+          })
+        }.width(120).backgroundColor(this.isDark?'#2A2A2A':'#FFF').borderRadius(12).shadow({radius:8,color:'#20000000'})
+        .position({x:16,y:90}).zIndex(99)
+      }
 
       // 分组标签
       if (this.groups_.length > 0) { Scroll(){Row(){ForEach(this.groups_,(g:string)=>{Text(g).fontSize(12).fontColor(this.groupFilter===g?'#FFF':(this.isDark?'#CCC':'#666')).backgroundColor(this.groupFilter===g?'#0078D7':(this.isDark?'#333':'#E8E8E8')).borderRadius(14).padding({left:10,right:10,top:4,bottom:4}).margin({right:6}).onClick(()=>{this.groupFilter=this.groupFilter===g?'':g;this.applyFilters()})})}.padding({left:12,top:4,bottom:4})}.width('100%').scrollable(ScrollDirection.Horizontal)}
@@ -146,7 +164,7 @@ struct BookSourcePage {
 
       // 批量操作栏
       if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(13).fontColor('#666').margin({left:12}).layoutWeight(1);Button('启用').fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.batchEnable(false)});Button('导出',{type:ButtonType.Capsule}).fontSize(12).height(30).padding({left:8,right:8}).margin({right:4}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(12).height(30).padding({left:8,right:8}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(44).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
-    }.width('100%').height('100%').backgroundColor(this.isDark?'#121212':'#F5F5F5')
+    }.width('100%').height('100%').backgroundColor(this.isDark?'#121212':'#F5F5F5').onClick(()=>{if(this.showSortMenu)this.showSortMenu=false})
 
     // 导入弹窗
     if (this.showImport) { Column(){}.layoutWeight(1).onClick(()=>{this.showImport=false}); ImportSourceDialog({controller:new CustomDialogController({builder:ImportSourceDialog({}),autoCancel:true}),onImportSuccess:()=>{this.showImport=false;this.load()}}) }
@@ -154,12 +172,13 @@ struct BookSourcePage {
   }
 
   @Builder item(s:BookSource,idx:number) {
+    Stack() {
     Row() {
-      if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).selectedColor('#0078D7').margin({right:8}).onChange((v:boolean)=>{this.selected[idx]=v}) }
+      if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).select(this.selected[idx]||false).selectedColor('#0078D7').margin({right:8}).onChange((v:boolean)=>{this.selected[idx]=v}) }
       Column() {
         Row() {
-          Text(s.sourceName||'未命名').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.isDark?'#E0E0E0':'#333').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
-          if (!this.selectMode) { Toggle({type:ToggleType.Switch,isOn:s.enabled}).width(36).height(20).margin({left:4}).onChange((v:boolean)=>{s.enabled=v;this.dao_?.toggleByUrl?.(s.sourceUrl,v)}) }
+          Button(s.sourceName||'未命名').fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.isDark?'#E0E0E0':'#333').backgroundColor('transparent').height('auto')
+          if (!this.selectMode) { Toggle({type:ToggleType.Switch,isOn:s.enabled}).width(36).height(20).onChange((v:boolean)=>{s.enabled=v;this.dao_?.toggleByUrl?.(s.sourceUrl,v)}) }
         }.width('100%')
         Text(s.sourceUrl).fontSize(11).fontColor(this.isDark?'#888':'#AAA').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).width('100%').margin({top:2})
         Row() {
@@ -168,8 +187,27 @@ struct BookSourcePage {
           if (s.ruleSearchUrl) { Text('🔍').fontSize(10).fontColor('#4CAF50') }
         }.width('100%').margin({top:3})
       }.layoutWeight(1)
-    }.width('100%').padding({left:12,right:12,top:10,bottom:10})
-    .onClick(() => { this.toggleSelect(idx); })
-    .gesture(LongPressGesture().onAction(()=>{this.selectMode=true;this.selected=new Array(this.filtered.length).fill(false);this.selected[idx]=true}))
+      .onClick(() => { if (!this.selectMode) router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}}); else this.toggleSelect(idx); })
+      if (!this.selectMode) {
+        Button('⋮').fontSize(18).fontColor('#888').width(32).height(32).backgroundColor('transparent')
+          .onClick(() => { this.contextMenuIdx = (this.contextMenuIdx === idx ? -1 : idx); })
+      }
+    }.width('100%').padding({left:12,right:4,top:10,bottom:10})
+    .gesture(LongPressGesture().onAction(()=>{this.selectMode=true;this.selected[idx]=true}))
+    // 更多菜单
+    if (this.contextMenuIdx === idx) {
+      Column() {
+        Text('删除').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor('#FF5722')
+          .onClick(()=>{this.contextMenuIdx=-1;this.dao_?.deleteByUrl?.(s.sourceUrl);this.load()})
+        Text('置顶').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
+          .onClick(()=>{this.contextMenuIdx=-1;s.customOrder=-1;this.dao_?.toggleByUrl?.(s.sourceUrl,s.enabled);this.applyFilters()})
+        Text('置底').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
+          .onClick(()=>{this.contextMenuIdx=-1;s.customOrder=9999;this.applyFilters()})
+        Text('取消').fontSize(13).padding({left:16,right:16,top:10,bottom:10}).width('100%').fontColor('#888')
+          .onClick(()=>{this.contextMenuIdx=-1})
+      }.width(120).backgroundColor(this.isDark?'#2A2A2A':'#FFF').borderRadius(12).shadow({radius:8,color:'#20000000',offsetY:2})
+      .position({x:'60%',y:0}).zIndex(100)
+    }
+    }.width('100%')
   }
 }

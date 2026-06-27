@@ -72,9 +72,9 @@ export struct ImportSourceDialog {
     } catch (e) { promptAction.showToast({message:'下载失败',duration:1500}); }
   }
 
-  private selectAll(select: boolean): void { for (const i of this.items) i.checked = select; }
-  private selectNew(): void { for (const i of this.items) i.checked = i.status === 'new'; }
-  private selectUpdate(): void { for (const i of this.items) i.checked = i.status === 'update'; }
+  private selectAll(select: boolean): void { for (const i of this.items) i.checked = select; this.items = [...this.items]; }
+  private selectNew(): void { for (const i of this.items) i.checked = i.status === 'new'; this.items = [...this.items]; }
+  private selectUpdate(): void { for (const i of this.items) i.checked = i.status === 'update'; this.items = [...this.items]; }
 
   private statusColor(s: string): string { return s==='new'?'#4CAF50':s==='update'?'#FF9800':'#AAA'; }
   private statusLabel(s: string): string { return s==='new'?'新增':s==='update'?'更新':'已有'; }
@@ -100,7 +100,7 @@ export struct ImportSourceDialog {
         }.padding({left:16,right:16,top:4,bottom:4}).width('100%')
 
         // 预览列表
-        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor('#0078D7').margin({right:8}).onChange((v:boolean)=>{item.checked=v});Text(item.name).fontSize(13).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.statusLabel(item.status)).fontSize(10).fontColor('#FFF').backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:'#EEE'})})}.layoutWeight(1).width('100%')
+        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor('#0078D7').margin({right:8}).onChange((v:boolean)=>{item.checked=v;this.items=[...this.items]});Text(item.name).fontSize(13).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.statusLabel(item.status)).fontSize(10).fontColor('#FFF').backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:'#EEE'})})}.layoutWeight(1).width('100%')
 
         // 选项
         Column() {
