@@ -12,6 +12,7 @@ import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../compon
 import { ClickAction, DEFAULT_ZONE_ACTIONS } from '../components/reader/ClickAction';
 import { StylePanel } from '../components/reader/StylePanel';
 import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
+import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
 import { HtmlUtil } from '../util/HtmlUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
@@ -53,6 +54,7 @@ struct ReadPage {
   @State showMenu: boolean = false;
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
+  @State showZoneConfig: boolean = false;
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
@@ -126,9 +128,13 @@ struct ReadPage {
     this.cfg.zhFormat = await s.getZhFormat();
     this.readBgColor = await s.getReadBgColor();
     this.readTextColor = await s.getReadTextColor();
-    this.pageMode = (await s.getPageMode()) !== 0;
-    this.cfg.pageMode = this.pageMode;
-    this.cacheSize_ = await s.getAutoCacheSize();
+      this.pageMode = (await s.getPageMode()) !== 0;
+      this.cfg.pageMode = this.pageMode;
+      this.cacheSize_ = await s.getAutoCacheSize();
+      // 加载自定义触控区域配置
+      const za: number[] = [];
+      for (let z = 0; z < 9; z++) za.push(await s.getClickAction(z));
+      this.zoneActions = za;
       this.cfg.bgColor = this.readBgColor;
       this.cfg.textColor = this.readTextColor;
     } catch (_e) { /* ignore */ }
@@ -589,7 +595,7 @@ struct ReadPage {
             onReadAloud: () => { this.showMenu = false; promptAction.showToast({message:'朗读功能开发中',duration:1500}); },
             onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
-            onSettings: () => { this.showMenu = false; this.showStyle = true; },
+            onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
             onSource: () => { this.showMenu = false; promptAction.showToast({message:'换源功能开发中',duration:1500}); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
             onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },
@@ -618,6 +624,15 @@ struct ReadPage {
             onDismiss: () => { this.showCacheDialog = false; },
             onCacheComplete: () => { promptAction.showToast({ message: '缓存完成', duration: 1500 }); },
             onCacheStart: () => {},
+          })
+        }.width('100%').height('100%')
+      }
+      if (this.showZoneConfig) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showZoneConfig = false; })
+          ClickActionConfig({
+            onDismiss: () => { this.showZoneConfig = false; },
+            onChanged: (actions: number[]) => { this.zoneActions = [...actions]; },
           })
         }.width('100%').height('100%')
       }

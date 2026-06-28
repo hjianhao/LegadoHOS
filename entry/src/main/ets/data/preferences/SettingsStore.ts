@@ -105,4 +105,19 @@ export class SettingsStore {
   // ---- 缓存设置 ----
   async getAutoCacheSize(): Promise<number> { return await this.get('auto_cache_size', 10); }
   async setAutoCacheSize(v: number): Promise<void> { await this.put('auto_cache_size', v); }
+
+  // ---- 触控区域 ----
+  private readonly ZONE_KEYS_: string[] = [
+    'click_tl', 'click_tc', 'click_tr',
+    'click_ml', 'click_mc', 'click_mr',
+    'click_bl', 'click_bc', 'click_br',
+  ];
+  private readonly DEFAULT_ACTIONS_: number[] = [4,2,3,2,0,1,2,1,1];
+
+  async getClickAction(zone: number): Promise<number> {
+    return await this.get(this.ZONE_KEYS_[zone], this.DEFAULT_ACTIONS_[zone]);
+  }
+  async setClickAction(zone: number, action: number): Promise<void> {
+    await this.put(this.ZONE_KEYS_[zone], action);
+  }
 }
