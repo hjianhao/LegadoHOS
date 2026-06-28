@@ -23,6 +23,7 @@ export interface PageViewConfig {
   headerContent: string; footerContent: string;
   brightness: number; zhFormat: boolean;
   chineseMode: string;
+  pageMode: boolean;
 }
 
 @Component
@@ -41,7 +42,7 @@ export struct PageView {
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
     headerContent: '', footerContent: '', brightness: 80, zhFormat: true,
-    chineseMode: 'original',
+    chineseMode: 'original', pageMode: true,
   };
 
   onPageTurn?: (event: PageTurnEvent) => void;

@@ -25,12 +25,12 @@ export struct CacheDialog {
   @State showProgress: boolean = false;
 
   /** 外部传入的书籍信息 */
-  private bookName: string = '';
-  private bookOriginUrl: string = '';
-  private source: BookSource | null = null;
-  private chapters: Object[] = [];
-  private totalChapters: number = 0;
-  private currentIndex: number = 0;
+  bookName: string = '';
+  bookOriginUrl: string = '';
+  source: BookSource | null = null;
+  chapters: Object[] = [];
+  totalChapters: number = 0;
+  currentIndex: number = 0;
 
   onDismiss?: () => void;
   /** 缓存完成后的回调 */

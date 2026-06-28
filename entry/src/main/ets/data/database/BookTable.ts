@@ -86,6 +86,14 @@ export class BookTable {
     return books.length > 0 ? books[0] : null;
   }
 
+  async getBookByUrl(bookUrl: string): Promise<Book | null> {
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.equalTo('book_url', bookUrl);
+    const resultSet = await this.rdbStore.query(predicates, []);
+    const books = this.toBooks(resultSet);
+    return books.length > 0 ? books[0] : null;
+  }
+
   async searchBooks(keyword: string): Promise<Book[]> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.like('name', `%${keyword}%`);

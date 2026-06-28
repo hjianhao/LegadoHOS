@@ -13,7 +13,7 @@ export struct StylePanel {
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
     headerContent: '', footerContent: '', brightness: 80, zhFormat: true,
-    chineseMode: 'original',
+    chineseMode: 'original', pageMode: true,
   };
   @State activeTab: number = 0;
 
@@ -197,6 +197,10 @@ export struct StylePanel {
     Row() {
       Text('中文排版').fontSize(14).fontColor(this.isDark ? '#E0E0E0' : '#333').layoutWeight(1)
       Toggle({ type: ToggleType.Switch, isOn: this.cfg.zhFormat }).onChange((v: boolean) => { this.cfg.zhFormat = v; this.emitChange(); })
+    }.width('100%').margin({ bottom: 10 })
+    Row() {
+      Text('显示页脚').fontSize(14).fontColor(this.isDark ? '#E0E0E0' : '#333').layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.cfg.showFooter }).onChange((v: boolean) => { this.cfg.showFooter = v; this.emitChange(); })
     }.width('100%').margin({ bottom: 10 })
     Text('简繁转换').fontSize(14).fontColor(this.isDark ? '#E0E0E0' : '#333').width('100%').margin({ bottom: 4 })
     Row() {

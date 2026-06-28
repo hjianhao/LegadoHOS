@@ -135,7 +135,7 @@ export class AppDatabase {
   /** 从 raw_json 重新解析规则字段，修复旧导入缺少规则列的问题 */
   private async reparseSourceRules(): Promise<void> {
     const rs = await this.rdbStore_.querySql(
-      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != '' AND rule_toc_title = ''"
+      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != '' AND (rule_toc_title = '' OR rule_book_content = '' OR rule_toc LIKE '{%')"
     );
     if (rs.rowCount === 0) { rs.close(); return; }
     let fixedCount = 0;
@@ -170,10 +170,13 @@ export class AppDatabase {
           'rule_book_info_introduce': toStr(obj['ruleBookInfoIntroduce'] || bi['intro'] || ''),
           'rule_book_info_toc_url': toStr(obj['ruleBookInfoTocUrl'] || bi['tocUrl'] || obj['tocUrl'] || ''),
           'rule_toc_url': toStr(obj['ruleTocUrl'] || rtc['tocUrl'] || ''),
-          'rule_toc': toStr(obj['ruleToc'] || rtc['chapterList'] || ''),
+          'rule_toc': toStr(typeof obj['ruleToc'] === 'object' ? (obj['ruleToc'] as Record<string, Object>)['chapterList'] || '' : obj['ruleToc'] || rtc['chapterList'] || ''),
           'rule_toc_title': toStr(obj['ruleTocTitle'] || rtc['chapterName'] || ''),
           'rule_book_content_url': toStr(obj['ruleBookContentUrl'] || rc['contentUrl'] || ''),
-          'rule_book_content': toStr(obj['ruleBookContent'] || rc['content'] || ''),
+          'rule_book_content': (() => {
+            const rbc = obj['ruleBookContent'] || rc['content'] || '';
+            return typeof rbc === 'string' ? rbc : JSON.stringify(rbc);
+          })(),
           'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
           'header': toStr(obj['header'] || ''),
         };
