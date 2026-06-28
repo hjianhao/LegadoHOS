@@ -3,6 +3,7 @@
  */
 import router from '@ohos.router';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
+import { MeasureUtils } from '@kit.ArkUI';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ChapterCache } from '../util/ChapterCache';
@@ -51,6 +52,9 @@ struct ReadPage {
   private scroller_: Scroller = new Scroller();
   private scrollAtTop_: boolean = true;
   private justLoadedChapter_: boolean = false;
+  private measureCharW_: number = 0;
+  private measureLineH_: number = 0;
+  private measureUtil_: MeasureUtils | null = null;
   @State showMenu: boolean = false;
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
@@ -84,6 +88,8 @@ struct ReadPage {
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
     if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
     this.loadSettings();
+    // 初始化测量工具
+    try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
   }
 
   onPageShow(): void {
@@ -407,11 +413,13 @@ struct ReadPage {
       pagePaddingRight: this.cfg.paddingRight,
       zhFormat: this.cfg.zhFormat,
       chineseMode: this.cfg.chineseMode,
-      measuredCharWidth: 0,
-      measuredLineHeight: 0,
+      measuredCharWidth: this.measureCharW_,
+      measuredLineHeight: this.measureLineH_,
     };
     const footerH = this.cfg.showFooter ? this.footerH_() : 0;
-    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH - footerH);
+    // 精确定位模式：pageHeight 已包含 paddingBottom（页脚在其上方叠加），
+    // TextLayout 内部会减去 paddingTop/paddingBottom，无需再额外减 footerH
+    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
     if (this.pageIndex >= this.pages.length) this.pageIndex = 0;
     this.scrollText = scrollText;
@@ -503,7 +511,7 @@ struct ReadPage {
     return `${hh}:${mm}`;
   }
 
-  private footerH_(): number { return 28; }
+  private footerH_(): number { return 20; }
 
   build() {
     Stack() {
@@ -561,6 +569,10 @@ struct ReadPage {
           onNextChapter: () => { this.onNextChapter(); },
           onShowMenu: () => { this.showMenu = true; },
           onShowToc: () => { this.onOpenToc(); },
+          onMeasured: (cw: number, lh: number) => {
+            if (cw > 0 && this.measureCharW_ !== cw) { this.measureCharW_ = cw; }
+            if (lh > 0 && this.measureLineH_ !== lh) { this.measureLineH_ = lh; }
+          },
         }).width('100%').height('100%')
       }
       // 页脚：直接渲染在 ReadPage Stack 中，PageView 上方
