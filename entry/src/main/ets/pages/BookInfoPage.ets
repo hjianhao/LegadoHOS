@@ -4,7 +4,9 @@ import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
+import { BookSourceChapter } from '../model/BookSource';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
@@ -29,6 +31,7 @@ export struct BookInfoPage {
   @State sourceCount: number = 1;
   @State chapterCount: number = 0;
   @State latestChapter: string = '';
+  @State recentChapters: BookSourceChapter[] = [];
   @State introExpanded: boolean = false;
   @State durChapterTitle: string = '';     // 阅读进度
   @State durChapterIndex: number = 0;
@@ -81,6 +84,7 @@ export struct BookInfoPage {
         this.chapterCount = chapters.length;
         const last = chapters[chapters.length - 1];
         this.latestChapter = last.title || '';
+        this.recentChapters = chapters.slice(0, 5);
       }
     } catch (_e) { /* ignore */ }
   }
@@ -221,8 +225,8 @@ export struct BookInfoPage {
         type: BookType.TEXT,
         groupId: BookGroup.ALL,
         tocUrl: '',
-        chapterCount: 0,
-        totalChapterNum: 0,
+        chapterCount: this.chapterCount,
+        totalChapterNum: this.chapterCount,
         latestChapterTitle: '',
         durChapterTitle: '',
         durChapterIndex: 0,
@@ -262,6 +266,21 @@ export struct BookInfoPage {
         origin: this.origin,
         originUrl: this.originUrl,
         header: this.sourceHeader
+      }
+    });
+  }
+
+  startReadAt(index: number): void {
+    router.pushUrl({
+      url: 'pages/ReadPage',
+      params: {
+        name: this.bookName,
+        author: this.bookAuthor,
+        bookUrl: this.noteUrl,
+        origin: this.origin,
+        originUrl: this.originUrl,
+        header: this.sourceHeader,
+        durChapterIndex: index,
       }
     });
   }
@@ -342,6 +361,31 @@ export struct BookInfoPage {
               .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
               .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
               .onClick(() => { this.openToc(); })
+            }
+
+            // ===== 最近章节 (前5章) =====
+            if (this.recentChapters.length > 0) {
+              Column() {
+                Row() {
+                  Text('目录 (' + this.chapterCount + '章)').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
+                  Text('全部 ›').fontSize(12).fontColor('#0078D7').onClick(() => { this.openToc(); })
+                }.width('100%').padding({left:16,right:16,top:10,bottom:6})
+                .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
+                .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
+                ForEach(this.recentChapters, (ch: BookSourceChapter, idx: number) => {
+                  Row() {
+                    Text(String(ch.index + 1)).fontSize(11).fontColor('#BBB').width(30)
+                    Text(ch.title || '第' + (ch.index + 1) + '章').fontSize(13)
+                      .fontColor(this.isDark ? '#CCC' : '#444').maxLines(1).layoutWeight(1)
+                  }.width('100%').padding({left:16,right:16,top:8,bottom:8})
+                  .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
+                  .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#F0F0F0' })
+                  .onClick(() => {
+                    ChapterCache.chapters = [];
+                    this.startReadAt(idx);
+                  })
+                }, (ch: BookSourceChapter) => ch.index.toString())
+              }.onClick(() => { this.openToc(); })
             }
 
             // ===== 操作按钮 =====
