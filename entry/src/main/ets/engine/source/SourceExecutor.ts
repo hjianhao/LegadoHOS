@@ -696,26 +696,10 @@ export class SourceExecutor {
           const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
           if (altResp && altResp.length > 100) {
             const altChapters = this.parseTocFromRules(altResp, tocRules);
-            if (altChapters.length > 0) return altChapters;
-          }
-        }
-      }
-
-      // 无结果？尝试 ruleBookInfoTocUrl 作为备用目录 URL
-      if (source.ruleBookInfoTocUrl) {
-        const idMatch = tocUrl.match(/bookid[=:](\d+)/i);
-        const bookId = idMatch ? idMatch[1] : '';
-        const altUrl = source.ruleBookInfoTocUrl
-          .replace(/\{\{bookUrl\}\}/g, tocUrl)
-          .replace(/\{\{id\}\}/g, bookId)
-          .replace(/\{\{\$\.resourceID\}\}/g, bookId)
-          .replace(/\{\{[^}]*\}\}/g, '');
-        if (altUrl && altUrl !== tocUrl && bookId) {
-          console.info('[SrcEx] Trying alt TOC URL:', altUrl.substring(0, 80));
-          const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
-          if (altResp && altResp.length > 100) {
-            const altChapters = this.parseTocFromRules(altResp, tocRules);
-            if (altChapters.length > 0) return altChapters;
+            if (altChapters.length > 0) {
+              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters, first=', altChapters[0].title || 'EMPTY');
+              return altChapters;
+            }
           }
         }
       }
@@ -1286,8 +1270,16 @@ export class SourceExecutor {
         return '';
       };
 
+      let title = parseField(titleRule);
+      // titleRule 为空时自动查找常见章名字段
+      if (!title && !titleRule && typeof item === 'object' && item !== null) {
+        const obj = item as Record<string, string>;
+        for (const k of ['serialName', 'chapterName', 'name', 'title', 'chapterTitle']) {
+          if (typeof obj[k] === 'string' && obj[k]) { title = obj[k]; break; }
+        }
+      }
       return {
-        title: parseField(titleRule) || `第${index + 1}章`,
+        title: title || `第${index + 1}章`,
         url: parseField(urlItemRule) || '',
         index: index,
       };
