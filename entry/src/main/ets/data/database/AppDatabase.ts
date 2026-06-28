@@ -122,6 +122,7 @@ export class AppDatabase {
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_explores TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_review TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN script TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE search_results ADD COLUMN source_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 

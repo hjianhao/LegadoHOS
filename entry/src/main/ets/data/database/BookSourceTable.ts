@@ -45,6 +45,7 @@ export const BookSourceTableCreate = `
     script TEXT DEFAULT '',
     header TEXT DEFAULT '',
     raw_json TEXT DEFAULT '',
+    rule_book_info_toc_url TEXT DEFAULT '',
     create_time INTEGER DEFAULT 0,
     update_time INTEGER DEFAULT 0
   );
@@ -350,12 +351,12 @@ export class BookSourceTable {
         ruleReview: rs.getString(rs.getColumnIndex('rule_review')) || '',
         script: rs.getString(rs.getColumnIndex('script')) || '',
         header: rs.getString(rs.getColumnIndex('header')) || '',
+        ruleBookInfoTocUrl: rs.getString(rs.getColumnIndex('rule_book_info_toc_url')) || '',
         createTime: rs.getLong(rs.getColumnIndex('create_time')),
         updateTime: rs.getLong(rs.getColumnIndex('update_time')),
         ruleSearchCheckKeyWord: '',
         ruleSearchLastChapter: '',
         ruleBookInfoLastChapter: '',
-        ruleBookInfoTocUrl: '',
         ruleBookInfoCanReName: '',
         ruleBookInfoDownloadUrls: '',
         ruleBookInfoRelatedBooks: '',
@@ -483,6 +484,7 @@ export class BookSourceTable {
       'script': source.script,
       'header': source.header,
       'raw_json': (source as any).rawJson || '',
+      'rule_book_info_toc_url': source.ruleBookInfoTocUrl,
       'create_time': source.createTime,
       'update_time': source.updateTime,
     };
