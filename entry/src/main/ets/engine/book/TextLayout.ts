@@ -2,8 +2,9 @@
  * 排版引擎
  *
  * 负责将文本内容排版为可显示的页面。
- * 处理：字体选择、字号、行距、段距、对齐、缩进。
+ * 使用 measureTextSize 精确二分查找页面边界，保证页间文字衔接。
  */
+import { MeasureUtils } from '@kit.ArkUI';
 
 export interface LayoutConfig {
   fontFamily: string;
@@ -53,20 +54,127 @@ export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
 
 export class TextLayout {
   /**
-   * 将文本分割为页面
+   * 将文本精确分割为页面（基于 measureTextSize 二分查找边界）
    */
   static splitIntoPages(
     text: string,
     config: LayoutConfig,
     pageWidth: number,
-    pageHeight: number
+    pageHeight: number,
+    measure?: MeasureUtils
   ): LayoutPage[] {
     if (!text) return [];
 
+    // pageWidth/pageHeight 来自 onAreaChange（单位 vp），padding 也单位 vp
+    const innerW = pageWidth - config.pagePaddingLeft - config.pagePaddingRight;
+    const innerH = pageHeight - config.pagePaddingTop - config.pagePaddingBottom;
+    if (innerW <= 0 || innerH <= 0) return [];
+
+    if (measure) {
+      return this.splitIntoPagesPrecise_(text, config, innerW, innerH, measure);
+    }
+    return this.splitIntoPagesEstimated_(text, config, pageWidth, pageHeight);
+  }
+
+  /** 使用 measureTextSize 二分查找每页边界 */
+  private static splitIntoPagesPrecise_(
+    text: string,
+    config: LayoutConfig,
+    innerW: number,
+    innerH: number,
+    measure: MeasureUtils
+  ): LayoutPage[] {
+    const pages: LayoutPage[] = [];
+    let offset = 0;
+    const len = text.length;
+
+    while (offset < len) {
+      // 二分查找：最长前缀使其高度 <= innerH
+      const end = this.findPageEnd_(text, offset, len, innerW, innerH, config, measure);
+      if (end <= offset) {
+        // 连一个字符都放不下，至少放一个字符避免死循环
+        pages.push({ lines: [{ text: text[offset], offset: offset, height: config.fontSize * config.lineHeightMultiplier, isParagraphStart: true, isParagraphEnd: false }], startOffset: offset, endOffset: offset + 1 });
+        offset++;
+        continue;
+      }
+      const pageText = text.substring(offset, end);
+      // 拆成显示用行（用于 PageView 渲染）
+      const lines = this.splitToLines_(pageText, config.fontSize * config.lineHeightMultiplier);
+      pages.push({ lines: lines, startOffset: offset, endOffset: end });
+      offset = end;
+    }
+    return pages;
+  }
+
+  /** 二分查找一页的结束位置 */
+  private static findPageEnd_(
+    text: string, start: number, totalLen: number,
+    innerW: number, innerH: number,
+    config: LayoutConfig, measure: MeasureUtils
+  ): number {
+    let lo = start;
+    let hi = totalLen;
+
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      const sub = text.substring(start, mid);
+      const size = measure.measureTextSize({
+        textContent: sub,
+        constraintWidth: innerW,
+        fontSize: config.fontSize,
+        fontWeight: config.fontWeight,
+        fontFamily: config.fontFamily,
+        letterSpacing: config.letterSpacing,
+        lineHeight: config.fontSize * config.lineHeightMultiplier,
+      });
+      // measureTextSize 返回高度单位 px，需要转换为 vp 再比较
+      const measuredH = typeof px2vp === 'function' ?
+        px2vp(Number(size.height || 0)) : Number(size.height || 0);
+      if (measuredH <= innerH) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return lo;
+  }
+
+  /** 将页面文本按换行符拆成 LayoutLine 数组（供 PageView 渲染） */
+  private static splitToLines_(text: string, lh: number): LayoutLine[] {
+    const lines: LayoutLine[] = [];
+    const parts = text.split('\n');
+    let off = 0;
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].length > 0) {
+        lines.push({
+          text: parts[i],
+          offset: off,
+          height: lh,
+          isParagraphStart: i === 0,
+          isParagraphEnd: false,
+        });
+      }
+      off += parts[i].length + 1; // +1 for newline
+    }
+    if (lines.length > 0) {
+      lines[lines.length - 1].isParagraphEnd = true;
+    }
+    return lines;
+  }
+
+  /** 回退：基于字符计数的估算分段 */
+  private static splitIntoPagesEstimated_(
+    text: string,
+    config: LayoutConfig,
+    pageWidth: number,
+    pageHeight: number
+  ): LayoutPage[] {
     const pages: LayoutPage[] = [];
     const paragraphs = text.split('\n');
-    const lineHeight = config.fontSize * config.lineHeightMultiplier;
-    const usableHeight = pageHeight - config.pagePadding * 2;
+    const lineHeight = config.measuredLineHeight > 0
+      ? config.measuredLineHeight
+      : config.fontSize * config.lineHeightMultiplier;
+    const usableHeight = pageHeight - config.pagePaddingTop - config.pagePaddingBottom;
     const maxLinesPerPage = Math.floor(usableHeight / lineHeight);
 
     let currentLines: LayoutLine[] = [];
@@ -78,44 +186,21 @@ export class TextLayout {
 
       for (const line of paraLines) {
         if (currentLines.length >= maxLinesPerPage) {
-          // 保存当前页
-          const pageStartOffset = currentLines.length > 0
-            ? currentLines[0].offset
-            : globalOffset;
+          const pageStartOffset = currentLines.length > 0 ? currentLines[0].offset : globalOffset;
           const pageEndOffset = currentLines.length > 0
-            ? currentLines[currentLines.length - 1].offset
-              + currentLines[currentLines.length - 1].text.length
+            ? currentLines[currentLines.length - 1].offset + currentLines[currentLines.length - 1].text.length
             : globalOffset;
-
-          pages.push({
-            lines: [...currentLines],
-            startOffset: pageStartOffset,
-            endOffset: pageEndOffset,
-          });
+          pages.push({ lines: [...currentLines], startOffset: pageStartOffset, endOffset: pageEndOffset });
           currentLines = [];
         }
-        currentLines.push({
-          ...line,
-          offset: globalOffset,
-        });
+        currentLines.push({ ...line, offset: globalOffset });
         globalOffset += line.text.length;
       }
-
-      // 段落后加空行（除了最后一章）
-      if (pi < paragraphs.length - 1) {
-        globalOffset += 1; // 换行符
-      }
+      if (pi < paragraphs.length - 1) { globalOffset += 1; }
     }
-
-    // 最后一页
     if (currentLines.length > 0) {
-      pages.push({
-        lines: currentLines,
-        startOffset: currentLines[0]?.offset || 0,
-        endOffset: globalOffset,
-      });
+      pages.push({ lines: currentLines, startOffset: currentLines[0]?.offset || 0, endOffset: globalOffset });
     }
-
     return pages;
   }
 
@@ -128,15 +213,24 @@ export class TextLayout {
     pageWidth: number
   ): LayoutLine[] {
     if (!text.trim()) {
+      const lh = config.measuredLineHeight > 0
+        ? config.measuredLineHeight
+        : config.fontSize * config.lineHeightMultiplier;
       return [{
-        text: '', offset: 0, height: config.fontSize * config.lineHeightMultiplier,
+        text: '', offset: 0, height: lh,
         isParagraphStart: true, isParagraphEnd: true,
       }];
     }
 
-    // 估算每行最大字符数（基于字体大小和页面宽度）
-    const charWidth = config.fontSize * 0.6; // 估算中文字符宽度
-    const usableWidth = pageWidth - config.pagePadding * 2;
+    const lh = config.measuredLineHeight > 0
+      ? config.measuredLineHeight
+      : config.fontSize * config.lineHeightMultiplier;
+
+    // 估算每行最大字符数
+    const charWidth = config.measuredCharWidth > 0
+      ? config.measuredCharWidth
+      : config.fontSize * 0.6;
+    const usableWidth = pageWidth - config.pagePaddingLeft - config.pagePaddingRight;
     const maxCharsPerLine = Math.max(1, Math.floor(usableWidth / charWidth));
 
     const lines: LayoutLine[] = [];
@@ -158,7 +252,7 @@ export class TextLayout {
           lines.push({
             text: lineText,
             offset: text.length - remaining.length,
-            height: config.fontSize * config.lineHeightMultiplier,
+            height: lh,
             isParagraphStart: true,
             isParagraphEnd: lineLength >= remaining.length,
           });
@@ -170,7 +264,7 @@ export class TextLayout {
         lines.push({
           text: remaining.slice(0, lineLength),
           offset: text.length - remaining.length,
-          height: config.fontSize * config.lineHeightMultiplier,
+          height: lh,
           isParagraphStart: false,
           isParagraphEnd: lineLength >= remaining.length,
         });
