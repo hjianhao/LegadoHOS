@@ -487,6 +487,32 @@ export class SourceExecutor {
     return results;
   }
 
+  /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body） */
+  private async fetchWithOpts(url: string, headers: Record<string, string>, timeout: number = 30000): Promise<string> {
+    let method = 'GET', body = '';
+    const jm = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
+    if (jm) {
+      try {
+        const opts = JSON.parse(jm[2]);
+        if (opts.method) method = opts.method.toUpperCase();
+        if (opts.body && typeof opts.body === 'string') body = opts.body;
+        else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
+      } catch (_e) {
+        const r = jm[2].replace(/\n/g, ' ');
+        const mm = r.match(/'method'\s*:\s*'([^']*)'/i);
+        if (mm) method = mm[1].toUpperCase();
+        const bm = r.match(/'body'\s*:\s*'([^']*)'/i);
+        if (bm) body = bm[1];
+      }
+      url = jm[1];
+    }
+    if (method === 'POST') {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+      return await NetUtil.httpPost(url, body, headers, timeout);
+    }
+    return await NetUtil.httpGet(url, headers, timeout);
+  }
+
   // ============ 书籍详情 ============
 
   /**
@@ -505,7 +531,7 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const body = await NetUtil.httpGet(noteUrl, headers);
+      const body = await this.fetchWithOpts(noteUrl, headers);
       if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
 
       const parser = getHtmlParser();
@@ -584,35 +610,12 @@ export class SourceExecutor {
     console.info('[SrcEx] getContent final URL:', contentUrl.substring(0, 80));
     try {
       // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）
-      let method = 'GET', body = '';
-      const jsonMatch = contentUrl.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
-      if (jsonMatch) {
-        try {
-          const opts = JSON.parse(jsonMatch[2]);
-          if (opts.method) method = opts.method.toUpperCase();
-          if (opts.body && typeof opts.body === 'string') body = opts.body;
-          else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
-        } catch (_e) {
-          const raw = jsonMatch[2].replace(/\n/g, ' ');
-          const mm = raw.match(/'method'\s*:\s*'([^']*)'/i);
-          if (mm) method = mm[1].toUpperCase();
-          const bm = raw.match(/'body'\s*:\s*'([^']*)'/i);
-          if (bm) body = bm[1];
-        }
-        contentUrl = jsonMatch[1];
-      }
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      let raw = '';
-      if (method === 'POST') {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        raw = await NetUtil.httpPost(contentUrl, body, headers);
-      } else {
-        raw = await NetUtil.httpGet(contentUrl, headers);
-      }
+      let raw = await this.fetchWithOpts(contentUrl, headers);
       if (!raw) return '';
 
       // JSON 直接解析
@@ -654,38 +657,17 @@ export class SourceExecutor {
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
     try {
-      // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）
-      let method = 'GET', body = '';
-      const jsonMatch = tocUrl.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
-      if (jsonMatch) {
-        try {
-          const opts = JSON.parse(jsonMatch[2]);
-          if (opts.method) method = opts.method.toUpperCase();
-          if (opts.body && typeof opts.body === 'string') body = opts.body;
-          else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
-        } catch (_e) {
-          const raw = jsonMatch[2].replace(/\n/g, ' ');
-          const mm = raw.match(/'method'\s*:\s*'([^']*)'/i);
-          if (mm) method = mm[1].toUpperCase();
-          const bm = raw.match(/'body'\s*:\s*'([^']*)'/i);
-          if (bm) body = bm[1];
-        }
-        tocUrl = jsonMatch[1];
-      }
-
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      let resp = '';
-      if (method === 'POST') {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        resp = await NetUtil.httpPost(tocUrl, body, headers);
-      } else {
-        resp = await NetUtil.httpGet(tocUrl, headers);
-      }
+      let resp = await this.fetchWithOpts(tocUrl, headers);
       if (!resp || resp.length < 100) return [];
+      // dump 企鹅 TOC 响应
+      if (tocUrl.includes('bookshelf.html5.qq.com')) {
+        console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
+      }
       const bodyText = resp;
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
@@ -708,8 +690,27 @@ export class SourceExecutor {
       }
 
       // 兜底：从 HTML 中提取章节链接
-      const chapters = this.extractTocFromHtml(bodyText, source);
-      if (chapters.length > 0) return chapters;
+      const tocChapters = this.extractTocFromHtml(bodyText, source);
+      if (tocChapters.length > 0) return tocChapters;
+
+      // 无结果？尝试 ruleBookInfoTocUrl 作为备用目录 URL
+      if (source.ruleBookInfoTocUrl) {
+        const idMatch = tocUrl.match(/bookid[=:](\d+)/i);
+        const bookId = idMatch ? idMatch[1] : '';
+        const altUrl = source.ruleBookInfoTocUrl
+          .replace(/\{\{bookUrl\}\}/g, tocUrl)
+          .replace(/\{\{id\}\}/g, bookId)
+          .replace(/\{\{\$\.resourceID\}\}/g, bookId)
+          .replace(/\{\{[^}]*\}\}/g, '');
+        if (altUrl && altUrl !== tocUrl && bookId) {
+          console.info('[SrcEx] Trying alt TOC URL:', altUrl.substring(0, 80));
+          const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
+          if (altResp && altResp.length > 100) {
+            const altChapters = this.parseTocFromRules(altResp, tocRules);
+            if (altChapters.length > 0) return altChapters;
+          }
+        }
+      }
     } catch (err) {
       console.warn('[SrcEx] getToc failed:', (err as Error).message);
       return [];
