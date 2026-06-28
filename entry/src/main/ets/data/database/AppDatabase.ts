@@ -135,7 +135,7 @@ export class AppDatabase {
   /** 从 raw_json 重新解析规则字段，修复旧导入缺少规则列的问题 */
   private async reparseSourceRules(): Promise<void> {
     const rs = await this.rdbStore_.querySql(
-      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != '' AND rule_search_url = ''"
+      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != '' AND rule_toc_title = ''"
     );
     if (rs.rowCount === 0) { rs.close(); return; }
     let fixedCount = 0;
