@@ -421,16 +421,6 @@ export class SourceExecutor {
   }
 
   /** 将搜索 HTML dump 到日志（用于诊断） */
-  private dumpHtml(sourceName: string, html: string): void {
-    // 分段输出（每段 500 字符，避免单行过长）
-    const chunkSize = 500;
-    console.info('[SrcEx] HTML DUMP START:', sourceName, 'len=', html.length);
-    for (let i = 0; i < Math.min(html.length, 5000); i += chunkSize) {
-      console.info('[SrcEx] HTML', sourceName, i, html.substring(i, i + chunkSize));
-    }
-    console.info('[SrcEx] HTML DUMP END:', sourceName);
-  }
-
   /** 解析搜索响应：先 JSON，再 HTML，再 Fallback */
   private parseResponse(bodyText: string, source: BookSource, baseUrl: string, duration: number): SearchResult[] {
     // JSON 直接解析（API 类书源）
@@ -692,6 +682,24 @@ export class SourceExecutor {
       // 兜底：从 HTML 中提取章节链接
       const tocChapters = this.extractTocFromHtml(bodyText, source);
       if (tocChapters.length > 0) return tocChapters;
+
+      // 无结果？尝试 ruleBookInfoTocUrl
+      if (source.ruleBookInfoTocUrl) {
+        const idMatch = tocUrl.match(/bookid[=:](\d+)/i);
+        const bookId = idMatch ? idMatch[1] : '';
+        const altUrl = source.ruleBookInfoTocUrl
+          .replace(/\{\{bookUrl\}\}/g, tocUrl)
+          .replace(/\{\{id\}\}/g, bookId)
+          .replace(/\{\{\$\.resourceID\}\}/g, bookId)
+          .replace(/\{\{[^}]*\}\}/g, '');
+        if (altUrl && altUrl !== tocUrl && bookId) {
+          const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
+          if (altResp && altResp.length > 100) {
+            const altChapters = this.parseTocFromRules(altResp, tocRules);
+            if (altChapters.length > 0) return altChapters;
+          }
+        }
+      }
 
       // 无结果？尝试 ruleBookInfoTocUrl 作为备用目录 URL
       if (source.ruleBookInfoTocUrl) {
@@ -1269,9 +1277,18 @@ export class SourceExecutor {
 
     return items.map((item: unknown, index: number): BookSourceChapter => {
       const itemHtml = typeof item === 'string' ? item : JSON.stringify(item);
+
+      const parseField = (rule: string): string => {
+        if (!rule) return '';
+        const val = RuleParser.parse(itemHtml, rule);
+        if (Array.isArray(val)) return val[0] || '';
+        if (typeof val === 'string') return val;
+        return '';
+      };
+
       return {
-        title: (RuleParser.parse(itemHtml, titleRule) as string[])?.[0] || `第${index + 1}章`,
-        url: (RuleParser.parse(itemHtml, urlItemRule) as string[])?.[0] || '',
+        title: parseField(titleRule) || `第${index + 1}章`,
+        url: parseField(urlItemRule) || '',
         index: index,
       };
     });
