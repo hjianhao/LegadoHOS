@@ -135,11 +135,13 @@ export struct BookSourceEditPage {
   @State isLoading: boolean = true;
   @State isNew: boolean = false;
   @State sourceUrl: string = '';
+  @State loadVersion: number = 0;   // 递增强制 TextInput 重建
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, string>;
-    const url: string = params ? (params['sourceUrl'] || '') : '';
+    const url: string = params ? (params['url'] || params['sourceUrl'] || '') : '';
     this.sourceUrl = url;
+    console.info('[SrcEdit] opening, url param:', url);
     this.loadSource(url);
   }
 
@@ -154,6 +156,10 @@ export struct BookSourceEditPage {
         if (s) {
           this.editSource = JSON.parse(JSON.stringify(s));
           this.isNew = false;
+          this.loadVersion++;
+          console.info('[SrcEdit] loaded source:', s.sourceName,
+            'searchUrl:', s.ruleSearchUrl ? s.ruleSearchUrl.substring(0,40) : 'EMPTY',
+            'name:', s.sourceName);
         } else {
           this.newSource();
         }
@@ -372,7 +378,7 @@ export struct BookSourceEditPage {
             .placeholderColor('#999')
         }
         .width('100%').margin({ top: 8 })
-      })
+      }, (field: FieldGroup): string => field.key + '_v' + this.loadVersion.toString())
     }.width('100%').padding({ left: 16, right: 16 })
   }
 

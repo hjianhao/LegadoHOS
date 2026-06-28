@@ -7,6 +7,7 @@
 import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../../model/BookSource';
 import { SearchResult, getBookMergeKey } from '../../model/SearchResult';
 import { globalScriptEngine } from './ScriptEngine';
+import { JsExpressionEvaluator } from './JsExpressionEvaluator';
 import { getPolyfillScript, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
 import { NetUtil } from '../../util/NetUtil';
@@ -582,17 +583,41 @@ export class SourceExecutor {
     if (!contentUrl) return '';
     console.info('[SrcEx] getContent final URL:', contentUrl.substring(0, 80));
     try {
+      // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）
+      let method = 'GET', body = '';
+      const jsonMatch = contentUrl.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
+      if (jsonMatch) {
+        try {
+          const opts = JSON.parse(jsonMatch[2]);
+          if (opts.method) method = opts.method.toUpperCase();
+          if (opts.body && typeof opts.body === 'string') body = opts.body;
+          else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
+        } catch (_e) {
+          const raw = jsonMatch[2].replace(/\n/g, ' ');
+          const mm = raw.match(/'method'\s*:\s*'([^']*)'/i);
+          if (mm) method = mm[1].toUpperCase();
+          const bm = raw.match(/'body'\s*:\s*'([^']*)'/i);
+          if (bm) body = bm[1];
+        }
+        contentUrl = jsonMatch[1];
+      }
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const body = await NetUtil.httpGet(contentUrl, headers);
-      if (!body) return '';
+      let raw = '';
+      if (method === 'POST') {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        raw = await NetUtil.httpPost(contentUrl, body, headers);
+      } else {
+        raw = await NetUtil.httpGet(contentUrl, headers);
+      }
+      if (!raw) return '';
 
       // JSON 直接解析
       try {
-        const json = JSON.parse(body) as Record<string, unknown>;
+        const json = JSON.parse(raw) as Record<string, unknown>;
         if (typeof json === 'string') return json as string;
         if (json['content']) return json['content'] as string;
         if (json['data']) {
@@ -603,10 +628,12 @@ export class SourceExecutor {
 
       // 规则解析：直接使用书源的内容规则，不通过 QuickJS（避免大数据传参溢出）
       if (source.ruleBookContent) {
-        const result = this.parseContentFromRules(body, { content: source.ruleBookContent });
+        const result = this.parseContentFromRules(raw, { content: source.ruleBookContent });
         if (result && result.length > 0) return result;
       }
-      return this.stripHtml(body);
+
+      // 兜底：stripHtml
+      return this.stripHtml(raw);
     } catch (err) {
       console.warn('[SrcEx] getContent failed:', (err as Error).message);
       return '';
@@ -621,20 +648,45 @@ export class SourceExecutor {
    */
   async getToc(source: BookSource, tocUrl: string): Promise<BookSourceChapter[]> {
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
-    // ruleTocUrl 是目录页 URL 模板，可能包含 {{bookUrl}}、{{id}} 等占位符
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
     try {
+      // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）
+      let method = 'GET', body = '';
+      const jsonMatch = tocUrl.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
+      if (jsonMatch) {
+        try {
+          const opts = JSON.parse(jsonMatch[2]);
+          if (opts.method) method = opts.method.toUpperCase();
+          if (opts.body && typeof opts.body === 'string') body = opts.body;
+          else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
+        } catch (_e) {
+          const raw = jsonMatch[2].replace(/\n/g, ' ');
+          const mm = raw.match(/'method'\s*:\s*'([^']*)'/i);
+          if (mm) method = mm[1].toUpperCase();
+          const bm = raw.match(/'body'\s*:\s*'([^']*)'/i);
+          if (bm) body = bm[1];
+        }
+        tocUrl = jsonMatch[1];
+      }
+
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const body = await NetUtil.httpGet(tocUrl, headers);
-      if (!body || body.length < 100) return [];
+      let resp = '';
+      if (method === 'POST') {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        resp = await NetUtil.httpPost(tocUrl, body, headers);
+      } else {
+        resp = await NetUtil.httpGet(tocUrl, headers);
+      }
+      if (!resp || resp.length < 100) return [];
+      const bodyText = resp;
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
       const tocRules: Record<string, string> = {
@@ -643,7 +695,7 @@ export class SourceExecutor {
         tocUrlItem: source.ruleTocUrlItem || '',
       };
       if (tocRules.toc) {
-        const chapters = this.parseTocFromRules(body, tocRules);
+        const chapters = this.parseTocFromRules(bodyText, tocRules);
         if (chapters.length > 0) {
           const baseUrl = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
           return chapters.map(ch => ({
@@ -656,7 +708,7 @@ export class SourceExecutor {
       }
 
       // 兜底：从 HTML 中提取章节链接
-      const chapters = this.extractTocFromHtml(body, source);
+      const chapters = this.extractTocFromHtml(bodyText, source);
       if (chapters.length > 0) return chapters;
     } catch (err) {
       console.warn('[SrcEx] getToc failed:', (err as Error).message);
@@ -923,8 +975,38 @@ export class SourceExecutor {
 
   /** 去掉规则末尾的 @put:... / @js:... 等后缀，只保留 JSONPath 部分 */
   private cleanRule(rule: string): string {
-    const idx = rule.search(/@(put|js|get|data-)/);
-    return idx >= 0 ? rule.substring(0, idx) : rule;
+    let idx = rule.indexOf('@put:');
+    if (idx < 0) idx = rule.indexOf('@js:');
+    if (idx < 0) idx = rule.indexOf('\n<js>');
+    if (idx < 0) idx = rule.indexOf('\nhttps://');
+    if (idx < 0) idx = rule.indexOf('\nhttp://');
+    return idx >= 0 ? rule.substring(0, idx).trim() : rule;
+  }
+
+  /** 处理 <js> 代码和 {{result}} 模板 */
+  private postProcessRule(rule: string, value: string): string {
+    if (!value) return value;
+    let result = value;
+    // 1. @js: 处理
+    result = JsExpressionEvaluator.processJsResult(rule, result);
+    // 2. <js>...</js> 代码
+    const jsm = rule.match(/<js>([\s\S]*?)<\/js>/);
+    if (jsm) {
+      const code = 'var result=' + JSON.stringify(result) + ';\n' + jsm[1];
+      try {
+        const r = globalScriptEngine.evaluateJsSync(code);
+        if (r && r !== 'null' && r !== 'undefined') result = r.trim().replace(/^['"]|['"]$/g, '') || result;
+      } catch(_e){}
+    }
+    // 3. {{result}} 模板
+    const tm = rule.match(/https?:\/\/[^\s\n]+\{\{result\}\}[^\s\n]*/);
+    if (tm) {
+      result = tm[0].replace(/\{\{result\}\}/g, result);
+      console.info('[SrcEx] PostRule tmpl: ' + result.substring(0, 100));
+    } else {
+      console.info('[SrcEx] PostRule no tmpl match, rule=' + rule.substring(0, 80));
+    }
+    return result;
   }
 
   private firstStr(item: Record<string, unknown>, ...paths: (string | undefined)[]): string {
@@ -932,8 +1014,12 @@ export class SourceExecutor {
       if (!p) continue;
       const cleaned = this.cleanRule(p);
       const val = this.getPath(item, cleaned);
-      if (typeof val === 'string' && val) return val;
-      if (typeof val === 'number') return String(val);
+      let raw = '';
+      if (typeof val === 'string') raw = val;
+      else if (typeof val === 'number') raw = String(val);
+      else continue;
+      const processed = this.postProcessRule(p, raw);
+      if (processed) return processed;
     }
     return '';
   }

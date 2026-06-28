@@ -59,6 +59,17 @@ export class ScriptEngine {
     }
   }
 
+  /** 同步执行 JS（用于简单表达式） */
+  evaluateJsSync(script: string): string {
+    this.checkReady();
+    try {
+      return getBridge().executeScript(this.engineId, script);
+    } catch (err) {
+      console.error('[ScriptEngine] Sync error:', err);
+      return '';
+    }
+  }
+
   /**
    * 调用 JS 全局函数
    * @param funcName 函数名 (如 "search", "getBookInfo", "getToc", "getContent")
