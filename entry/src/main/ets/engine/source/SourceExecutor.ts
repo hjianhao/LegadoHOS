@@ -10,6 +10,7 @@ import { globalScriptEngine } from './ScriptEngine';
 import { JsExpressionEvaluator } from './JsExpressionEvaluator';
 import { getPolyfillScript, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
+import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from './RuleAnalyzer';
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
@@ -18,6 +19,51 @@ import { WebViewFetcher } from '../web/WebViewFetcher';
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
+}
+
+/** @put / @get 变量存储（跨段变量引用） */
+let putGetStore: Record<string, string> = {};
+
+function initPutGetStore(): void {
+  putGetStore = {};
+}
+
+function processPutGet(rule: string, evalFn: (r: string) => string): string {
+  if (!rule) return '';
+  let remaining = rule;
+  // 处理 @get:varName — 获取之前 put 的变量值
+  if (rule.startsWith('@get:')) {
+    const varName = rule.slice(5).trim();
+    return putGetStore[varName] || '';
+  }
+  // 处理内嵌 @put:{varName:"subRule"}
+  const putMatch = remaining.match(/@put\s*:\s*\{\s*(\w+)\s*:\s*("[^"]*"|'[^']*'|[^}]+)\s*\}/);
+  if (putMatch) {
+    const varName = putMatch[1].trim();
+    let varRule = putMatch[2];
+    if ((varRule.startsWith('"') && varRule.endsWith('"')) || (varRule.startsWith("'") && varRule.endsWith("'"))) {
+      varRule = varRule.slice(1, -1);
+    }
+    putGetStore[varName] = evalFn(varRule);
+    remaining = remaining.replace(putMatch[0], '');
+  }
+  if (remaining.trim()) {
+    return evalFn(remaining.trim());
+  }
+  return '';
+}
+
+/**
+ * 应用连接操作符（|| &&）解析单字段规则
+ */
+function resolveFieldRule(rule: string, fn: (subRule: string) => string): string {
+  if (!rule) return '';
+  const { rules, connector } = splitConnectorRules(rule.trim());
+  if (!connector || rules.length === 1) return processPutGet(rules[0], fn);
+  const values = rules.map(r => processPutGet(r, fn));
+  if (connector === '||') return firstNonEmpty(values);
+  if (connector === '&&') return mergeAll(values);
+  return values[0] || '';
 }
 
 function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
@@ -477,7 +523,7 @@ export class SourceExecutor {
     return results;
   }
 
-  /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body） */
+  /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body + headers） */
   private async fetchWithOpts(url: string, headers: Record<string, string>, timeout: number = 30000): Promise<string> {
     let method = 'GET', body = '';
     const jm = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
@@ -487,15 +533,32 @@ export class SourceExecutor {
         if (opts.method) method = opts.method.toUpperCase();
         if (opts.body && typeof opts.body === 'string') body = opts.body;
         else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
+        // 提取 headers 合并到请求头
+        if (opts.headers && typeof opts.headers === 'object') {
+          for (const [hk, hv] of Object.entries(opts.headers as Record<string, Object>)) {
+            if (typeof hv === 'string') headers[hk] = hv;
+          }
+        }
       } catch (_e) {
         const r = jm[2].replace(/\n/g, ' ');
         const mm = r.match(/'method'\s*:\s*'([^']*)'/i);
         if (mm) method = mm[1].toUpperCase();
         const bm = r.match(/'body'\s*:\s*'([^']*)'/i);
         if (bm) body = bm[1];
+        const hm = r.match(/'headers'\s*:\s*\{([^}]*)\}/i);
+        if (hm) {
+          const hparts = hm[1].match(/'(\w+)'\s*:\s*'([^']*)'/g);
+          if (hparts) {
+            for (const hp of hparts) {
+              const kv = hp.match(/'(\w+)'\s*:\s*'([^']*)'/);
+              if (kv) headers[kv[1]] = kv[2];
+            }
+          }
+        }
       }
       url = jm[1];
     }
+    console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(headers).substring(0, 200));
     if (method === 'POST') {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json';
       return await NetUtil.httpPost(url, body, headers, timeout);
@@ -530,8 +593,10 @@ export class SourceExecutor {
 
       const extractField = (rule: string): string => {
         if (!rule) return '';
-        const normalized = this.normalizeCssRule(rule);
-        return parser.extractAttr(doc, normalized);
+        return resolveFieldRule(rule, (subRule: string) => {
+          const normalized = this.normalizeCssRule(subRule);
+          return parser.extractAttr(doc, normalized);
+        });
       };
 
       return {
@@ -581,8 +646,64 @@ export class SourceExecutor {
     return url;
   }
 
+  /**
+   * 解析 TOC 章节 URL 中的 {{baseUrl.match(...)}} 模板
+   */
+  private resolveTocUrlTemplate(url: string, tocUrl: string): string {
+    if (!url || !url.includes('{{')) return url;
+
+    // 解析 {{baseUrl.match(/pattern/)[N]}} 模板（支持嵌套括号）
+    url = url.replace(/\{\{baseUrl\.match\(/g, '\x00');
+    while (url.includes('\x00')) {
+      const start = url.indexOf('\x00');
+      const afterMatch = start + 1; // past \x00
+      // 找匹配的 ) 支持嵌套括号
+      let depth = 1;
+      let endParen = -1;
+      for (let i = afterMatch; i < url.length; i++) {
+        if (url[i] === '(') depth++;
+        else if (url[i] === ')') {
+          depth--;
+          if (depth === 0) { endParen = i; break; }
+        }
+      }
+      if (endParen < 0) { url = url.replace('\x00', '{{baseUrl.match('); break; }
+      let regexStr = url.substring(afterMatch, endParen);
+      // 去掉首尾 /（Legado 正则写法 /pattern/ → pattern）
+      if (regexStr.startsWith('/') && regexStr.endsWith('/')) {
+        regexStr = regexStr.slice(1, -1);
+      }
+      // 找后面的 [N]}
+      const idxMatch = url.substring(endParen + 1).match(/^\[(\d+)\]\}\}/);
+      const idx = idxMatch ? idxMatch[1] : '0';
+      let replacement = '';
+      try {
+        const m = tocUrl.match(new RegExp(regexStr, 'i'));
+        if (m) replacement = m[parseInt(idx)] || '';
+      } catch (_e) { /* ignore regex errors */ }
+      url = url.substring(0, start) + replacement + url.substring(endParen + 1 + (idxMatch ? idxMatch[0].length : 3));
+    }
+
+    // 相对路径转绝对路径
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      const baseUrl_ = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+      url = baseUrl_ + (url.startsWith('/') ? url : '/' + url);
+    }
+
+    return url;
+  }
+
   async getContent(source: BookSource, contentUrl: string, bookUrl?: string): Promise<string> {
-    console.info('[SrcEx] getContent input - chapterUrl:', (contentUrl || '').substring(0, 60), 'bookUrl:', ((bookUrl || '')).substring(0, 60));
+    console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
+    console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
+
+    // 安全解析 {{baseUrl.match(...)}} 模板
+    if (bookUrl && contentUrl && contentUrl.includes('{{')) {
+      contentUrl = this.resolveTocUrlTemplate(contentUrl, bookUrl);
+      console.info('[SrcEx] getContent after resolveTocUrlTemplate len=' + contentUrl.length);
+    }
+
+    console.info('[SrcEx] getContent source.ruleBookContent=[' + (source.ruleBookContent || '') + ']');
 
     // 用 ruleBookContentUrl 解析正文页 URL（如果书源有配置）
     if (source.ruleBookContentUrl && contentUrl) {
@@ -606,18 +727,54 @@ export class SourceExecutor {
         ...parseHeader(source.header)
       };
       let raw = await this.fetchWithOpts(contentUrl, headers);
-      if (!raw) return '';
+      console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
+      if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
 
-      // JSON 直接解析
+      // 尝试 JSON 解析 + 内容规则模板替换
+      let jsonParsed: Record<string, unknown> | null = null;
       try {
-        const json = JSON.parse(raw) as Record<string, unknown>;
-        if (typeof json === 'string') return json as string;
-        if (json['content']) return json['content'] as string;
-        if (json['data']) {
-          const data = json['data'];
+        jsonParsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch (_e) { /* not JSON */ }
+
+      if (jsonParsed) {
+        // 直接返回已知字段
+        if (typeof jsonParsed === 'string') return jsonParsed as string;
+        if (jsonParsed['content']) return jsonParsed['content'] as string;
+        if (jsonParsed['data']) {
+          const data = jsonParsed['data'];
           if (typeof data === 'string') return data;
         }
-      } catch (_e) { /* not JSON */ }
+
+        // 如果有 ruleBookContent，解析其中的 {{$.xxx}} 模板
+        if (source.ruleBookContent && source.ruleBookContent.includes('{{')) {
+          let content = source.ruleBookContent;
+          console.info('[SrcEx] Content rule before:', content.substring(0, 100));
+          // 解析 {{$.xxx}} 从 JSON 中取值
+          content = content.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
+            const v = RuleParser.parseJsonPath(jsonParsed, '$.' + path);
+            let val = '';
+            if (v !== null && v !== undefined) {
+              if (Array.isArray(v)) {
+                // 数组 → 用换行连接
+                val = (v as unknown[]).map(item => String(item)).join('\n');
+              } else {
+                val = String(v);
+              }
+            }
+            console.info('[SrcEx] Content resolve path=' + path + ' val=' + val.substring(0, 80));
+            return val;
+          });
+          console.info('[SrcEx] Content rule after:', content.substring(0, 200));
+          // 清理 \r\n → \n（处理真实 CRLF 和转义序列）
+          content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+          // 取纯文本内容（去掉 HTML 标签）
+          if (content && content.length > 0) {
+            content = this.stripHtml(content);
+            content = content.trim();
+          }
+          return content;
+        }
+      }
 
       // 规则解析：直接使用书源的内容规则，不通过 QuickJS（避免大数据传参溢出）
       if (source.ruleBookContent) {
@@ -672,9 +829,7 @@ export class SourceExecutor {
           const baseUrl = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
           return chapters.map(ch => ({
             ...ch,
-            url: ch.url && !ch.url.startsWith('http')
-              ? (baseUrl + (ch.url.startsWith('/') ? ch.url : '/' + ch.url))
-              : ch.url
+            url: this.resolveTocUrlTemplate(ch.url, tocUrl) || ch.url,
           }));
         }
       }
@@ -697,8 +852,11 @@ export class SourceExecutor {
           if (altResp && altResp.length > 100) {
             const altChapters = this.parseTocFromRules(altResp, tocRules);
             if (altChapters.length > 0) {
-              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters, first=', altChapters[0].title || 'EMPTY');
-              return altChapters;
+              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters, first=', altChapters[0].title || 'EMPTY', 'second=', altChapters.length > 1 ? altChapters[1].title : 'N/A', 'fifth=', altChapters.length > 4 ? altChapters[4].title : 'N/A');
+              return altChapters.map(ch => ({
+                ...ch,
+                url: this.resolveTocUrlTemplate(ch.url, altUrl) || ch.url,
+              }));
             }
           }
         }
@@ -773,10 +931,40 @@ export class SourceExecutor {
     }
     console.info('[SrcEx] CSS list rule found', items.length, 'items for', source.sourceName);
 
-    const nameRule = this.normalizeCssRule(source.ruleSearchName || '');
-    const authorRule = this.normalizeCssRule(source.ruleSearchAuthor || '');
-    const coverRule = this.normalizeCssRule(source.ruleSearchCover || '');
-    const noteUrlRule = this.normalizeCssRule(source.ruleSearchNoteUrl || '');
+    const nameRule = source.ruleSearchName || '';
+    const authorRule = source.ruleSearchAuthor || '';
+    const coverRule = source.ruleSearchCover || '';
+    const noteUrlRule = source.ruleSearchNoteUrl || '';
+
+    // 编译 || && 后的子规则
+    const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
+      if (!rule) return (_item: HtmlElement): string => '';
+      const { rules, connector } = splitConnectorRules(rule.trim());
+      if (!connector || rules.length === 1) {
+        const nr = this.normalizeCssRule(rules[0]);
+        return (item: HtmlElement): string => {
+          return processPutGet(rules[0], (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+        };
+      }
+      const compiled = rules.map(r => {
+        const nr = this.normalizeCssRule(r);
+        return (item: HtmlElement): string => {
+          return processPutGet(r, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+        };
+      });
+      if (connector === '||') {
+        return (item: HtmlElement): string => firstNonEmpty(compiled.map(fn => fn(item)));
+      }
+      if (connector === '&&') {
+        return (item: HtmlElement): string => mergeAll(compiled.map(fn => fn(item)));
+      }
+      return compiled[0];
+    };
+
+    const getName = compileFieldRule(nameRule);
+    const getAuthor = compileFieldRule(authorRule);
+    const getCover = compileFieldRule(coverRule);
+    const getNoteUrl = compileFieldRule(noteUrlRule);
 
     const results: SearchResult[] = [];
 
@@ -785,10 +973,7 @@ export class SourceExecutor {
       if (!item) continue;
 
       // 提取字段
-      let name = '';
-      if (nameRule) {
-        name = parser.extractAttr(item, nameRule);
-      }
+      let name = getName(item);
 
       // 书名兜底：取元素内的第一个 <a> 文本
       if (!name) {
@@ -804,20 +989,14 @@ export class SourceExecutor {
       if (!name || name.length < 1) continue;
 
       // 作者
-      let author = '';
-      if (authorRule) {
-        author = parser.extractAttr(item, authorRule);
-      }
+      let author = getAuthor(item);
       if (!author && idx === 0) {
         console.info('[SrcEx] Author not found for', source.sourceName,
           'authorRule:', authorRule);
       }
 
       // 封面
-      let coverUrl = '';
-      if (coverRule) {
-        coverUrl = parser.extractAttr(item, coverRule);
-      }
+      let coverUrl = getCover(item);
       if (!coverUrl) {
         // 取第一个图片（尝试多种 src 属性）
         const imgs = parser.querySelectorAll(item, 'img');
@@ -836,10 +1015,7 @@ export class SourceExecutor {
       }
 
       // 详情页 URL
-      let noteUrl = '';
-      if (noteUrlRule) {
-        noteUrl = parser.extractAttr(item, noteUrlRule);
-      }
+      let noteUrl = getNoteUrl(item);
       if (!noteUrl) {
         const links = parser.querySelectorAll(item, 'a');
         if (links.length > 0) {
@@ -1264,23 +1440,73 @@ export class SourceExecutor {
 
       const parseField = (rule: string): string => {
         if (!rule) return '';
-        const val = RuleParser.parse(itemHtml, rule);
-        if (Array.isArray(val)) return val[0] || '';
-        if (typeof val === 'string') return val;
-        return '';
+        // 剥离 ## 后缀 post-processing（例如 $.serialName##正文卷. ）
+        let postProcessors: string[] = [];
+        let cleanRule = rule;
+        if (rule.includes('##')) {
+          const parts = rule.split('##');
+          cleanRule = parts[0];
+          postProcessors = parts.slice(1);
+        }
+        const val = RuleParser.parse(itemHtml, cleanRule);
+        let result = '';
+        if (Array.isArray(val)) result = val[0] || '';
+        else if (typeof val === 'string') result = val;
+        // 应用 ## 后缀 post-processing
+        for (const proc of postProcessors) {
+          if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
+            result = result.trim();
+          } else {
+            try {
+              const regex = new RegExp(proc);
+              const match = result.match(regex);
+              if (match && match.length > 1 && match[1] !== undefined) {
+                result = match[1];
+              } else {
+                result = result.replace(regex, '');
+              }
+            } catch (_e) { /* 忽略无效正则 */ }
+          }
+        }
+        // 解析结果中的 {{$.xxx}} 模板（从当前 item 中提取字段值）
+        if (result.includes('{{')) {
+          result = result.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
+            const v = RuleParser.parseJsonPath(item, '$.' + path);
+            if (v !== null && v !== undefined) return String(v);
+            return '';
+          });
+        }
+        return result;
       };
 
-      let title = parseField(titleRule);
-      // titleRule 为空时自动查找常见章名字段
+      // 用 resolveFieldRule 支持 || && 操作符
+      const resolveTocField = (rule: string): string => {
+        if (!rule) return '';
+        return resolveFieldRule(rule, (subRule: string) => parseField(subRule));
+      };
+
+      let title = resolveTocField(titleRule);
+      if (title) {
+        if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
+      } else {
+        console.info('[SrcEx] TocTitle FAIL titleRule=' + titleRule + ' item_type=' + typeof item + ' isObj=' + (typeof item === 'object') + ' item_keys=' + (typeof item === 'object' && item !== null ? Object.keys(item as object).join(',') : 'N/A'));
+      }
+      // titleRule 为空时从 JSON 中找第一个字符串字段作为章节名
       if (!title && !titleRule && typeof item === 'object' && item !== null) {
-        const obj = item as Record<string, string>;
-        for (const k of ['serialName', 'chapterName', 'name', 'title', 'chapterTitle']) {
-          if (typeof obj[k] === 'string' && obj[k]) { title = obj[k]; break; }
+        const raw = JSON.stringify(item);
+        for (const k of ['"serialName"','"chapterName"','"name"','"title"']) {
+          const m = raw.match(new RegExp(k + '\\s*:\\s*"([^"]+)"'));
+          if (m && m[1].length > 1) { title = m[1]; break; }
         }
+        if (title) console.info('[SrcEx] TocFallbackTitle OK index=' + index + ' title=' + title.substring(0, 30));
       }
       return {
         title: title || `第${index + 1}章`,
-        url: parseField(urlItemRule) || '',
+        url: (() => {
+          const u = resolveTocField(urlItemRule) || '';
+          if (index === 0) console.info('[SrcEx] Chapter0 url len=' + u.length + ':', u.substring(0, 300));
+          return u;
+        })(),
         index: index,
       };
     });

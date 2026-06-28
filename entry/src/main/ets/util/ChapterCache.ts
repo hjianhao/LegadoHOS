@@ -12,4 +12,6 @@ export class ChapterCache {
   static bookUrl: string = '';
   /** 缓存的书源 header（用于 ReadPage 内容获取，避免 source 匹配失败） */
   static sourceHeader: Record<string, string> = {};
+  /** 目标跳转章节索引（从 ChapterListPage 传回 ReadPage） */
+  static targetIndex: number = -1;
 }

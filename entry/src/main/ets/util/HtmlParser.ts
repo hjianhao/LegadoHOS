@@ -163,10 +163,10 @@ export class HtmlParser {
 
     const s = selector.trim();
 
-    // 分离属性后缀: expr@text | expr@href | expr@src | expr@html | expr@ownText
+    // 分离属性后缀: expr@text | expr@href | expr@src | expr@html | expr@ownText | expr@textNodes
     let attrSuffix = 'text';
     let cssSel = s;
-    const attrMatch = s.match(/^(.*?)@(text|href|src|html|ownText)$/i);
+    const attrMatch = s.match(/^(.*?)@(text|href|src|html|ownText|textNodes)$/i);
     if (attrMatch) {
       cssSel = attrMatch[1].trim();
       attrSuffix = attrMatch[2].toLowerCase();
@@ -205,13 +205,23 @@ export class HtmlParser {
 
   /**
    * 提取 CSS 选择器的属性值
-   * @returns 直接返回属性值字符串（用于 @text/@href/@src/@html/@ownText）
+   * @returns 直接返回属性值字符串（用于 @text/@href/@src/@html/@ownText/@textNodes）
    */
   extractAttr(root: HtmlElement, selector: string): string {
     const s = selector.trim();
+
+    // 先剥离 ## 后缀（post-processing），例如 span.0@text##作者：(.*)
+    let postProcessors: string[] = [];
+    let cleanSelector = s;
+    if (s.includes('##')) {
+      const parts = s.split('##');
+      cleanSelector = parts[0];
+      postProcessors = parts.slice(1);
+    }
+
     let attrSuffix = 'text';
-    let cssSel = s;
-    const attrMatch = s.match(/^(.*?)@(text|href|src|html|ownText)$/i);
+    let cssSel = cleanSelector;
+    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes)$/i);
     if (attrMatch) {
       cssSel = attrMatch[1].trim();
       attrSuffix = attrMatch[2].toLowerCase();
@@ -230,19 +240,52 @@ export class HtmlParser {
 
     const el = elements[0];
 
+    let result = '';
     switch (attrSuffix) {
       case 'text':
-        return this.cleanText(el.text);
+        result = this.cleanText(el.text);
+        break;
       case 'ownText':
-        return this.cleanText(el.ownText);
+        result = this.cleanText(el.ownText);
+        break;
+      case 'textNodes':
+        result = this.cleanText(el.ownText);
+        break;
       case 'href':
       case 'src':
-        return el.attributes[attrSuffix] || '';
+        result = el.attributes[attrSuffix] || '';
+        break;
       case 'html':
-        return el.innerHtml;
+        result = el.innerHtml;
+        break;
       default:
-        return el.attributes[attrSuffix] || this.cleanText(el.text);
+        result = el.attributes[attrSuffix] || this.cleanText(el.text);
+        break;
     }
+
+    // 应用 ## 后缀 post-processing
+    for (const proc of postProcessors) {
+      if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
+        result = result.trim();
+      } else {
+        try {
+          const regex = new RegExp(proc);
+          const match = result.match(regex);
+          if (match && match.length > 1 && match[1] !== undefined) {
+            // 有捕获组 → 取第一个捕获组的值
+            result = match[1];
+          } else {
+            // 无捕获组 → 替换匹配内容为空（删除匹配）
+            result = result.replace(regex, '');
+          }
+        } catch (e) {
+          // 正则无效，忽略
+          console.warn('[HtmlParser] Invalid regex in ## suffix:', proc);
+        }
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -328,6 +371,51 @@ export class HtmlParser {
    * 递归查找匹配 CSS 选择器的元素
    */
   private findElements(root: HtmlElement, selector: string): HtmlElement[] {
+    if (!root || !selector) return [];
+
+    // CSS 逗号分组: .s1,.s7 — 取第一个有结果的分组
+    if (selector.includes(',')) {
+      const groups = this.splitByCommaOutsideBrackets(selector);
+      if (groups.length > 1) {
+        for (const group of groups) {
+          const g = group.trim();
+          if (g) {
+            const result = this.findElementsInner(root, g);
+            if (result.length > 0) return result;
+          }
+        }
+        return [];
+      }
+    }
+
+    return this.findElementsInner(root, selector);
+  }
+
+  /**
+   * CSS 逗号分组，避开 [] 和 () 内的逗号
+   */
+  private splitByCommaOutsideBrackets(selector: string): string[] {
+    const parts: string[] = [];
+    let current = '';
+    let depthBracket = 0;
+    let depthParen = 0;
+    for (const ch of selector) {
+      if (ch === '[') depthBracket++;
+      else if (ch === ']') depthBracket--;
+      else if (ch === '(') depthParen++;
+      else if (ch === ')') depthParen--;
+      else if (ch === ',' && depthBracket === 0 && depthParen === 0) {
+        parts.push(current);
+        current = '';
+        continue;
+      }
+      current += ch;
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+  }
+
+  private findElementsInner(root: HtmlElement, selector: string): HtmlElement[] {
     if (!root || !selector) return [];
 
     // 分割组合器: ' ' (descendant) or '>' (child)
@@ -533,6 +621,35 @@ export class HtmlParser {
     s = s.replace(/!(-?\d+)(?::(-?\d+))?$/, '');  // 去掉 !N
     s = s.replace(/\.(-?\d+)$/, '');               // 去掉 .N 位置
 
+    // CSS 伪类: :nth-of-type(n), :eq(n), :first, :last
+    // 先提取伪类，再从选择器中去掉
+    let pseudoType = '';
+    let pseudoArg = '';
+    const nthMatch = s.match(/:nth-of-type\((\d+)\)/i);
+    if (nthMatch) {
+      pseudoType = 'nth-of-type';
+      pseudoArg = nthMatch[1];
+      s = s.replace(/:nth-of-type\(\d+\)/i, '');
+    }
+    const eqMatch = s.match(/:eq\((\d+)\)/i);
+    if (eqMatch) {
+      pseudoType = 'eq';
+      pseudoArg = eqMatch[1];
+      s = s.replace(/:eq\(\d+\)/i, '');
+    }
+    const firstMatch = s.match(/:first/i);
+    if (firstMatch) {
+      pseudoType = 'first';
+      pseudoArg = '';
+      s = s.replace(/:first/i, '');
+    }
+    const lastMatch = s.match(/:last/i);
+    if (lastMatch) {
+      pseudoType = 'last';
+      pseudoArg = '';
+      s = s.replace(/:last/i, '');
+    }
+
     // 属性选择器 [attr] 或 [attr=value]
     if (s.startsWith('[')) {
       return this.matchAttrSelector(el, s);
@@ -557,6 +674,34 @@ export class HtmlParser {
     if (classMatch) {
       const classes = (el.attributes['class'] || '').split(/\s+/);
       if (!classes.includes(classMatch[1])) return false;
+    }
+
+    // 基础选择器匹配后，检查伪类
+    if (pseudoType) {
+      const parent = el.parent;
+      if (!parent) return pseudoType === 'first' || pseudoType === 'last'; // root always matches :first/:last
+
+      // 收集符合条件的兄弟元素
+      let siblings: HtmlElement[];
+      if (pseudoType === 'nth-of-type') {
+        siblings = parent.children.filter(child => child.tagName === el.tagName);
+      } else {
+        siblings = parent.children;
+      }
+
+      const idx = siblings.indexOf(el);
+      if (idx < 0) return false;
+
+      const n = pseudoArg ? parseInt(pseudoArg) : 0;
+      switch (pseudoType) {
+        case 'nth-of-type':
+        case 'eq':
+          return idx === n - 1; // CSS :nth-of-type is 1-indexed, :eq(0) is 0-indexed
+        case 'first':
+          return idx === 0;
+        case 'last':
+          return idx === siblings.length - 1;
+      }
     }
 
     // 如果选择器只有 .class 或 #id（没有标签名），检查通过

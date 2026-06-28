@@ -147,11 +147,14 @@ export class TextLayout {
 
     while (remaining.length > 0) {
       let lineLength: number;
-      if (firstLine && config.firstLineIndent) {
-        // 缩进2字符
-        lineLength = Math.min(maxCharsPerLine - 2, remaining.length);
+      if (firstLine && config.firstLineIndent && config.indentSize > 0) {
+        // 按 indentSize 缩进（每个缩进 = 2空格）
+        const indentChars = config.indentSize * 2;
+        lineLength = Math.min(maxCharsPerLine - indentChars, remaining.length);
         if (lineLength > 0) {
-          const lineText = '  ' + remaining.slice(0, lineLength);
+          let indent = '';
+          for (let i = 0; i < indentChars; i++) indent += ' ';
+          const lineText = indent + remaining.slice(0, lineLength);
           lines.push({
             text: lineText,
             offset: text.length - remaining.length,

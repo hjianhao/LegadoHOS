@@ -203,12 +203,16 @@ export struct BookInfoPage {
       const db = AppDatabase.getInstance().rdbStore;
       const bookTable = new BookTable(db);
 
-      // 去重检查
+      // 去重检查：严格按 bookUrl 匹配，不同源的书允许同名
       if (this.noteUrl) {
-        const existing = await bookTable.searchBooks(this.bookName);
-        if (existing.some(b => b.name === this.bookName || b.bookUrl === this.noteUrl)) {
+        const existing = await bookTable.getBookByUrl(this.noteUrl);
+        if (existing) {
+          if (!existing.isShelf) {
+            existing.isShelf = true;
+            await bookTable.updateBook(existing);
+          }
           this.isInShelf = true;
-          promptAction.showToast({ message: '已在书架中', duration: 1500 });
+          promptAction.showToast({ message: '已加入书架', duration: 1500 });
           return;
         }
       }

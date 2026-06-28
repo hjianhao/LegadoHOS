@@ -2,6 +2,7 @@ import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
 import { NetUtil } from '../util/NetUtil';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 
 interface SettingItem { icon: string; title: string; key: string; }
 
@@ -15,6 +16,8 @@ export struct SettingsPage {
   @State dnsEnabled: boolean = true;
   @State proxyHost: string = '';
   @State proxyPort: string = '';
+  @State pageMode: boolean = true;
+  @State autoCacheSize: number = 10;
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
@@ -28,6 +31,16 @@ export struct SettingsPage {
       NetUtil.setProxy(this.proxyHost, parseInt(this.proxyPort));
     }
     this.syncWebViewNetwork();
+    this.loadReadSettings();
+  }
+
+  private async loadReadSettings(): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(getContext());
+      this.pageMode = (await s.getPageMode()) !== 0;
+      this.autoCacheSize = await s.getAutoCacheSize();
+    } catch (_e) { /* ignore */ }
   }
 
   private syncWebViewNetwork(): void {
@@ -126,11 +139,44 @@ export struct SettingsPage {
   @Builder
   buildReadSettings() {
     Column() {
-      Text('\uD83D\uDCD6 阅读设置').fontSize(16).fontWeight(FontWeight.Medium)
+      Text('📖 阅读设置').fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start)
 
-      Text('阅读字号、行距等设置在阅读页面中调整')
-        .fontSize(14).fontColor('#888').padding({ left: 16, right: 16 })
+      // 翻页模式
+      Row() {
+        Text('翻页模式').fontSize(15).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.pageMode }).onChange(async (v: boolean) => {
+          this.pageMode = v;
+          try {
+            const s = SettingsStore.getInstance();
+            await s.init(getContext());
+            s.setPageMode(v ? 1 : 0).catch(() => {});
+          } catch (_e) { /* ignore */ }
+        })
+      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+        .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+
+      Text('关闭后使用滚动模式阅读').fontSize(12).fontColor('#888').padding({ left: 16, right: 16, bottom: 12 })
+
+      // 自动缓存章节数
+      Text('自动缓存').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 8 })
+      Row() {
+        Slider({ value: this.autoCacheSize, min: 0, max: 50, step: 1 })
+          .width('60%').margin({ left: 16 })
+          .onChange(async (v: number) => {
+            this.autoCacheSize = v;
+            try {
+              const s = SettingsStore.getInstance();
+              await s.init(getContext());
+              s.setAutoCacheSize(v).catch(() => {});
+            } catch (_e) { /* ignore */ }
+          })
+        Text(String(this.autoCacheSize) + ' 章').fontSize(14).fontColor('#0078D7').margin({ left: 8 })
+      }.width('100%').margin({ top: 4 })
+        .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+
+      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor('#888')
+        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
   }

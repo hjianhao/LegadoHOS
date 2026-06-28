@@ -195,6 +195,7 @@ export struct ChapterListPage {
     // 将当前章节列表缓存给 ReadPage 用
     ChapterCache.chapters = this.chapters;
     ChapterCache.bookUrl = this.bookUrl;
+    ChapterCache.targetIndex = ch.index;
     if (this.from === 'ReadPage') {
       // 从阅读页进来的 → router.back 回到阅读页并传参
       router.back({

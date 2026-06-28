@@ -38,7 +38,7 @@ export class SettingsStore {
   async getLineHeight(): Promise<number> { return await this.get('line_height', 1.5); }
   async setLineHeight(v: number): Promise<void> { await this.put('line_height', v); }
 
-  async getPageMode(): Promise<number> { return await this.get('page_mode', 0); }
+  async getPageMode(): Promise<number> { return await this.get('page_mode', 1); }
   async setPageMode(v: number): Promise<void> { await this.put('page_mode', v); }
 
   async getReadBgColor(): Promise<string> { return await this.get('read_bg', '#F5F0E8'); }
@@ -46,6 +46,36 @@ export class SettingsStore {
 
   async getReadTextColor(): Promise<string> { return await this.get('read_text', '#333333'); }
   async setReadTextColor(v: string): Promise<void> { await this.put('read_text', v); }
+
+  async getIndentSize(): Promise<number> { return await this.get('indent_size', 2); }
+  async setIndentSize(v: number): Promise<void> { await this.put('indent_size', v); }
+
+  async getLetterSpacing(): Promise<number> { return await this.get('letter_spacing', 0.5); }
+  async setLetterSpacing(v: number): Promise<void> { await this.put('letter_spacing', v); }
+
+  async getParagraphSpacing(): Promise<number> { return await this.get('para_spacing', 10); }
+  async setParagraphSpacing(v: number): Promise<void> { await this.put('para_spacing', v); }
+
+  async getFontWeight(): Promise<number> { return await this.get('font_weight', 1); }
+  async setFontWeight(v: number): Promise<void> { await this.put('font_weight', v); }
+
+  async getPaddingTop(): Promise<number> { return await this.get('padding_top', 24); }
+  async setPaddingTop(v: number): Promise<void> { await this.put('padding_top', v); }
+
+  async getPaddingBottom(): Promise<number> { return await this.get('padding_bottom', 24); }
+  async setPaddingBottom(v: number): Promise<void> { await this.put('padding_bottom', v); }
+
+  async getPaddingLeft(): Promise<number> { return await this.get('padding_left', 20); }
+  async setPaddingLeft(v: number): Promise<void> { await this.put('padding_left', v); }
+
+  async getPaddingRight(): Promise<number> { return await this.get('padding_right', 20); }
+  async setPaddingRight(v: number): Promise<void> { await this.put('padding_right', v); }
+
+  async getChineseMode(): Promise<string> { return await this.get('chinese_mode', 'original'); }
+  async setChineseMode(v: string): Promise<void> { await this.put('chinese_mode', v); }
+
+  async getZhFormat(): Promise<boolean> { return await this.get('zh_format', true); }
+  async setZhFormat(v: boolean): Promise<void> { await this.put('zh_format', v); }
 
   // ---- 主题设置 ----
   async getThemeMode(): Promise<string> { return await this.get('theme_mode', 'system'); }
@@ -71,4 +101,8 @@ export class SettingsStore {
   // ---- 搜索历史 ----
   async getSearchHistory(): Promise<string[]> { return await this.get<string[]>('search_history', []); }
   async setSearchHistory(history: string[]): Promise<void> { await this.put('search_history', history); }
+
+  // ---- 缓存设置 ----
+  async getAutoCacheSize(): Promise<number> { return await this.get('auto_cache_size', 10); }
+  async setAutoCacheSize(v: number): Promise<void> { await this.put('auto_cache_size', v); }
 }
