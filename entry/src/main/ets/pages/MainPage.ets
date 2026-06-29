@@ -4,6 +4,7 @@
 import { BookshelfPage } from './BookshelfPage';
 import { ExplorePage } from './ExplorePage';
 import { MyPage } from './MyPage';
+import { RssMainPage } from './RssMainPage';
 
 interface TabCfg {
   icon: ResourceStr;
@@ -27,7 +28,7 @@ struct MainPage {
       Stack() {
         if (this.currentTab === 0) { BookshelfPage() }
         else if (this.currentTab === 1) { ExplorePage() }
-        else if (this.currentTab === 2) { Text('RSS').fontSize(18) }
+        else if (this.currentTab === 2) { RssMainPage() }
         else if (this.currentTab === 3) { MyPage() }
       }
       .width('100%')

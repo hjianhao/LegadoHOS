@@ -12,7 +12,7 @@ import { BookmarkTable, BookmarkTableCreate } from './BookmarkTable';
 import { ReadRecordTable, ReadRecordTableCreate, ReadRecordDetailTableCreate } from './ReadRecordTable';
 
 import { ReplaceRuleTable, ReplaceRuleTableCreate } from './ReplaceRuleTable';
-import { RSSSourceTable, RSSSourceTableCreate, RSSArticleTableCreate } from './RSSSourceTable';
+import { RSSSourceTable, RSSSourceTableCreate, RSSArticleTableCreate, RSSArticleTable } from './RSSSourceTable';
 
 import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } from './CacheTable';
 
@@ -40,6 +40,14 @@ export class AppDatabase {
       throw new Error('Database not initialized. Call init() first.');
     }
     return this.rdbStore_;
+  }
+
+  get rssSourceTable(): RSSSourceTable {
+    return new RSSSourceTable(this.rdbStore);
+  }
+
+  get rssArticleTable(): RSSArticleTable {
+    return new RSSArticleTable(this.rdbStore);
   }
 
   /**

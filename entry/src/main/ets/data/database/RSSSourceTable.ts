@@ -1,54 +1,776 @@
+/**
+ * RSS 数据表操作
+ * 对应 Android RssSourceDao / RssArticleDao / RssStarDao
+ */
 import relationalStore from '@ohos.data.relationalStore';
-import { RSSSource, RSSArticle } from '../../model/RSSSource';
+import { RSSSource, RSSArticle, RssStar, RssReadRecord } from '../../model/RSSSource';
+import { RSSImportPreview } from '../../model/RSSImport';
+
+// ====== 建表 SQL ======
 
 export const RSSSourceTableCreate = `
   CREATE TABLE IF NOT EXISTS rss_sources (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_url TEXT NOT NULL,
+    source_url TEXT PRIMARY KEY,
     source_name TEXT DEFAULT '',
-    group_id INTEGER DEFAULT 0,
+    source_icon TEXT DEFAULT '',
+    source_group TEXT DEFAULT '',
+    source_comment TEXT DEFAULT '',
     enabled INTEGER DEFAULT 1,
-    create_time INTEGER DEFAULT 0,
-    update_time INTEGER DEFAULT 0
+    variable_comment TEXT DEFAULT '',
+    js_lib TEXT DEFAULT '',
+    enabled_cookie_jar INTEGER DEFAULT 0,
+    concurrent_rate TEXT DEFAULT '',
+    header TEXT DEFAULT '',
+    login_url TEXT DEFAULT '',
+    login_ui TEXT DEFAULT '',
+    login_check_js TEXT DEFAULT '',
+    cover_decode_js TEXT DEFAULT '',
+    sort_url TEXT DEFAULT '',
+    single_url INTEGER DEFAULT 0,
+    article_style INTEGER DEFAULT 0,
+    rule_articles TEXT DEFAULT '',
+    rule_next_page TEXT DEFAULT '',
+    rule_title TEXT DEFAULT '',
+    rule_pub_date TEXT DEFAULT '',
+    rule_description TEXT DEFAULT '',
+    rule_image TEXT DEFAULT '',
+    rule_link TEXT DEFAULT '',
+    rule_content TEXT DEFAULT '',
+    content_whitelist TEXT DEFAULT '',
+    content_blacklist TEXT DEFAULT '',
+    should_override_url_loading TEXT DEFAULT '',
+    style TEXT DEFAULT '',
+    enable_js INTEGER DEFAULT 1,
+    load_with_base_url INTEGER DEFAULT 1,
+    inject_js TEXT DEFAULT '',
+    preload_js TEXT DEFAULT '',
+    start_html TEXT DEFAULT '',
+    start_style TEXT DEFAULT '',
+    start_js TEXT DEFAULT '',
+    show_web_log INTEGER DEFAULT 0,
+    last_update_time INTEGER DEFAULT 0,
+    custom_order INTEGER DEFAULT 0,
+    type INTEGER DEFAULT 0,
+    preload INTEGER DEFAULT 0,
+    cache_first INTEGER DEFAULT 0,
+    search_url TEXT DEFAULT '',
+    redirect_policy TEXT DEFAULT 'ASK_CROSS_ORIGIN'
   );
 `;
 
 export const RSSArticleTableCreate = `
   CREATE TABLE IF NOT EXISTS rss_articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id INTEGER,
+    origin TEXT NOT NULL,
+    sort TEXT NOT NULL,
     title TEXT DEFAULT '',
-    content TEXT DEFAULT '',
-    summary TEXT DEFAULT '',
-    link TEXT DEFAULT '',
-    author TEXT DEFAULT '',
+    order_num INTEGER DEFAULT 0,
+    link TEXT NOT NULL,
     pub_date TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    content TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    group_name TEXT DEFAULT '默认分组',
     is_read INTEGER DEFAULT 0,
-    is_star INTEGER DEFAULT 0,
-    create_time INTEGER DEFAULT 0
+    variable TEXT DEFAULT '',
+    type INTEGER DEFAULT 0,
+    dur_pos INTEGER DEFAULT 0,
+    PRIMARY KEY (origin, link, sort)
   );
 `;
+
+export const RssStarTableCreate = `
+  CREATE TABLE IF NOT EXISTS rss_stars (
+    origin TEXT NOT NULL,
+    sort TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    star_time INTEGER DEFAULT 0,
+    link TEXT NOT NULL,
+    pub_date TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    content TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    group_name TEXT DEFAULT '默认分组',
+    variable TEXT DEFAULT '',
+    type INTEGER DEFAULT 0,
+    dur_pos INTEGER DEFAULT 0,
+    PRIMARY KEY (origin, link)
+  );
+`;
+
+export const RssReadRecordTableCreate = `
+  CREATE TABLE IF NOT EXISTS rss_read_records (
+    origin TEXT NOT NULL,
+    sort TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    read_time INTEGER DEFAULT 0,
+    record TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    type INTEGER DEFAULT 0,
+    dur_pos INTEGER DEFAULT 0,
+    pub_date TEXT DEFAULT '',
+    PRIMARY KEY (origin, record)
+  );
+`;
+
+// ====== RSSSourceTable ======
 
 export class RSSSourceTable {
   static readonly TABLE_NAME = 'rss_sources';
   private rdbStore: relationalStore.RdbStore;
-  constructor(rdbStore: relationalStore.RdbStore) { this.rdbStore = rdbStore; }
+
+  constructor(rdbStore: relationalStore.RdbStore) {
+    this.rdbStore = rdbStore;
+  }
+
+  /** 获取所有启用的 RSS 源 */
+  async getEnabledSources(): Promise<RSSSource[]> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('enabled', 1);
+    p.orderByDesc('custom_order');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readSources(rs);
+  }
+
+  /** 获取所有 RSS 源 */
   async getAll(): Promise<RSSSource[]> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.orderByDesc('custom_order');
     const rs = await this.rdbStore.query(p, []);
-    const list: RSSSource[] = [];
+    return this.readSources(rs);
+  }
+
+  /** 根据 sourceUrl 获取单个源 */
+  async getByKey(sourceUrl: string): Promise<RSSSource | null> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('source_url', sourceUrl);
+    const rs = await this.rdbStore.query(p, []);
+    const list = this.readSources(rs);
+    return list.length > 0 ? list[0] : null;
+  }
+
+  /** 插入或替换 */
+  async insert(source: RSSSource): Promise<void> {
+    const row = this.sourceToBucket(source);
+    try { await this.rdbStore.insert(RSSSourceTable.TABLE_NAME, row); } catch (_e_) { const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME); p.equalTo('source_url', row.sourceUrl); await this.rdbStore.update(row, p); }
+  }
+
+  /** 更新 */
+  async update(source: RSSSource): Promise<void> {
+    const row = this.sourceToBucket(source);
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('source_url', source.sourceUrl);
+    await this.rdbStore.update(row, p);
+  }
+
+  /** 删除 */
+
+  async getMaxOrder(): Promise<number> {
+    const rs = await this.rdbStore.querySql('SELECT MAX(custom_order) FROM rss_sources');
+    let maxOrder = 0;
+    if (rs.goToFirstRow()) maxOrder = rs.getLong(0) || 0;
+    rs.close();
+    return maxOrder;
+  }
+
+  async getMinOrder(): Promise<number> {
+    const rs = await this.rdbStore.querySql('SELECT MIN(custom_order) FROM rss_sources');
+    let minOrder = 0;
+    if (rs.goToFirstRow()) minOrder = rs.getLong(0) || 0;
+    rs.close();
+    return minOrder;
+  }
+
+  async delete(sourceUrl: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('source_url', sourceUrl);
+    await this.rdbStore.delete(p);
+  }
+
+  /** 批量导入 — 解析 JSON 为预览列表 */
+  async importSourcesPreview(jsonText: string): Promise<RSSImportPreview[]> {
+    const result: RSSImportPreview[] = [];
+    let sources: RSSSource[] = [];
+    try {
+      const data: Object = JSON.parse(jsonText) as Object;
+      if (Array.isArray(data)) {
+        sources = data as RSSSource[];
+      } else {
+        sources = [data as RSSSource];
+      }
+    } catch (_e) {
+      return result;
+    }
+
+    for (const s of sources) {
+      if (!s.sourceUrl || !s.sourceName) continue;
+      // 检查是否已存在
+      const existing = await this.getByKey(s.sourceUrl);
+      const status = existing ? 'existing' : 'new';
+      const item: RSSImportPreview = { source: s, status: status, checked: status === 'new' };
+      result.push(item);
+    }
+    return result;
+  }
+
+  /** 批量导入选中的源 */
+  async importSelected(items: RSSImportPreview[], keepName: boolean, keepGroup: boolean, customGroup: string): Promise<number> {
+    let count = 0;
+    for (const item of items) {
+      if (!item.checked) continue;
+      const s = item.source;
+      if (!keepName && item.status === 'update') {
+        // 更新时不覆盖名称
+      }
+      if (customGroup) {
+        s.sourceGroup = customGroup;
+      } else if (!keepGroup) {
+        s.sourceGroup = '';
+      }
+      await this.insert(s);
+      count++;
+    }
+    return count;
+  }
+
+  /** 启用/禁用 */
+  async setEnabled(sourceUrl: string, enabled: boolean): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('source_url', sourceUrl);
+    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, p);
+  }
+
+  /** 获取所有分组 */
+  async getAllGroups(): Promise<string[]> {
+    const sql = 'SELECT DISTINCT source_group FROM rss_sources WHERE source_group IS NOT NULL AND source_group != \'\'';
+    const rs = await this.rdbStore.querySql(sql);
+    const groups = new Set<string>();
     while (rs.goToNextRow()) {
-      list.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        sourceUrl: rs.getString(rs.getColumnIndex('source_url')) || '',
-        sourceName: rs.getString(rs.getColumnIndex('source_name')) || '',
-        groupId: rs.getLong(rs.getColumnIndex('group_id')),
-        enabled: rs.getLong(rs.getColumnIndex('enabled')) === 1,
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
-      });
+      const g = rs.getString(0);
+      if (g) {
+        g.split(/[,，]/).forEach((item: string) => {
+          const t = item.trim();
+          if (t) groups.add(t);
+        });
+      }
     }
     rs.close();
+    return Array.from(groups).sort();
+  }
+
+  /** 通过分组获取源 */
+  async getByGroup(group: string): Promise<RSSSource[]> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.like('source_group', `%${group}%`);
+    p.orderByDesc('custom_order');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readSources(rs);
+  }
+
+  /** 搜索源 */
+  async search(keyword: string): Promise<RSSSource[]> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.beginWrap();
+    p.like('source_name', `%${keyword}%`);
+    p.or().like('source_url', `%${keyword}%`);
+    p.or().like('source_group', `%${keyword}%`);
+    p.endWrap();
+    p.orderByDesc('custom_order');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readSources(rs);
+  }
+
+  /** 批量导入 */
+  async batchInsert(sources: RSSSource[]): Promise<void> {
+    for (const s of sources) {
+      await this.insert(s);
+    }
+  }
+
+  /** 批量启用/禁用 */
+  async batchSetEnabled(urls: string[], enabled: boolean): Promise<void> {
+    for (const url of urls) {
+      await this.setEnabled(url, enabled);
+    }
+  }
+
+  /** 批量删除 */
+  async batchDelete(urls: string[]): Promise<void> {
+    for (const url of urls) {
+      await this.delete(url);
+    }
+  }
+
+  /** 更新自定义排序 */
+  async updateOrder(sourceUrl: string, order: number): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
+    p.equalTo('source_url', sourceUrl);
+    await this.rdbStore.update({ 'custom_order': order, 'last_update_time': Date.now() }, p);
+  }
+
+  /** 计数 */
+  async count(): Promise<number> {
+    const rs = await this.rdbStore.querySql('SELECT COUNT(*) FROM rss_sources');
+    let c = 0;
+    if (rs.goToFirstRow()) c = rs.getLong(0);
+    rs.close();
+    return c;
+  }
+
+  // ====== 辅助方法 ======
+
+  private readSources(rs: relationalStore.ResultSet): RSSSource[] {
+    const list: RSSSource[] = [];
+    if (!rs) return list;
+    while (rs.goToNextRow()) {
+      list.push({
+        sourceUrl: rs.getString(rs.getColumnIndex('source_url')) || '',
+        sourceName: rs.getString(rs.getColumnIndex('source_name')) || '',
+        sourceIcon: rs.getString(rs.getColumnIndex('source_icon')) || '',
+        sourceGroup: rs.getString(rs.getColumnIndex('source_group')) || '',
+        sourceComment: rs.getString(rs.getColumnIndex('source_comment')) || '',
+        enabled: rs.getLong(rs.getColumnIndex('enabled')) === 1,
+        variableComment: rs.getString(rs.getColumnIndex('variable_comment')) || '',
+        jsLib: rs.getString(rs.getColumnIndex('js_lib')) || '',
+        enabledCookieJar: rs.getLong(rs.getColumnIndex('enabled_cookie_jar')) === 1,
+        concurrentRate: rs.getString(rs.getColumnIndex('concurrent_rate')) || '',
+        header: rs.getString(rs.getColumnIndex('header')) || '',
+        loginUrl: rs.getString(rs.getColumnIndex('login_url')) || '',
+        loginUi: rs.getString(rs.getColumnIndex('login_ui')) || '',
+        loginCheckJs: rs.getString(rs.getColumnIndex('login_check_js')) || '',
+        coverDecodeJs: rs.getString(rs.getColumnIndex('cover_decode_js')) || '',
+        sortUrl: rs.getString(rs.getColumnIndex('sort_url')) || '',
+        singleUrl: rs.getLong(rs.getColumnIndex('single_url')) === 1,
+        articleStyle: rs.getLong(rs.getColumnIndex('article_style')),
+        ruleArticles: rs.getString(rs.getColumnIndex('rule_articles')) || '',
+        ruleNextPage: rs.getString(rs.getColumnIndex('rule_next_page')) || '',
+        ruleTitle: rs.getString(rs.getColumnIndex('rule_title')) || '',
+        rulePubDate: rs.getString(rs.getColumnIndex('rule_pub_date')) || '',
+        ruleDescription: rs.getString(rs.getColumnIndex('rule_description')) || '',
+        ruleImage: rs.getString(rs.getColumnIndex('rule_image')) || '',
+        ruleLink: rs.getString(rs.getColumnIndex('rule_link')) || '',
+        ruleContent: rs.getString(rs.getColumnIndex('rule_content')) || '',
+        contentWhitelist: rs.getString(rs.getColumnIndex('content_whitelist')) || '',
+        contentBlacklist: rs.getString(rs.getColumnIndex('content_blacklist')) || '',
+        shouldOverrideUrlLoading: rs.getString(rs.getColumnIndex('should_override_url_loading')) || '',
+        style: rs.getString(rs.getColumnIndex('style')) || '',
+        enableJs: rs.getLong(rs.getColumnIndex('enable_js')) === 1,
+        loadWithBaseUrl: rs.getLong(rs.getColumnIndex('load_with_base_url')) === 1,
+        injectJs: rs.getString(rs.getColumnIndex('inject_js')) || '',
+        preloadJs: rs.getString(rs.getColumnIndex('preload_js')) || '',
+        startHtml: rs.getString(rs.getColumnIndex('start_html')) || '',
+        startStyle: rs.getString(rs.getColumnIndex('start_style')) || '',
+        startJs: rs.getString(rs.getColumnIndex('start_js')) || '',
+        showWebLog: rs.getLong(rs.getColumnIndex('show_web_log')) === 1,
+        lastUpdateTime: rs.getLong(rs.getColumnIndex('last_update_time')),
+        customOrder: rs.getLong(rs.getColumnIndex('custom_order')),
+        type: rs.getLong(rs.getColumnIndex('type')),
+        preload: rs.getLong(rs.getColumnIndex('preload')) === 1,
+        cacheFirst: rs.getLong(rs.getColumnIndex('cache_first')) === 1,
+        searchUrl: rs.getString(rs.getColumnIndex('search_url')) || '',
+        redirectPolicy: rs.getString(rs.getColumnIndex('redirect_policy')) || 'ASK_CROSS_ORIGIN',
+      });
+    }
+    try { rs.close(); } catch (_e) { /* ignore */ }
     return list;
+  }
+
+  private sourceToBucket(source: RSSSource): relationalStore.ValuesBucket {
+    return {
+      'source_url': source.sourceUrl,
+      'source_name': source.sourceName,
+      'source_icon': source.sourceIcon,
+      'source_group': source.sourceGroup,
+      'source_comment': source.sourceComment,
+      'enabled': source.enabled ? 1 : 0,
+      'variable_comment': source.variableComment,
+      'js_lib': source.jsLib,
+      'enabled_cookie_jar': source.enabledCookieJar ? 1 : 0,
+      'concurrent_rate': source.concurrentRate,
+      'header': source.header,
+      'login_url': source.loginUrl,
+      'login_ui': source.loginUi,
+      'login_check_js': source.loginCheckJs,
+      'cover_decode_js': source.coverDecodeJs,
+      'sort_url': source.sortUrl,
+      'single_url': source.singleUrl ? 1 : 0,
+      'article_style': source.articleStyle,
+      'rule_articles': source.ruleArticles,
+      'rule_next_page': source.ruleNextPage,
+      'rule_title': source.ruleTitle,
+      'rule_pub_date': source.rulePubDate,
+      'rule_description': source.ruleDescription,
+      'rule_image': source.ruleImage,
+      'rule_link': source.ruleLink,
+      'rule_content': source.ruleContent,
+      'content_whitelist': source.contentWhitelist,
+      'content_blacklist': source.contentBlacklist,
+      'should_override_url_loading': source.shouldOverrideUrlLoading,
+      'style': source.style,
+      'enable_js': source.enableJs ? 1 : 0,
+      'load_with_base_url': source.loadWithBaseUrl ? 1 : 0,
+      'inject_js': source.injectJs,
+      'preload_js': source.preloadJs,
+      'start_html': source.startHtml,
+      'start_style': source.startStyle,
+      'start_js': source.startJs,
+      'show_web_log': source.showWebLog ? 1 : 0,
+      'last_update_time': source.lastUpdateTime,
+      'custom_order': source.customOrder,
+      'type': source.type,
+      'preload': source.preload ? 1 : 0,
+      'cache_first': source.cacheFirst ? 1 : 0,
+      'search_url': source.searchUrl,
+      'redirect_policy': source.redirectPolicy,
+    };
+  }
+}
+
+// ====== RSSArticleTable ======
+
+export class RSSArticleTable {
+  static readonly TABLE_NAME = 'rss_articles';
+  private rdbStore: relationalStore.RdbStore;
+
+  constructor(rdbStore: relationalStore.RdbStore) {
+    this.rdbStore = rdbStore;
+  }
+
+  async getByOrigin(origin: string): Promise<RSSArticle[]> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.orderByDesc('order_num');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readArticles(rs);
+  }
+
+  async getByOriginSort(origin: string, sort: string): Promise<RSSArticle[]> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    if (sort) p.and().equalTo('sort', sort);
+    p.orderByDesc('order_num');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readArticles(rs);
+  }
+
+  async getByOriginAndLink(origin: string, link: string): Promise<RSSArticle | null> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('link', link);
+    const rs = await this.rdbStore.query(p, []);
+    const list = this.readArticles(rs);
+    return list.length > 0 ? list[0] : null;
+  }
+
+  async insert(article: RSSArticle): Promise<void> {
+    const row = this.articleToBucket(article);
+    await this.rdbStore.insert(RSSArticleTable.TABLE_NAME, row);
+  }
+
+  /** 插入或替换（主键冲突时更新） */
+  async replace(article: RSSArticle): Promise<void> {
+    const row = this.articleToBucket(article);
+    try { await this.rdbStore.insert(RSSArticleTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); p2.and().equalTo('sort', row.sort); await this.rdbStore.update(row, p2); }
+  }
+
+  async batchInsert(articles: RSSArticle[]): Promise<void> {
+    for (const a of articles) {
+      await this.replace(a);
+    }
+  }
+
+  async update(article: RSSArticle): Promise<void> {
+    const row = this.articleToBucket(article);
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', article.origin);
+    p.and().equalTo('link', article.link);
+    p.and().equalTo('sort', article.sort);
+    await this.rdbStore.update(row, p);
+  }
+
+  async markRead(origin: string, link: string, sort: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('link', link);
+    p.and().equalTo('sort', sort);
+    await this.rdbStore.update({ 'is_read': 1 }, p);
+  }
+
+  async markAllRead(origin: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('is_read', 0);
+    await this.rdbStore.update({ 'is_read': 1 }, p);
+  }
+
+  async delete(origin: string, link: string, sort: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('link', link);
+    p.and().equalTo('sort', sort);
+    await this.rdbStore.delete(p);
+  }
+
+  async deleteByOrigin(origin: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    await this.rdbStore.delete(p);
+  }
+
+  async getUnreadCount(origin: string): Promise<number> {
+    const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('is_read', 0);
+    const rs = await this.rdbStore.query(p, ['COUNT(*) AS cnt']);
+    let c = 0;
+    if (rs.goToFirstRow()) c = rs.getLong(0);
+    rs.close();
+    return c;
+  }
+
+  async getRecent(limit: number): Promise<RSSArticle[]> {
+    const sql = `SELECT * FROM rss_articles ORDER BY order_num DESC LIMIT ${limit}`;
+    const rs = await this.rdbStore.querySql(sql);
+    return this.readArticles(rs);
+  }
+
+  private readArticles(rs: relationalStore.ResultSet): RSSArticle[] {
+    const list: RSSArticle[] = [];
+    while (rs.goToNextRow()) {
+      list.push({
+        origin: rs.getString(rs.getColumnIndex('origin')) || '',
+        sort: rs.getString(rs.getColumnIndex('sort')) || '',
+        title: rs.getString(rs.getColumnIndex('title')) || '',
+        order: rs.getLong(rs.getColumnIndex('order_num')),
+        link: rs.getString(rs.getColumnIndex('link')) || '',
+        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
+        description: rs.getString(rs.getColumnIndex('description')) || null,
+        content: rs.getString(rs.getColumnIndex('content')) || null,
+        image: rs.getString(rs.getColumnIndex('image')) || null,
+        group: rs.getString(rs.getColumnIndex('group_name')) || '默认分组',
+        read: rs.getLong(rs.getColumnIndex('is_read')) === 1,
+        variable: rs.getString(rs.getColumnIndex('variable')) || null,
+        type: rs.getLong(rs.getColumnIndex('type')),
+        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
+      });
+    }
+    try { rs.close(); } catch (_e) { /* ignore */ }
+    return list;
+  }
+
+  private articleToBucket(article: RSSArticle): relationalStore.ValuesBucket {
+    return {
+      'origin': article.origin,
+      'sort': article.sort || '',
+      'title': article.title || '',
+      'order_num': article.order || 0,
+      'link': article.link || '',
+      'pub_date': article.pubDate || '',
+      'description': article.description || '',
+      'content': article.content || '',
+      'image': article.image || '',
+      'group_name': article.group || '默认分组',
+      'is_read': article.read ? 1 : 0,
+      'variable': article.variable || '',
+      'type': article.type || 0,
+      'dur_pos': article.durPos || 0,
+    };
+  }
+}
+
+// ====== RssStarTable ======
+
+export class RssStarTable {
+  static readonly TABLE_NAME = 'rss_stars';
+  private rdbStore: relationalStore.RdbStore;
+
+  constructor(rdbStore: relationalStore.RdbStore) {
+    this.rdbStore = rdbStore;
+  }
+
+  async getAll(): Promise<RssStar[]> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.orderByDesc('star_time');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readStars(rs);
+  }
+
+  async get(origin: string, link: string): Promise<RssStar | null> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('link', link);
+    const rs = await this.rdbStore.query(p, []);
+    const list = this.readStars(rs);
+    return list.length > 0 ? list[0] : null;
+  }
+
+  async insert(star: RssStar): Promise<void> {
+    const row = this.starToBucket(star);
+    try { await this.rdbStore.insert(RssStarTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); await this.rdbStore.update(row, p2); }
+  }
+
+  async update(star: RssStar): Promise<void> {
+    const row = this.starToBucket(star);
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('origin', star.origin);
+    p.and().equalTo('link', star.link);
+    await this.rdbStore.update(row, p);
+  }
+
+  async delete(origin: string, link: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.and().equalTo('link', link);
+    await this.rdbStore.delete(p);
+  }
+
+  async deleteByOrigin(origin: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    await this.rdbStore.delete(p);
+  }
+
+  async deleteAll(): Promise<void> {
+    await this.rdbStore.executeSql('DELETE FROM rss_stars');
+  }
+
+  async deleteByGroup(group: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('group_name', group);
+    await this.rdbStore.delete(p);
+  }
+
+  async getGroups(): Promise<string[]> {
+    const sql = 'SELECT DISTINCT group_name FROM rss_stars WHERE group_name IS NOT NULL AND group_name != \'\'';
+    const rs = await this.rdbStore.querySql(sql);
+    const groups: string[] = [];
+    while (rs.goToNextRow()) groups.push(rs.getString(0) || '');
+    rs.close();
+    return groups;
+  }
+
+  async getByGroup(group: string): Promise<RssStar[]> {
+    const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
+    p.equalTo('group_name', group);
+    p.orderByDesc('star_time');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readStars(rs);
+  }
+
+  async count(): Promise<number> {
+    const rs = await this.rdbStore.querySql('SELECT COUNT(*) FROM rss_stars');
+    let c = 0;
+    if (rs.goToFirstRow()) c = rs.getLong(0);
+    rs.close();
+    return c;
+  }
+
+  private readStars(rs: relationalStore.ResultSet): RssStar[] {
+    const list: RssStar[] = [];
+    while (rs.goToNextRow()) {
+      list.push({
+        origin: rs.getString(rs.getColumnIndex('origin')) || '',
+        sort: rs.getString(rs.getColumnIndex('sort')) || '',
+        title: rs.getString(rs.getColumnIndex('title')) || '',
+        starTime: rs.getLong(rs.getColumnIndex('star_time')),
+        link: rs.getString(rs.getColumnIndex('link')) || '',
+        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
+        description: rs.getString(rs.getColumnIndex('description')) || null,
+        content: rs.getString(rs.getColumnIndex('content')) || null,
+        image: rs.getString(rs.getColumnIndex('image')) || null,
+        group: rs.getString(rs.getColumnIndex('group_name')) || '默认分组',
+        variable: rs.getString(rs.getColumnIndex('variable')) || null,
+        type: rs.getLong(rs.getColumnIndex('type')),
+        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
+      });
+    }
+    try { rs.close(); } catch (_e) { /* ignore */ }
+    return list;
+  }
+
+  private starToBucket(star: RssStar): relationalStore.ValuesBucket {
+    return {
+      'origin': star.origin,
+      'sort': star.sort || '',
+      'title': star.title || '',
+      'star_time': star.starTime || 0,
+      'link': star.link || '',
+      'pub_date': star.pubDate || '',
+      'description': star.description || '',
+      'content': star.content || '',
+      'image': star.image || '',
+      'group_name': star.group || '默认分组',
+      'variable': star.variable || '',
+      'type': star.type || 0,
+      'dur_pos': star.durPos || 0,
+    };
+  }
+}
+
+// ====== RssReadRecordTable ======
+
+export class RssReadRecordTable {
+  static readonly TABLE_NAME = 'rss_read_records';
+  private rdbStore: relationalStore.RdbStore;
+
+  constructor(rdbStore: relationalStore.RdbStore) {
+    this.rdbStore = rdbStore;
+  }
+
+  async getRecent(limit: number): Promise<RssReadRecord[]> {
+    const sql = `SELECT * FROM rss_read_records ORDER BY read_time DESC LIMIT ${limit}`;
+    const rs = await this.rdbStore.querySql(sql);
+    return this.readRecords(rs);
+  }
+
+  async getByOrigin(origin: string, limit: number): Promise<RssReadRecord[]> {
+    const p = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    p.orderByDesc('read_time');
+    const rs = await this.rdbStore.query(p, []);
+    return this.readRecords(rs);
+  }
+
+  async insert(record: RssReadRecord): Promise<void> {
+    const row = this.recordToBucket(record);
+    try { await this.rdbStore.insert(RssReadRecordTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('record', row.record); await this.rdbStore.update(row, p2); }
+  }
+
+  async deleteByOrigin(origin: string): Promise<void> {
+    const p = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME);
+    p.equalTo('origin', origin);
+    await this.rdbStore.delete(p);
+  }
+
+  private readRecords(rs: relationalStore.ResultSet): RssReadRecord[] {
+    const list: RssReadRecord[] = [];
+    while (rs.goToNextRow()) {
+      list.push({
+        origin: rs.getString(rs.getColumnIndex('origin')) || '',
+        sort: rs.getString(rs.getColumnIndex('sort')) || '',
+        title: rs.getString(rs.getColumnIndex('title')) || '',
+        readTime: rs.getLong(rs.getColumnIndex('read_time')),
+        record: rs.getString(rs.getColumnIndex('record')) || '',
+        image: rs.getString(rs.getColumnIndex('image')) || null,
+        type: rs.getLong(rs.getColumnIndex('type')),
+        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
+        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
+      });
+    }
+    try { rs.close(); } catch (_e) { /* ignore */ }
+    return list;
+  }
+
+  private recordToBucket(record: RssReadRecord): relationalStore.ValuesBucket {
+    return {
+      'origin': record.origin,
+      'sort': record.sort || '',
+      'title': record.title || '',
+      'read_time': record.readTime || 0,
+      'record': record.record || '',
+      'image': record.image || '',
+      'type': record.type || 0,
+      'dur_pos': record.durPos || 0,
+      'pub_date': record.pubDate || '',
+    };
   }
 }

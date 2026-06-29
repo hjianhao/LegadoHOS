@@ -44,6 +44,7 @@ export function parseXML(
   }
 
   try {
+    console.info('[RssParserDefault] parsing XML, length: ' + xml.length + ', isAtom: ' + (xml.includes('<feed') || xml.includes('xmlns="http://www.w3.org/2005/Atom"')));
     // 简单预清理
     const cleaned = xml.replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
 
@@ -69,6 +70,7 @@ export function parseXML(
 function parseRSS(xml: string, sortName: string, sourceUrl: string, articles: RSSArticle[]): void {
   // 提取所有 <item>...</item> 块
   const items = extractTags(xml, TAG_ITEM);
+  console.info('[RssParserDefault] parseRSS: found ' + items.length + ' items');
   for (const item of items) {
     const article = parseItem(item, sortName, sourceUrl);
     if (article.title) {

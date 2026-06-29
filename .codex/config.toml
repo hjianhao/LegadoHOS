@@ -1,0 +1,12 @@
+[mcp_servers.arkts-lsp]
+command = "npx"
+args = ["-y", "--package", "arkts-lsp-proxy@latest", "arkts-lsp-mcp"]
+
+[mcp_servers.arkts-lsp.env]
+ARKTS_LSP_SYNC = "auto"
+
+[mcp_servers.harmonyos]
+command = "npx"
+args = ["-y", "mcp-harmonyos@latest"]
+
+[mcp_servers.harmonyos.env]

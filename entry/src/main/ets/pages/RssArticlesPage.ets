@@ -1,0 +1,148 @@
+/**
+ * RSS 文章列表页
+ * 对应 Android RssSortScreen — 显示某个 RSS 源的文章列表
+ */
+import { AppDatabase } from '../data/database/AppDatabase';
+import { RSSArticle } from '../model/RSSSource';
+import { fetchArticles } from '../engine/rss/RssService';
+import { NetUtil } from '../util/NetUtil';
+import router from '@ohos.router';
+
+@Entry
+@Component
+export struct RssArticlesPage {
+  @StorageProp('isDark') isDark: boolean = false;
+  @State articles: RSSArticle[] = [];
+  @State isLoading: boolean = true;
+  @State sourceName: string = '';
+  @State statusMsg: string = '';
+  private sourceUrl: string = '';
+
+  private db: AppDatabase = AppDatabase.getInstance();
+
+  aboutToAppear() {
+    const params = router.getParams() as Record<string, Object>;
+    if (params) {
+      this.sourceUrl = (params['sourceUrl'] as string) || '';
+      this.sourceName = (params['sourceName'] as string) || 'RSS 文章';
+    }
+    this.loadData();
+  }
+
+  async loadData() {
+    this.isLoading = true;
+    this.statusMsg = '';
+    try {
+      await this.db.waitForInit();
+      const source = await this.db.rssSourceTable.getByKey(this.sourceUrl);
+      if (!source) {
+        this.statusMsg = '未找到源数据';
+        this.isLoading = false;
+        return;
+      }
+      this.sourceName = source.sourceName || source.sourceUrl;
+
+      // 清除旧文章
+      try { await this.db.rssArticleTable.deleteByOrigin(this.sourceUrl); } catch (_e) { /* ignore */ }
+
+      // 修复 URL：去除 # 及之后的内容（URL 碎片）
+      let cleanUrl = this.sourceUrl;
+      const hashIdx = cleanUrl.indexOf('#');
+      if (hashIdx > 0) {
+        cleanUrl = cleanUrl.substring(0, hashIdx);
+        console.info('[RssArticlesPage] cleaned URL: ' + cleanUrl);
+      }
+
+      // 直接 HTTP 获取
+      let body: string;
+      try {
+        body = await NetUtil.httpGet(cleanUrl, {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xml;q=0.9,*/*;q=0.8',
+        }, 15000);
+      } catch (httpErr) {
+        const errMsg = (httpErr instanceof Error) ? httpErr.message : String(httpErr);
+        this.statusMsg = '网络请求失败: ' + errMsg;
+        this.isLoading = false;
+        return;
+      }
+
+      // 解析
+      const result = await fetchArticles(source.sourceName || '默认分类', cleanUrl, source);
+      const fetchedArticles = result[0];
+      if (fetchedArticles.length > 0) {
+        await this.db.rssArticleTable.batchInsert(fetchedArticles);
+      }
+
+      this.articles = await this.db.rssArticleTable.getByOrigin(this.sourceUrl);
+    } catch (e) {
+      const errMsg = (e instanceof Error) ? e.message : String(e);
+      this.statusMsg = '加载失败: ' + errMsg;
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  build() {
+    Column() {
+      Row() {
+        Button({ type: ButtonType.Normal }) {
+          Text('← 返回').fontSize(16).fontColor('#0078D7')
+        }
+        .backgroundColor('transparent')
+        .onClick(() => { router.back(); })
+        Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
+          .fontColor(this.isDark ? '#E0E0E0' : '#333')
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1).margin({ left: 8 })
+      }
+      .width('100%').padding({ left: 8, right: 12, top: 8, bottom: 4 })
+
+      if (this.statusMsg) {
+        Text(this.statusMsg).fontSize(12).fontColor('#FF5722')
+          .padding(8).backgroundColor('#FFF3E0').width('100%')
+      }
+
+      if (this.isLoading) {
+        LoadingProgress().color('#0078D7')
+      } else if (this.articles.length === 0) {
+        Column() {
+          Text('暂无文章').fontSize(16).fontColor(this.isDark ? '#AAA' : '#888')
+          Text('该源暂无内容，请检查源URL是否正确')
+            .fontSize(13).fontColor(this.isDark ? '#888' : '#AAA').margin({ top: 8 })
+        }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+      } else {
+        Scroll() {
+          Column() {
+            ForEach(this.articles, (article: RSSArticle) => {
+              Column() {
+                Text(article.title).fontSize(15)
+                  .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                  .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                Row() {
+                  if (article.pubDate) {
+                    Text(article.pubDate).fontSize(11)
+                      .fontColor(this.isDark ? '#888' : '#AAA')
+                  }
+                  Blank()
+                  if (article.read) {
+                    Text('已读').fontSize(10).fontColor('#4CAF50')
+                      .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+                      .border({ radius: 3 }).borderColor('#4CAF50').borderWidth(0.5)
+                  }
+                }.width('100%').margin({ top: 4 })
+              }
+              .padding(12).borderRadius(8)
+              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+              .margin({ left: 12, right: 12, top: 4, bottom: 4 })
+              .width('100%')
+            })
+          }.width('100%')
+        }.layoutWeight(1)
+      }
+    }
+    .width('100%').height('100%')
+    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+  }
+}

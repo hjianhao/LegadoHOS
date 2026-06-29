@@ -1,0 +1,36 @@
+# HarmonyOS AI Workspace install manifest
+# Format: <status>\t<path>\t<sha256_or_reason>
+# DO NOT EDIT — used by 'install.sh --uninstall' to know what to remove
+# status:  written  = 本工具实际写入
+#          skipped  = 已存在被跳过（uninstall 不动）
+#          failed   = 下载失败
+# Generated: 2026-06-29T03:12:33Z
+# Source: https://raw.githubusercontent.com/Octo-o-o-o/harmonyos-ai-workspace/main
+# Targets: claude,codex
+written	CLAUDE.md	03124e5a5b98d2773a6517653a5d2b17a87a03a6dfdbca4bdf8fee70a9a4ef67
+skipped	AGENTS.md	pre-existing
+written	.mcp.json	c72f8a02a45ba0ede76a219380540e9500a8738901269577d4055b64824f8637
+written	tools/hooks/post-edit.sh	9a83f1ff7c7cda0fb778b553c9157cce1a71b735f19c1b19a37bb7040ea98cc5
+written	tools/hooks/lib/parse-hook-input.sh	891114711e37188c46e0cf65de53d66b06240785f49a612585eecf885d2e8d7f
+written	tools/hooks/lib/scan-arkts.sh	8beae7608ffc6aa0a3ea72e64dbd4de9b96ffdc9f40c65b480a45492a57d5578
+written	tools/check-ohpm-deps.sh	720eabdf0ff95658649b2ee86514e392fe99b87806bd8da06c0a5d95f5083f26
+written	tools/harmony-dev-cycle.sh	11e056b1473337f9a57c1aed350ce28b0b62bc374c696d164d083412987098af
+written	tools/run-linter.sh	ddad48675998eb5e8b378118e326dcf6886fdbe6fa9e9994b2e88bcc6ccef6bd
+written	tools/data/ohpm-blacklist.txt	98362fb114b7b80fcbfd3648ee15d3fa03fbc24118ca282dad6f983cd088de28
+written	tools/data/ohpm-whitelist.txt	54b9364b66bf32768cd8c239ccc5b2bf6eec0bf72f6bf8f1fddc76d3724f8c78
+written	.claude/settings.json	01fe4c54bfe060038d1a6035bf1245965d8ed04f5f853a3c1cd1d3d762fcb090
+written	.claude/skills/manifest.json	6061a3a71fd1d12262e594da45b34da5a0bdc793a73d555bc36e3f24b3c1bc60
+written	.claude/skills/README.md	e55f07c3f13e8d115b1b116cf874d90c587f55cf98cf2033c83a8cf5dd100a56
+written	.claude/skills/arkts-rules/SKILL.md	f2082fd94c9845d08c56f15c353632a986cc95a4cba7cea9db05b5a76a3e2294
+written	.claude/skills/state-management/SKILL.md	3e7bca53f69ca852429b400472c26b445de0d1cd38f21d037d5071d4eea27ed0
+written	.claude/skills/build-debug/SKILL.md	27633485d46b0e7003af603f21ee968c9f763556cad3ac0d9aa907d78af6b6cb
+written	.claude/skills/signing-publish/SKILL.md	0ba5810878b20bf2081149f55305e3d17dc72c88007ff203237a1bf9e7c771e7
+written	.claude/skills/harmonyos-review/SKILL.md	33f2a369aeefd20df0e452d7a2b9fc0495119d002c7a08a0f0968527acd845da
+written	.claude/skills/runtime-pitfalls/SKILL.md	46780dba4b9e5225c28dd5298935b0eca84ba373bd31665bf20ba5b0f24c3d6b
+written	.claude/skills/multimodal-llm/SKILL.md	e5f8e7c3f4830c76f1f1da9ae37f26820e36cf5a7f69683951a6ae413fac2f4a
+written	.claude/skills/web-bridge/SKILL.md	ad25828cb5fe6a083c3478565ae611923204e374c0823ac8c5015f8dc1a1501b
+written	.claude/skills/harmonyos-review/references/checklist.md	ef473223ed726e83984c4bb201fb33f72d1c0c5d5c27acfec27b1d593e76aa1d
+written	.claude/skills/harmonyos-review/references/report-template.md	6e543c1b1e81b6e2886d7f10f6fb53c5cf8b8217ae99abf8037c23f0aede94b6
+written	.claude/skills/harmonyos-review/references/official-docs.md	39eb2873f4576f91761737fa9f5c99b6b197b07d7ac72513918ddcb259bba21c
+written	.claude/skills/arkts-rules/references/spec-quick-ref.md	8cac9632c1d9b979d68019d2a2196d0a164c66747d0ed2b45dcad731aa955448
+written	.claude/skills/build-debug/references/develop-debug-build.md	e82101259422666d14e60ec577e3ab2c3358d494a4e890c96c1d0252f9b4973f
