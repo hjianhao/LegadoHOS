@@ -1,6 +1,6 @@
 /**
  * 发现书籍列表页
- * 直接 HTTP 获取，JSON 优先，回退到 SourceExecutor 引擎解析。
+ * 直接走 SourceExecutor 引擎解析，复用搜索/发现规则。
  */
 import { AppTheme } from '../theme/AppTheme';
 import { BookSource } from '../model/BookSource';
@@ -8,7 +8,6 @@ import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
-import { NetUtil } from '../util/NetUtil';
 
 @Entry
 @Component
@@ -55,32 +54,50 @@ export struct ExploreBookPage {
     void this.loadBooks();
   }
 
-  /**
-   * JSON 解析辅助：从任意对象中递归找数组
-   */
-  private findBooksArray(obj: Object, depth: number): Record<string, Object>[] {
-    if (depth > 4 || !obj || typeof obj !== 'object') return [];
-    const arr = obj as Object[];
-    if (Array.isArray(arr) && arr.length > 1) {
-      // 验证第一个元素看起来像书籍对象（有 name/title/bookName 等字段）
-      const first = arr[0] as Record<string, Object>;
-      if (first && typeof first === 'object') {
-        const hasBookLike = first['name'] || first['title'] || first['bookName'] ||
-          first['novelName'] || first['book_name'] || first['novel_name'] ||
-          first['author'] || first['url'] || first['bookUrl'];
-        if (hasBookLike) return arr as Record<string, Object>[];
-      }
-    }
-    const rec = obj as Record<string, Object>;
-    const keys = Object.keys(rec);
-    for (let k = 0; k < keys.length; k++) {
-      const v = rec[keys[k]];
-      if (typeof v === 'object' && v !== null) {
-        const sub = this.findBooksArray(v as Object, depth + 1);
-        if (sub.length > 0) return sub;
-      }
-    }
-    return [];
+  private makeSource(catUrl: string): BookSource {
+    return {
+      id: 0, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
+      sourceType: 0, group: '', enabled: true, weight: 0, customOrder: 0,
+      ruleSearchUrl: catUrl,
+      ruleSearchList: this.ruleExploreList,
+      ruleSearchName: this.ruleExploreName,
+      ruleSearchAuthor: this.ruleExploreAuthor,
+      ruleSearchCover: this.ruleExploreCover,
+      ruleSearchNoteUrl: this.ruleExploreNoteUrl,
+      ruleSearchKind: this.ruleExploreKind,
+      ruleSearchWordCount: this.ruleExploreWordCount,
+      ruleSearchLastUpdateTime: this.ruleExploreLastUpdateTime || '',
+      ruleSearchLastChapter: this.ruleExploreLastChapter,
+      ruleSearchIntroduce: '', ruleSearchCheckKeyWord: '',
+      ruleBookInfoInit: '', ruleBookInfoName: '', ruleBookInfoAuthor: '', ruleBookInfoCover: '',
+      ruleBookInfoIntroduce: '', ruleBookInfoKind: '', ruleBookInfoWordCount: '',
+      ruleBookInfoLastUpdateTime: '', ruleBookInfoFrom: '', ruleBookInfoTocUrl: '',
+      ruleBookInfoLastChapter: '', ruleBookInfoCanReName: '', ruleBookInfoDownloadUrls: '',
+      ruleBookInfoRelatedBooks: '',
+      ruleTocUrl: '', ruleToc: '', ruleTocTitle: '', ruleTocUrlItem: '',
+      ruleTocPreUpdateJs: '', ruleTocFormatJs: '', ruleTocIsVolume: '',
+      ruleTocIsVip: '', ruleTocIsPay: '', ruleTocUpdateTime: '', ruleTocNextTocUrl: '',
+      ruleBookContentUrl: '', ruleBookContent: '', ruleBookContentNext: '',
+      ruleBookContentSubContent: '', ruleBookContentTitle: '', ruleBookContentWebJs: '',
+      ruleBookContentSourceRegex: '', ruleBookContentReplaceRegex: '',
+      ruleBookContentImageStyle: '', ruleBookContentImageDecode: '',
+      ruleBookContentPayAction: '', ruleBookContentCallBackJs: '',
+      ruleExplores: '', ruleReview: '', ruleReviewUrl: '', ruleReviewAvatar: '',
+      ruleReviewContent: '', ruleReviewPostTime: '', ruleReviewQuoteUrl: '',
+      script: '', header: this.header,
+      respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
+      variableComment: '', coverDecodeJs: '', loginUrl: '', loginCheckJs: '',
+      jsLib: '', bookUrlPattern: '',
+      ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
+      ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
+      ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',
+      ruleExploreIntroduce: '', exploreUrl: '', loginUi: '',
+      eventListener: false, customButton: false, homepageModules: '',
+      enabledCookieJar: false, enabledExplore: true, exploreScreen: '',
+      review: '', reviewUrl: '', reviewAvatar: '', reviewContent: '',
+      reviewPostTime: '', reviewQuoteUrl: '',
+      createTime: 0, updateTime: 0, rawJson: '',
+    };
   }
 
   async loadBooks(): Promise<void> {
@@ -90,156 +107,24 @@ export struct ExploreBookPage {
     console.info('[ExploreBook] Loading: ' + this.categoryName + ', url: ' + this.categoryUrl);
 
     try {
-      let catUrl = this.categoryUrl || '';
+      let catUrl: string = this.categoryUrl || '';
       if (!catUrl) {
         this.isLoading = false;
         this.errorMsg = '该分类无可用链接';
         return;
       }
       if (!catUrl.startsWith('http') && this.sourceUrl) {
-        const baseUrl = this.sourceUrl.replace(/(https?:\/\/[^\/]+).*/, '$1');
+        const baseUrl: string = this.sourceUrl.replace(/(https?:\/\/[^\/]+).*/, '$1');
         catUrl = baseUrl + (catUrl.startsWith('/') ? '' : '/') + catUrl;
       }
       catUrl = catUrl.replace(/\{\{page\}\}/g, '1');
+      // qbread rank API doesn't support text sub param — strip it
+      catUrl = catUrl.replace(/[&?]sub=[^&]*/g, '');
       console.info('[ExploreBook] Full URL: ' + catUrl);
 
-      const reqHeaders: Record<string, string> = {
-        'Accept': 'text/html,application/json,*/*',
-        'User-Agent': 'Mozilla/5.0 (Linux; HarmonyOS 5.0)',
-        'Referer': this.sourceUrl || '',
-      };
-      if (this.header) {
-        try {
-          const hdrs: Record<string, Object> = JSON.parse(this.header) as Record<string, Object>;
-          const hkeys = Object.keys(hdrs);
-          for (let h = 0; h < hkeys.length; h++) {
-            reqHeaders[hkeys[h]] = String(hdrs[hkeys[h]]);
-          }
-        } catch (_e) { /* ignore */ }
-      }
-      const body = await NetUtil.httpGet(catUrl, reqHeaders, 15000);
-      console.info('[ExploreBook] Got ' + body.length + ' bytes');
-
-      if (!body) {
-        this.isLoading = false;
-        this.errorMsg = '服务器返回空数据';
-        return;
-      }
-
-      let results: SearchResult[] = [];
-
-      // 尝试 JSON 解析
-      try {
-        const json: Object = JSON.parse(body) as Object;
-        let items: Record<string, Object>[] = [];
-        // 按规则路径提取
-        const rule = this.ruleExploreList || '';
-        if (rule) {
-          try {
-            // 简单 JSONPath 提取
-            let cur: Object | null = json;
-            let p = rule.replace(/^\$\.?/, '');
-            const parts = p.split('.');
-            for (let pi = 0; pi < parts.length; pi++) {
-              if (cur === null || cur === undefined) break;
-              const part = parts[pi];
-              const arrW = part.match(/^(\w+)?\[\*\]$/);
-              if (arrW) {
-                if (arrW[1]) cur = (cur as Record<string, Object>)[arrW[1]] as Object;
-                if (Array.isArray(cur)) { items = cur as Record<string, Object>[]; break; }
-                cur = null;
-                break;
-              }
-              const idxM = part.match(/^(\w+)?\[(\d+)\]$/);
-              if (idxM) {
-                if (idxM[1]) cur = (cur as Record<string, Object>)[idxM[1]] as Object;
-                if (Array.isArray(cur)) cur = (cur as Object[])[parseInt(idxM[2])] as Object;
-                continue;
-              }
-              cur = (cur as Record<string, Object>)[part] as Object;
-            }
-          } catch (_jp) { /* ignore */ }
-        }
-        // 自动探测
-        if (items.length === 0) {
-          items = this.findBooksArray(json, 0);
-        }
-        if (items.length > 0) {
-          for (let i = 0; i < items.length; i++) {
-            const item = items[i] as Record<string, Object>;
-            const name = String(item['name'] || item['title'] || item['bookName'] || item['novelName'] || item['book_name'] || '');
-            if (!name) continue;
-            const noteUrl = String(item['url'] || item['bookUrl'] || item['novelId'] || item['id'] || '');
-            results.push({
-              key: (this.sourceUrl || '') + '|' + noteUrl,
-              name: name,
-              author: String(item['author'] || item['Author'] || item['author_name'] || ''),
-              coverUrl: this.validImageUrl(item['cover'] || item['coverUrl'] || item['cover_url'] || item['img'] || item['image'] || ''),
-              noteUrl: noteUrl,
-              origin: this.sourceName, originUrl: this.sourceUrl || '',
-              kind: String(item['kind'] || item['category'] || item['type'] || ''),
-              wordCount: String(item['wordCount'] || item['words'] || item['word_count'] || ''),
-              introduce: String(item['introduce'] || item['description'] || item['intro'] || ''),
-              lastUpdateTime: '', helperMsg: '',
-              duration: 0, searchTime: Date.now(), sourceCount: 1,
-              sourceOrigins: this.sourceName ? [this.sourceName] : [],
-            });
-          }
-          console.info('[ExploreBook] JSON: ' + results.length + ' books');
-        }
-      } catch (_je) {
-        console.info('[ExploreBook] Not JSON');
-      }
-
-      // JSON 没结果 → 用 SourceExecutor 引擎解析
-      if (results.length === 0) {
-        const source: BookSource = {
-          id: 0, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
-          sourceType: 0, group: '', enabled: true, weight: 0, customOrder: 0,
-          ruleSearchUrl: catUrl,
-          ruleSearchList: this.ruleExploreList,
-          ruleSearchName: this.ruleExploreName,
-          ruleSearchAuthor: this.ruleExploreAuthor,
-          ruleSearchCover: this.ruleExploreCover,
-          ruleSearchNoteUrl: this.ruleExploreNoteUrl,
-          ruleSearchKind: this.ruleExploreKind,
-          ruleSearchWordCount: this.ruleExploreWordCount,
-          ruleSearchLastUpdateTime: this.ruleExploreLastUpdateTime || '',
-          ruleSearchLastChapter: this.ruleExploreLastChapter,
-          ruleSearchIntroduce: '', ruleSearchCheckKeyWord: '',
-          ruleBookInfoInit: '', ruleBookInfoName: '', ruleBookInfoAuthor: '', ruleBookInfoCover: '',
-          ruleBookInfoIntroduce: '', ruleBookInfoKind: '', ruleBookInfoWordCount: '',
-          ruleBookInfoLastChapter: '', ruleBookInfoLastUpdateTime: '', ruleBookInfoFrom: '',
-          ruleBookInfoTocUrl: '', ruleBookInfoCanReName: '', ruleBookInfoDownloadUrls: '',
-          ruleBookInfoRelatedBooks: '',
-          ruleTocUrl: '', ruleToc: '', ruleTocTitle: '', ruleTocUrlItem: '',
-          ruleTocPreUpdateJs: '', ruleTocFormatJs: '', ruleTocIsVolume: '',
-          ruleTocIsVip: '', ruleTocIsPay: '', ruleTocUpdateTime: '', ruleTocNextTocUrl: '',
-          ruleBookContent: '', ruleBookContentUrl: '', ruleBookContentNext: '',
-          ruleBookContentSubContent: '', ruleBookContentTitle: '', ruleBookContentWebJs: '',
-          ruleBookContentSourceRegex: '', ruleBookContentReplaceRegex: '',
-          ruleBookContentImageStyle: '', ruleBookContentImageDecode: '',
-          ruleBookContentPayAction: '', ruleBookContentCallBackJs: '',
-          ruleExplores: '', ruleReview: '', ruleReviewUrl: '', ruleReviewAvatar: '',
-          ruleReviewContent: '', ruleReviewPostTime: '', ruleReviewQuoteUrl: '',
-          script: '', header: this.header,
-          respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
-          variableComment: '', coverDecodeJs: '', loginUrl: '', loginCheckJs: '',
-          jsLib: '', bookUrlPattern: '',
-          ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
-          ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
-          ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',
-          ruleExploreIntroduce: '', exploreUrl: '', loginUi: '',
-          eventListener: false, customButton: false, homepageModules: '',
-          enabledCookieJar: false, enabledExplore: true, exploreScreen: '',
-          review: '', reviewUrl: '', reviewAvatar: '', reviewContent: '',
-          reviewPostTime: '', reviewQuoteUrl: '',
-          createTime: 0, updateTime: 0, rawJson: '',
-        };
-        results = await globalSourceExecutor.search(this.categoryName || '', [source]);
-        console.info('[ExploreBook] Engine: ' + results.length + ' books');
-      }
-
+      const source: BookSource = this.makeSource(catUrl);
+      const results: SearchResult[] = await globalSourceExecutor.search(this.categoryName || '', [source]);
+      console.info('[ExploreBook] Engine: ' + results.length + ' books');
       this.books = results;
     } catch (e) {
       this.errorMsg = '加载失败: ' + (e instanceof Error ? e.message : String(e));
@@ -247,12 +132,6 @@ export struct ExploreBookPage {
     } finally {
       this.isLoading = false;
     }
-  }
-
-  private validImageUrl(url: string | Object): string {
-    const s = String(url || '');
-    if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('//')) return s;
-    return '';
   }
 
   openBookDetail(book: SearchResult): void {

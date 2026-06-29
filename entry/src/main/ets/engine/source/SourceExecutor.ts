@@ -1062,7 +1062,7 @@ export class SourceExecutor {
     }
     if (list.length === 0) {
       if (Array.isArray(json)) { list = json; } else {
-        for (const p of ['data', 'list', 'items', 'results', 'books', 'data.list', 'data.items', 'data.records', 'data.books', 'data.novels', 'data.bookList', 'data.booklist']) {
+        for (const p of ['data', 'list', 'items', 'results', 'books', 'rows', 'data.list', 'data.items', 'data.records', 'data.books', 'data.novels', 'data.bookList', 'data.booklist', 'data.rows']) {
           const raw = this.getPath(json, p);
           if (Array.isArray(raw)) { list = raw; break; }
         }
@@ -1148,7 +1148,9 @@ export class SourceExecutor {
 
   /** 去掉规则末尾的 @put:... / @js:... 等后缀，只保留 JSONPath 部分 */
   private cleanRule(rule: string): string {
-    let idx = rule.indexOf('@put:');
+    // ## 分隔符：前面是 JSONPath，后面是后处理规则
+    let idx = rule.indexOf('##');
+    if (idx < 0) idx = rule.indexOf('@put:');
     if (idx < 0) idx = rule.indexOf('@js:');
     if (idx < 0) idx = rule.indexOf('\n<js>');
     if (idx < 0) idx = rule.indexOf('\nhttps://');
@@ -1156,10 +1158,26 @@ export class SourceExecutor {
     return idx >= 0 ? rule.substring(0, idx).trim() : rule;
   }
 
-  /** 处理 <js> 代码和 {{result}} 模板 */
+  /** 处理 <js> 代码、{{result}} 模板 和 ## 正则替换 */
   private postProcessRule(rule: string, value: string): string {
     if (!value) return value;
     let result = value;
+    // 0. ## 正则替换: $.resourceName##（.* → 去掉括号内容
+    const hashIdx = rule.indexOf('##');
+    if (hashIdx >= 0) {
+      const afterHash = rule.substring(hashIdx + 2);
+      // 支持多级##: ##regex1##replacement1##regex2##replacement2
+      const parts = afterHash.split('##');
+      for (let i = 0; i + 1 < parts.length; i += 2) {
+        const pattern = parts[i];
+        const replacement = parts[i + 1];
+        try {
+          result = result.replace(new RegExp(pattern, 'g'), replacement);
+        } catch(_e) {
+          console.warn('[SrcEx] ## regex error: ' + pattern);
+        }
+      }
+    }
     // 1. @js: 处理
     result = JsExpressionEvaluator.processJsResult(rule, result);
     // 2. <js>...</js> 代码
@@ -1176,8 +1194,6 @@ export class SourceExecutor {
     if (tm) {
       result = tm[0].replace(/\{\{result\}\}/g, result);
       console.info('[SrcEx] PostRule tmpl: ' + result.substring(0, 100));
-    } else {
-      console.info('[SrcEx] PostRule no tmpl match, rule=' + rule.substring(0, 80));
     }
     return result;
   }

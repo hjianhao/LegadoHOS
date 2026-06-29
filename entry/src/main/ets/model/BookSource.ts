@@ -211,6 +211,7 @@ function toRuleString(val: unknown): string {
 export function parseBookSource(json: any): BookSource {
   // 兼容嵌套格式: ruleSearch.bookList 或 ruleSearchList
   const rs = json.ruleSearch || {};
+  const re = json.ruleExplore || {};
   return {
     id: json.id || 0,
     sourceName: json.sourceName || json.bookSourceName || '',
@@ -285,16 +286,16 @@ export function parseBookSource(json: any): BookSource {
     bookUrlPattern: json.bookUrlPattern || '',
     respond: json.respond || 0,
     ruleExploreScreen: json.ruleExploreScreen || '',
-    ruleExploreList: json.ruleExploreList || '',
-    ruleExploreName: json.ruleExploreName || '',
-    ruleExploreAuthor: json.ruleExploreAuthor || '',
-    ruleExploreCover: json.ruleExploreCover || '',
-    ruleExploreKind: json.ruleExploreKind || '',
-    ruleExploreWordCount: json.ruleExploreWordCount || '',
-    ruleExploreLastChapter: json.ruleExploreLastChapter || '',
-    ruleExploreLastUpdateTime: json.ruleExploreLastUpdateTime || '',
-    ruleExploreNoteUrl: json.ruleExploreNoteUrl || '',
-    ruleExploreIntroduce: json.ruleExploreIntroduce || '',
+    ruleExploreList: json.ruleExploreList || re.bookList || '',
+    ruleExploreName: json.ruleExploreName || re.name || '',
+    ruleExploreAuthor: json.ruleExploreAuthor || re.author || '',
+    ruleExploreCover: json.ruleExploreCover || re.coverUrl || '',
+    ruleExploreKind: json.ruleExploreKind || re.kind || '',
+    ruleExploreWordCount: json.ruleExploreWordCount || re.wordCount || '',
+    ruleExploreLastChapter: json.ruleExploreLastChapter || re.lastChapter || '',
+    ruleExploreLastUpdateTime: json.ruleExploreLastUpdateTime || re.lastUpdateTime || '',
+    ruleExploreNoteUrl: json.ruleExploreNoteUrl || re.bookUrl || '',
+    ruleExploreIntroduce: json.ruleExploreIntroduce || re.intro || '',
     exploreUrl: json.exploreUrl || '',
     loginUi: json.loginUi || '',
     eventListener: json.eventListener || false,
