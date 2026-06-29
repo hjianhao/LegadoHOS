@@ -430,7 +430,7 @@ export class BookSourceTable {
           if (fixed.exploreUrl && !source.exploreUrl) {
             source.exploreUrl = fixed.exploreUrl;
           }
-          // 如果平铺规则为空，从嵌套格式恢复搜索规则
+          // 如果有平铺规则为空，从嵌套格式恢复
           if (!source.ruleSearchList && !source.ruleSearchName && fixed.ruleSearchList) {
             source.ruleSearchList = fixed.ruleSearchList;
             source.ruleSearchName = fixed.ruleSearchName;
@@ -438,6 +438,19 @@ export class BookSourceTable {
             source.ruleSearchCover = fixed.ruleSearchCover;
             source.ruleSearchNoteUrl = fixed.ruleSearchNoteUrl;
             source.ruleSearchUrl = source.ruleSearchUrl || fixed.ruleSearchUrl;
+          }
+          // 恢复 ruleExplore*（发现页规则）
+          if (fixed.ruleExploreList && !source.ruleExploreList) {
+            source.ruleExploreList = fixed.ruleExploreList;
+            source.ruleExploreName = fixed.ruleExploreName;
+            source.ruleExploreAuthor = fixed.ruleExploreAuthor;
+            source.ruleExploreCover = fixed.ruleExploreCover;
+            source.ruleExploreKind = fixed.ruleExploreKind;
+            source.ruleExploreWordCount = fixed.ruleExploreWordCount;
+            source.ruleExploreLastChapter = fixed.ruleExploreLastChapter;
+            source.ruleExploreLastUpdateTime = fixed.ruleExploreLastUpdateTime;
+            source.ruleExploreNoteUrl = fixed.ruleExploreNoteUrl;
+            source.ruleExploreIntroduce = fixed.ruleExploreIntroduce;
           }
         } catch (_e) { /* ignore parse errors */ }
       }

@@ -337,10 +337,6 @@ export struct ExplorePage {
             this.resolvedCategories = cats;
             this.loadingKinds = false;
             console.info('[Explore] Got ' + cats.length + ' categories for ' + src.sourceName);
-            let msg = src.sourceName + ': exploreUrl=' + (src.exploreUrl || '(空)') + ' ruleExplores=' + ((src.ruleExplores || '').substring(0, 60));
-            msg += ' => ' + cats.length + ' categories';
-            if (cats.length > 0) msg += ' first=' + cats[0].name;
-            promptAction.showToast({ message: msg, duration: 3000 });
           });
           return;
         }
