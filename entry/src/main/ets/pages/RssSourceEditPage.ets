@@ -28,62 +28,58 @@ const TAB_BASIC: FieldGroup[] = [
 const TAB_LIST_RULES: FieldGroup[] = [
   { key: 'ruleArticles', label: '文章列表规则', placeholder: 'CSS/JSONPath 规则' },
   { key: 'ruleTitle', label: '标题规则', placeholder: '文章标题提取规则' },
+  { key: 'rulePubDate', label: '日期规则', placeholder: '文章发布日期规则' },
+  { key: 'ruleDescription', label: '摘要规则', placeholder: '文章摘要提取规则' },
+  { key: 'ruleImage', label: '图片规则', placeholder: '文章图片提取规则' },
   { key: 'ruleLink', label: '链接规则', placeholder: '文章链接提取规则' },
-  { key: 'rulePubDate', label: '发布日期规则', placeholder: '发布日期提取规则' },
-  { key: 'ruleDescription', label: '描述规则', placeholder: '描述提取规则' },
-  { key: 'ruleImage', label: '图片规则', placeholder: '图片提取规则' },
   { key: 'ruleNextPage', label: '下一页规则', placeholder: '分页规则' },
 ];
 
 const TAB_CONTENT_RULES: FieldGroup[] = [
-  { key: 'ruleContent', label: '正文规则', placeholder: '正文提取规则' },
-  { key: 'contentWhitelist', label: 'URL 白名单', placeholder: '允许的 URL 模式' },
-  { key: 'contentBlacklist', label: 'URL 黑名单', placeholder: '禁止的 URL 模式' },
+  { key: 'ruleContent', label: '正文规则', placeholder: '文章正文提取规则' },
+  { key: 'contentWhitelist', label: '标签白名单', placeholder: '允许的 HTML 标签' },
+  { key: 'contentBlacklist', label: '标签黑名单', placeholder: '禁用的 HTML 标签' },
 ];
 
 const TAB_WEBVIEW: FieldGroup[] = [
-  { key: 'style', label: '样式 CSS', placeholder: '自定义 CSS 样式' },
-  { key: 'injectJs', label: '注入 JS', placeholder: '注入 JavaScript' },
-  { key: 'preloadJs', label: '预加载 JS', placeholder: '预加载 JavaScript' },
-  { key: 'startHtml', label: '起始 HTML', placeholder: '起始 HTML 内容' },
-  { key: 'startJs', label: '起始 JS', placeholder: '起始 JavaScript' },
-  { key: 'header', label: '自定义请求头', placeholder: 'JSON 格式请求头' },
-  { key: 'loginUrl', label: '登录地址', placeholder: '登录页面 URL' },
-  { key: 'loginCheckJs', label: '登录检测 JS', placeholder: '登录状态检测 JS' },
+  { key: 'style', label: '自定义样式(CSS)', placeholder: '注入的 CSS 样式' },
+  { key: 'injectJs', label: '注入 JS', placeholder: '页面加载后注入的 JS' },
+  { key: 'preloadJs', label: '预载 JS', placeholder: '页面加载前执行的 JS' },
+  { key: 'startHtml', label: '自定义 HTML', placeholder: '替换页面的 HTML 模板' },
+  { key: 'startStyle', label: '自定义内部 CSS', placeholder: '嵌入 HTML 的 style 标签内容' },
+  { key: 'startJs', label: '自定义内部 JS', placeholder: '嵌入 HTML 的 script 标签内容' },
 ];
 
 @Entry
 @Component
 export struct RssSourceEditPage {
-  @StorageLink('isDark') isDark: boolean = false;
-  @State sourceUrl: string = '';
-  @State editSource: RSSSource = this.defaultSource();
-  @State isNew: boolean = true;
+  @StorageProp('isDark') isDark: boolean = false;
   @State currentTab: number = 0;
+  @State editSource: RSSSource = this.createDefault();
   @State isSaving: boolean = false;
-
+  private sourceUrl: string = '';
+  private isNew: boolean = true;
+  private tabs: string[] = ['基本信息', '列表规则', '内容规则', 'WebView'];
   private db: AppDatabase = AppDatabase.getInstance();
 
-  private tabs: string[] = ['基本信息', '列表规则', '内容规则', 'WebView'];
-
-  defaultSource(): RSSSource {
+  createDefault(): RSSSource {
     return {
       sourceUrl: '',
       sourceName: '',
       sourceIcon: '',
       sourceGroup: '',
-      sourceComment: null,
+      sourceComment: '',
       enabled: true,
-      variableComment: null,
-      jsLib: null,
-      enabledCookieJar: true,
-      concurrentRate: null,
-      header: null,
-      loginUrl: null,
-      loginUi: null,
-      loginCheckJs: null,
-      coverDecodeJs: null,
-      sortUrl: null,
+      variableComment: '',
+      jsLib: '',
+      enabledCookieJar: false,
+      concurrentRate: '',
+      header: '',
+      loginUrl: '',
+      loginUi: '',
+      loginCheckJs: '',
+      coverDecodeJs: '',
+      sortUrl: '',
       singleUrl: false,
       articleStyle: 0,
       ruleArticles: '',
@@ -94,24 +90,24 @@ export struct RssSourceEditPage {
       ruleImage: '',
       ruleLink: '',
       ruleContent: '',
-      contentWhitelist: null,
-      contentBlacklist: null,
-      shouldOverrideUrlLoading: null,
-      style: null,
+      contentWhitelist: '',
+      contentBlacklist: '',
+      shouldOverrideUrlLoading: '',
+      style: '',
       enableJs: true,
       loadWithBaseUrl: true,
-      injectJs: null,
-      preloadJs: null,
-      startHtml: null,
-      startStyle: null,
-      startJs: null,
+      injectJs: '',
+      preloadJs: '',
+      startHtml: '',
+      startStyle: '',
+      startJs: '',
       showWebLog: false,
       lastUpdateTime: Date.now(),
       customOrder: 0,
       type: 0,
       preload: false,
       cacheFirst: false,
-      searchUrl: null,
+      searchUrl: '',
       redirectPolicy: 'ASK_CROSS_ORIGIN',
     };
   }
@@ -130,19 +126,11 @@ export struct RssSourceEditPage {
       await this.db.waitForInit();
       const s = await this.db.rssSourceTable.getByKey(this.sourceUrl);
       if (s) {
-        // 深拷贝
         this.editSource = JSON.parse(JSON.stringify(s));
       }
     } catch (e) {
-      console.error('[RssSourceEditPage] 加载源失败: ' + e);
+      console.error('[RssSourceEditPage] load failed: ' + e);
     }
-  }
-
-  setField(key: string, value: string | boolean | number) {
-    // 使用 JSON 深拷贝后修改
-    const copy = JSON.parse(JSON.stringify(this.editSource)) as RSSSource;
-    copy[key] = value;
-    this.editSource = copy;
   }
 
   async save() {
@@ -150,171 +138,90 @@ export struct RssSourceEditPage {
       promptAction.showToast({ message: '名称和源 URL 不能为空' });
       return;
     }
+    // 去除 URL 中的 # 片段（可能由导入时带入）
+    const hashIdx = this.editSource.sourceUrl.indexOf('#');
+    if (hashIdx > 0) {
+      this.editSource.sourceUrl = this.editSource.sourceUrl.substring(0, hashIdx);
+    }
     this.isSaving = true;
     try {
       this.editSource.lastUpdateTime = Date.now();
-      const exists = await this.db.rssSourceTable.has(this.editSource.sourceUrl);
-      if (exists) {
-        await this.db.rssSourceTable.update(this.editSource);
-      } else {
+      try {
         await this.db.rssSourceTable.insert(this.editSource);
+      } catch (_e) {
+        await this.db.rssSourceTable.update(this.editSource);
       }
       promptAction.showToast({ message: '保存成功' });
       router.back();
     } catch (e) {
-      promptAction.showToast({ message: `保存失败: ${e}` });
+      promptAction.showToast({ message: '保存失败' });
     } finally {
       this.isSaving = false;
     }
   }
 
-  async testFetch() {
-    promptAction.showToast({ message: '正在测试...' });
-    try {
-      const RssService = await import('../engine/rss/RssService');
-      const result = await RssService.fetchArticles('测试', this.editSource.sortUrl || this.editSource.sourceUrl, this.editSource, 1, null);
-      const articles = result[0] as Object[];
-      promptAction.showToast({ message: '成功获取 ' + articles.length + ' 篇文章' });
-    } catch (e) {
-      const msg = (e instanceof Error) ? e.message : String(e);
-      promptAction.showToast({ message: '获取失败: ' + msg });
-    }
-  }
-
-  getFieldValue(key: string): string {
-    const s = JSON.parse(JSON.stringify(this.editSource)) as Record<string, Object>;
-    return String(s[key] || '');
-  }
-
-  @Builder
-  buildFieldInputs(fields: FieldGroup[]) {
-    Column() {
-      ForEach(fields, (field: FieldGroup) => {
-        Text(field.label).fontSize(13).fontColor(this.isDark ? '#CCC' : '#666')
-          .margin({ top: 12, bottom: 4 })
-        TextInput({ placeholder: field.placeholder, text: this.getFieldValue(field.key) })
-          .onChange((val) => this.setField(field.key, val))
-          .width('100%')
-      })
+  getFieldsForTab(): FieldGroup[] {
+    switch (this.currentTab) {
+      case 0: return TAB_BASIC;
+      case 1: return TAB_LIST_RULES;
+      case 2: return TAB_CONTENT_RULES;
+      case 3: return TAB_WEBVIEW;
+      default: return TAB_BASIC;
     }
   }
 
   build() {
     Column() {
-      // ===== 顶部栏 =====
+      // 标题栏
       Row() {
-        Text('←').fontSize(22).fontColor('#0078D7')
-          .onClick(() => router.back())
-        Text(this.isNew ? '新建 RSS 源' : '编辑 RSS 源')
-          .fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
-          .margin({ left: 8 })
-        Blank()
         Button({ type: ButtonType.Normal }) {
-          Text('测试').fontSize(13).fontColor('#0078D7')
-        }
-        .backgroundColor('transparent').margin({ right: 4 })
-        .onClick(() => this.testFetch())
-        Button({ type: ButtonType.Normal }) {
-          Text(this.isSaving ? '保存中...' : '保存').fontSize(14)
-            .fontColor('#0078D7').fontWeight(FontWeight.Bold)
+          Text('← 返回').fontSize(16).fontColor('#0078D7')
         }
         .backgroundColor('transparent')
-        .enabled(!this.isSaving)
-        .onClick(() => this.save())
+        .onClick(() => { router.back(); })
+        Text(this.isNew ? '添加 RSS 源' : '编辑 RSS 源').fontSize(18).fontWeight(FontWeight.Bold)
+          .fontColor(this.isDark ? '#E0E0E0' : '#333').margin({ left: 8 })
+        Blank()
+        Button({ type: ButtonType.Normal }) {
+          Text('保存').fontSize(14).fontColor('#0078D7').fontWeight(FontWeight.Bold)
+        }
+        .backgroundColor('transparent')
+        .onClick(() => { this.save(); })
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })
 
-      // ===== Tab 栏 =====
-      Scroll() {
-        Row() {
-          ForEach(this.tabs, (tab: string, idx: number) => {
-            Column() {
-              Text(tab).fontSize(14)
-                .fontColor(this.currentTab === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#666'))
-                .fontWeight(this.currentTab === idx ? FontWeight.Bold : FontWeight.Normal)
-                .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-              if (this.currentTab === idx) {
-                Divider().color('#0078D7').width('80%').height(2).borderRadius(1)
-              }
-            }
+      // Tab 切换
+      Row() {
+        ForEach(this.tabs, (tab: string, idx: number) => {
+          Text(tab).fontSize(13)
+            .fontColor(this.currentTab === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#888'))
+            .padding({ left: 6, right: 6, top: 4, bottom: 4 })
             .onClick(() => { this.currentTab = idx; })
-          })
-        }
+        })
       }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%').height(40)
+      .width('100%').padding({ left: 8, right: 8, bottom: 4 })
 
-      // ===== 编辑内容 =====
+      // 表单
       Scroll() {
         Column() {
-          if (this.currentTab === 0) {
-            this.buildFieldInputs(TAB_BASIC)
-            // articleStyle 选择
-            Text('文章列表样式').fontSize(13).fontColor(this.isDark ? '#CCC' : '#666')
-              .margin({ top: 12, bottom: 4 })
+          ForEach(this.getFieldsForTab(), (field: FieldGroup) => {
             Row() {
-              ForEach(['列表', '大卡片', '网格', '瀑布流'], (label: string, idx: number) => {
-                Column() {
-                  Text(label).fontSize(12)
-                    .fontColor(this.editSource.articleStyle === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#666'))
-                    .padding(8)
-                    .border({ radius: 4, width: 1, color: this.editSource.articleStyle === idx ? '#0078D7' : '#CCC' })
-                }
-                .onClick(() => { this.setField('articleStyle', idx); })
-              })
+              Text(field.label).fontSize(13)
+                .fontColor(this.isDark ? '#CCC' : '#666')
+                .width(60)
+              TextInput({ text: this.editSource[field.key] as string, placeholder: field.placeholder })
+                .fontSize(13)
+                .layoutWeight(1)
+                .onChange((val: string) => {
+                  this.editSource[field.key] = val;
+                })
             }
-            .width('100%').justifyContent(FlexAlign.SpaceEvenly).margin({ top: 4 })
-
-            // 开启选项
-            Row() {
-              Text('启用').fontSize(14).fontColor(this.isDark ? '#CCC' : '#666')
-              Toggle({ type: ToggleType.Switch, isOn: this.editSource.enabled })
-                .onChange((val) => this.setField('enabled', val))
-            }
-            .width('100%').justifyContent(FlexAlign.SpaceBetween).padding({ top: 16 })
-          } else if (this.currentTab === 1) {
-            this.buildFieldInputs(TAB_LIST_RULES)
-          } else if (this.currentTab === 2) {
-            this.buildFieldInputs(TAB_CONTENT_RULES)
-          } else if (this.currentTab === 3) {
-            this.buildFieldInputs(TAB_WEBVIEW)
-            // WebView 选项
-            Column() {
-              Row() {
-                Text('启用 JS').fontSize(14).fontColor(this.isDark ? '#CCC' : '#666')
-                Toggle({ type: ToggleType.Switch, isOn: this.editSource.enableJs })
-                  .onChange((val) => this.setField('enableJs', val))
-              }
-              .width('100%').justifyContent(FlexAlign.SpaceBetween).padding({ top: 12 })
-
-              Row() {
-                Text('使用 Base URL 加载').fontSize(14).fontColor(this.isDark ? '#CCC' : '#666')
-                Toggle({ type: ToggleType.Switch, isOn: this.editSource.loadWithBaseUrl })
-                  .onChange((val) => this.setField('loadWithBaseUrl', val))
-              }
-              .width('100%').justifyContent(FlexAlign.SpaceBetween).padding({ top: 12 })
-
-              Row() {
-                Text('预加载').fontSize(14).fontColor(this.isDark ? '#CCC' : '#666')
-                Toggle({ type: ToggleType.Switch, isOn: this.editSource.preload })
-                  .onChange((val) => this.setField('preload', val))
-              }
-              .width('100%').justifyContent(FlexAlign.SpaceBetween).padding({ top: 12 })
-
-              Row() {
-                Text('优先使用缓存').fontSize(14).fontColor(this.isDark ? '#CCC' : '#666')
-                Toggle({ type: ToggleType.Switch, isOn: this.editSource.cacheFirst })
-                  .onChange((val) => this.setField('cacheFirst', val))
-              }
-              .width('100%').justifyContent(FlexAlign.SpaceBetween).padding({ top: 12 })
-            }
-          }
-        }
-        .width('100%').padding(16)
-      }
-      .layoutWeight(1)
+            .width('100%').padding(8).margin({ bottom: 4 })
+            .borderRadius(6)
+            .backgroundColor(this.isDark ? '#1E1E1E' : '#FFF')
+          })
+        }.width('100%').padding({ left: 8, right: 8 })
+      }.layoutWeight(1)
     }
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')

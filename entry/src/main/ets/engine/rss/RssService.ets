@@ -7,8 +7,8 @@
 
 import { RSSArticle, RSSSource } from '../../model/RSSSource';
 import { parseXML as parseByRule } from './RssParserByRule';
-import { JsExpressionEvaluator } from '../source/JsExpressionEvaluator';
-import http from '@ohos.net.http';
+import { JsExpressionEvaluator, JsEvalContext } from '../source/JsExpressionEvaluator';
+import { NetUtil } from '../../util/NetUtil';
 import { RuleParser } from '../source/RuleParser';
 
 /**
@@ -16,15 +16,12 @@ import { RuleParser } from '../source/RuleParser';
  */
 const REQUEST_TIMEOUT = 15000;
 
-function createHttpRequest(): http.HttpRequest {
-  const req = http.createHttp();
-  return req;
-}
-
-function destroyHttpRequest(req: http.HttpRequest): void {
-  try {
-    req.destroy();
-  } catch (_e) { /* ignore */ }
+/**
+ * 分类 URL 条目
+ */
+export interface SortUrlEntry {
+  name: string;
+  url: string;
 }
 
 /**
@@ -37,7 +34,11 @@ function buildHeaders(source: RSSSource | null): Record<string, string> {
   if (source && source.header) {
     try {
       const customHeaders = JSON.parse(source.header) as Record<string, string>;
-      Object.assign(headers, customHeaders);
+      const keys = Object.keys(customHeaders);
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        headers[k] = customHeaders[k];
+      }
     } catch (_e) { /* not valid JSON */ }
   }
   return headers;
@@ -50,16 +51,12 @@ function buildHeaders(source: RSSSource | null): Record<string, string> {
 async function resolveSortUrl(rssSource: RSSSource): Promise<string> {
   let sortUrl = rssSource.sortUrl || rssSource.sourceUrl;
 
-  // @js: 或 <js> 表达式 — 执行 JS 获取实际 URL
   if (sortUrl.startsWith('@js:') || sortUrl.startsWith('<js>')) {
     try {
       const jsCode = extractJsCode(sortUrl);
-      const result = await JsExpressionEvaluator.evaluate(jsCode, {
-        baseUrl: rssSource.sourceUrl,
-        source: rssSource as Object,
-      });
+      const ctx: JsEvalContext = { baseUrl: rssSource.sourceUrl, source: rssSource as Object };
+      const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
       if (result && result.trim()) {
-        // 可能返回 "name::url" 格式，取第一个 URL
         const parts = result.split(/&&|\n/);
         if (parts.length > 0) {
           const first = parts[0].trim();
@@ -69,22 +66,32 @@ async function resolveSortUrl(rssSource: RSSSource): Promise<string> {
         return result.trim();
       }
     } catch (e) {
-      console.error(`[RssService] JS sortUrl 执行失败: ${e}`);
+      console.error(`[RssService] JS sortUrl 执行失败: ${JSON.stringify(e)}`);
     }
-    // 失败时回退到源 URL
     return rssSource.sourceUrl;
   }
 
-  // 多分类::分隔
   if (sortUrl.includes('::')) {
-    return sortUrl.split('::')[1].trim();
+    const rawUrl = sortUrl.split('::')[1].trim();
+    // data: URIs are not real HTTP URLs — use sourceUrl+loginUrl for fetch,
+    // and pass the raw data URI to JS rules via rssSource.sortUrl
+    if (rawUrl.startsWith('data:')) {
+      const loginPath = rssSource.loginUrl || '';
+      const base = rssSource.sourceUrl || '';
+      if (loginPath && base) {
+        const httpUrl = base.replace(/\/+$/, '') + '/' + loginPath.replace(/^\/+/, '');
+        console.info('[RssService] data URI detected, using HTTP URL: ' + httpUrl);
+        return httpUrl;
+      }
+    }
+    return rawUrl;
   }
 
   return sortUrl;
 }
 
 /**
- * 提取 JS 代码 (从 @js: 或 <js>...</js> 格式)
+ * 提取 JS 代码
  */
 function extractJsCode(sortUrl: string): string {
   if (sortUrl.startsWith('@js:')) {
@@ -101,41 +108,43 @@ function extractJsCode(sortUrl: string): string {
 }
 
 /**
- * 拆解多分类 sortUrl，返回 [(分类名, URL)] 列表
- * 支持 @js: / <js> 表达式执行
+ * 拆解多分类 sortUrl
  */
-export async function resolveSortUrls(sourceUrl: string, sortUrl: string | null): Promise<Array<{ name: string; url: string }>> {
+export async function resolveSortUrls(sourceUrl: string, sortUrl: string | null): Promise<SortUrlEntry[]> {
   if (!sortUrl || sortUrl.trim().length === 0) {
-    return [{ name: '', url: sourceUrl }];
+    const entry: SortUrlEntry = { name: '', url: sourceUrl };
+    const result: SortUrlEntry[] = [];
+    result.push(entry);
+    return result;
   }
 
-  // @js: 或 <js> 表达式 — 执行 JS 获取分类列表
   if (sortUrl.startsWith('@js:') || sortUrl.startsWith('<js>')) {
     try {
       const jsCode = extractJsCode(sortUrl);
-      const result = await JsExpressionEvaluator.evaluate(jsCode, {
-        baseUrl: sourceUrl,
-      });
+      const ctx: JsEvalContext = { baseUrl: sourceUrl };
+      const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
       if (result && result.trim()) {
         return parseSortResult(result, sourceUrl);
       }
     } catch (e) {
-      console.error(`[RssService] JS sortUrl 执行失败: ${e}`);
+      console.error(`[RssService] JS sortUrl 执行失败: ${JSON.stringify(e)}`);
     }
-    // 失败时回退
-    return [{ name: '', url: sourceUrl }];
+    const entry: SortUrlEntry = { name: '', url: sourceUrl };
+    const result: SortUrlEntry[] = [];
+    result.push(entry);
+    return result;
   }
 
   return parseSortResult(sortUrl, sourceUrl);
 }
 
 /**
- * 解析分类结果字符串 "分类名::url&&分类2::url2" 为数组
+ * 解析分类结果字符串
  */
-function parseSortResult(input: string, baseUrl: string): Array<{ name: string; url: string }> {
+function parseSortResult(input: string, baseUrl: string): SortUrlEntry[] {
   const separator = /(?:&&|\n)+/;
   const parts = input.split(separator);
-  const results: Array<{ name: string; url: string }> = [];
+  const results: SortUrlEntry[] = [];
 
   for (const part of parts) {
     const t = part.trim();
@@ -147,14 +156,17 @@ function parseSortResult(input: string, baseUrl: string): Array<{ name: string; 
       if (url && !url.startsWith('http') && !url.startsWith('{{')) {
         url = getAbsoluteURL(baseUrl, url);
       }
-      results.push({ name, url });
+      const entry: SortUrlEntry = { name: name, url: url };
+      results.push(entry);
     } else {
-      results.push({ name: t, url: getAbsoluteURL(baseUrl, t) });
+      const entry: SortUrlEntry = { name: t, url: getAbsoluteURL(baseUrl, t) };
+      results.push(entry);
     }
   }
 
   if (results.length === 0) {
-    return [{ name: '', url: baseUrl }];
+    const entry: SortUrlEntry = { name: '', url: baseUrl };
+    results.push(entry);
   }
 
   return results;
@@ -168,40 +180,30 @@ export async function fetchArticles(
   sortName: string,
   sortUrl: string,
   rssSource: RSSSource,
-  page: number,
-  searchKey: string | null = null
+  _page?: number,
+  _searchKey?: string | null
 ): Promise<[RSSArticle[], string | null]> {
-  const actualUrl = await resolveSortUrl(rssSource);
-  const url = sortUrl || actualUrl;
+  let url = sortUrl;
+  if (!url) {
+    url = await resolveSortUrl(rssSource);
+  }
 
-  console.info(`[RssService] fetchArticles: ${url}, sortName: ${sortName}`);
+  console.info('[RssService] fetchArticles: ' + url + ', sortName: ' + sortName);
 
-  // 构建请求
-  const req = createHttpRequest();
   try {
-    const response = await req.request(url, {
-      method: http.RequestMethod.GET,
-      header: buildHeaders(rssSource),
-      connectTimeout: REQUEST_TIMEOUT,
-      readTimeout: REQUEST_TIMEOUT,
-      expectDataType: http.HttpDataType.STRING,
-    });
-
-    const body = response.result as string;
+    const body = await NetUtil.httpGet(url, buildHeaders(rssSource), REQUEST_TIMEOUT);
     if (!body) {
-      throw new Error(`Empty response from ${url}`);
+      const err = new Error('Empty response from ' + url);
+      console.error('[RssService] fetchArticles 失败: Empty response');
+      throw err;
     }
 
-    // 使用规则解析
-    const headerObj = response.header as Record<string, string>;
-    const locationUrl: string = (headerObj && headerObj['location']) ? headerObj['location'] : url;
-    return parseByRule(sortName, url, locationUrl, body, rssSource);
-  } catch (e: unknown) {
+    return parseByRule(sortName, url, url, body, rssSource);
+  } catch (e) {
     const msg = (e instanceof Error) ? e.message : String(e);
-    console.error(`[RssService] fetchArticles 失败: ${msg}`);
-    throw e;
-  } finally {
-    destroyHttpRequest(req);
+    console.error('[RssService] fetchArticles 失败: ' + msg);
+    const err = new Error(msg);
+    throw err;
   }
 }
 
@@ -216,44 +218,28 @@ export async function fetchContent(
 ): Promise<string> {
   const targetUrl = article.link;
 
-  console.info(`[RssService] fetchContent: ${targetUrl}`);
+  console.info('[RssService] fetchContent: ' + targetUrl);
 
   if (!ruleContent || ruleContent.trim().length === 0) {
-    // 无正文规则则直接返回链接，由 WebView 加载
     return targetUrl;
   }
 
-  const req = createHttpRequest();
   try {
-    const response = await req.request(targetUrl, {
-      method: http.RequestMethod.GET,
-      header: buildHeaders(rssSource),
-      connectTimeout: REQUEST_TIMEOUT,
-      readTimeout: REQUEST_TIMEOUT,
-      expectDataType: http.HttpDataType.STRING,
-    });
-
-    const body = response.result as string;
+    const body = await NetUtil.httpGet(targetUrl, buildHeaders(rssSource), REQUEST_TIMEOUT);
     if (!body) {
-      throw new Error(`Empty response from ${targetUrl}`);
+      console.error('[RssService] fetchContent 失败: Empty response');
+      return targetUrl;
     }
 
-    // 使用规则提取正文
-    const content = RuleParser.parse(body, ruleContent);
-    if (typeof content === 'string' && content) {
-      return content;
-    }
-    if (Array.isArray(content) && content.length > 0 && typeof content[0] === 'string') {
-      return content[0];
+    const parsed: string = RuleParser.parse(body, ruleContent) as string;
+    if (parsed && parsed.length > 0) {
+      return parsed;
     }
     return body;
-  } catch (e: unknown) {
+  } catch (e) {
     const msg = (e instanceof Error) ? e.message : String(e);
-    console.error(`[RssService] fetchContent 失败: ${msg}`);
-    // 失败时返回原始链接，由 WebView 兜底
+    console.error('[RssService] fetchContent 失败: ' + msg);
     return targetUrl;
-  } finally {
-    destroyHttpRequest(req);
   }
 }
 
@@ -263,7 +249,7 @@ export async function fetchContent(
 export function getAbsoluteURL(base: string, relative: string): string {
   if (!relative) return base;
   if (/^https?:\/\//i.test(relative)) return relative;
-  if (relative.startsWith('//')) return `https:${relative}`;
+  if (relative.startsWith('//')) return 'https:' + relative;
   if (relative.startsWith('/')) {
     try {
       const protocolEnd = base.indexOf('://');
@@ -280,5 +266,5 @@ export function getAbsoluteURL(base: string, relative: string): string {
   if (lastSlash > 8) {
     return base.substring(0, lastSlash + 1) + relative;
   }
-  return `${base}/${relative}`;
+  return base + '/' + relative;
 }

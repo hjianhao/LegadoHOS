@@ -75,12 +75,14 @@ export class NetUtil {
   }
 
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+    const startMs: number = Date.now();
     try {
       const h = NetUtil.buildHeaders(headers);
       const reqHeaders = h as rcp.RequestHeaders;
       const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
       const session = NetUtil.getSession(timeout);
       const response = await session.fetch(request);
+      console.info('[NetUtil]', method, url, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
       if (response.body === undefined || response.body === null) return '';
       const uint8 = new Uint8Array(response.body);
       const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
@@ -88,7 +90,10 @@ export class NetUtil {
       if (response.statusCode >= 200 && response.statusCode < 400) return text;
       throw new Error(`HTTP ${response.statusCode}: ${text.substring(0, 200)}`);
     } catch (e) {
-      throw new Error((e as Error).message || String(e));
+      const elapsedMs: number = Date.now() - startMs;
+      const errMsg: string = (e as Error).message || String(e);
+      console.error('[NetUtil]', method, url, 'FAILED (' + elapsedMs + 'ms):', errMsg);
+      throw new Error(errMsg);
     }
   }
 

@@ -12,6 +12,9 @@
     "pages/BookmarkPage",
     "pages/ComicReadPage",
     "pages/AboutPage",
-    "pages/WebServicePage"
+    "pages/WebServicePage",
+    "pages/RssSourceManagePage",
+    "pages/RssSourceEditPage",
+    "pages/RssArticlesPage"
   ]
 }

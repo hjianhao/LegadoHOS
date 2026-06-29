@@ -137,7 +137,25 @@ export function getPolyfillScript(): string {
   }
 })();
 
+
+// --- java.hexDecodeToString 兼容 ---
+(function() {
+  var _j = typeof java !== "undefined" ? java : globalThis.java;
+  if (_j && !_j.hexDecodeToString) {
+    _j.hexDecodeToString = function(hex) {
+      if (!hex || hex.length === 0) return "";
+      var result = "";
+      for (var i = 0; i < hex.length; i += 2) {
+        var code = parseInt(hex.substring(i, i + 2), 16);
+        if (!isNaN(code)) result += String.fromCharCode(code);
+      }
+      return result;
+    };
+  }
+})();
+
 console.log('[Polyfill] Legado compatibility layer loaded');
+
   `;
 }
 
@@ -246,6 +264,7 @@ function getContent(url) {
     }
   };
 }
+
   `;
 }
 
@@ -308,6 +327,7 @@ function getContentWithHtml(url, html) {
     }
   };
 }
+
   `;
 }
 
