@@ -476,8 +476,12 @@ export class SourceExecutor {
       if (results.length > 0) {
         console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
         return results;
+      } else {
+        console.info('[SrcEx] JSON parsed but 0 results, ruleSearchList=' + source.ruleSearchList + ' first100=' + bodyText.substring(0, 100));
       }
-    } catch (_e) { /* not JSON */ }
+    } catch (_e) {
+      console.info('[SrcEx] JSON parse failed, first100=' + bodyText.substring(0, 100));
+      /* not JSON */ }
 
     // HtmlParser + CSS 选择器
     if (source.ruleSearchList) {
@@ -1058,7 +1062,7 @@ export class SourceExecutor {
     }
     if (list.length === 0) {
       if (Array.isArray(json)) { list = json; } else {
-        for (const p of ['data', 'list', 'items', 'results', 'books']) {
+        for (const p of ['data', 'list', 'items', 'results', 'books', 'data.list', 'data.items', 'data.records', 'data.books', 'data.novels', 'data.bookList', 'data.booklist']) {
           const raw = this.getPath(json, p);
           if (Array.isArray(raw)) { list = raw; break; }
         }

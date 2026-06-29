@@ -149,25 +149,43 @@ function buildSearchUrl(template: string, keyword: string, page: number, baseUrl
  */
 function getJsonPath(obj: unknown, path: string): unknown {
   if (!path || obj === null || obj === undefined) return undefined;
-  const parts = path.split('.');
+  // 去掉 $. 前缀
+  let clean = path.replace(/^\$\.?/, '');
+  if (!clean) return obj;
+  const parts = clean.split('.');
   let current: unknown = obj;
   for (const part of parts) {
     if (current === null || current === undefined) return undefined;
+    // 匹配 key[N] 格式（如 booklist[0]）
     const arrIdx = part.match(/^(\w+)\[(\d+)\]$/);
     if (arrIdx) {
       const arr = (current as Record<string, unknown>)[arrIdx[1]];
       if (Array.isArray(arr)) current = arr[parseInt(arrIdx[2])];
       else return undefined;
+      continue;
+    }
+    // 匹配 key[*] 格式（如 booklist[*]）—— 返回整个数组
+    const arrWild = part.match(/^(\w+)\[\*\]$/);
+    if (arrWild) {
+      const arr = (current as Record<string, unknown>)[arrWild[1]];
+      if (Array.isArray(arr)) { current = arr; }
+      else return undefined;
+      continue;
+    }
+    // 匹配裸 [*] 格式——如果当前是数组则返回
+    if (part === '[*]') {
+      if (Array.isArray(current)) return current;
+      return undefined;
+    }
+    // 普通 key 查找
+    if (typeof current === 'object' && part in (current as Record<string, unknown>)) {
+      current = (current as Record<string, unknown>)[part];
+    } else if (Array.isArray(current)) {
+      const idx = parseInt(part);
+      if (!isNaN(idx)) current = current[idx];
+      else return undefined;
     } else {
-      if (typeof current === 'object' && part in (current as Record<string, unknown>)) {
-        current = (current as Record<string, unknown>)[part];
-      } else if (Array.isArray(current)) {
-        const idx = parseInt(part);
-        if (!isNaN(idx)) current = current[idx];
-        else return undefined;
-      } else {
-        return undefined;
-      }
+      return undefined;
     }
   }
   return current;
@@ -211,7 +229,7 @@ function extractJsonList(json: unknown, ruleList: string | undefined): unknown[]
     if (Array.isArray(json)) {
       list = json;
     } else {
-      for (const p of ['data', 'list', 'items', 'results', 'books', 'novels', 'data.list', 'data.items', 'data.records']) {
+      for (const p of ['data', 'list', 'items', 'results', 'books', 'novels', 'data.list', 'data.items', 'data.records', 'data.books', 'data.novels', 'data.bookList', 'data.booklist', 'data.content', 'data.result']) {
         const raw = getJsonPath(json, p);
         if (Array.isArray(raw)) { list = raw; break; }
       }

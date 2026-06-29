@@ -419,23 +419,27 @@ export class BookSourceTable {
         rawJson: '',
       };
 
-      // 如果平铺规则为空，尝试从 raw_json 重新解析嵌套格式
-      if (!source.ruleSearchList && !source.ruleSearchName) {
-        const rawJson = rs.getString(rs.getColumnIndex('raw_json')) || '';
-        if (rawJson) {
-          try {
-            const parsed = JSON.parse(rawJson);
-            const fixed = parseBookSource(parsed);
-            if (fixed.ruleSearchList) {
-              source.ruleSearchList = fixed.ruleSearchList;
-              source.ruleSearchName = fixed.ruleSearchName;
-              source.ruleSearchAuthor = fixed.ruleSearchAuthor;
-              source.ruleSearchCover = fixed.ruleSearchCover;
-              source.ruleSearchNoteUrl = fixed.ruleSearchNoteUrl;
-              source.ruleSearchUrl = source.ruleSearchUrl || fixed.ruleSearchUrl;
-            }
-          } catch (_e) { /* ignore parse errors */ }
-        }
+      // 从 raw_json 恢复完整数据
+      const rawJson = rs.getString(rs.getColumnIndex('raw_json')) || '';
+      if (rawJson) {
+        source.rawJson = rawJson;
+        try {
+          const parsed = JSON.parse(rawJson);
+          const fixed = parseBookSource(parsed);
+          // 恢复 exploreUrl
+          if (fixed.exploreUrl && !source.exploreUrl) {
+            source.exploreUrl = fixed.exploreUrl;
+          }
+          // 如果平铺规则为空，从嵌套格式恢复搜索规则
+          if (!source.ruleSearchList && !source.ruleSearchName && fixed.ruleSearchList) {
+            source.ruleSearchList = fixed.ruleSearchList;
+            source.ruleSearchName = fixed.ruleSearchName;
+            source.ruleSearchAuthor = fixed.ruleSearchAuthor;
+            source.ruleSearchCover = fixed.ruleSearchCover;
+            source.ruleSearchNoteUrl = fixed.ruleSearchNoteUrl;
+            source.ruleSearchUrl = source.ruleSearchUrl || fixed.ruleSearchUrl;
+          }
+        } catch (_e) { /* ignore parse errors */ }
       }
 
       sources.push(source);

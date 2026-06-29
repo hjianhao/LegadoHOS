@@ -15,6 +15,7 @@
     "pages/WebServicePage",
     "pages/RssSourceManagePage",
     "pages/RssSourceEditPage",
-    "pages/RssArticlesPage"
+    "pages/RssArticlesPage",
+    "pages/ExploreBookPage"
   ]
 }

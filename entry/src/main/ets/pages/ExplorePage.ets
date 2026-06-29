@@ -1,270 +1,519 @@
+/**
+ * 发现页面
+ * 参照 Android 版 Legado ExploreScreen
+ *
+ * 列出所有有 exploreUrl 的书源。
+ * 每个书源可展开，通过获取 exploreUrl 返回的 JSON/文本解析分类。
+ * 点击分类可跳转到书籍列表页（ExploreBookPage）。
+ */
 import { AppTheme } from '../theme/AppTheme';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
-import { SearchResult } from '../model/SearchResult';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
-import { searchBooks } from '../engine/search/SearchEngine';
-import { WebViewFetchDialog } from './WebViewFetchDialog';
-import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
-import promptAction from '@ohos.promptAction';
+import { promptAction } from '@kit.ArkUI';
+import { http } from '@kit.NetworkKit';
+import { util } from '@kit.ArkTS';
+
+interface ExploreCategory {
+  name: string;
+  url: string;
+  keyword: string;
+  style: string;
+  bookUrl: string;
+  // 布局属性（从 style JSON 解析）
+  flexBasisPercent: number;
+  flexGrow: number;
+  wrapBefore: boolean;
+}
 
 @Component
 export struct ExplorePage {
-  @State keyword: string = '';
   @State isDark: boolean = false;
-  @State results: SearchResult[] = [];
-  @State isSearching: boolean = false;
-  @State hasSearched: boolean = false;
-  @State sources: BookSource[] = [];
-  @State pendingWebViewUrl: string = '';
-  @State searchProgress: string = '';
-  @State searchTotal: number = 0;      // 总书源数
-  @State searchProcessed: number = 0;  // 已搜索书源数
-
-  webViewDialog: CustomDialogController = new CustomDialogController({
-    builder: WebViewFetchDialog({
-      fetchUrl: this.pendingWebViewUrl,
-      onFetched: (content: string, url: string): void => {
-        this.handleWebViewResult(content, url);
-      }
-    }),
-    autoCancel: false,
-    alignment: DialogAlignment.Center,
-    customStyle: true
-  })
+  @State exploreSources: BookSource[] = [];
+  @State expandedSourceUrl: string = '';
+  @State loadingKinds: boolean = false;
+  @State categoryCache: Record<string, ExploreCategory[]> = {};
+  @State resolvedCategories: ExploreCategory[] = [];
+  @State resolvedFoundSource: BookSource | null = null;
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
-    this.loadSources();
+    void this.loadExploreSources();
   }
 
-  async loadSources(): Promise<void> {
+  async loadExploreSources(): Promise<void> {
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
       const dao = new BookSourceTable(db);
-      this.sources = await dao.getEnabledSources();
-    } catch (_e) { /* ignore */ }
+      const allSources = await dao.getAllSources();
+      // 筛选有发现数据的源：优先从 exploreUrl，其次从 rawJson 提取
+      for (let i = 0; i < allSources.length; i++) {
+        const s = allSources[i];
+        // 如果 exploreUrl 为空，尝试从 rawJson 提取
+        if ((!s.exploreUrl || s.exploreUrl.trim() === '') && s.rawJson) {
+          try {
+            const rj: Record<string, Object> = JSON.parse(s.rawJson) as Record<string, Object>;
+            const eu = rj['exploreUrl'] as string;
+            if (eu && eu.trim().length > 0) {
+              s.exploreUrl = eu;
+              console.info('[Explore] Recovered exploreUrl from rawJson for ' + s.sourceName + ', len=' + eu.length);
+            }
+          } catch (_x) { /* ignore */ }
+        }
+        console.info('[Explore] Source ' + s.sourceName + ': exploreUrl=' + ((s.exploreUrl || '').substring(0, 100)) + ' rawJson_len=' + ((s.rawJson || '').length));
+      }
+      // 筛选 exploreUrl 非空的源，或者 ruleExplores 是 :: 格式的（简单兼容）
+      this.exploreSources = allSources.filter((s: BookSource): boolean => {
+        if (s.exploreUrl && s.exploreUrl.trim().length > 0) return true;
+        // 兼容：检查 ruleExplores 是否为 :: 格式（如 "玄幻::/xuanhuan/"）
+        if (s.ruleExplores && s.ruleExplores.trim().length > 0 && s.ruleExplores.includes('::')) return true;
+        return false;
+      });
+      console.info('[Explore] Loaded ' + this.exploreSources.length + ' explore sources');
+    } catch (_e) {
+      console.error('[Explore] loadExploreSources error: ' + JSON.stringify(_e));
+    }
   }
 
-  async doSearch(): Promise<void> {
-    if (!this.keyword.trim()) { return; }
-    console.info('[Explore] Searching:', this.keyword);
-    this.isSearching = true;
-    this.hasSearched = true;
-    this.results = [];
-    this.searchProcessed = 0;
-    this.searchTotal = 0;
-    globalSourceExecutor.lastBlockedUrl = '';
-
-    try {
-      await AppDatabase.getInstance().waitForInit();
-      const db = AppDatabase.getInstance().rdbStore;
-      const dao = new BookSourceTable(db);
-      this.sources = await dao.getEnabledSources();
-    } catch (_e) { /* ignore */ }
-
-    const searchable = this.sources.filter(s => s.ruleSearchUrl);
-    console.info('[Explore] Sources with URL:', searchable.length);
-    if (searchable.length === 0) {
-      console.warn('[Explore] No searchable sources');
-      this.isSearching = false;
-      return;
+  /**
+   * 获取并解析分类
+   * 支持格式:
+   * 1. JSON 数组: [{"name":"xxx","url":"..."}, ...]
+   * 2. 文本行(&& 或 \n 分隔): 分类名::url
+   * 3. JS 脚本 (<js>...</js> 或 @js:...) — 暂不支持，返回空
+   */
+  async loadCategories(source: BookSource): Promise<ExploreCategory[]> {
+    const cacheKey = source.sourceUrl;
+    if (this.categoryCache[cacheKey]) {
+      return this.categoryCache[cacheKey];
     }
 
-    this.searchTotal = searchable.length;
-    this.searchProgress = '正在搜索 ' + searchable.length + ' 个书源...';
+    let exploreUrl = source.exploreUrl || '';
+    console.info('[Explore] loadCategories for ' + source.sourceName + ', exploreUrl=' + exploreUrl.substring(0, 120));
 
-    // ★ 增量搜索：每完成一个书源，SourceExecutor 回调 onProgress
-    //   直接在回调中更新 @State results，ArkUI 会触发重渲染
-    const searchPromise = globalSourceExecutor.search(
-      this.keyword, searchable,
-      (merged: SearchResult[], processed: number, total: number) => {
-        // 调试：检查合并结果中的来源计数
-        if (merged.length > 0) {
-          const maxSrc = Math.max(...merged.map(r => r.sourceCount));
-          if (maxSrc > 1) {
-            console.info('[Explore] MERGED: max sourceCount=' + maxSrc,
-              'book=', merged.find(r => r.sourceCount > 1)?.name);
+    // 如果 exploreUrl 是 JSON 数组/对象，直接解析
+    const exploreTrimmed = exploreUrl.trim();
+    if (exploreTrimmed.startsWith('[') || exploreTrimmed.startsWith('{')) {
+      const parsed = this.parseExploreJson(exploreUrl);
+      if (parsed.length > 0) {
+        this.categoryCache[cacheKey] = parsed;
+        console.info('[Explore] Parsed ' + parsed.length + ' categories from exploreUrl JSON');
+        return parsed;
+      }
+    }
+
+    // fallback: 尝试 ruleExplores
+    if (source.ruleExplores) {
+      const lineParsed = this.parseExploreLines(source.ruleExplores);
+      if (lineParsed.length > 0) {
+        this.categoryCache[cacheKey] = lineParsed;
+        return lineParsed;
+      }
+      const jsonParsed = this.parseExploreJson(source.ruleExplores);
+      if (jsonParsed.length > 0) {
+        this.categoryCache[cacheKey] = jsonParsed;
+        return jsonParsed;
+      }
+    }
+
+    if (!exploreUrl) {
+      const result: ExploreCategory[] = [];
+      this.categoryCache[cacheKey] = result;
+      return result;
+    }
+
+    // JS脚本暂不支持
+    if (exploreUrl.startsWith('<js>') || exploreUrl.startsWith('@js:')) {
+      console.warn('[Explore] JS exploreUrl not supported yet');
+      // fallback to ruleExplores
+      if (source.ruleExplores) {
+        const parsed = this.parseExploreJson(source.ruleExplores);
+        if (parsed.length > 0) {
+          this.categoryCache[cacheKey] = parsed;
+          return parsed;
+        }
+      }
+      const result: ExploreCategory[] = [];
+      this.categoryCache[cacheKey] = result;
+      return result;
+    }
+
+    // 如果 exploreUrl 本身是 JSON 数组/对象，直接解析
+    if (exploreUrl.trim().startsWith('[') || exploreUrl.trim().startsWith('{')) {
+      const parsed = this.parseExploreJson(exploreUrl);
+      if (parsed.length > 0) {
+        this.categoryCache[cacheKey] = parsed;
+        return parsed;
+      }
+    }
+
+    // 尝试 HTTP 请求获取
+    if (exploreUrl.startsWith('http')) {
+      try {
+        const body = await this.httpGet(exploreUrl, source.header || '');
+        if (body) {
+          const parsed = this.parseExploreJson(body);
+          if (parsed.length > 0) {
+            this.categoryCache[cacheKey] = parsed;
+            return parsed;
+          }
+          const lineParsed = this.parseExploreLines(body);
+          if (lineParsed.length > 0) {
+            this.categoryCache[cacheKey] = lineParsed;
+            return lineParsed;
           }
         }
-        this.results = merged;
-        this.searchProcessed = processed;
-        this.searchTotal = total;
-        this.searchProgress = '正在搜索 ' + processed + '/' + total + ' 个书源';
+      } catch (e) {
+        console.error('[Explore] HTTP get failed: ' + JSON.stringify(e));
       }
-    );
-
-    searchPromise.then((merged) => {
-      console.info('[Explore] Search completed,', merged.length, 'merged results');
-      this.results = merged;
-      this.isSearching = false;
-      this.searchProgress = '';
-
-      if (merged.length === 0) {
-        console.info('[Explore] No results, trying fallback SearchEngine');
-        this.tryFallbackSearch(searchable);
+      // HTTP 失败，fallback 到 ruleExplores
+      if (source.ruleExplores) {
+        const parsed = this.parseExploreJson(source.ruleExplores);
+        if (parsed.length > 0) {
+          this.categoryCache[cacheKey] = parsed;
+          return parsed;
+        }
       }
+    }
 
-      if (this.results.length === 0 && globalSourceExecutor.lastBlockedUrl) {
-        console.info('[Explore] Cloudflare detected, offering WebView');
-        this.pendingWebViewUrl = globalSourceExecutor.lastBlockedUrl;
+    // 最后尝试按行/&& 解析
+    const lineParsed = this.parseExploreLines(exploreUrl);
+    this.categoryCache[cacheKey] = lineParsed;
+    return lineParsed;
+  }
+
+  private buildCategory(item: Record<string, Object>, defaultName: string): ExploreCategory {
+    const name = String(item['title'] || item['name'] || item['Name'] || defaultName);
+    const url = String(item['url'] || item['exploreUrl'] || item['Url'] || '');
+    const keyword = String(item['keyword'] || item['Keyword'] || '');
+    const styleRaw: Record<string, Object> | null = (item['style'] || item['Style']) ? (item['style'] || item['Style']) as Record<string, Object> : null;
+    console.info('[Explore] buildCategory: name=' + name + ', url=' + url + ', hasStyle=' + (styleRaw !== null));
+    let flexBasisPercent = 0;
+    let flexGrow = 0;
+    let wrapBefore = false;
+
+    if (styleRaw) {
+      const fbp = styleRaw['layout_flexBasisPercent'];
+      if (typeof fbp === 'number') flexBasisPercent = fbp as number;
+      else if (typeof fbp === 'string') flexBasisPercent = parseFloat(fbp as string) || 0;
+      const fg = styleRaw['layout_flexGrow'];
+      if (typeof fg === 'number') flexGrow = fg as number;
+      else if (typeof fg === 'string') flexGrow = parseFloat(fg as string) || 0;
+      wrapBefore = styleRaw['layout_wrapBefore'] ? true : false;
+    }
+    return {
+      name: name,
+      url: url,
+      keyword: keyword,
+      style: '',
+      bookUrl: String(item['bookUrl'] || item['BookUrl'] || ''),
+      flexBasisPercent: flexBasisPercent,
+      flexGrow: flexGrow,
+      wrapBefore: wrapBefore,
+    };
+  }
+
+  parseExploreJson(jsonStr: string): ExploreCategory[] {
+    const result: ExploreCategory[] = [];
+    if (!jsonStr || jsonStr.trim() === '') return result;
+    try {
+      const parsed: Object = JSON.parse(jsonStr) as Object;
+      if (Array.isArray(parsed)) {
+        const arr: Object[] = parsed as Object[];
+        for (let i = 0; i < arr.length; i++) {
+          const item: Object = arr[i];
+          if (typeof item === 'object' && item !== null) {
+            result.push(this.buildCategory(item as Record<string, Object>, '分类' + (i + 1)));
+          }
+        }
+        return result;
       }
-    }).catch(() => {
-      this.isSearching = false;
-      this.searchProgress = '';
+      // 单对象
+      if (typeof parsed === 'object' && parsed !== null) {
+        const single: Record<string, Object> = parsed as Record<string, Object>;
+        if (single['name'] || single['title'] || single['url']) {
+          result.push(this.buildCategory(single, '发现'));
+        }
+      }
+    } catch (_e) {
+      console.error('[Explore] JSON parse error');
+    }
+    return result;
+  }
+
+  parseExploreLines(text: string): ExploreCategory[] {
+    const result: ExploreCategory[] = [];
+    if (!text || text.trim() === '') return result;
+    let normalized = text;
+    normalized = normalized.replace(/\r\n/g, '\n');
+    normalized = normalized.replace(/\r/g, '\n');
+    normalized = normalized.replace(/&&/g, '\n');
+    const lines = normalized.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const doubleColonIdx = trimmed.indexOf('::');
+      if (doubleColonIdx >= 0) {
+        result.push({
+          name: trimmed.substring(0, doubleColonIdx).trim(),
+          url: trimmed.substring(doubleColonIdx + 2).trim(),
+          keyword: '', style: '', bookUrl: '',
+          flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
+        });
+      } else {
+        result.push({
+          name: trimmed, url: '', keyword: '', style: '', bookUrl: '',
+          flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
+        });
+      }
+    }
+    return result;
+  }
+
+  async httpGet(url: string, headerStr: string): Promise<string> {
+    return new Promise<string>((resolve, _reject) => {
+      const req = http.createHttp();
+      const headers: Record<string, string> = {
+        'Accept': 'application/json,text/html,*/*',
+        'User-Agent': 'Mozilla/5.0 (Linux; HarmonyOS 5.0)',
+      };
+      if (headerStr) {
+        try {
+          const h: Record<string, Object> = JSON.parse(headerStr) as Record<string, Object>;
+          if (typeof h === 'object' && h !== null) {
+            const keys: string[] = Object.keys(h);
+            for (let i = 0; i < keys.length; i++) {
+              headers[keys[i]] = String(h[keys[i]]);
+            }
+          }
+        } catch (e2) {
+          // ignore
+        }
+      }
+      req.request(url, {
+        method: http.RequestMethod.GET,
+        header: headers,
+        connectTimeout: 10000,
+        readTimeout: 10000,
+      }, (err, data) => {
+        req.destroy();
+        if (err) {
+          console.error('[Explore] HTTP error: ' + JSON.stringify(err));
+          resolve('');
+        } else {
+          if (typeof data.result === 'string') { resolve(data.result); } else { const buf = data.result as ArrayBuffer; const u8 = new Uint8Array(buf); resolve(util.TextDecoder.create('utf-8').decodeWithStream(u8)); }
+        }
+      });
     });
   }
 
-  /** 兜底：旧版搜索引擎 */
-  private async tryFallbackSearch(searchable: BookSource[]): Promise<void> {
-    try {
-      const fallback = await searchBooks(searchable, this.keyword);
-      if (fallback.length > 0) {
-        this.results = fallback;
-        console.info('[Explore] Fallback got', fallback.length, 'results');
-      }
-    } catch (_e) { /* ignore */ }
-  }
-  handleWebViewResult(content: string, url: string): void {
-    if (content && content.length > 100) {
-      // 简单取前几个结果
-      const lines = content.split('\n').filter(l => l.trim().length > 0);
-      const items: SearchResult[] = [];
-      for (let i = 0; i < Math.min(lines.length, 50); i++) {
-        const line = lines[i].trim();
-        if (line.length < 2) continue;
-        items.push({
-          key: url + '|' + i,
-          name: line.substring(0, 50),
-          author: '',
-          coverUrl: '',
-          noteUrl: url,
-          origin: 'WebView',
-          originUrl: url,
-          kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
-          duration: 0, searchTime: Date.now(),
-          sourceCount: 1,
-          sourceOrigins: []
-        });
-      }
-      if (items.length > 0) {
-        this.results = items;
-      }
-    }
-    this.pendingWebViewUrl = '';
+  getCategories(sourceUrl: string): ExploreCategory[] {
+    return this.categoryCache[sourceUrl] || [];
   }
 
-  tryWebViewFetch(): void {
-    if (!this.pendingWebViewUrl) return;
-    this.webViewDialog.open();
+  toggleExpand(sourceUrl: string): void {
+    if (this.expandedSourceUrl === sourceUrl) {
+      this.expandedSourceUrl = '';
+      this.resolvedCategories = [];
+      this.resolvedFoundSource = null;
+    } else {
+      this.expandedSourceUrl = sourceUrl;
+      this.loadingKinds = true;
+      // 找到源并加载分类
+      for (const src of this.exploreSources) {
+        if (src.sourceUrl === sourceUrl) {
+          this.resolvedFoundSource = src;
+          // 如果 exploreUrl 为空，尝试从 rawJson 提取
+          if (!src.exploreUrl && src.rawJson) {
+            try {
+              const rj: Record<string, Object> = JSON.parse(src.rawJson) as Record<string, Object>;
+              const eu = rj['exploreUrl'] as string;
+              if (eu) src.exploreUrl = eu;
+            } catch (_x) { /* ignore */ }
+          }
+          void this.loadCategories(src).then((cats: ExploreCategory[]) => {
+            this.resolvedCategories = cats;
+            this.loadingKinds = false;
+            console.info('[Explore] Got ' + cats.length + ' categories for ' + src.sourceName);
+            let msg = src.sourceName + ': exploreUrl=' + (src.exploreUrl || '(空)') + ' ruleExplores=' + ((src.ruleExplores || '').substring(0, 60));
+            msg += ' => ' + cats.length + ' categories';
+            if (cats.length > 0) msg += ' first=' + cats[0].name;
+            promptAction.showToast({ message: msg, duration: 3000 });
+          });
+          return;
+        }
+      }
+      this.resolvedFoundSource = null;
+      this.resolvedCategories = [];
+      this.loadingKinds = false;
+    }
+  }
+
+  openCategory(source: BookSource, category: ExploreCategory): void {
+    // 无 URL 的分类不跳转
+    if (!category.url || category.url.trim() === '') {
+      console.warn('[Explore] Category ' + category.name + ' has no URL, skip');
+      return;
+    }
+    router.pushUrl({
+      url: 'pages/ExploreBookPage',
+      params: {
+        sourceName: source.sourceName,
+        sourceUrl: source.sourceUrl,
+        ruleExploreList: source.ruleExploreList || source.ruleSearchList || '',
+        ruleExploreName: source.ruleExploreName || source.ruleSearchName || '',
+        ruleExploreAuthor: source.ruleExploreAuthor || source.ruleSearchAuthor || '',
+        ruleExploreCover: source.ruleExploreCover || source.ruleSearchCover || '',
+        ruleExploreKind: source.ruleExploreKind || source.ruleSearchKind || '',
+        ruleExploreWordCount: source.ruleExploreWordCount || source.ruleSearchWordCount || '',
+        ruleExploreLastChapter: source.ruleExploreLastChapter || source.ruleSearchLastChapter || '',
+        ruleExploreLastUpdateTime: source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime || '',
+        ruleExploreNoteUrl: source.ruleExploreNoteUrl || source.ruleSearchNoteUrl || '',
+        categoryName: category.name,
+        categoryUrl: category.url,
+        categoryKeyword: category.keyword,
+        header: source.header || '',
+      }
+    });
+  }
+
+  /**
+   * 计算分类行（与 Android calculateExploreKindRows 一致）
+   * 每行最多 maxSpan(6) 列，根据 flexBasisPercent 分配宽度
+   */
+  calculateKindRows(kinds: ExploreCategory[], maxSpan: number): ExploreCategory[][] {
+    const rows: ExploreCategory[][] = [];
+    let currentRow: ExploreCategory[] = [];
+    let currentSpan = 0;
+
+    for (const kind of kinds) {
+      let span = 2; // default
+      if (kind.wrapBefore || kind.flexBasisPercent >= 1.0) {
+        span = maxSpan;
+      } else if (kind.flexBasisPercent > 0) {
+        span = Math.max(1, Math.min(maxSpan, Math.round(maxSpan * kind.flexBasisPercent)));
+      } else if (kind.flexGrow > 0) {
+        span = 3;
+      }
+      if ((kind.wrapBefore && currentRow.length > 0) || (currentSpan + span > maxSpan)) {
+        rows.push(currentRow);
+        currentRow = [];
+        currentSpan = 0;
+      }
+      currentRow.push(kind);
+      currentSpan += span;
+      if (currentSpan >= maxSpan) {
+        rows.push(currentRow);
+        currentRow = [];
+        currentSpan = 0;
+      }
+    }
+    if (currentRow.length > 0) {
+      rows.push(currentRow);
+    }
+    return rows;
   }
 
   build() {
     Column() {
-      Text('\uD83D\uDD0D 发现').fontSize(20).fontWeight(FontWeight.Bold)
-        .alignSelf(ItemAlign.Start).padding(16)
-
+      // 顶部标题
       Row() {
-        TextInput({ placeholder: '搜索书名或作者...', text: this.keyword })
-          .height(44).backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
-          .borderRadius(22).padding({ left: 20 }).layoutWeight(1)
-          .onChange((v: string): void => { this.keyword = v; })
-        Button('搜索').margin({ left: 8 }).fontSize(14)
-          .onClick((): void => { this.doSearch(); })
-      }.padding({ left: 12, right: 12 })
+        Text('发现').fontSize(20).fontWeight(FontWeight.Bold)
+          .fontColor(this.isDark ? '#FFF' : '#111')
+      }.width('100%').padding({ left: 16, top: 12, bottom: 8 })
 
-      if (this.isSearching && this.results.length === 0 && this.searchProcessed === 0) {
-        // 搜索刚开始，还没有任何结果 → 显示加载动画
-        Column() {
-          LoadingProgress().color('#0078D7').margin({ top: 40 })
-          Text('搜索中...').fontSize(14).fontColor('#888').margin({ top: 8 })
-        }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
-      } else if (this.hasSearched && this.results.length === 0 && !this.isSearching) {
+      if (this.exploreSources.length === 0) {
         Column() {
           Text('\uD83D\uDD0D').fontSize(48).margin({ top: 80 })
-          Text('没有找到结果').fontSize(16).fontColor('#888').margin({ top: 8 })
-          if (this.pendingWebViewUrl) {
-            Text('网站被 Cloudflare 保护，是否尝试用浏览器模式加载？')
-              .fontSize(13).fontColor('#FF9800').margin({ top: 8 })
-            Button('使用浏览器模式重试').margin({ top: 8 }).fontSize(13)
-              .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
-              .onClick((): void => { this.tryWebViewFetch(); })
-          }
+          Text('暂无可用的发现书源').fontSize(16).fontColor('#888').margin({ top: 8 })
+          Text('请在书源管理中导入带有发现URL的书源').fontSize(12).fontColor('#888').margin({ top: 4 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
-      } else if (this.hasSearched) {
-        if (this.isSearching && this.searchProgress) {
-          Text(this.searchProgress + ' | 已合并 ' + this.results.length + ' 条').fontSize(12)
-            .fontColor('#888').padding({ left: 16, top: 8 })
-        } else {
-          Text('找到 ' + this.results.length + ' 条结果').fontSize(12)
-            .fontColor('#888').padding({ left: 16, top: 8 })
-        }
-
-        List() {
-          ForEach(this.results, (item: SearchResult) => {
-            ListItem() {
-              Row() {
-                // 封面
-                BookCover({
-                  name: item.name,
-                  coverUrl: item.coverUrl,
-                  coverWidth: 44,
-                  coverHeight: 62
-                }).margin({ right: 12 })
-
-                Column() {
-                  Text(item.name).fontSize(15).fontWeight(FontWeight.Bold)
-                    .alignSelf(ItemAlign.Start).maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(item.author || '未知作者').fontSize(12).fontColor('#888')
-                    .alignSelf(ItemAlign.Start).margin({ top: 2 })
-                  // 来源行：书源名 + 来源计数（始终显示）
-                  Row() {
-                    Text(item.origin).fontSize(11).fontColor('#AAA')
-                    if (item.sourceCount >= 1) {
-                      Text(item.sourceCount + '个源').fontSize(10).fontColor('#FFF')
-                        .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-                        .backgroundColor('#5C6BC0').borderRadius(4)
-                        .margin({ left: 4 })
-                        .onClick(() => {
-                          const sources = item.sourceOrigins.join(', ');
-                          promptAction.showToast({
-                            message: '来源: ' + (sources || '未知'),
-                            duration: 3000
-                          });
-                        })
-                    }
-                  }.alignSelf(ItemAlign.Start).margin({ top: 2 })
-                }
-                .layoutWeight(1).alignItems(HorizontalAlign.Start).height(62)
-                .justifyContent(FlexAlign.Center)
-              }
-              .padding(12).width('100%')
-              .onClick((): void => {
-                router.pushUrl({
-                  url: 'pages/BookInfoPage',
-                  params: {
-                    name: item.name, author: item.author, coverUrl: item.coverUrl,
-                    noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
-                    introduce: item.introduce, kind: item.kind, wordCount: item.wordCount
-                  }
-                });
-              })
-            }
-            .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
-          })
-        }.width('100%').layoutWeight(1).margin({ top: 4 })
       } else {
-        Column() {
-          Text('\uD83D\uDD0D').fontSize(48).margin({ top: 80 })
-          Text('搜索你想看的书籍').fontSize(16).fontColor('#888').margin({ top: 8 })
-          Text('已加载 ' + this.sources.length + ' 个书源').fontSize(12).fontColor('#888').margin({ top: 4 })
-        }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
+        // 搜索框
+        Row() {
+          Text('搜索书名或作者...').fontSize(14).fontColor('#AAA').layoutWeight(1)
+            .padding({ left: 20 }).height(42)
+            .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+            .borderRadius(22)
+            .onClick((): void => {
+              router.pushUrl({ url: 'pages/SearchPage' });
+            })
+        }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
+
+        // 书源列表
+        List() {
+          ForEach(this.exploreSources, (source: BookSource) => {
+            ListItem() {
+              Column() {
+                // 书源卡片头部
+                Flex({ alignItems: ItemAlign.Center }) {
+                  Column() {
+                    Text(source.sourceName).fontSize(16).fontWeight(FontWeight.Medium)
+                      .fontColor(this.isDark ? '#FFF' : '#111').alignSelf(ItemAlign.Start)
+                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text(source.group || '').fontSize(11).fontColor('#888')
+                      .alignSelf(ItemAlign.Start).margin({ top: 2 })
+                  }.flexShrink(1).alignItems(HorizontalAlign.Start)
+
+                  Text(this.expandedSourceUrl === source.sourceUrl ? '收起' : '展开')
+                    .fontSize(12).fontColor('#0078D7')
+                    .flexShrink(0).margin({ left: 8 })
+                }
+                .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .onClick((): void => { this.toggleExpand(source.sourceUrl); })
+
+                // 展开：加载中 / 分类网格
+                if (this.expandedSourceUrl === source.sourceUrl) {
+                  if (this.loadingKinds) {
+                    Row() {
+                      LoadingProgress().width(20).height(20).color('#0078D7')
+                      Text('加载分类...').fontSize(13).fontColor('#888').margin({ left: 8 })
+                    }.padding(16)
+                  } else if (this.resolvedCategories.length === 0) {
+                    Text('无分类').fontSize(13).fontColor('#888')
+                      .padding({ left: 16, bottom: 12 })
+                  } else {
+                    this.buildKindGrid(source)
+                  }
+                }
+              }
+              .width('100%')
+              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFF')
+              .borderRadius(12).margin({ left: 16, right: 16, bottom: 10 })
+              .border({ width: 1, color: this.isDark ? '#333' : '#E8E8E8' })
+            }
+          })
+        }.width('100%').layoutWeight(1)
       }
     }
     .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+  }
+
+  @Builder
+  buildKindGrid(source: BookSource) {
+    Column() {
+      ForEach(this.calculateKindRows(this.resolvedCategories, 6), (row: ExploreCategory[]) => {
+        Row() {
+          ForEach(row, (cat: ExploreCategory) => {
+            Text(cat.name)
+              .fontSize(13)
+              .fontColor(this.isDark ? '#DDD' : '#333')
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .textAlign(TextAlign.Center)
+              .height(36)
+              .padding({ left: 6, right: 6 })
+              .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+              .borderRadius(8)
+              .layoutWeight(cat.flexBasisPercent > 0 ? cat.flexBasisPercent : 1)
+              .margin({ left: 3, right: 3, bottom: 4 })
+              .onClick((): void => { this.openCategory(source, cat); })
+          })
+        }.width('100%').padding({ left: 12, right: 12 })
+      })
+      Row().height(8)
+    }
   }
 }
