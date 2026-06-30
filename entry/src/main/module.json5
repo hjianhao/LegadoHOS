@@ -20,7 +20,8 @@
         "reason": "$string:reason_write_media",
         "usedScene": { "abilities": ["MainAbility"], "when": "always" }
       },
-      { "name": "ohos.permission.RUNNING_LOCK" }
+      { "name": "ohos.permission.RUNNING_LOCK" },
+      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING" }
     ],
     "abilities": [
       {
@@ -33,6 +34,7 @@
         "startWindowBackground": "$color:start_window_background",
         "visible": true,
         "exported": true,
+        "backgroundModes": ["audioPlayback"],
         "skills": [
           {
             "entities": ["entity.system.home"],

@@ -37,6 +37,7 @@ export struct ReadAloudPanel {
   engine_: ReadAloudEngine | null = null;
   private bgTaskActive_: boolean = false;
   private avSession_: avSession.AVSession | null = null;
+  private wantAgent_: object | null = null;
 
   aboutToAppear(): void {
     this.loadVoicePreference_();
@@ -182,6 +183,11 @@ export struct ReadAloudPanel {
     if (this.avSession_) return;
     try {
       this.avSession_ = await avSession.createAVSession(getContext(), 'legado_tts', 'audio');
+      // 设置 WantAgent 后激活（播控中心点击拉起应用）
+      if (!this.wantAgent_) {
+        this.wantAgent_ = await this.createWantAgent_();
+      }
+      this.avSession_.setLaunchAbility(this.wantAgent_);
       await this.avSession_.activate();
       // 设置元数据
       const meta: avSession.AVMetadata = {
@@ -194,7 +200,7 @@ export struct ReadAloudPanel {
       // 监听播控命令
       this.avSession_.on('play', () => { if (!this.isPlaying) this.togglePlay(); });
       this.avSession_.on('pause', () => { if (this.isPlaying) this.togglePlay(); });
-      this.avSession_.on('stop', () => { this.stopPlay(); this.onDismiss?.(); });
+      this.avSession_.on('stop', () => { if (this.isPlaying || this.isPaused) this.stopPlay(); });
       this.avSession_.on('playNext', () => { this.stopPlay(); this.onNextChapter?.(); });
       this.avSession_.on('playPrevious', () => { this.stopPlay(); this.onPrevChapter?.(); });
       console.info('[Aloud] AVSession created');
@@ -210,20 +216,26 @@ export struct ReadAloudPanel {
     this.avSession_ = null;
   }
 
+  private async createWantAgent_(): Promise<object> {
+    const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+    console.info('[Aloud] creating WantAgent for bundle=' + info.name);
+    return await wantAgent.getWantAgent({
+      wants: [{ bundleName: info.name, abilityName: 'MainAbility' }],
+      operationType: wantAgent.OperationType.START_ABILITIES,
+      requestCode: 0,
+      wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
+    });
+  }
+
   async startBgTask_(): Promise<void> {
     console.info('[Aloud] startBgTask_ called, active=' + this.bgTaskActive_);
     if (this.bgTaskActive_) return;
     try {
-      const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
-      console.info('[Aloud] bgTask bundle=' + info.name);
-      const wa = await wantAgent.getWantAgent({
-        wants: [{ bundleName: info.name, abilityName: 'MainAbility' }],
-        operationType: wantAgent.OperationType.START_ABILITY,
-        requestCode: 0,
-        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
-      });
-      await backgroundTaskManager.startBackgroundRunning(getContext(),
-        backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, wa);
+      if (!this.wantAgent_) {
+        this.wantAgent_ = await this.createWantAgent_();
+      }
+      await backgroundTaskManager.startBackgroundRunning(
+        getContext(), backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, this.wantAgent_);
       this.bgTaskActive_ = true;
       console.info('[Aloud] bgTask started');
     } catch (e) {
@@ -284,7 +296,9 @@ export struct ReadAloudPanel {
     console.info('[Aloud] togglePlay playing=' + this.isPlaying + ' paused=' + this.isPaused);
     if (this.isPlaying) {
       await this.engine_?.pause();
+      this.stopBgTask_();
     } else if (this.isPaused) {
+      await this.startBgTask_();
       await this.engine_?.resume();
     } else {
       await this.startPlay();
@@ -433,10 +447,7 @@ export struct ReadAloudPanel {
             .fontColor(this.isDark ? '#E0E0E0' : '#333')
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          const currentVoice = this.findSelectedVoice_()
-          if (currentVoice && !currentVoice.downloaded) {
-            Text('未下载').fontSize(10).fontColor('#F57C00').margin({ top: 2 })
-          }
+          Blank()
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
