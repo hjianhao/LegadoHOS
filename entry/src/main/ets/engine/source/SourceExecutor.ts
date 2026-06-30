@@ -196,7 +196,8 @@ export class SourceExecutor {
    */
   async search(
     keyword: string, sources: BookSource[],
-    onProgress?: (merged: SearchResult[], processed: number, total: number) => void
+    onProgress?: (merged: SearchResult[], processed: number, total: number) => void,
+    page: number = 1
   ): Promise<SearchResult[]> {
     if (!this.engineInitialized) await this.initialize();
     if (sources.length === 0) return [];
@@ -321,6 +322,8 @@ export class SourceExecutor {
               searchTime: existing.searchTime,
               sourceCount: existing.sourceCount + 1,
               sourceOrigins: [...existing.sourceOrigins, r.origin || r.originUrl || '未知'],
+              sourceOriginUrls: [...(existing.sourceOriginUrls || []), r.originUrl || ''],
+              sourceNoteUrls: [...(existing.sourceNoteUrls || []), r.noteUrl || ''],
               latestChapterTitle: existing.latestChapterTitle || r.latestChapterTitle || '',
             };
             mergedMap.set(key, merged);
@@ -347,6 +350,8 @@ export class SourceExecutor {
             searchTime: r.searchTime || Date.now(),
             sourceCount: 1,
             sourceOrigins: [r.origin || r.originUrl || '未知'],
+            sourceOriginUrls: [r.originUrl || ''],
+            sourceNoteUrls: [r.noteUrl || ''],
             latestChapterTitle: r.latestChapterTitle || '',
           });
         }
@@ -357,7 +362,7 @@ export class SourceExecutor {
     const runOneSource = async (source: BookSource): Promise<void> => {
       if (!source.enabled || !source.ruleSearchUrl) return;
       try {
-        const results = await this.searchWithTimeout(keyword, source, 20000);
+        const results = await this.searchWithTimeout(keyword, source, 20000, page);
         incrementMerge(results);
       } catch (_e) {
         // 单个源失败/超时不影响其他源
@@ -393,10 +398,10 @@ export class SourceExecutor {
     });
   }
   
-  private async searchSingle(keyword: string, source: BookSource): Promise<SearchResult[]> {
+  private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     const baseUrl = getBaseUrl(source.sourceUrl);
-    const { url, method, body, charset, webView } = buildUrl(source.ruleSearchUrl, keyword, 1, baseUrl);
+    const { url, method, body, charset, webView } = buildUrl(source.ruleSearchUrl, keyword, page, baseUrl);
 
     if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       console.warn('[SrcEx] Invalid URL for', source.sourceName, ':', url);
@@ -461,10 +466,10 @@ export class SourceExecutor {
   }
 
   /** 带超时的搜索（20s 总超时，兜底 WebView hang 等） */
-  private searchWithTimeout(keyword: string, source: BookSource, timeoutMs: number): Promise<SearchResult[]> {
+  private searchWithTimeout(keyword: string, source: BookSource, timeoutMs: number, page: number = 1): Promise<SearchResult[]> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('搜索超时')), timeoutMs);
-      this.searchSingle(keyword, source).then(r => { clearTimeout(timer); resolve(r); }).catch(e => { clearTimeout(timer); reject(e); });
+      this.searchSingle(keyword, source, page).then(r => { clearTimeout(timer); resolve(r); }).catch(e => { clearTimeout(timer); reject(e); });
     });
   }
 
@@ -518,7 +523,9 @@ export class SourceExecutor {
         coverUrl: '', noteUrl: href || '', origin: source.sourceName || '未知',
         originUrl: source.sourceUrl || '', kind: '', wordCount: '', lastUpdateTime: '', latestChapterTitle: '',
         introduce: '', helperMsg: '', duration: 0, searchTime: Date.now(),
-        sourceCount: 1, sourceOrigins: source.sourceName ? [source.sourceName] : []
+        sourceCount: 1, sourceOrigins: source.sourceName ? [source.sourceName] : [],
+        sourceOriginUrls: source.sourceUrl ? [source.sourceUrl] : [],
+        sourceNoteUrls: href ? [href] : []
       });
     }
     if (results.length > 0) {

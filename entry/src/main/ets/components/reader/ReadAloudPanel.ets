@@ -1,10 +1,12 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager } from '../../service/ReadAloudEngine';
+import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
 import { avSession } from '@kit.AVSessionKit';
+import promptAction from '@ohos.promptAction';
 
 @Component
 export struct ReadAloudPanel {
@@ -15,6 +17,15 @@ export struct ReadAloudPanel {
   @State progress: number = 0;
   @State progressText: string = '';
   @State errorText: string = '';
+  @State voices: ReadAloudVoice[] = [];
+  @State voicesLoading: boolean = false;
+  @State showVoiceSelect: boolean = false;
+  @State downloadingVoiceKey: string = '';
+  @State voiceDownloadProgress: string = '';
+  @State selectedVoiceLanguage: string = 'zh-CN';
+  @State selectedVoicePerson: number = 13;
+  @State selectedVoiceStyle: string = 'interaction-broadcast';
+  @State selectedVoiceName: string = '系统默认';
 
   text: string = '';
   textOffset: number = 0;  // 从第几个字开始读
@@ -27,8 +38,144 @@ export struct ReadAloudPanel {
   private bgTaskActive_: boolean = false;
   private avSession_: avSession.AVSession | null = null;
 
+  aboutToAppear(): void {
+    this.loadVoicePreference_();
+    this.loadVoices_();
+  }
+
   aboutToDisappear(): void {
     // 不停止引擎，不释放 session——后台继续播
+  }
+
+  private async loadVoicePreference_(): Promise<void> {
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(getContext());
+      this.selectedVoiceLanguage = await settings.get('tts_voice_language', TtsVoiceManager.DEFAULT_VOICE.language);
+      this.selectedVoicePerson = await settings.get('tts_voice_person', TtsVoiceManager.DEFAULT_VOICE.person);
+      this.selectedVoiceStyle = await settings.get('tts_voice_style', TtsVoiceManager.DEFAULT_VOICE.style);
+      this.selectedVoiceName = await settings.get('tts_voice_name', '系统默认');
+    } catch (e) {
+      console.warn('[Aloud] load voice preference failed: ' + (e as Error).message);
+    }
+  }
+
+  private async saveVoicePreference_(voice: ReadAloudVoice): Promise<void> {
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(getContext());
+      await settings.put('tts_voice_language', voice.language);
+      await settings.put('tts_voice_person', voice.person);
+      await settings.put('tts_voice_style', voice.style);
+      await settings.put('tts_voice_name', this.voiceDisplayName_(voice));
+    } catch (e) {
+      console.warn('[Aloud] save voice preference failed: ' + (e as Error).message);
+    }
+  }
+
+  private async loadVoices_(): Promise<void> {
+    this.voicesLoading = true;
+    try {
+      const list = await TtsVoiceManager.listOfflineVoices();
+      this.voices = list;
+      this.syncSelectedVoiceName_();
+    } catch (e) {
+      console.error('[Aloud] list voices failed: ' + (e as Error).message);
+      this.errorText = '音色列表加载失败';
+    } finally {
+      this.voicesLoading = false;
+    }
+  }
+
+  private currentVoiceConfig_(): ReadAloudVoiceConfig {
+    return {
+      language: this.selectedVoiceLanguage,
+      person: this.selectedVoicePerson,
+      style: this.selectedVoiceStyle,
+    };
+  }
+
+  private currentVoiceKey_(): string {
+    return TtsVoiceManager.makeKey(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);
+  }
+
+  private findSelectedVoice_(): ReadAloudVoice | null {
+    const key = this.currentVoiceKey_();
+    for (let i = 0; i < this.voices.length; i++) {
+      if (this.voices[i].key === key) return this.voices[i];
+    }
+    return null;
+  }
+
+  private syncSelectedVoiceName_(): void {
+    const voice = this.findSelectedVoice_();
+    if (voice) {
+      this.selectedVoiceName = this.voiceDisplayName_(voice);
+    }
+  }
+
+  private voiceDisplayName_(voice: ReadAloudVoice): string {
+    if (voice.description) return voice.description;
+    if (voice.style) return voice.style;
+    return '音色 ' + voice.person;
+  }
+
+  private voiceSubText_(voice: ReadAloudVoice): string {
+    const gender = voice.gender ? voice.gender : '未知';
+    return gender + ' · ' + voice.language + ' · ' + TtsVoiceManager.statusLabel(voice.status);
+  }
+
+  private async ensureSelectedVoiceReady_(): Promise<boolean> {
+    const voice = this.findSelectedVoice_();
+    if (!voice || voice.downloaded) return true;
+    return await this.downloadAndSelectVoice_(voice, false);
+  }
+
+  private async selectVoice_(voice: ReadAloudVoice): Promise<void> {
+    if (this.downloadingVoiceKey) return;
+    if (!voice.downloaded) {
+      await this.downloadAndSelectVoice_(voice, true);
+      return;
+    }
+    await this.applyVoice_(voice, true);
+  }
+
+  private async downloadAndSelectVoice_(voice: ReadAloudVoice, showToast: boolean): Promise<boolean> {
+    this.downloadingVoiceKey = voice.key;
+    this.voiceDownloadProgress = '0%';
+    this.errorText = '';
+    try {
+      await TtsVoiceManager.downloadVoice(voice, (progress: string) => {
+        this.voiceDownloadProgress = progress;
+      });
+      promptAction.showToast({ message: '音色下载完成', duration: 1500 });
+      await this.loadVoices_();
+      const refreshed = this.voices.find((item: ReadAloudVoice) => item.key === voice.key) || voice;
+      refreshed.downloaded = true;
+      refreshed.status = refreshed.status === 'GA' ? '' : refreshed.status;
+      await this.applyVoice_(refreshed, showToast);
+      return true;
+    } catch (e) {
+      const msg = (e as Error).message || String(e);
+      this.errorText = msg;
+      promptAction.showToast({ message: msg, duration: 1800 });
+      return false;
+    } finally {
+      this.downloadingVoiceKey = '';
+      this.voiceDownloadProgress = '';
+    }
+  }
+
+  private async applyVoice_(voice: ReadAloudVoice, restartIfNeeded: boolean): Promise<void> {
+    this.selectedVoiceLanguage = voice.language;
+    this.selectedVoicePerson = voice.person;
+    this.selectedVoiceStyle = voice.style;
+    this.selectedVoiceName = this.voiceDisplayName_(voice);
+    this.showVoiceSelect = false;
+    await this.saveVoicePreference_(voice);
+    if (restartIfNeeded && (this.isPlaying || this.isPaused)) {
+      await this.startPlay();
+    }
   }
 
   async createAvSession_(): Promise<void> {
@@ -94,6 +241,8 @@ export struct ReadAloudPanel {
 
   async startPlay(): Promise<void> {
     console.info('[Aloud] startPlay text.length=' + (this.text ? this.text.length : 0));
+    const voiceReady = await this.ensureSelectedVoiceReady_();
+    if (!voiceReady) return;
     if (this.engine_) {
       await this.engine_.release();
     }
@@ -113,7 +262,7 @@ export struct ReadAloudPanel {
       onError: (msg: string) => {
         this.errorText = msg;
       },
-    });
+    }, this.currentVoiceConfig_());
 
     try {
       console.info('[Aloud] calling init...');
@@ -172,6 +321,82 @@ export struct ReadAloudPanel {
     return '2.0x';
   }
 
+  @Builder
+  voiceListContent_() {
+    if (this.voicesLoading) {
+      Row() {
+        LoadingProgress().width(18).height(18).color('#0078D7')
+        Text('正在加载音色').fontSize(12).fontColor(this.isDark ? '#AAA' : '#666').margin({ left: 8 })
+      }
+      .width('100%')
+      .height(44)
+      .justifyContent(FlexAlign.Center)
+    } else if (this.voices.length === 0) {
+      Text('未获取到系统音色').fontSize(12).fontColor(this.isDark ? '#AAA' : '#666')
+        .width('100%').textAlign(TextAlign.Center).padding({ top: 12, bottom: 12 })
+    } else {
+      Scroll() {
+        Column() {
+          ForEach(this.voices, (voice: ReadAloudVoice) => {
+            Row() {
+              Column() {
+                Text(this.voiceDisplayName_(voice))
+                  .fontSize(13)
+                  .fontColor(voice.key === this.currentVoiceKey_() ? '#0078D7' : (this.isDark ? '#E0E0E0' : '#333'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(this.voiceSubText_(voice))
+                  .fontSize(10)
+                  .fontColor(voice.downloaded ? (this.isDark ? '#888' : '#777') : '#F57C00')
+                  .margin({ top: 2 })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              if (this.downloadingVoiceKey === voice.key) {
+                Row() {
+                  LoadingProgress().width(16).height(16).color('#0078D7')
+                  Text(this.voiceDownloadProgress ? this.voiceDownloadProgress : '下载中')
+                    .fontSize(11)
+                    .fontColor('#0078D7')
+                    .margin({ left: 4 })
+                }
+              } else if (voice.key === this.currentVoiceKey_()) {
+                Text('使用中').fontSize(11).fontColor('#0078D7')
+              } else if (voice.downloaded) {
+                Button('选择')
+                  .fontSize(11)
+                  .height(28)
+                  .padding({ left: 10, right: 10 })
+                  .backgroundColor(this.isDark ? '#333' : '#F0F0F0')
+                  .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                  .onClick(() => { this.selectVoice_(voice); })
+              } else {
+                Button('下载')
+                  .fontSize(11)
+                  .height(28)
+                  .padding({ left: 10, right: 10 })
+                  .backgroundColor('#0078D7')
+                  .fontColor('#FFF')
+                  .enabled(this.downloadingVoiceKey.length === 0)
+                  .onClick(() => { this.selectVoice_(voice); })
+              }
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .backgroundColor(voice.key === this.currentVoiceKey_() ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+            .borderRadius(8)
+            .onClick(() => { this.selectVoice_(voice); })
+          }, (voice: ReadAloudVoice) => voice.key)
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+      }
+      .width('100%')
+      .height(180)
+    }
+  }
+
   build() {
     Column() {
       // 标题行
@@ -197,6 +422,41 @@ export struct ReadAloudPanel {
       if (this.errorText) {
         Text(this.errorText).fontSize(11).fontColor('#FF4444')
           .padding({ left: 12, right: 12, top: 4 })
+      }
+
+      // 音色选择
+      Row() {
+        Text('音色').fontSize(12).fontColor('#888').width(36)
+        Column() {
+          Text(this.selectedVoiceName)
+            .fontSize(13)
+            .fontColor(this.isDark ? '#E0E0E0' : '#333')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          const currentVoice = this.findSelectedVoice_()
+          if (currentVoice && !currentVoice.downloaded) {
+            Text('未下载').fontSize(10).fontColor('#F57C00').margin({ top: 2 })
+          }
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .margin({ left: 4, right: 8 })
+        Button(this.showVoiceSelect ? '收起' : '切换')
+          .fontSize(12)
+          .height(30)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor(this.isDark ? '#333' : '#F2F2F2')
+          .fontColor(this.isDark ? '#E0E0E0' : '#333')
+          .onClick(() => {
+            this.showVoiceSelect = !this.showVoiceSelect;
+            if (this.showVoiceSelect && this.voices.length === 0 && !this.voicesLoading) {
+              this.loadVoices_();
+            }
+          })
+      }.width('100%').padding({ left: 12, right: 12, top: 8 })
+
+      if (this.showVoiceSelect) {
+        this.voiceListContent_()
       }
 
       // 语速调节

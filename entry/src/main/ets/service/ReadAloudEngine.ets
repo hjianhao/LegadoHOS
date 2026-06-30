@@ -7,11 +7,116 @@ import audio from '@ohos.multimedia.audio';
 
 export enum AloudState { IDLE = 0, PLAYING = 1, PAUSED = 2, STOPPED = 3 }
 
+export interface ReadAloudVoiceConfig {
+  language: string;
+  person: number;
+  style: string;
+}
+
+export interface ReadAloudVoice extends ReadAloudVoiceConfig {
+  key: string;
+  gender: string;
+  description: string;
+  status: string;
+  downloaded: boolean;
+}
+
 export interface AloudCallback {
   onStateChange?: (state: AloudState) => void;
   onProgress?: (charIndex: number, totalChars: number) => void;
   onChapterEnd?: () => void;
   onError?: (msg: string) => void;
+}
+
+export class TtsVoiceManager {
+  static readonly DEFAULT_VOICE: ReadAloudVoiceConfig = {
+    language: 'zh-CN',
+    person: 13,
+    style: 'interaction-broadcast',
+  };
+
+  static makeKey(language: string, person: number, style: string): string {
+    return language + '#' + person + '#' + style;
+  }
+
+  static isVoiceDownloaded(status: string): boolean {
+    const normalized = (status || '').toUpperCase();
+    return normalized.length === 0 || normalized !== 'GA';
+  }
+
+  static statusLabel(status: string): string {
+    return TtsVoiceManager.isVoiceDownloaded(status) ? '已下载' : '未下载';
+  }
+
+  static async listOfflineVoices(): Promise<ReadAloudVoice[]> {
+    const voices = await textToSpeech.listVoices({
+      requestId: 'voice_list_' + Date.now(),
+      online: 1,
+      extraParams: {
+        'locate': 'CN',
+      },
+    });
+    const result: ReadAloudVoice[] = [];
+    for (let i = 0; i < voices.length; i++) {
+      const voice = voices[i];
+      const status = voice.status || '';
+      result.push({
+        key: TtsVoiceManager.makeKey(voice.language, voice.person, voice.style),
+        language: voice.language,
+        person: voice.person,
+        style: voice.style,
+        gender: voice.gender || '',
+        description: voice.description || '',
+        status: status,
+        downloaded: TtsVoiceManager.isVoiceDownloaded(status),
+      });
+    }
+    return result;
+  }
+
+  static async downloadVoice(voice: ReadAloudVoiceConfig, onProgress?: (progress: string) => void): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      try {
+        textToSpeech.downloadVoice({
+          requestId: 'voice_download_' + Date.now(),
+          language: voice.language,
+          person: voice.person,
+          style: voice.style,
+        }, (err: BusinessError, response: textToSpeech.DownloadResponse) => {
+          if (err) {
+            if (err.code === 1002300010) {
+              resolve();
+            } else {
+              reject(new Error('下载音色失败: ' + err.code));
+            }
+            return;
+          }
+          if (!response) {
+            reject(new Error('下载音色失败: 无下载响应'));
+            return;
+          }
+          response.on('start', () => {
+            onProgress?.('0%');
+          });
+          response.on('progress', (progress: string) => {
+            onProgress?.(progress.indexOf('%') >= 0 ? progress : progress + '%');
+          });
+          response.on('complete', () => {
+            onProgress?.('100%');
+            resolve();
+          });
+          response.on('cancel', () => {
+            reject(new Error('已取消音色下载'));
+          });
+          response.on('error', (downloadErr: BusinessError) => {
+            reject(new Error('下载音色失败: ' + downloadErr.code));
+          });
+        });
+      } catch (e) {
+        reject(e as Error);
+      }
+    });
+  }
 }
 
 export class ReadAloudEngine {
@@ -30,8 +135,12 @@ export class ReadAloudEngine {
   private chunkOffset_: number = 0;
   private synthPending_: boolean = false;
   private chapterEnded_: boolean = false;
+  private voice_: ReadAloudVoiceConfig;
 
-  constructor(callback: AloudCallback) { this.callback_ = callback; }
+  constructor(callback: AloudCallback, voice?: ReadAloudVoiceConfig) {
+    this.callback_ = callback;
+    this.voice_ = voice || TtsVoiceManager.DEFAULT_VOICE;
+  }
 
   get state(): AloudState { return this.state_; }
 
@@ -43,13 +152,13 @@ export class ReadAloudEngine {
   async init(): Promise<void> {
     const extraParam: Record<string, Object> = {
       'name': 'legado_tts_' + Date.now(),
-      'style': 'interaction-broadcast',
+      'style': this.voice_.style,
       'locate': 'CN',
     };
 
     this.ttsEngine_ = await new Promise<textToSpeech.TextToSpeechEngine>((resolve, reject) => {
       textToSpeech.createEngine(
-        { language: 'zh-CN', person: 13, online: 1, extraParams: extraParam },
+        { language: this.voice_.language, person: this.voice_.person, online: 1, extraParams: extraParam },
         (err: BusinessError, engine: textToSpeech.TextToSpeechEngine) => {
           if (err) { reject(new Error('TTS: ' + err.code)); }
           else {

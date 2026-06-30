@@ -76,6 +76,8 @@ export struct BookInfoPage {
       this.introduce = params['introduce'] || '';
       this.kind = params['kind'] || '';
       this.wordCount = params['wordCount'] || '';
+      this.lastUpdateTime = params['lastUpdateTime'] || '';
+      this.latestChapter = params['latestChapterTitle'] || '';
       try {
         const cachedStr = String(params['cachedSources'] || '');
         if (cachedStr) {
@@ -93,6 +95,7 @@ export struct BookInfoPage {
   /** 从源获取书籍详情和目录 */
   async tryFetchBookInfo(): Promise<void> {
     if (!this.noteUrl || !this.originUrl) return;
+    this.isRefreshing = true;
     try {
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
@@ -118,6 +121,7 @@ export struct BookInfoPage {
         this.recentChapters = chapters.slice(0, 5);
       }
     } catch (_e) { /* ignore */ }
+    this.isRefreshing = false;
   }
 
   /** 检查书籍是否已在书架 */
@@ -127,11 +131,28 @@ export struct BookInfoPage {
       await AppDatabase.getInstance().waitForInit();
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
       if (this.noteUrl) {
-        const existing = await bookTable.searchBooks(this.bookName);
-        const matched = existing.find(b => b.name === this.bookName || b.bookUrl === this.noteUrl);
-        if (matched) {
+        let matched = await bookTable.getBookByUrl(this.noteUrl);
+        if (!matched && this.bookName) {
+          const existing = await bookTable.searchBooks(this.bookName);
+          matched = existing.find(b => b.isShelf && (b.name === this.bookName || (this.bookAuthor && b.author === this.bookAuthor))) || null;
+        }
+        if (matched && matched.isShelf) {
           this.isInShelf = true;
           this.bookId = matched.id;
+          if (matched.name) this.bookName = matched.name;
+          if (matched.author) this.bookAuthor = matched.author;
+          if (matched.coverUrl) this.coverUrl = matched.coverUrl;
+          if (matched.customCoverPath) this.customCoverPath = matched.customCoverPath;
+          if (matched.origin) this.origin = matched.origin;
+          if (matched.originUrl) this.originUrl = matched.originUrl;
+          if (matched.bookUrl) this.noteUrl = matched.bookUrl;
+          if (matched.kind) this.kind = matched.kind;
+          if (matched.wordCount) this.wordCount = matched.wordCount;
+          if (matched.introduce) this.introduce = matched.introduce;
+          if (matched.remark) this.remark = matched.remark;
+          if (matched.lastUpdateTime) this.lastUpdateTime = matched.lastUpdateTime;
+          if (matched.latestChapterTitle) this.latestChapter = matched.latestChapterTitle;
+          if (matched.totalChapterNum > 0) this.chapterCount = matched.totalChapterNum;
           this.durChapterTitle = matched.durChapterTitle || '';
           this.durChapterIndex = matched.durChapterIndex || 0;
           if (matched.lastOpenTime > 0) {
@@ -140,6 +161,9 @@ export struct BookInfoPage {
               String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
           }
           console.info('[BookInfo] found in shelf, id=', matched.id, 'progress=', matched.durChapterTitle);
+        } else {
+          this.isInShelf = false;
+          this.bookId = 0;
         }
       }
     } catch (_e) { /* ignore */ }
@@ -438,167 +462,470 @@ export struct BookInfoPage {
 
   build() {
     Stack() {
+      // 背景层：对齐 Android BookInfoBackdrop，使用封面大图 + 遮罩 + 向下过渡到内容底色
       Column() {
-        // 顶部导航（透明底）
+        if (this.getDisplayCover()) {
+          Image(this.getDisplayCover())
+            .width('100%')
+            .height(500)
+            .objectFit(ImageFit.Cover)
+            .blur(24)
+            .opacity(0.72)
+        } else {
+          Column()
+            .width('100%')
+            .height(500)
+            .backgroundColor(this.getCoverColor())
+        }
+        Blank()
+      }
+      .width('100%')
+      .height('100%')
+
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          direction: GradientDirection.Bottom,
+          colors: [
+            [this.isDark ? '#263238AA' : '#DDE6E8AA', 0.0],
+            [this.isDark ? '#121212E6' : '#FFFFFFD9', 0.56],
+            [this.surfaceColor(), 0.74],
+            [this.surfaceColor(), 1.0],
+          ]
+        })
+
+      Column() {
+        // 透明顶栏：返回 + 分享 + 更多，滚动顶部保持轻量
         Row() {
-          Button() { Text('←').fontSize(20).fontColor('#FFF') }
-            .width(40).height(40).backgroundColor('transparent')
+          Button() { Text('‹').fontSize(30).fontColor(this.primaryTextColor()) }
+            .width(44).height(44).backgroundColor(Color.Transparent)
             .onClick((): void => { router.back(); })
           Blank()
-        }.width('100%').padding({ left: 8, top: 40 }).zIndex(10).position({ x: 0, y: 0 })
+          Button() { Text('↗').fontSize(20).fontColor(this.primaryTextColor()) }
+            .width(44).height(44).backgroundColor(Color.Transparent)
+            .onClick(() => {
+              promptAction.showToast({ message: '分享功能待完善', duration: 1200 });
+            })
+          Button() { Text('⋮').fontSize(24).fontColor(this.primaryTextColor()) }
+            .width(44).height(44).backgroundColor(Color.Transparent)
+            .onClick(() => { this.showMoreMenu = !this.showMoreMenu; })
+        }
+        .width('100%')
+        .height(88)
+        .padding({ left: 4, right: 8, top: 36 })
+        .zIndex(10)
+        .position({ x: 0, y: 0 })
 
         Scroll() {
           Column() {
-            // ===== 封面区 =====
+            // Header：封面 112x157 + 右侧书名/作者/来源，贴近 Compose 版 BookInfoHeader
             Column() {
               Row() {
-                // 封面
-                Stack() {
-                  Column() {
-                    Text(this.bookName ? this.bookName.charAt(0) : '?').fontSize(50).fontColor('#FFF').fontWeight(FontWeight.Bold)
-                  }.width(140).height(180).borderRadius(10)
-                    .backgroundColor(this.getCoverColor()).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-                  if (this.coverUrl) {
-                    Image(this.coverUrl).width(140).height(180).borderRadius(10).objectFit(ImageFit.Cover)
-                  }
-                }.margin({ right: 16 })
+                BookCover({
+                  name: this.bookName,
+                  coverUrl: this.getDisplayCover(),
+                  coverWidth: 112,
+                  coverHeight: 157
+                })
+                  .borderRadius(8)
+                  .shadow({ radius: 16, color: '#00000030', offsetX: 0, offsetY: 8 })
+                  .onClick(() => { this.showCoverSheet(); })
+                  .margin({ right: 16 })
 
-                // 书名 + 作者
                 Column() {
-                  Text(this.bookName || '未知书名').fontSize(20).fontWeight(FontWeight.Bold)
-                    .fontColor('#FFF').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(this.bookName || '未知书名')
+                    .fontSize(23)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(this.primaryTextColor())
+                    .maxLines(this.titleExpanded ? 6 : 2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .alignSelf(ItemAlign.Start)
-                  Text(this.bookAuthor || '未知作者').fontSize(14).fontColor('rgba(255,255,255,0.8)')
-                    .alignSelf(ItemAlign.Start).margin({ top: 6 })
-                  if (this.origin) {
-                    Text(this.origin).fontSize(12).fontColor('rgba(255,255,255,0.6)')
-                      .alignSelf(ItemAlign.Start).margin({ top: 4 })
+                    .onClick(() => { this.titleExpanded = !this.titleExpanded; })
+
+                  Row() {
+                    Text('作').fontSize(11).fontColor(this.secondaryTextColor())
+                      .width(18).height(18).textAlign(TextAlign.Center)
+                    Text(this.bookAuthor || '未知作者')
+                      .fontSize(16)
+                      .fontColor(this.secondaryTextColor())
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .layoutWeight(1)
+                      .margin({ left: 4 })
                   }
-                  Blank()
-                  // 统计行
-                  Row() {
-                    if (this.wordCount) { Text(this.wordCount).fontSize(11).fontColor('rgba(255,255,255,0.7)').margin({right:12}) }
-                    if (this.chapterCount > 0) { Text(this.chapterCount + '章').fontSize(11).fontColor('rgba(255,255,255,0.7)').margin({right:12}) }
-                    if (this.kind) { Text(this.kind).fontSize(11).fontColor('rgba(255,255,255,0.7)').padding({left:6,right:6}).backgroundColor('rgba(255,255,255,0.15)').borderRadius(4) }
-                  }.alignSelf(ItemAlign.Start)
-                }.layoutWeight(1).height(180)
-              }.width('100%').padding(16)
-            }.width('100%')
-            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#263238', 0.0], ['#37474F', 1.0]] })
-            .padding({ top: 48 })
+                  .width('100%')
+                  .margin({ top: 8 })
 
-            // ===== 最新章节 =====
-            if (this.latestChapter) {
-              Row() {
-                Column() {
-                  Text('最新章节').fontSize(11).fontColor('#888')
-                  Text(this.latestChapter).fontSize(13).fontColor(this.isDark ? '#CCC' : '#444')
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                }.layoutWeight(1)
-                Text('›').fontSize(18).fontColor('#CCC')
-              }.width('100%').padding(16)
-              .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-              .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
-              .onClick(() => { this.openToc(); })
-            }
-
-            // ===== 最近章节 (前5章) =====
-            if (this.recentChapters.length > 0) {
-              Column() {
-                Row() {
-                  Text('目录 (' + this.chapterCount + '章)').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
-                  Text('全部 ›').fontSize(12).fontColor('#0078D7').onClick(() => { this.openToc(); })
-                }.width('100%').padding({left:16,right:16,top:10,bottom:6})
-                .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-                .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
-                ForEach(this.recentChapters, (ch: BookSourceChapter, idx: number) => {
                   Row() {
-                    Text(String(ch.index + 1)).fontSize(11).fontColor('#BBB').width(30)
-                    Text(ch.title || '第' + (ch.index + 1) + '章').fontSize(13)
-                      .fontColor(this.isDark ? '#CCC' : '#444').maxLines(1).layoutWeight(1)
-                  }.width('100%').padding({left:16,right:16,top:8,bottom:8})
-                  .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-                  .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#F0F0F0' })
+                    Text('网').fontSize(11).fontColor(this.primaryColor())
+                      .width(18).height(18).textAlign(TextAlign.Center)
+                    Text(this.origin || '未知书源')
+                      .fontSize(13)
+                      .fontColor(this.primaryColor())
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .layoutWeight(1)
+                      .margin({ left: 4 })
+                  }
+                  .width('100%')
+                  .margin({ top: 6 })
                   .onClick(() => {
-                    ChapterCache.chapters = [];
-                    this.startReadAt(idx);
+                    promptAction.showToast({ message: this.originUrl || this.origin || '暂无书源信息', duration: 1500 });
                   })
-                }, (ch: BookSourceChapter) => ch.index.toString())
-              }.onClick(() => { this.openToc(); })
-            }
-
-            // ===== 操作按钮 =====
-            Row() {
-              Button('开始阅读').fontSize(14).height(42).layoutWeight(1).margin({ right: 4 })
-                .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(21)
-                .onClick((): void => { this.startRead() })
-              Button(this.isInShelf ? '已在书架' : '加入书架').fontSize(12).height(42).width(100)
-                .backgroundColor(this.isInShelf ? '#999' : '#4CAF50').fontColor('#FFF').borderRadius(21)
-                .enabled(!this.isInShelf).onClick((): void => { this.addToShelf() })
-            }.width('100%').padding(16)
-            .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-            .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
-
-            // 阅读进度
-            if (this.isInShelf && this.durChapterTitle) {
-              Row() {
-                Text('📖 ' + this.durChapterTitle).fontSize(12).fontColor('#0078D7')
-                  .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
-                if (this.lastReadTime) {
-                  Text(this.lastReadTime).fontSize(11).fontColor('#AAA')
                 }
-              }.width('100%').padding({left:16,right:16,top:10,bottom:10})
-              .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-              .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
-            }
-
-            // ===== 次操作 =====
-            Row() {
-              this.buildIconBtn('🔄', '换源', () => { this.changeSource(); })
-              this.buildIconBtn('📋', '目录', () => { this.openToc(); })
-              this.buildIconBtn('🔄', '刷新', () => { this.tryFetchBookInfo(); })
-              if (this.isInShelf) {
-                this.buildIconBtn('📝', '备注', () => { this.showRemarkDialog(); })
-              this.buildIconBtn('📊', '记录', () => { this.showReadRecord(); })
-              this.buildIconBtn('📂', '分组', () => { this.showGroupSheet(); })
-              this.buildIconBtn('🖼️', '封面', () => { this.showCoverSheet(); })
-              this.buildIconBtn('🗑️', '删除', () => { this.removeFromShelf(); })
+                .layoutWeight(1)
+                .height(157)
+                .justifyContent(FlexAlign.Center)
               }
-            }.width('100%').padding({left:8,right:8,top:6,bottom:6}).justifyContent(FlexAlign.SpaceEvenly)
-            .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
-            .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#EEE' })
+              .width('100%')
+              .padding({ left: 16, right: 16 })
 
-            // ===== 简介 =====
-            if (this.introduce) {
-              Column() {
-                Text('简介').fontSize(14).fontWeight(FontWeight.Medium)
-                  .margin({ bottom: 6 }).alignSelf(ItemAlign.Start)
-                Text(this.introduce).fontSize(13).fontColor('#888').lineHeight(20)
-                  .maxLines(this.introExpanded ? 100 : 5).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .alignSelf(ItemAlign.Start)
-                if (this.introduce.length > 200) {
-                  Text(this.introExpanded ? '收起' : '展开').fontSize(12).fontColor('#0078D7')
-                    .margin({ top: 4 }).alignSelf(ItemAlign.Start)
-                    .onClick(() => { this.introExpanded = !this.introExpanded; })
+              if (this.getInfoLabels().length > 0) {
+                Scroll() {
+                  Row() {
+                    ForEach(this.getInfoLabels(), (label: string) => {
+                      this.buildLabelChip(label)
+                    }, (label: string) => label)
+                  }
+                  .padding({ left: 16, right: 16 })
                 }
-              }.width('100%').padding(16).alignItems(HorizontalAlign.Start)
-              .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')
+                .width('100%')
+                .scrollable(ScrollDirection.Horizontal)
+              }
             }
-          }.width('100%')
-        }.layoutWeight(1).width('100%')
-      }.width('100%').height('100%')
-    }.width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F0F0F0')
+            .width('100%')
+            .padding({ top: 104, bottom: 12 })
+            .linearGradient({
+              direction: GradientDirection.Bottom,
+              colors: [
+                ['#00000000', 0.0],
+                [this.surfaceTranslucentColor(), 0.74],
+                [this.surfaceColor(), 1.0],
+              ]
+            })
+
+            Column() {
+              this.buildActionRow()
+              this.buildSummary()
+            }
+            .width('100%')
+            .backgroundColor(this.surfaceColor())
+            .padding({ bottom: 128 })
+          }
+          .width('100%')
+        }
+        .layoutWeight(1)
+        .width('100%')
+      }
+      .width('100%')
+      .height('100%')
+
+      // 阅读 FAB：对齐 Android ExtendedFloatingActionButton，固定右下角
+      Button() {
+        Row() {
+          Text('书').fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.fabTextColor())
+          Text('阅读').fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.fabTextColor())
+            .margin({ left: 8 })
+        }
+      }
+      .height(54)
+      .padding({ left: 18, right: 22 })
+      .borderRadius(27)
+      .backgroundColor(this.fabColor())
+      .shadow({ radius: 18, color: '#00000030', offsetX: 0, offsetY: 8 })
+      .position({ x: 'calc(100% - 128vp)', y: 'calc(100% - 84vp)' })
+      .zIndex(20)
+      .onClick((): void => { this.startRead(); })
+
+      if (this.showMoreMenu) {
+        this.buildOverflowMenu()
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.surfaceColor())
   }
 
-  @Builder buildIconBtn(icon: string, label: string, action: () => void) {
+  @Builder buildActionRow() {
+    Row() {
+      this.buildShelfActionCard()
+      this.buildActionCard('☰', '查看目录', () => { this.openToc(); })
+      this.buildActionCard('源', '书源', () => { this.changeSource(); })
+      this.buildActionCard('时', '阅读记录', () => { this.showReadRecord(); })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .justifyContent(FlexAlign.SpaceBetween)
+  }
+
+  @Builder buildShelfActionCard() {
     Column() {
-      Text(icon).fontSize(20)
-      Text(label).fontSize(10).fontColor('#888').margin({top:2})
-    }.onClick(action).padding({left:8,right:8})
+      Text(this.isInShelf ? '书' : '+')
+        .fontSize(20)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.primaryTextColor())
+        .height(24)
+        .textAlign(TextAlign.Center)
+      Text(this.isInShelf ? '已在书架' : '加入书架')
+        .fontSize(12)
+        .fontColor(this.primaryTextColor())
+        .maxLines(2)
+        .textAlign(TextAlign.Center)
+        .margin({ top: 5 })
+    }
+    .height(74)
+    .layoutWeight(1)
+    .margin({ left: 4, right: 4 })
+    .padding({ left: 6, right: 6, top: 12, bottom: 10 })
+    .borderRadius(16)
+    .backgroundColor(this.containerLowColor())
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      if (this.isInShelf) {
+        this.removeFromShelf();
+      } else {
+        this.addToShelf();
+      }
+    })
+  }
+
+  @Builder buildActionCard(icon: string, label: string, action: () => void) {
+    Column() {
+      Text(icon)
+        .fontSize(20)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.primaryTextColor())
+        .height(24)
+        .textAlign(TextAlign.Center)
+      Text(label)
+        .fontSize(12)
+        .fontColor(this.primaryTextColor())
+        .maxLines(2)
+        .textAlign(TextAlign.Center)
+        .margin({ top: 5 })
+    }
+    .height(74)
+    .layoutWeight(1)
+    .margin({ left: 4, right: 4 })
+    .padding({ left: 6, right: 6, top: 12, bottom: 10 })
+    .borderRadius(16)
+    .backgroundColor(this.containerLowColor())
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(action)
+  }
+
+  @Builder buildSummary() {
+    Column() {
+      Text('目录：' + (this.durChapterTitle || (this.isRefreshing ? '加载中' : '未开始阅读')))
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryTextColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .onClick(() => { this.openToc(); })
+
+      Text('最新：' + (this.latestChapter || '无最新章节信息'))
+        .fontSize(14)
+        .fontColor(this.secondaryTextColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .margin({ top: 4 })
+        .onClick(() => { this.openToc(); })
+
+      Row() {
+        Text('共' + this.chapterCount + '章')
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryColor())
+        Text('|')
+          .fontSize(13)
+          .fontColor(this.tertiaryTextColor())
+          .margin({ left: 8, right: 8 })
+        Text(this.getReadIndexText())
+          .fontSize(13)
+          .fontColor(this.tertiaryTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        if (this.lastReadTime) {
+          Text(this.lastReadTime).fontSize(12).fontColor(this.tertiaryTextColor())
+        }
+      }
+      .width('100%')
+      .margin({ top: 8 })
+
+      if (this.chapterCount === 0 && !this.isRefreshing) {
+        Text('目录加载失败或书源暂无目录')
+          .fontSize(12)
+          .fontColor('#E35D5B')
+          .width('100%')
+          .margin({ top: 8 })
+      }
+
+      if (this.remark) {
+        Column() {
+          Text(this.remark)
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .lineHeight(20)
+            .width('100%')
+        }
+        .width('100%')
+        .padding(14)
+        .borderRadius(14)
+        .backgroundColor(this.containerLowColor())
+        .margin({ top: 14, bottom: 8 })
+        .onClick(() => { this.showRemarkDialog(); })
+      }
+
+      Text(this.getIntroText())
+        .fontSize(14)
+        .fontColor(this.primaryTextColor())
+        .lineHeight(22)
+        .maxLines(this.introExpanded ? 100 : 8)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .margin({ top: 12 })
+        .onClick(() => { this.introExpanded = !this.introExpanded; })
+
+      if (this.getIntroText().length > 180) {
+        Text(this.introExpanded ? '收起' : '展开')
+          .fontSize(13)
+          .fontColor(this.primaryColor())
+          .margin({ top: 8 })
+          .onClick(() => { this.introExpanded = !this.introExpanded; })
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder buildLabelChip(label: string) {
+    Text(label)
+      .fontSize(12)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(this.primaryTextColor())
+      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+      .borderRadius(14)
+      .backgroundColor(this.containerColor())
+      .margin({ right: 8, top: 10 })
+  }
+
+  @Builder buildOverflowMenu() {
+    Column() {
+      this.buildMenuItem('刷新', () => { this.showMoreMenu = false; this.tryFetchBookInfo(); })
+      this.buildMenuItem('换封面', () => { this.showMoreMenu = false; this.showCoverSheet(); })
+      this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })
+      this.buildMenuItem('备注', () => { this.showMoreMenu = false; this.showRemarkDialog(); })
+      if (this.isInShelf) {
+        this.buildMenuItem('移出书架', () => { this.showMoreMenu = false; this.removeFromShelf(); }, true)
+      }
+    }
+    .width(150)
+    .padding({ top: 8, bottom: 8 })
+    .borderRadius(16)
+    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
+    .shadow({ radius: 20, color: '#00000026', offsetX: 0, offsetY: 8 })
+    .position({ x: 'calc(100% - 166vp)', y: 82 })
+    .zIndex(30)
+  }
+
+  @Builder buildMenuItem(label: string, action: () => void, danger: boolean = false) {
+    Text(label)
+      .fontSize(14)
+      .fontColor(danger ? '#E35D5B' : this.primaryTextColor())
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 11, bottom: 11 })
+      .onClick(action)
+  }
+
+  private getDisplayCover(): string {
+    return this.customCoverPath || this.coverUrl || '';
+  }
+
+  private getInfoLabels(): string[] {
+    const labels: string[] = [];
+    if (this.groupId > BookGroup.ALL) {
+      labels.push('分组 ' + this.groupId);
+    }
+    if (this.wordCount) {
+      labels.push(this.wordCount);
+    }
+    if (this.chapterCount > 0) {
+      labels.push(this.chapterCount + '章');
+    }
+    if (this.lastUpdateTime) {
+      labels.push(this.lastUpdateTime);
+    }
+    if (this.kind) {
+      const parts = this.kind.split(/[,，\\s]+/).filter((p: string) => p.length > 0);
+      for (let i = 0; i < parts.length && i < 8; i++) {
+        labels.push(parts[i]);
+      }
+    }
+    return labels;
+  }
+
+  private getReadIndexText(): string {
+    if (this.chapterCount > 0 && this.durChapterIndex + 1 >= this.chapterCount) {
+      return '已读完';
+    }
+    return '读至第' + (this.durChapterIndex + 1) + '章';
+  }
+
+  private getIntroText(): string {
+    return this.introduce || '暂无简介';
   }
 
   private getCoverColor(): string {
     const cs = ['#455A64','#5C6BC0','#26A69A','#EC407A','#AB47BC','#42A5F5','#66BB6A','#FF7043'];
     return this.bookName ? cs[this.bookName.charCodeAt(0) % cs.length] : cs[0];
+  }
+
+  private surfaceColor(): string {
+    return this.isDark ? '#121212' : '#FFFFFF';
+  }
+
+  private surfaceTranslucentColor(): string {
+    return this.isDark ? '#121212CC' : '#FFFFFFD9';
+  }
+
+  private containerColor(): string {
+    return this.isDark ? '#2A2A2A' : '#EEF2F3';
+  }
+
+  private containerLowColor(): string {
+    return this.isDark ? '#1F1F1F' : '#F5F7F8';
+  }
+
+  private primaryTextColor(): string {
+    return this.isDark ? '#F2F2F2' : '#1B1B1F';
+  }
+
+  private secondaryTextColor(): string {
+    return this.isDark ? '#C6C6C6' : '#5F6368';
+  }
+
+  private tertiaryTextColor(): string {
+    return this.isDark ? '#9A9A9A' : '#7A7D82';
+  }
+
+  private primaryColor(): string {
+    return this.isDark ? '#8AB4F8' : '#2F6F8F';
+  }
+
+  private fabColor(): string {
+    return this.isDark ? '#B8D7EA' : '#355F72';
+  }
+
+  private fabTextColor(): string {
+    return this.isDark ? '#12313F' : '#FFFFFF';
   }
 }
