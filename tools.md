@@ -35,3 +35,32 @@ export PATH="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/to
 hdc -t 127.0.0.1:5555 install -r entry/build/default/outputs/default/entry-default-signed.hap
 hdc -t 127.0.0.1:5555 shell aa start -a MainAbility -b io.legado.hos
 ```
+
+## 抓取 hilog 方法
+
+### 1. 获取应用 PID
+```bash
+hdc -t 127.0.0.1:5555 shell ps -A | grep legado | awk '{print $2}'
+```
+
+### 2. 抓取应用的 hilog（仅错误级别）
+```bash
+hdc -t 127.0.0.1:5555 hilog -P <PID> -L E
+```
+
+### 3. 抓取全部级别并过滤应用关键词
+```bash
+hdc -t 127.0.0.1:5555 hilog -P <PID> | grep -E "ReadPage|loadContent|SrcEx|error|ERROR|getToc|chapter|BookInfo"
+```
+
+### 4. 清除旧日志后抓取新日志
+```bash
+hdc -t 127.0.0.1:5555 shell hilog -r  # 清除日志缓冲
+# 操作应用触发问题
+hdc -t 127.0.0.1:5555 hilog -P <PID> | grep -i "legado\|ReadPage\|loadContent\|fetch\|getToc\|error" | head -50
+```
+
+### 注意事项
+- `console.error()` 输出级别为 ERROR，`console.info()` 输出为 INFO
+- 优先在关键路径使用 `console.error()` 以确保日志级别可见
+- hilog -r 清缓冲后需要立即操作应用，稍等几秒再抓取
