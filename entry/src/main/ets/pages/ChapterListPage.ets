@@ -136,10 +136,24 @@ export struct ChapterListPage {
       const m = s.match(/(\d+)/);
       return m ? parseInt(m[1]) : -1;
     };
-    // 等距取 20 个采样点，统计趋势
+    // 检测前5章和后5章趋势，覆盖倒序章节在前的情况
+    const headEnd = Math.min(5, this.chapters.length);
+    const tailStart = Math.max(0, this.chapters.length - 5);
+    let headDesc = 0, tailAsc = 0;
+    for (let i = 1; i < headEnd; i++) {
+      const a = getNum(this.chapters[i-1].title), b = getNum(this.chapters[i].title);
+      if (a > 0 && b > 0 && a > b) headDesc++;
+    }
+    for (let i = tailStart + 1; i < this.chapters.length; i++) {
+      const a = getNum(this.chapters[i-1].title), b = getNum(this.chapters[i].title);
+      if (a > 0 && b > 0 && a < b) tailAsc++;
+    }
+    // 如果前5章递减 >=2 且 后5章递增 >=2，说明开头是倒序 → 排序
+    const needSort = headDesc >= 2 && tailAsc >= 2;
+    // 回退：等距采样法
     let ascCount = 0, descCount = 0;
     const sampleCount = Math.min(20, this.chapters.length);
-    const step = Math.floor(this.chapters.length / sampleCount);
+    const step = Math.max(1, Math.floor(this.chapters.length / sampleCount));
     let prevNum = -1;
     for (let i = 0; i < this.chapters.length; i += step) {
       const n = getNum(this.chapters[i].title);
@@ -150,8 +164,8 @@ export struct ChapterListPage {
       if (n > 0) prevNum = n;
     }
     const rev = descCount > ascCount;
-    console.info('[ChapterList] trend: asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
-    if (!rev) return;
+    console.info('[ChapterList] trend: headDesc=' + headDesc + ' tailAsc=' + tailAsc + ' needSort=' + needSort + ' asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
+    if (!needSort && !rev) return;
     console.info('[ChapterList] sorting ' + this.chapters.length + ' chapters');
     const nums: number[] = [];
     for (let i = 0; i < this.chapters.length; i++) {
