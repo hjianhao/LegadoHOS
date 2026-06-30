@@ -856,13 +856,38 @@ export class SourceExecutor {
       const tocBodies: string[] = [];
       const visitedToc = new Set<string>();
       const maxTocPages = 20;
-      for (let page = 0; page < maxTocPages; page++) {
-        if (visitedToc.has(currentTocUrl)) break;
+      const nextRule = source.ruleTocNextTocUrl || '';
+      // 预提取所有分页URL（某些网站 select option 列表固定，需一次提取全部分页链接）
+      const tocPageUrls: string[] = [currentTocUrl];
+      if (nextRule) {
+        const parser = getHtmlParser();
+        const doc = parser.parse(bodyText);
+        // 提取 nextUrl 规则中除 @value 外的选择器部分，然后 querySelectorAll 获取所有 option
+        const normRule = this.normalizeCssRule(nextRule);
+        const attrMatch = normRule.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
+        if (attrMatch) {
+          const cssSel = attrMatch[1].trim();
+          const attrSuffix = attrMatch[2].toLowerCase();
+          // 去掉位置索引 .N，获取所有同类元素
+          const allSel = cssSel.replace(/\.\d+$/, '');
+          const allOptions = parser.querySelectorAll(doc, allSel);
+          console.info('[SrcEx] getToc all options: css=' + allSel + ' found=' + allOptions.length);
+          for (let oi = 0; oi < Math.min(allOptions.length, 20); oi++) {
+            const opt = allOptions[oi];
+            const val = opt.attributes[attrSuffix] || '';
+            if (val) {
+              const fullUrl = this.resolvePageUrl(val, currentTocUrl);
+              if (fullUrl && !visitedToc.has(fullUrl)) {
+                tocPageUrls.push(fullUrl);
+              }
+            }
+          }
+        }
+      }
+      for (let page = 0; page < Math.min(maxTocPages, tocPageUrls.length); page++) {
+        currentTocUrl = tocPageUrls[page];
+        if (visitedToc.has(currentTocUrl)) continue;
         visitedToc.add(currentTocUrl);
-        tocBodies.push(bodyText);
-        const nextRule = source.ruleTocNextTocUrl || '';
-        console.info('[SrcEx] getToc nextRule:', JSON.stringify(nextRule));
-        if (!nextRule) { console.info('[SrcEx] getToc no nextRule, break'); break; }
         // debug: dump select innerHtml and structure
         const parser = getHtmlParser();
         const doc = parser.parse(bodyText);
