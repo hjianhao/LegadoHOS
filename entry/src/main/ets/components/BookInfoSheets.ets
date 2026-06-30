@@ -179,8 +179,9 @@ export struct ChangeSourceSheet {
   showCachedSources(): void {
     const targetName = this.bookName.replace(/\s/g, '');
     const targetAuthor = this.bookAuthor.replace(/\s/g, '');
+    const expandedSources = this.expandCachedSources(this.cachedSources);
     // 只保留精确匹配书名 + 可选匹配作者的源
-    const matched = this.cachedSources.filter((r: SearchResult) => {
+    const matched = expandedSources.filter((r: SearchResult) => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (rname !== targetName) return false;
       if (targetAuthor) {
@@ -201,6 +202,52 @@ export struct ChangeSourceSheet {
       this.cachedSources = [];
       this.searchSources();
     }
+  }
+
+  /**
+   * 搜索页展示的是合并后的书籍结果，一条结果可能包含多个源。
+   * 换源面板需要还原成逐源列表，否则 sourceCount=2 的搜索结果进入详情后只会显示第一源。
+   */
+  private expandCachedSources(sources: SearchResult[]): SearchResult[] {
+    const expanded: SearchResult[] = [];
+    for (const item of sources) {
+      const origins = item.sourceOrigins || [];
+      const originUrls = item.sourceOriginUrls || [];
+      const noteUrls = item.sourceNoteUrls || [];
+      const maxLen = Math.max(origins.length, originUrls.length, noteUrls.length);
+      if (maxLen <= 1) {
+        expanded.push(item);
+        continue;
+      }
+      for (let i = 0; i < maxLen; i++) {
+        const origin = origins[i] || item.origin || '';
+        const originUrl = originUrls[i] || (origin === item.origin ? item.originUrl : '');
+        const noteUrl = noteUrls[i] || (originUrl === item.originUrl ? item.noteUrl : '');
+        if (!originUrl && !noteUrl) continue;
+        expanded.push({
+          key: (originUrl || item.originUrl || '') + '|' + (noteUrl || item.noteUrl || ''),
+          name: item.name,
+          author: item.author,
+          coverUrl: item.coverUrl,
+          noteUrl: noteUrl || item.noteUrl,
+          origin: origin || item.origin,
+          originUrl: originUrl || item.originUrl,
+          kind: item.kind,
+          wordCount: item.wordCount,
+          lastUpdateTime: item.lastUpdateTime,
+          latestChapterTitle: item.latestChapterTitle,
+          introduce: item.introduce,
+          helperMsg: item.helperMsg,
+          duration: item.duration,
+          searchTime: item.searchTime,
+          sourceCount: 1,
+          sourceOrigins: [origin || item.origin],
+          sourceOriginUrls: [originUrl || item.originUrl],
+          sourceNoteUrls: [noteUrl || item.noteUrl],
+        });
+      }
+    }
+    return expanded;
   }
 
   /** 对齐 Legado startSearch() — 网络搜索 */

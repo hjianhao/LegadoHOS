@@ -36,6 +36,10 @@ export interface SearchResult {
   sourceCount: number;
   /** 所有搜索到此书的源列表 */
   sourceOrigins: string[];
+  /** 所有搜索到此书的源 URL 列表，与 sourceOrigins 同序 */
+  sourceOriginUrls?: string[];
+  /** 所有搜索到此书的详情页 URL 列表，与 sourceOrigins 同序 */
+  sourceNoteUrls?: string[];
 }
 
 /**
@@ -80,7 +84,7 @@ export function createSearchResult(): SearchResult {
     key: '', name: '', author: '', coverUrl: '', noteUrl: '',
     origin: '', originUrl: '', kind: '', wordCount: '', lastUpdateTime: '', latestChapterTitle: '',
     introduce: '', helperMsg: '', duration: 0, searchTime: 0,
-    sourceCount: 1, sourceOrigins: []
+    sourceCount: 1, sourceOrigins: [], sourceOriginUrls: [], sourceNoteUrls: []
   };
 }
 
@@ -97,6 +101,12 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
       if (!existing.sourceOrigins.includes(r.origin)) {
         existing.sourceOrigins.push(r.origin);
         existing.sourceCount = existing.sourceOrigins.length;
+      }
+      if (r.originUrl && !(existing.sourceOriginUrls || []).includes(r.originUrl)) {
+        existing.sourceOriginUrls = [...(existing.sourceOriginUrls || []), r.originUrl];
+      }
+      if (r.noteUrl && !(existing.sourceNoteUrls || []).includes(r.noteUrl)) {
+        existing.sourceNoteUrls = [...(existing.sourceNoteUrls || []), r.noteUrl];
       }
       // 保留更完整的封面
       if (!existing.coverUrl && r.coverUrl) {
@@ -119,6 +129,8 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
         duration: r.duration, searchTime: r.searchTime,
         sourceCount: 1,
         sourceOrigins: r.origin ? [r.origin] : [],
+        sourceOriginUrls: r.originUrl ? [r.originUrl] : [],
+        sourceNoteUrls: r.noteUrl ? [r.noteUrl] : [],
         latestChapterTitle: r.latestChapterTitle || ''
       });
     }
