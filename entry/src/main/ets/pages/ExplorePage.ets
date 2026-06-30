@@ -31,6 +31,7 @@ interface ExploreCategory {
 export struct ExplorePage {
   @State isDark: boolean = false;
   @State exploreSources: BookSource[] = [];
+  @State searchKey: string = '';
   @State expandedSourceUrl: string = '';
   @State loadingKinds: boolean = false;
   @State categoryCache: Record<string, ExploreCategory[]> = {};
@@ -40,6 +41,14 @@ export struct ExplorePage {
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
     void this.loadExploreSources();
+  }
+
+  getFilteredSources(): BookSource[] {
+    const q = this.searchKey.trim().toLowerCase();
+    if (!q) return this.exploreSources;
+    return this.exploreSources.filter((s: BookSource) =>
+      (s.sourceName || '').toLowerCase().includes(q) ||
+      (s.group || '').toLowerCase().includes(q));
   }
 
   async loadExploreSources(): Promise<void> {
@@ -420,27 +429,30 @@ export struct ExplorePage {
           .fontColor(this.isDark ? '#FFF' : '#111')
       }.width('100%').padding({ left: 16, top: 12, bottom: 8 })
 
-      if (this.exploreSources.length === 0) {
+      // 搜索框 — 过滤当前显示的发现源
+      Row() {
+        TextInput({ placeholder: '筛选发现源...' })
+          .height(42).layoutWeight(1)
+          .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+          .fontSize(14).padding({ left: 16 }).borderRadius(22)
+          .onChange((v: string) => { this.searchKey = v; })
+        if (this.searchKey.length > 0) {
+          Text('✕').fontSize(14).fontColor('#AAA').width(36).height(36)
+            .textAlign(TextAlign.Center).margin({ left: 8 })
+            .onClick(() => { this.searchKey = ''; })
+        }
+      }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
+
+      if (this.getFilteredSources().length === 0) {
         Column() {
-          Text('\uD83D\uDD0D').fontSize(48).margin({ top: 80 })
+          Text('🔍').fontSize(48).margin({ top: 80 })
           Text('暂无可用的发现书源').fontSize(16).fontColor('#888').margin({ top: 8 })
           Text('请在书源管理中导入带有发现URL的书源').fontSize(12).fontColor('#888').margin({ top: 4 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else {
-        // 搜索框
-        Row() {
-          Text('搜索书名或作者...').fontSize(14).fontColor('#AAA').layoutWeight(1)
-            .padding({ left: 20 }).height(42)
-            .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
-            .borderRadius(22)
-            .onClick((): void => {
-              router.pushUrl({ url: 'pages/SearchPage' });
-            })
-        }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
-
         // 书源列表
         List() {
-          ForEach(this.exploreSources, (source: BookSource) => {
+          ForEach(this.getFilteredSources(), (source: BookSource) => {
             ListItem() {
               Column() {
                 // 书源卡片头部

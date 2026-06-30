@@ -439,6 +439,23 @@ export class BookSourceTable {
             source.ruleSearchNoteUrl = fixed.ruleSearchNoteUrl;
             source.ruleSearchUrl = source.ruleSearchUrl || fixed.ruleSearchUrl;
           }
+          if (!source.ruleSearchKind) source.ruleSearchKind = fixed.ruleSearchKind;
+          if (!source.ruleSearchWordCount) source.ruleSearchWordCount = fixed.ruleSearchWordCount;
+          if (!source.ruleSearchLastUpdateTime) source.ruleSearchLastUpdateTime = fixed.ruleSearchLastUpdateTime;
+          if (!source.ruleSearchIntroduce) source.ruleSearchIntroduce = fixed.ruleSearchIntroduce;
+          source.ruleSearchLastChapter = fixed.ruleSearchLastChapter;
+          if (!source.ruleBookInfoName) source.ruleBookInfoName = fixed.ruleBookInfoName;
+          if (!source.ruleBookInfoAuthor) source.ruleBookInfoAuthor = fixed.ruleBookInfoAuthor;
+          if (!source.ruleBookInfoCover) source.ruleBookInfoCover = fixed.ruleBookInfoCover;
+          if (!source.ruleBookInfoIntroduce) source.ruleBookInfoIntroduce = fixed.ruleBookInfoIntroduce;
+          if (!source.ruleBookInfoKind) source.ruleBookInfoKind = fixed.ruleBookInfoKind;
+          if (!source.ruleBookInfoWordCount) source.ruleBookInfoWordCount = fixed.ruleBookInfoWordCount;
+          if (!source.ruleBookInfoLastUpdateTime) source.ruleBookInfoLastUpdateTime = fixed.ruleBookInfoLastUpdateTime;
+          if (!source.ruleBookInfoTocUrl) source.ruleBookInfoTocUrl = fixed.ruleBookInfoTocUrl;
+          source.ruleBookInfoLastChapter = fixed.ruleBookInfoLastChapter;
+          source.ruleTocNextTocUrl = fixed.ruleTocNextTocUrl;
+          source.ruleBookContentReplaceRegex = fixed.ruleBookContentReplaceRegex;
+          if (!source.ruleBookContentNext) source.ruleBookContentNext = fixed.ruleBookContentNext;
           // 恢复 ruleExplore*（发现页规则）
           if (fixed.ruleExploreList && !source.ruleExploreList) {
             source.ruleExploreList = fixed.ruleExploreList;

@@ -321,6 +321,7 @@ export class SourceExecutor {
               searchTime: existing.searchTime,
               sourceCount: existing.sourceCount + 1,
               sourceOrigins: [...existing.sourceOrigins, r.origin || r.originUrl || '未知'],
+              latestChapterTitle: existing.latestChapterTitle || r.latestChapterTitle || '',
             };
             mergedMap.set(key, merged);
             console.info('[SrcEx] Merged:', r.origin || r.originUrl, '→', cleanName,
@@ -346,6 +347,7 @@ export class SourceExecutor {
             searchTime: r.searchTime || Date.now(),
             sourceCount: 1,
             sourceOrigins: [r.origin || r.originUrl || '未知'],
+            latestChapterTitle: r.latestChapterTitle || '',
           });
         }
       }
@@ -514,7 +516,7 @@ export class SourceExecutor {
       results.push({
         key: (source.sourceUrl || '') + '|' + href, name: name, author: '',
         coverUrl: '', noteUrl: href || '', origin: source.sourceName || '未知',
-        originUrl: source.sourceUrl || '', kind: '', wordCount: '', lastUpdateTime: '',
+        originUrl: source.sourceUrl || '', kind: '', wordCount: '', lastUpdateTime: '', latestChapterTitle: '',
         introduce: '', helperMsg: '', duration: 0, searchTime: Date.now(),
         sourceCount: 1, sourceOrigins: source.sourceName ? [source.sourceName] : []
       });
@@ -782,8 +784,30 @@ export class SourceExecutor {
 
       // 规则解析：直接使用书源的内容规则，不通过 QuickJS（避免大数据传参溢出）
       if (source.ruleBookContent) {
-        const result = this.parseContentFromRules(raw, { content: source.ruleBookContent });
-        if (result && result.length > 0) return result;
+        const contentParts: string[] = [];
+        const visited = new Set<string>();
+        let pageUrl = contentUrl;
+        let pageHtml = raw;
+        for (let page = 0; page < 10; page++) {
+          if (visited.has(pageUrl)) break;
+          visited.add(pageUrl);
+
+          const result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
+          if (result && result.length > 0) {
+            contentParts.push(this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex));
+          }
+
+          const nextRule = source.ruleBookContentNext || '';
+          if (!nextRule) break;
+          const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, nextRule), pageUrl);
+          if (!nextUrl || visited.has(nextUrl)) break;
+          pageUrl = nextUrl;
+          pageHtml = await this.fetchWithOpts(pageUrl, headers);
+          if (!pageHtml) break;
+          console.info('[SrcEx] getContent next page', page + 2, pageUrl.substring(0, 100));
+        }
+        const merged = contentParts.join('\n');
+        if (merged && merged.length > 0) return merged;
       }
 
       // 兜底：stripHtml
@@ -819,7 +843,25 @@ export class SourceExecutor {
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
-      const bodyText = resp;
+      let bodyText = resp;
+      let currentTocUrl = tocUrl;
+      const tocBodies: string[] = [];
+      const visitedToc = new Set<string>();
+      for (let page = 0; page < 20; page++) {
+        if (visitedToc.has(currentTocUrl)) break;
+        visitedToc.add(currentTocUrl);
+        tocBodies.push(bodyText);
+        const nextRule = source.ruleTocNextTocUrl || '';
+        if (!nextRule) break;
+        const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(bodyText, nextRule), currentTocUrl);
+        if (!nextUrl || visitedToc.has(nextUrl)) break;
+        currentTocUrl = nextUrl;
+        const nextBody = await this.fetchWithOpts(currentTocUrl, headers);
+        if (!nextBody || nextBody.length < 100) break;
+        bodyText = nextBody;
+        console.info('[SrcEx] getToc next page', page + 2, currentTocUrl.substring(0, 100));
+      }
+      bodyText = tocBodies.join('\n');
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
       const tocRules: Record<string, string> = {
@@ -939,6 +981,10 @@ export class SourceExecutor {
     const authorRule = source.ruleSearchAuthor || '';
     const coverRule = source.ruleSearchCover || '';
     const noteUrlRule = source.ruleSearchNoteUrl || '';
+    const kindRule = (source as unknown as Record<string, string>).ruleSearchKind || '';
+    const wordCountRule = (source as unknown as Record<string, string>).ruleSearchWordCount || '';
+    const introRule = (source as unknown as Record<string, string>).ruleSearchIntroduce || '';
+    const lastChapterRule = (source as unknown as Record<string, string>).ruleSearchLastChapter || '';
 
     // 编译 || && 后的子规则
     const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
@@ -969,6 +1015,10 @@ export class SourceExecutor {
     const getAuthor = compileFieldRule(authorRule);
     const getCover = compileFieldRule(coverRule);
     const getNoteUrl = compileFieldRule(noteUrlRule);
+    const getKind = compileFieldRule(kindRule);
+    const getWordCount = compileFieldRule(wordCountRule);
+    const getIntro = compileFieldRule(introRule);
+    const getLastChapter = compileFieldRule(lastChapterRule);
 
     const results: SearchResult[] = [];
 
@@ -1037,13 +1087,24 @@ export class SourceExecutor {
       if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
         coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
       }
+      if (noteUrl && noteUrl.startsWith('//')) {
+        noteUrl = 'https:' + noteUrl;
+      }
+      if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
+        noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+      }
+
+      const cssKind = getKind(item);
+      const cssWordCount = getWordCount(item);
+      const cssIntro = getIntro(item);
+      const cssLastChapter = getLastChapter(item);
 
       results.push({
         key: (source.sourceUrl || '') + '|' + noteUrl + '|' + idx,
         name: name, author: author || '',
         coverUrl: coverUrl || '', noteUrl: noteUrl || '',
         origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
-        kind: '', wordCount: '', lastUpdateTime: '', introduce: '', helperMsg: '',
+        kind: cssKind || '', wordCount: cssWordCount || '', lastUpdateTime: '', latestChapterTitle: cssLastChapter || '', introduce: cssIntro || '', helperMsg: '',
         duration: 0, searchTime: Date.now(),
         sourceCount: 1, sourceOrigins: [],
       });
@@ -1092,7 +1153,7 @@ export class SourceExecutor {
         noteUrl: noteUrl || '', origin: source.sourceName || '未知',
         originUrl: source.sourceUrl || '',
         kind: kind, wordCount: wordCount,
-        lastUpdateTime: '', introduce: introduce, helperMsg: '',
+        lastUpdateTime: '', latestChapterTitle: '', introduce: introduce, helperMsg: '',
         duration: duration, searchTime: Date.now(),
         sourceCount: 1,
         sourceOrigins: source.sourceName ? [source.sourceName] : []
@@ -1284,6 +1345,7 @@ export class SourceExecutor {
         duration: 0, searchTime: Date.now(),
         sourceCount: 1,
         sourceOrigins: [],
+        latestChapterTitle: '',
       });
     }
     return results;
@@ -1431,11 +1493,58 @@ export class SourceExecutor {
   }
 
   private parseContentFromRules(html: string, rules: Record<string, string>): string {
-    const contentParts = RuleParser.parse(html, rules['content'] || '') as string[];
-    if (contentParts && Array.isArray(contentParts)) {
-      return contentParts.join('\n');
+    const rule = rules['content'] || '';
+    if (rule) {
+      const value = this.extractHtmlRuleValue(html, rule);
+      if (value) {
+        return this.stripHtml(value);
+      }
     }
     return this.stripHtml(html);
+  }
+
+  private extractHtmlRuleValue(html: string, rule: string): string {
+    if (!html || !rule) return '';
+    const trimmed = rule.trim();
+    const textHref = trimmed.match(/^text\.([^@]+)@href$/i);
+    if (textHref) {
+      const label = this.escapeRegex(textHref[1].trim());
+    const re = new RegExp("<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>\\s*[^<]*" + label + "[^<]*\\s*</a>", 'i');
+      const m = html.match(re);
+      return m ? m[1] : '';
+    }
+    const parser = getHtmlParser();
+    const doc = parser.parse(html);
+    return parser.extractAttr(doc, this.normalizeCssRule(trimmed));
+  }
+
+  private resolvePageUrl(url: string, currentUrl: string): string {
+    if (!url) return '';
+    let nextUrl = url.trim();
+    if (!nextUrl || nextUrl.startsWith('#') || nextUrl.startsWith('javascript:')) return '';
+    if (nextUrl.startsWith('//')) return 'https:' + nextUrl;
+    if (nextUrl.startsWith('http://') || nextUrl.startsWith('https://')) return nextUrl;
+    const origin = currentUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+    if (nextUrl.startsWith('/')) return origin + nextUrl;
+    const base = currentUrl.replace(/[#?].*$/, '').replace(/\/[^\/]*$/, '/');
+    return base + nextUrl;
+  }
+
+  private applyReplaceRegex(content: string, replaceRule: string): string {
+    if (!content || !replaceRule) return content;
+    let result = content;
+    const rules = replaceRule.startsWith('##') ? replaceRule.substring(2).split('##') : replaceRule.split('##');
+    for (let i = 0; i < rules.length; i += 2) {
+      const pattern = rules[i];
+      const replacement = i + 1 < rules.length ? rules[i + 1] : '';
+      if (!pattern) continue;
+      try {
+        result = result.replace(new RegExp(pattern, 'g'), replacement);
+      } catch (_e) {
+        /* ignore invalid replacement rule */
+      }
+    }
+    return result.trim();
   }
 
   private stripHtml(html: string): string {
@@ -1449,15 +1558,15 @@ export class SourceExecutor {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
 
-    const items = RuleParser.parse(html, tocRule) as unknown[];
-    if (!items || !Array.isArray(items)) return [];
+    const parser = getHtmlParser();
+    const doc = parser.parse(html);
+    const items = parser.querySelectorAll(doc, this.normalizeCssRule(tocRule));
+    if (!items || items.length === 0) return [];
 
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
-    return items.map((item: unknown, index: number): BookSourceChapter => {
-      const itemHtml = typeof item === 'string' ? item : JSON.stringify(item);
-
+    return items.map((item: HtmlElement, index: number): BookSourceChapter => {
       const parseField = (rule: string): string => {
         if (!rule) return '';
         // 剥离 ## 后缀 post-processing（例如 $.serialName##正文卷. ）
@@ -1468,10 +1577,18 @@ export class SourceExecutor {
           cleanRule = parts[0];
           postProcessors = parts.slice(1);
         }
-        const val = RuleParser.parse(itemHtml, cleanRule);
         let result = '';
-        if (Array.isArray(val)) result = val[0] || '';
-        else if (typeof val === 'string') result = val;
+        if (cleanRule === 'text') {
+          result = item.text || '';
+        } else if (cleanRule === 'ownText' || cleanRule === 'textNodes') {
+          result = item.ownText || '';
+        } else if (cleanRule === 'href' || cleanRule === 'src') {
+          result = parser.getAttr(item, cleanRule);
+        } else if (cleanRule === 'html') {
+          result = item.innerHtml || '';
+        } else if (cleanRule) {
+          result = parser.extractAttr(item, this.normalizeCssRule(cleanRule));
+        }
         // 应用 ## 后缀 post-processing
         for (const proc of postProcessors) {
           if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
@@ -1491,12 +1608,10 @@ export class SourceExecutor {
         // 解析结果中的 {{$.xxx}} 模板（从当前 item 中提取字段值）
         if (result.includes('{{')) {
           result = result.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
-            const v = RuleParser.parseJsonPath(item, '$.' + path);
-            if (v !== null && v !== undefined) return String(v);
             return '';
           });
         }
-        return result;
+        return HtmlUtil.stripHtml(result).trim();
       };
 
       // 用 resolveFieldRule 支持 || && 操作符
@@ -1509,16 +1624,7 @@ export class SourceExecutor {
       if (title) {
         if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
       } else {
-        console.info('[SrcEx] TocTitle FAIL titleRule=' + titleRule + ' item_type=' + typeof item + ' isObj=' + (typeof item === 'object') + ' item_keys=' + (typeof item === 'object' && item !== null ? Object.keys(item as object).join(',') : 'N/A'));
-      }
-      // titleRule 为空时从 JSON 中找第一个字符串字段作为章节名
-      if (!title && !titleRule && typeof item === 'object' && item !== null) {
-        const raw = JSON.stringify(item);
-        for (const k of ['"serialName"','"chapterName"','"name"','"title"']) {
-          const m = raw.match(new RegExp(k + '\\s*:\\s*"([^"]+)"'));
-          if (m && m[1].length > 1) { title = m[1]; break; }
-        }
-        if (title) console.info('[SrcEx] TocFallbackTitle OK index=' + index + ' title=' + title.substring(0, 30));
+        title = HtmlUtil.stripHtml(item.text || '').trim();
       }
       return {
         title: title || `第${index + 1}章`,

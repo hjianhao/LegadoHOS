@@ -75,6 +75,17 @@ export class ChapterTable {
     await this.rdbStore.delete(predicates);
   }
 
+  async clearContentByBookId(bookId: number): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
+    predicates.equalTo('book_id', bookId);
+    await this.rdbStore.update({
+      'content': '',
+      'content_length': 0,
+      'is_cached': 0,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
   async getChapterCount(bookId: number): Promise<number> {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);

@@ -14,7 +14,21 @@ import { Book } from '../model/Book';
 import { AppTheme } from '../theme/AppTheme';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
+import { BookSourceTable } from '../data/database/BookSourceTable';
+import { ChapterTable } from '../data/database/ChapterTable';
 import { BookCover } from '../components/BookCover';
+import { GlobalConfig } from '../data/preferences/GlobalConfig';
+import { BookGroupTable } from '../data/database/BookGroupTable';
+import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookGroup';
+import { BookSourceChapter } from '../model/BookSource';
+import { createDefaultChapter, BookChapter } from '../model/BookChapter';
+import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+
+import { BookshelfConfigDialog } from './BookshelfConfigDialog';
+import { BookGroupManageDialog } from './BookGroupManageDialog';
+import { AddBookUrlDialog } from './AddBookUrlDialog';
+import { BookshelfImportDialog } from './BookshelfImportDialog';
+import { BookshelfExportDialog } from './BookshelfExportDialog';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 
@@ -26,27 +40,156 @@ export struct BookshelfPage {
   @State isRefreshing: boolean = false;
   @State isDark: boolean = false;
   @State activeTabIndex: number = 0;
+  @State activeGroupId: number = BookGroup.ALL;
+  @State groups: BookGroupItem[] = [];
   @State searchText: string = '';
-  @State isListView: boolean = true;
-  @State sortMode: number = 0;
+  @StorageLink('gc_groupStyle') groupStyle: number = 0;
+  @StorageLink('gc_sortMode') sortMode: number = 0;
+  @StorageLink('gc_sortOrder') sortOrder: number = 0;
+  @StorageLink('gc_layoutMode') layoutMode: number = 0;
+  @StorageLink('gc_gridColumns') gridColumns: number = 3;
+  @StorageLink('gc_gridStyle') gridStyle: number = 0;
+  @StorageLink('gc_showDivider') showDivider: boolean = true;
+  @StorageLink('gc_coverWidth') coverWidth: number = 84;
+  @StorageLink('gc_isCompact') isCompact: boolean = false;
+  @StorageLink('gc_titleLines') titleMaxLines: number = 2;
+  @StorageLink('gc_coverShadow') coverShadow: boolean = false;
+  @StorageLink('gc_showUnread') showUnread: boolean = true;
+  @StorageLink('gc_showTip') showTip: boolean = true;
+  @StorageLink('gc_showLastUpd') showLastUpdateTime: boolean = true;
+  @StorageLink('gc_showBookIntro') showBookIntro: boolean = true;
+  @StorageLink('gc_showLatest') showLatestChapter: boolean = true;
+  @StorageLink('gc_showTag') showTag: boolean = true;
+  @StorageLink('gc_introLines') introMaxLines: number = 2;
+  @StorageLink('shelfRefreshCounter') @Watch('onShelfRefreshCounterChanged') shelfRefreshCounter: number = 0;
 
-  private tabs: string[] = ['全部', '在读', '已完本'];
-  private sortLabels: string[] = ['最后阅读', '书名', '更新时间'];
+  @State showMenu: boolean = false;
+  @State isSelectMode: boolean = false;
+  @State selectedBookIds: number[] = [];
+  @State exportBooks: Book[] = [];
+  private cfgDlg?: CustomDialogController;
+  private groupDlg?: CustomDialogController;
+  private addUrlDlg?: CustomDialogController;
+  private importDlg?: CustomDialogController;
+  private exportDlg?: CustomDialogController;
+  private sortLabels: string[] = ['最后阅读', '书名', '更新时间', '手动排序'];
+  private firstLoadRetryCount: number = 0;
+  private isLoadingShelf: boolean = false;
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
-    this.sortMode = AppStorage.get<number>('shelfSortMode') || 0;
-    this.loadBooks();
+    GlobalConfig.getInstance().syncToAppStorage();
+    this.cfgDlg = new CustomDialogController({
+      builder: BookshelfConfigDialog({
+        controller: this.cfgDlg!,
+        onConfigChanged: () => {
+          this.applyFilters();
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.groupDlg = new CustomDialogController({
+      builder: BookGroupManageDialog({
+        controller: this.groupDlg!,
+        onGroupChanged: () => {
+          this.loadGroups();
+          this.loadBooks();
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.addUrlDlg = new CustomDialogController({
+      builder: AddBookUrlDialog({
+        controller: this.addUrlDlg!,
+        groupId: this.activeGroupId,
+        onSuccess: () => { this.loadBooks(); }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.importDlg = new CustomDialogController({
+      builder: BookshelfImportDialog({
+        controller: this.importDlg!,
+        groupId: this.activeGroupId,
+        onImportSuccess: () => { this.loadBooks(); }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.exportDlg = new CustomDialogController({
+      builder: BookshelfExportDialog({
+        controller: this.exportDlg!,
+        books: this.exportBooks
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.loadShelfData();
   }
 
   onPageShow(): void {
-    this.loadBooks();
+    this.loadShelfData();
+  }
+
+  onShelfRefreshCounterChanged(): void {
+    this.loadShelfData();
+  }
+
+  private async ensureDatabaseReady(): Promise<boolean> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      return true;
+    } catch (_e) {
+      try {
+        await AppDatabase.getInstance().init(getContext());
+        return true;
+      } catch (err) {
+        console.error('[Bookshelf] database not ready:', err);
+        return false;
+      }
+    }
+  }
+
+  private async loadShelfData(): Promise<void> {
+    if (this.isLoadingShelf) return;
+    this.isLoadingShelf = true;
+    try {
+      const ready = await this.ensureDatabaseReady();
+      if (!ready) {
+        this.scheduleFirstLoadRetry();
+        return;
+      }
+      await this.loadGroups();
+      await this.loadBooks();
+      this.firstLoadRetryCount = 0;
+    } finally {
+      this.isLoadingShelf = false;
+    }
+  }
+
+  private scheduleFirstLoadRetry(): void {
+    if (this.firstLoadRetryCount >= 3) return;
+    this.firstLoadRetryCount++;
+    setTimeout(() => {
+      this.loadShelfData();
+    }, 300);
   }
 
   async loadBooks(): Promise<void> {
     if (!this.isRefreshing) this.isLoading = true;
     try {
-      await AppDatabase.getInstance().waitForInit();
+      const ready = await this.ensureDatabaseReady();
+      if (!ready) {
+        this.scheduleFirstLoadRetry();
+        return;
+      }
       const db = AppDatabase.getInstance().rdbStore;
       const bookDao = new BookTable(db);
       const result = await bookDao.getAllShelfBooks();
@@ -59,22 +202,47 @@ export struct BookshelfPage {
     this.isRefreshing = false;
   }
 
+  async loadGroups(): Promise<void> {
+    try {
+      const ready = await this.ensureDatabaseReady();
+      if (!ready) {
+        this.scheduleFirstLoadRetry();
+        return;
+      }
+      const groupDao = new BookGroupTable(AppDatabase.getInstance().rdbStore);
+      const shown = await groupDao.getShownGroups();
+      this.groups = shown.length > 0 ? shown : [{
+        id: BookGroup.ALL, name: '全部', order: 0, cover: '', isSystem: true,
+        enableRefresh: true, show: true, isPrivate: false, bookSort: -1
+      }];
+      if (!this.groups.some((g: BookGroupItem): boolean => g.id === this.activeGroupId)) {
+        this.activeGroupId = this.groups[0].id;
+        this.activeTabIndex = 0;
+      }
+      this.applyFilters();
+    } catch (_e) {
+      this.groups = [{
+        id: BookGroup.ALL, name: '全部', order: 0, cover: '', isSystem: true,
+        enableRefresh: true, show: true, isPrivate: false, bookSort: -1
+      }];
+    }
+  }
+
   async onRefresh(): Promise<void> {
+    if (this.isLoadingShelf) {
+      this.isRefreshing = false;
+      return;
+    }
     this.isRefreshing = true;
-    await this.loadBooks();
+    await this.loadShelfData();
   }
 
   applyFilters(): void {
     let result = [...this.books];
-    if (this.activeTabIndex === 1) {
-      result = result.filter(b =>
-        b.durChapterIndex > 0 &&
-        (b.totalChapterNum <= 0 || b.durChapterIndex < b.totalChapterNum)
-      );
-    } else if (this.activeTabIndex === 2) {
-      result = result.filter(b =>
-        b.totalChapterNum > 0 && b.durChapterIndex >= b.totalChapterNum
-      );
+    if (this.activeGroupId < BookGroup.CUSTOM) {
+      result = result.filter((b: Book): boolean => bookMatchesSystemGroup(b, this.activeGroupId));
+    } else {
+      result = result.filter((b: Book): boolean => b.groupId === this.activeGroupId);
     }
     if (this.searchText.trim()) {
       const q = this.searchText.trim().toLowerCase();
@@ -83,19 +251,26 @@ export struct BookshelfPage {
         (b.author && b.author.toLowerCase().includes(q))
       );
     }
-    if (this.sortMode === 0) {
-      result.sort((a, b) => (b.lastOpenTime || 0) - (a.lastOpenTime || 0));
-    } else if (this.sortMode === 1) {
-      result.sort((a, b) => a.name.localeCompare(b.name));
-    } else if (this.sortMode === 2) {
-      result.sort((a, b) => (b.lastUpdateTime || '').localeCompare(a.lastUpdateTime || ''));
-    }
+    result.sort((a, b) => {
+      let cmp = 0;
+      switch (this.sortMode) { case 0: cmp = (b.lastOpenTime||0)-(a.lastOpenTime||0); break; case 1: cmp = (a.name||'').localeCompare(b.name||''); break; case 2: cmp = (b.lastUpdateTime||'').localeCompare(a.lastUpdateTime||''); break; case 3: cmp = (a.id||0)-(b.id||0); break; }
+      return this.sortOrder === 1 ? -cmp : cmp;
+    });
     this.filteredBooks = result;
   }
 
   onTabChange(index: number): void {
     this.activeTabIndex = index;
+    if (this.groups[index]) this.activeGroupId = this.groups[index].id;
     this.applyFilters();
+  }
+
+  private onBookLongPress(book: Book): void {
+    if (this.isSelectMode) {
+      this.toggleBookSelection(book.id);
+    } else {
+      this.showContextMenu(book);
+    }
   }
 
   onSearchChange(value: string): void {
@@ -104,13 +279,148 @@ export struct BookshelfPage {
   }
 
   onSortToggle(): void {
-    this.sortMode = (this.sortMode + 1) % 3;
-    AppStorage.set<number>('shelfSortMode', this.sortMode);
+    this.sortMode = (this.sortMode + 1) % 4;
+    this.saveConfig();
     this.applyFilters();
   }
 
   onLayoutToggle(): void {
-    this.isListView = !this.isListView;
+    this.layoutMode = this.layoutMode === 0 ? 1 : 0;
+    this.saveConfig();
+  }
+
+  private currentTargetBooks(): Book[] {
+    if (this.selectedBookIds.length > 0) {
+      return this.books.filter((book: Book): boolean => this.selectedBookIds.includes(book.id));
+    }
+    return this.filteredBooks;
+  }
+
+  private toggleSelectMode(): void {
+    this.isSelectMode = !this.isSelectMode;
+    if (!this.isSelectMode) this.selectedBookIds = [];
+  }
+
+  private isSelected(id: number): boolean {
+    return this.selectedBookIds.includes(id);
+  }
+
+  private toggleBookSelection(id: number): void {
+    if (this.isSelected(id)) {
+      this.selectedBookIds = this.selectedBookIds.filter((item: number): boolean => item !== id);
+    } else {
+      this.selectedBookIds = [...this.selectedBookIds, id];
+    }
+  }
+
+  private selectAllVisible(): void {
+    if (this.selectedBookIds.length === this.filteredBooks.length) {
+      this.selectedBookIds = [];
+    } else {
+      this.selectedBookIds = this.filteredBooks.map((book: Book): number => book.id);
+    }
+  }
+
+  private openExportDialog(books: Book[]): void {
+    this.exportBooks = books;
+    this.exportDlg?.open();
+  }
+
+  private async removeSelectedFromShelf(): Promise<void> {
+    if (this.selectedBookIds.length === 0) return;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const bookDao = new BookTable(AppDatabase.getInstance().rdbStore);
+      const count = this.selectedBookIds.length;
+      await bookDao.setShelfByIds(this.selectedBookIds, false);
+      this.selectedBookIds = [];
+      this.isSelectMode = false;
+      promptAction.showToast({ message: '已移除 ' + count + ' 本', duration: 1500 });
+      this.loadBooks();
+    } catch (_e) {
+      promptAction.showToast({ message: '移除失败', duration: 1500 });
+    }
+  }
+
+  private async updateTocForVisible(): Promise<void> {
+    const targets = this.currentTargetBooks().filter((book: Book): boolean => !!book.bookUrl && !!book.originUrl);
+    if (targets.length === 0) {
+      promptAction.showToast({ message: '没有可更新目录的书籍', duration: 1500 });
+      return;
+    }
+    this.isRefreshing = true;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      const sourceDao = new BookSourceTable(db);
+      const bookDao = new BookTable(db);
+      const chapterDao = new ChapterTable(db);
+      let success = 0;
+      let failed = 0;
+      for (const book of targets) {
+        const source = await sourceDao.getSourceByUrl(book.originUrl);
+        if (!source) {
+          failed++;
+          continue;
+        }
+        const chapters = await globalSourceExecutor.getToc(source, book.bookUrl);
+        if (chapters.length === 0) {
+          failed++;
+          continue;
+        }
+        await chapterDao.deleteChaptersByBookId(book.id);
+        await chapterDao.insertChapters(this.toBookChapters(book.id, chapters));
+        await bookDao.updateTocInfo(book.id, chapters.length, chapters[chapters.length - 1].title);
+        success++;
+      }
+      promptAction.showToast({ message: '目录更新完成：成功 ' + success + '，失败 ' + failed, duration: 2000 });
+      this.loadBooks();
+    } catch (_e) {
+      promptAction.showToast({ message: '更新目录失败', duration: 1500 });
+    }
+    this.isRefreshing = false;
+  }
+
+  private toBookChapters(bookId: number, chapters: BookSourceChapter[]): BookChapter[] {
+    const now = Date.now();
+    return chapters.map((ch: BookSourceChapter, index: number): BookChapter => {
+      const item = createDefaultChapter();
+      item.bookId = bookId;
+      item.index = ch.index >= 0 ? ch.index : index;
+      item.title = ch.title || '';
+      item.url = ch.url || '';
+      item.createTime = now;
+      item.updateTime = now;
+      return item;
+    });
+  }
+
+  private saveConfig(): void {
+    const cfg = GlobalConfig.getInstance();
+    cfg.groupStyle = this.groupStyle;
+    cfg.sortMode = this.sortMode;
+    cfg.sortOrder = this.sortOrder;
+    cfg.layoutMode = this.layoutMode;
+    cfg.gridColumns = this.gridColumns;
+    cfg.gridStyle = this.gridStyle;
+    cfg.showDivider = this.showDivider;
+    cfg.coverWidth = this.coverWidth;
+    cfg.isCompact = this.isCompact;
+    cfg.titleMaxLines = this.titleMaxLines;
+    cfg.coverShadow = this.coverShadow;
+    cfg.showUnread = this.showUnread;
+    cfg.showTip = this.showTip;
+    cfg.showLastUpdateTime = this.showLastUpdateTime;
+    cfg.showBookIntro = this.showBookIntro;
+    cfg.showLatestChapter = this.showLatestChapter;
+    cfg.showTag = this.showTag;
+    cfg.introMaxLines = this.introMaxLines;
+    cfg.syncToAppStorage();
+    cfg.save();
+  }
+
+  private getIntroMaxLines(): number {
+    return this.introMaxLines === 0 ? 99 : this.introMaxLines;
   }
 
   getNewChaptersCount(book: Book): number {
@@ -199,7 +509,7 @@ export struct BookshelfPage {
     return `${d.getMonth() + 1}/${d.getDate()}`;
   }
 
-  build() {
+  build() { Stack() {
     Column().width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5') {
       // 顶部栏
       Row() {
@@ -210,10 +520,10 @@ export struct BookshelfPage {
         }
         Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor('#FFF')
           .height(32).padding({ left: 10, right: 10 })
-          .backgroundColor('#0078D7').borderRadius(16).margin({ right: 6 })
-          .onClick(() => { router.pushUrl({ url: 'pages/SearchPage' }); })
+        .backgroundColor('#0078D7').borderRadius(16).margin({ right: 6 })
+        .onClick(() => { router.pushUrl({ url: 'pages/SearchPage' }); })
         Button() {
-          Text(this.isListView ? '▦' : '☰').fontSize(16).fontColor('#666')
+          Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor('#666')
         }.width(36).height(36).backgroundColor('transparent')
         .onClick(() => { this.onLayoutToggle(); })
         Button() {
@@ -221,6 +531,7 @@ export struct BookshelfPage {
         }.height(28).padding({ left: 8, right: 8 })
         .backgroundColor(this.isDark ? '#333' : '#E0E0E0').borderRadius(14).margin({ left: 4 })
         .onClick(() => { this.onSortToggle(); })
+        Button() { Text('⋮').fontSize(22).fontColor(this.isDark ? '#CCC' : '#555') }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
       }.padding({ left: 16, right: 12, top: 12 }).width('100%')
 
       // 搜索栏
@@ -230,48 +541,79 @@ export struct BookshelfPage {
         .borderRadius(18).fontSize(14).placeholderColor('#999')
         .onChange((value: string) => { this.onSearchChange(value); })
 
-      // 分类标签
-      Row() {
-        ForEach(this.tabs, (tab: string, index: number) => {
-          Column() {
-            Text(tab).fontSize(14)
-              .fontColor(this.activeTabIndex === index ? '#0078D7' : (this.isDark ? '#AAA' : '#888'))
-              .fontWeight(this.activeTabIndex === index ? FontWeight.Bold : FontWeight.Normal)
-              .padding({ top: 8, bottom: 8 })
-            if (this.activeTabIndex === index) {
-              Row().width('60%').height(2).backgroundColor('#0078D7').borderRadius(1)
-            }
-          }.onClick(() => { this.onTabChange(index); }).layoutWeight(1).alignItems(HorizontalAlign.Center)
-        })
-      }.width('100%').padding({ left: 16, right: 16, top: 4 })
+      // 分类标签 (groupStyle: 0=show, 1=hide)
+      if (this.groupStyle === 0) {
+        Scroll() {
+          Row() {
+            ForEach(this.groups, (group: BookGroupItem, index: number) => {
+              Column() {
+                Text(group.name).fontSize(14)
+                  .fontColor(this.activeTabIndex === index ? '#0078D7' : (this.isDark ? '#AAA' : '#888'))
+                  .fontWeight(this.activeTabIndex === index ? FontWeight.Bold : FontWeight.Normal)
+                  .padding({ top: 8, bottom: 8 })
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                if (this.activeTabIndex === index) {
+                  Row().width('60%').height(2).backgroundColor('#0078D7').borderRadius(1)
+                }
+              }
+              .width(88).alignItems(HorizontalAlign.Center)
+              .onClick(() => { this.onTabChange(index); })
+            })
+          }.padding({ left: 16, right: 16, top: 4 })
+        }
+        .width('100%')
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+      }
+
+      if (this.isSelectMode) {
+        Row() {
+          Text('已选 ' + this.selectedBookIds.length + ' / ' + this.filteredBooks.length)
+            .fontSize(13).fontColor('#666').layoutWeight(1)
+          Button('全选').fontSize(13).fontColor('#0078D7')
+            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+            .onClick(() => { this.selectAllVisible(); })
+          Button('导出').fontSize(13).fontColor('#0078D7')
+            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+            .onClick(() => { this.openExportDialog(this.currentTargetBooks()); })
+          Button('移除').fontSize(13).fontColor('#F44336')
+            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+            .onClick(() => { this.removeSelectedFromShelf(); })
+        }.width('100%').height(40).padding({ left: 16, right: 12 })
+        .backgroundColor(this.isDark ? '#1F1F1F' : '#F0F7FF')
+      }
 
       // 内容
       if (this.isLoading && !this.isRefreshing) {
-        LoadingProgress().color('#0078D7').margin({ top: 100 })
-      } else if (this.filteredBooks.length === 0) {
         Column() {
-          Text('\uD83D\uDCDA').fontSize(64).margin({ top: 100 })
-          if (this.searchText) {
-            Text('没有匹配的书籍').fontSize(16).fontColor('#888').margin({ top: 12 })
-            Text('试试其他关键词').fontSize(13).fontColor('#AAA').margin({ top: 4 })
-          } else if (this.activeTabIndex > 0) {
-            Text('该分类下没有书籍').fontSize(16).fontColor('#888').margin({ top: 12 })
-            Text('去搜索添加书籍吧').fontSize(13).fontColor('#AAA').margin({ top: 4 })
-          } else {
-            Text('书架是空的').fontSize(16).fontColor('#888').margin({ top: 12 })
-            Text('去搜索添加书籍吧').fontSize(13).fontColor('#AAA').margin({ top: 4 })
-          }
-        }.width('100%').alignItems(HorizontalAlign.Center).layoutWeight(1)
+          LoadingProgress().color('#0078D7')
+        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
-        Refresh({ refreshing: this.isRefreshing }) {
-          if (this.isListView) {
+        Refresh({ refreshing: $$this.isRefreshing }) {
+          if (this.filteredBooks.length === 0) {
+            Scroll() {
+              Column() {
+                Text('\uD83D\uDCDA').fontSize(64).margin({ top: 100 })
+                if (this.searchText) {
+                  Text('没有匹配的书籍').fontSize(16).fontColor('#888').margin({ top: 12 })
+                  Text('试试其他关键词').fontSize(13).fontColor('#AAA').margin({ top: 4 })
+                } else if (this.activeTabIndex > 0) {
+                  Text('当前分组没有书籍').fontSize(16).fontColor('#888').margin({ top: 12 })
+                  Text('去搜索添加书籍吧').fontSize(13).fontColor('#AAA').margin({ top: 4 })
+                } else {
+                  Text('书架是空的').fontSize(16).fontColor('#888').margin({ top: 12 })
+                  Text('去搜索添加书籍吧').fontSize(13).fontColor('#AAA').margin({ top: 4 })
+                }
+              }.width('100%').height('100%').alignItems(HorizontalAlign.Center)
+            }.width('100%').height('100%')
+          } else if (this.layoutMode === 0) {
             List() {
               ForEach(this.filteredBooks, (book: Book) => {
                 ListItem() {
                   this.buildListItem(book)
-                }.border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
-                .onClick(() => { this.continueRead(book); })
-                .gesture(LongPressGesture().onAction(() => { this.showContextMenu(book); }))
+                }.border({ width: { bottom: this.showDivider ? 1 : 0 }, color: this.isDark ? '#333' : '#E8E8E8' })
+                .onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
+                .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
               })
             }.width('100%').margin({ top: 4 })
           } else {
@@ -279,50 +621,98 @@ export struct BookshelfPage {
               ForEach(this.filteredBooks, (book: Book) => {
                 GridItem() {
                   this.buildGridItem(book)
-                }.onClick(() => { this.continueRead(book); })
-                .gesture(LongPressGesture().onAction(() => { this.showContextMenu(book); }))
+                }.onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
+                .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
               })
-            }.columnsTemplate('1fr 1fr 1fr').columnsGap(8).rowsGap(8)
+            }.columnsTemplate(new Array(Math.max(1, this.gridColumns)).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
             .padding({ left: 16, right: 16, top: 8 })
           }
         }.layoutWeight(1).width('100%').onRefreshing(() => { this.onRefresh(); }).refreshOffset(64)
       }
     }
+    // ---- 11-item menu ----
+    if (this.showMenu) {
+      Column().width('100%').height('100%').position({ top: 0, left: 0 }).onClick(() => { this.showMenu = false; })
+      Column() {
+        this.mi('添加远程书籍', () => { this.showMenu = false; router.pushUrl({ url: 'pages/SearchPage' }); })
+        this.mi('添加本地书籍', () => { this.showMenu = false; promptAction.showToast({ message: '本地书籍导入待接入文件解析', duration: 1500 }); })
+        this.mi('更新目录', () => { this.showMenu = false; this.updateTocForVisible(); })
+        this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
+        this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
+        this.mi('添加URL', () => { this.showMenu = false; this.addUrlDlg?.open(); })
+        this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
+        this.mi('书架管理', () => { this.showMenu = false; router.pushUrl({ url: 'pages/BookshelfManagePage' }); })
+        this.mi('导出书架', () => { this.showMenu = false; this.openExportDialog(this.currentTargetBooks()); })
+        this.mi('导入书架', () => { this.showMenu = false; this.importDlg?.open(); })
+        this.mi('日志', () => { this.showMenu = false; promptAction.showToast({ message: '日志面板待接入', duration: 1500 }); })
+      }
+      .position({ top: 8, right: 8 }).backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')
+      .borderRadius(12).shadow({ radius: 8, color: '#20000000' }).width(180)
+    }
+  }
+  }
+
+  @Builder
+  mi(label: string, cb: () => void) {
+    Row() {
+      Text(label).fontSize(14).fontColor(this.isDark ? '#DDD' : '#333')
+    }
+    .width('100%').height(44).padding({ left: 16, right: 16 })
+    .justifyContent(FlexAlign.Start).alignItems(VerticalAlign.Center)
+    .onClick(cb)
   }
 
   @Builder
   buildListItem(book: Book) {
     Row() {
-      BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: 52, coverHeight: 70 }).margin({ right: 12 })
+      if (this.isSelectMode) {
+        Text(this.isSelected(book.id) ? '✓' : '')
+          .fontSize(16).fontColor('#FFF').fontWeight(FontWeight.Bold)
+          .width(24).height(24).textAlign(TextAlign.Center)
+          .backgroundColor(this.isSelected(book.id) ? '#0078D7' : '#33000000')
+          .borderRadius(12).margin({ right: 8 })
+      }
+      BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: this.coverWidth, coverHeight: Math.round(this.coverWidth * 1.375) })
+        .margin({ right: 12 })
+        .shadow({ radius: this.coverShadow ? 6 : 0, color: '#22000000', offsetY: 2 })
       Column() {
         Row() {
           Text(book.name).fontSize(15).fontWeight(FontWeight.Bold)
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-          if (this.getNewChaptersCount(book) > 0) {
+            .maxLines(this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          if (this.showUnread && this.getNewChaptersCount(book) > 0) {
             Text('+' + this.getNewChaptersCount(book))
               .fontSize(10).fontColor('#FFF').fontWeight(FontWeight.Bold)
               .padding({ left: 4, right: 4, top: 1, bottom: 1 })
               .backgroundColor('#F44336').borderRadius(8).margin({ left: 4 })
           }
         }.width('100%').alignItems(VerticalAlign.Center)
-        Text(book.author || '未知作者').fontSize(12).fontColor('#888')
-          .alignSelf(ItemAlign.Start).margin({ top: 2 })
-        if (book.durChapterTitle) {
+        if (!this.isCompact) {
+          Text(book.author || '未知作者').fontSize(12).fontColor('#888')
+            .alignSelf(ItemAlign.Start).margin({ top: 2 })
+        }
+        if (!this.isCompact && book.durChapterTitle) {
           Text(book.durChapterTitle).fontSize(11).fontColor('#AAA')
             .alignSelf(ItemAlign.Start).margin({ top: 1 })
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
-        if (book.latestChapterTitle && book.latestChapterTitle !== book.durChapterTitle) {
+        if (!this.isCompact && this.showLatestChapter && book.latestChapterTitle && book.latestChapterTitle !== book.durChapterTitle) {
           Text('最新: ' + book.latestChapterTitle).fontSize(11)
             .fontColor(this.isDark ? '#009688' : '#00897B')
             .alignSelf(ItemAlign.Start).margin({ top: 1 })
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
+        if (!this.isCompact) {
+          Row() {
+            Row().width(this.getProgressPercent(book) + '%').height(3).backgroundColor('#0078D7').borderRadius(2)
+          }.width('100%').height(3).margin({ top: 3 }).backgroundColor(this.isDark ? '#444' : '#E0E0E0').borderRadius(2)
+        }
+        if (!this.isCompact && this.showBookIntro && book.introduce) {
+          Text(book.introduce).fontSize(11).fontColor('#999')
+            .maxLines(this.getIntroMaxLines()).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%').margin({ top: 2 })
+        }
         Row() {
-          Row().width(this.getProgressPercent(book) + '%').height(3).backgroundColor('#0078D7').borderRadius(2)
-        }.width('100%').height(3).margin({ top: 3 }).backgroundColor(this.isDark ? '#444' : '#E0E0E0').borderRadius(2)
-        Row() {
-          if (book.lastOpenTime > 0) Text(this.formatTime(book.lastOpenTime)).fontSize(10).fontColor('#999')
+          if (this.showLastUpdateTime && book.lastOpenTime > 0) Text(this.formatTime(book.lastOpenTime)).fontSize(10).fontColor('#999')
           Blank()
           if (book.totalChapterNum > 0) {
             Text(book.durChapterIndex + '/' + book.totalChapterNum + ' (' + this.getProgressPercent(book) + '%)')
@@ -330,9 +720,11 @@ export struct BookshelfPage {
           }
         }.width('100%').margin({ top: 2 })
       }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(72).justifyContent(FlexAlign.Center)
-      Button() { Text('✕').fontSize(14).fontColor('#F44336') }
-        .width(36).height(36).backgroundColor('transparent')
-        .onClick(() => { this.confirmRemove(book); })
+      if (!this.isSelectMode) {
+        Button() { Text('✕').fontSize(14).fontColor('#F44336') }
+          .width(36).height(36).backgroundColor('transparent')
+          .onClick(() => { this.confirmRemove(book); })
+      }
     }.padding({ left: 12, right: 4 }).width('100%')
   }
 
@@ -340,19 +732,31 @@ export struct BookshelfPage {
   buildGridItem(book: Book) {
     Column() {
       Stack() {
-        BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: 120, coverHeight: 168 })
-        if (this.getNewChaptersCount(book) > 0) {
+        BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: this.coverWidth * 1.5, coverHeight: Math.round(this.coverWidth * 1.5 * 1.4) })
+          .shadow({ radius: this.coverShadow ? 6 : 0, color: '#22000000', offsetY: 2 })
+        if (this.showUnread && this.getNewChaptersCount(book) > 0) {
           Text('+' + this.getNewChaptersCount(book))
             .fontSize(10).fontColor('#FFF').fontWeight(FontWeight.Bold)
             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
             .backgroundColor('#F44336').borderRadius(8).position({ top: 4, right: 4 })
         }
+        if (this.isSelectMode) {
+          Text(this.isSelected(book.id) ? '✓' : '')
+            .fontSize(18).fontColor('#FFF').fontWeight(FontWeight.Bold)
+            .width(28).height(28).textAlign(TextAlign.Center)
+            .backgroundColor(this.isSelected(book.id) ? '#0078D7' : '#66000000')
+            .borderRadius(14).position({ top: 4, left: 4 })
+        }
       }.width('100%').height(172)
-      Text(book.name).fontSize(13).fontWeight(FontWeight.Medium)
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-        .margin({ top: 4 }).fontColor(this.isDark ? '#CCC' : '#333')
-      Text(book.author || '未知作者').fontSize(11).fontColor('#888')
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-    }.width('100%').onClick(() => { this.continueRead(book); })
+      if (this.gridStyle !== 2) {
+        Text(book.name).fontSize(13).fontWeight(FontWeight.Medium)
+          .maxLines(this.gridStyle === 1 ? 1 : this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+          .margin({ top: 4 }).fontColor(this.isDark ? '#CCC' : '#333')
+        if (this.gridStyle === 0) {
+          Text(book.author || '未知作者').fontSize(11).fontColor('#888')
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+        }
+      }
+    }.width('100%')
   }
 }

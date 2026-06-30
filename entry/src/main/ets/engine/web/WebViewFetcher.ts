@@ -392,6 +392,17 @@ export class WebViewFetcher {
       });
   }
 
+  /** 清理所有状态（页面销毁时调用） */
+  static clearAll(): void {
+    WebViewFetcher.clearTimers();
+    WebViewFetcher.pendingResolve = null;
+    WebViewFetcher.pendingReject = null;
+    WebViewFetcher.pendingUrl = '';
+    WebViewFetcher.requestQueue = [];
+    WebViewFetcher.controller = null;
+    console.info('[WebViewFetcher] Cleared all state');
+  }
+
   /** 处理队列中的下一个 WebView 请求 */
   private static processNext(): void {
     if (WebViewFetcher.requestQueue.length === 0) return;

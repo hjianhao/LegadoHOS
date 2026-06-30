@@ -21,7 +21,9 @@ import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
+import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
+import { SourceChangePanel } from '../components/reader/SourceChangePanel';
 import promptAction from '@ohos.promptAction';
 
 @Entry
@@ -59,6 +61,7 @@ struct ReadPage {
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
+  @State showSourcePanel: boolean = false;
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
@@ -158,8 +161,15 @@ struct ReadPage {
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
         sources.find(s => s.sourceName === this.origin) || null;
 
-      let chapters = ChapterCache.chapters;
-      if (!chapters || chapters.length === 0) {
+      let chapters: BookSourceChapter[] = [];
+      if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
+        chapters = ChapterCache.chapters;
+        console.info('[ReadPage] Loaded chapters from cache:', chapters.length, this.bookUrl.substring(0, 80));
+      } else {
+        if (ChapterCache.chapters.length > 0) {
+          console.info('[ReadPage] Ignore stale chapter cache. cacheBookUrl=',
+            ChapterCache.bookUrl.substring(0, 80), 'current=', this.bookUrl.substring(0, 80));
+        }
         if (this.source_) {
           chapters = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
           if (chapters.length === 0 && this.tocUrl && this.tocUrl !== this.bookUrl) {
@@ -172,7 +182,7 @@ struct ReadPage {
       this.totalChapters_ = chapters.length;
       this.currentIndex = this.targetIdx_ >= 0 && this.targetIdx_ < chapters.length ? this.targetIdx_ : 0;
       this.chapters = chapters;
-      if (!ChapterCache.chapters || ChapterCache.chapters.length === 0) {
+      if (ChapterCache.bookUrl !== this.bookUrl || ChapterCache.chapters.length === 0) {
         ChapterCache.chapters = chapters;
         ChapterCache.bookUrl = this.bookUrl;
       }
@@ -504,6 +514,97 @@ struct ReadPage {
     router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
   }
 
+  private resetReadStateForSourceChange_(): void {
+    this.source_ = null;
+    this.bookId_ = -1;
+    this.targetIdx_ = 0;
+    this.currentIndex = 0;
+    this.pageIndex = 0;
+    this.text = '';
+    this.scrollText = '';
+    this.pages = [];
+    this.chapters = [];
+    this.allChapters_ = [];
+    this.totalChapters_ = 0;
+    this.nextChapterContent_ = '';
+    this.nextChapterIdx_ = -1;
+    this.isPreloading_ = false;
+    this.scrollAtTop_ = true;
+    this.justLoadedChapter_ = false;
+    ChapterCache.bookUrl = '';
+    ChapterCache.chapters = [];
+    ChapterCache.targetIndex = -1;
+  }
+
+  private async applySourceChange(result: SearchResult): Promise<void> {
+    const newBookUrl = result.noteUrl || '';
+    const newOriginUrl = result.originUrl || '';
+    if (!newBookUrl || !newOriginUrl) {
+      promptAction.showToast({ message: '书源信息不完整', duration: 1500 });
+      return;
+    }
+    if (newBookUrl === this.bookUrl && newOriginUrl === this.originUrl) {
+      promptAction.showToast({ message: '已经是当前书源', duration: 1200 });
+      return;
+    }
+
+    this.showSourcePanel = false;
+    this.showMenu = false;
+    const oldBookUrl = this.bookUrl;
+    try {
+      this.saveProgress();
+    } catch (_e) {
+      /* ignore */
+    }
+
+    promptAction.showToast({ message: '正在更换书源...', duration: 1000 });
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+      const shelfBook = oldBookUrl ? await bookTable.getBookByUrl(oldBookUrl) : null;
+
+      this.origin = result.origin || this.origin;
+      this.originUrl = newOriginUrl;
+      this.bookUrl = newBookUrl;
+      this.tocUrl = '';
+      this.resetReadStateForSourceChange_();
+      this.isLoading = true;
+
+      if (shelfBook) {
+        shelfBook.bookUrl = this.bookUrl;
+        shelfBook.origin = this.origin;
+        shelfBook.originUrl = this.originUrl;
+        shelfBook.tocUrl = '';
+        if (result.coverUrl) shelfBook.coverUrl = result.coverUrl;
+        if (result.kind) shelfBook.kind = result.kind;
+        if (result.wordCount) shelfBook.wordCount = result.wordCount;
+        if (result.introduce) shelfBook.introduce = result.introduce;
+        shelfBook.latestChapterTitle = result.latestChapterTitle || '';
+        shelfBook.chapterCount = 0;
+        shelfBook.totalChapterNum = 0;
+        shelfBook.durChapterTitle = '';
+        shelfBook.durChapterIndex = 0;
+        shelfBook.durChapterPos = 0;
+        shelfBook.durChapterProgress = 0;
+        shelfBook.lastUpdateTime = result.lastUpdateTime || shelfBook.lastUpdateTime;
+        shelfBook.lastOpenTime = Date.now();
+        shelfBook.updateTime = Date.now();
+        await bookTable.updateBook(shelfBook);
+        this.bookId_ = shelfBook.id;
+        const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
+        await chapterTable.deleteChaptersByBookId(shelfBook.id);
+        AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+      }
+
+      await this.loadContent();
+      promptAction.showToast({ message: '已更换书源', duration: 1500 });
+    } catch (e) {
+      console.error('[ReadPage] applySourceChange failed:', (e as Error).message);
+      this.isLoading = false;
+      promptAction.showToast({ message: '换源失败', duration: 1500 });
+    }
+  }
+
   private formatCurTime(): string {
     const d = new Date();
     const hh = String(d.getHours()).padStart(2, '0');
@@ -608,9 +709,21 @@ struct ReadPage {
             onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
-            onSource: () => { this.showMenu = false; promptAction.showToast({message:'换源功能开发中',duration:1500}); },
+            onSource: () => { this.showMenu = false; this.showSourcePanel = true; },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
             onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },
+          })
+        }.width('100%').height('100%')
+      }
+      if (this.showSourcePanel) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showSourcePanel = false; })
+          SourceChangePanel({
+            bookName: this.bookName,
+            bookAuthor: this.bookAuthor,
+            currentOriginUrl: this.originUrl,
+            onReplace: (result: SearchResult) => { this.applySourceChange(result); },
+            onDismiss: () => { this.showSourcePanel = false; },
           })
         }.width('100%').height('100%')
       }

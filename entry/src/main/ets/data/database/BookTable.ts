@@ -33,6 +33,7 @@ export const BookTableCreate = `
     kind TEXT DEFAULT '',
     word_count TEXT DEFAULT '',
     introduce TEXT DEFAULT '',
+    remark TEXT DEFAULT '',
     last_update_time TEXT DEFAULT '',
     last_open_time INTEGER DEFAULT 0,
     create_time INTEGER DEFAULT 0,
@@ -61,7 +62,7 @@ export class BookTable {
   async getBooksByGroup(groupId: number): Promise<Book[]> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('is_shelf', 1);
-    if (groupId > BookGroup.CUSTOM) {
+    if (groupId >= BookGroup.CUSTOM) {
       predicates.equalTo('group_id', groupId);
     }
     predicates.orderByDesc('last_open_time');
@@ -123,9 +124,69 @@ export class BookTable {
   }
 
   async deleteBooks(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.in('id', ids);
     await this.rdbStore.delete(predicates);
+  }
+
+  async setShelfByIds(ids: number[], isShelf: boolean): Promise<void> {
+    if (ids.length === 0) return;
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.in('id', ids);
+    await this.rdbStore.update({
+      'is_shelf': isShelf ? 1 : 0,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
+  async batchUpdateGroup(ids: number[], groupId: number): Promise<void> {
+    if (ids.length === 0) return;
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.in('id', ids);
+    await this.rdbStore.update({
+      'group_id': groupId,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
+  async batchUpdateGroupForDelete(groupId: number): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.equalTo('group_id', groupId);
+    await this.rdbStore.update({
+      'group_id': BookGroup.ALL,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
+  async updateTocInfo(bookId: number, totalChapterNum: number, latestChapterTitle: string): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.equalTo('id', bookId);
+    await this.rdbStore.update({
+      'chapter_count': totalChapterNum,
+      'total_chapter_num': totalChapterNum,
+      'latest_chapter_title': latestChapterTitle,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
+  async getMinOrder(): Promise<number> {
+    const rs = await this.rdbStore.querySql(`SELECT MIN(book_order) FROM ${BookTable.TABLE_NAME}`, []);
+    let minOrder = 0;
+    if (rs.goToFirstRow()) {
+      minOrder = rs.getLong(0) || 0;
+    }
+    rs.close();
+    return minOrder;
+  }
+
+  async updateRemark(bookId: number, remark: string): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.equalTo('id', bookId);
+    await this.rdbStore.update({
+      'remark': remark,
+      'update_time': Date.now(),
+    }, predicates);
   }
 
   // ---- 工具 ----
@@ -159,6 +220,7 @@ export class BookTable {
         kind: rs.getString(rs.getColumnIndex('kind')) || '',
         wordCount: rs.getString(rs.getColumnIndex('word_count')) || '',
         introduce: rs.getString(rs.getColumnIndex('introduce')) || '',
+        remark: rs.getString(rs.getColumnIndex('remark')) || '',
         lastUpdateTime: rs.getString(rs.getColumnIndex('last_update_time')) || '',
         lastOpenTime: rs.getLong(rs.getColumnIndex('last_open_time')),
         createTime: rs.getLong(rs.getColumnIndex('create_time')),
@@ -196,6 +258,7 @@ export class BookTable {
       'kind': book.kind,
       'word_count': book.wordCount,
       'introduce': book.introduce,
+      'remark': book.remark || '',
       'last_update_time': book.lastUpdateTime,
       'last_open_time': book.lastOpenTime,
       'create_time': book.createTime,

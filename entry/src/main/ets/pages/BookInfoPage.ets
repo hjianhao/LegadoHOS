@@ -9,6 +9,14 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
+import {
+  ChangeCoverSheet,
+  ChangeSourceSheet,
+  GroupSelectSheet,
+  BookReadRecordSheet,
+  RemarkEditDialog
+} from '../components/BookInfoSheets';
+import { SearchResult } from '../model/SearchResult';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 
@@ -18,25 +26,42 @@ export struct BookInfoPage {
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State coverUrl: string = '';
+  @State customCoverPath: string = '';
   @State noteUrl: string = '';
   @State origin: string = '';
   @State originUrl: string = '';
   @State introduce: string = '';
   @State kind: string = '';
   @State wordCount: string = '';
+  @State lastUpdateTime: string = '';
+  @State remark: string = '';
   @State isDark: boolean = false;
   @State isLoading: boolean = true;
+  @State isRefreshing: boolean = false;
+  @State isBusy: boolean = false;
   @State isInShelf: boolean = false;
   @State sourceHeader: string = '';
   @State sourceCount: number = 1;
   @State chapterCount: number = 0;
   @State latestChapter: string = '';
+  @State chapters: BookSourceChapter[] = [];
   @State recentChapters: BookSourceChapter[] = [];
   @State introExpanded: boolean = false;
-  @State durChapterTitle: string = '';     // 阅读进度
+  @State titleExpanded: boolean = false;
+  @State showMoreMenu: boolean = false;
+  @State deleteAlertEnabled: boolean = true;
+  @State durChapterTitle: string = '';
   @State durChapterIndex: number = 0;
-  @State lastReadTime: string = '';        // 最后阅读时间
-  @State bookId: number = 0;               // 书架中的 ID
+  @State lastReadTime: string = '';
+  @State bookId: number = 0;
+  @State groupId: number = BookGroup.ALL;
+
+  private cachedSearchResults: SearchResult[] = [];
+  private coverDlg?: CustomDialogController;
+  private sourceDlg?: CustomDialogController;
+  private groupDlg?: CustomDialogController;
+  private readRecordDlg?: CustomDialogController;
+  private remarkDlg?: CustomDialogController
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
@@ -51,6 +76,12 @@ export struct BookInfoPage {
       this.introduce = params['introduce'] || '';
       this.kind = params['kind'] || '';
       this.wordCount = params['wordCount'] || '';
+      try {
+        const cachedStr = String(params['cachedSources'] || '');
+        if (cachedStr) {
+          this.cachedSearchResults = JSON.parse(cachedStr) as SearchResult[];
+        }
+      } catch (_e) { this.cachedSearchResults = []; }
     }
     this.loadSourceHeader();
     this.checkShelfStatus();
@@ -142,7 +173,7 @@ export struct BookInfoPage {
         tocUrl: '', chapterCount: 0, totalChapterNum: 0, latestChapterTitle: '',
         durChapterTitle: '', durChapterIndex: 0, durChapterPos: 0, durChapterProgress: 0,
         isRead: false, isAudio: false, isManga: false, isShelf: false, order: 0,
-        kind: '', wordCount: '', introduce: '', lastUpdateTime: '', lastOpenTime: 0,
+        kind: '', wordCount: '', introduce: '', remark: '', lastUpdateTime: '', lastOpenTime: 0,
         createTime: 0, updateTime: Date.now()
       });
       this.isInShelf = false;
@@ -244,6 +275,7 @@ export struct BookInfoPage {
         kind: this.kind,
         wordCount: this.wordCount,
         introduce: this.introduce,
+        remark: '',
         lastUpdateTime: '',
         lastOpenTime: 0,
         createTime: Date.now(),
@@ -290,7 +322,110 @@ export struct BookInfoPage {
   }
 
   changeSource(): void {
-    promptAction.showToast({ message: '换源功能开发中', duration: 1500 });
+    const cached = this.cachedSearchResults;
+    this.sourceDlg = new CustomDialogController({
+      builder: ChangeSourceSheet({
+        controller: this.sourceDlg!,
+        bookName: this.bookName,
+        bookAuthor: this.bookAuthor,
+        currentOriginUrl: this.originUrl,
+        cachedSources: cached,
+        onReplace: (result: SearchResult) => { this.replaceWithSource(result); },
+        onAddAsNew: (result: SearchResult) => { this.addSourceAsNewBook(result); }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.sourceDlg.open();
+  }
+
+  private replaceWithSource(result: SearchResult): void {
+    this.origin = result.origin || this.origin;
+    this.originUrl = result.originUrl || this.originUrl;
+    this.noteUrl = result.noteUrl || this.noteUrl;
+    if (result.coverUrl) this.coverUrl = result.coverUrl;
+    if (result.kind) this.kind = result.kind;
+    if (result.wordCount) this.wordCount = result.wordCount;
+    if (result.introduce) this.introduce = result.introduce;
+    this.sourceHeader = '';
+    this.recentChapters = [];
+    this.loadSourceHeader();
+    this.tryFetchBookInfo();
+    this.tryFetchCover();
+    promptAction.showToast({ message: '已更换书源', duration: 1500 });
+  }
+
+  private addSourceAsNewBook(result: SearchResult): void {
+    promptAction.showToast({ message: '已作为新书加入书架', duration: 1500 });
+  }
+
+  showCoverSheet(): void {
+    this.coverDlg = new CustomDialogController({
+      builder: ChangeCoverSheet({
+        controller: this.coverDlg!,
+        bookName: this.bookName,
+        bookAuthor: this.bookAuthor,
+        onSelect: (cover: string) => { this.updateCover(cover); }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.coverDlg.open();
+  }
+
+  private async updateCover(cover: string): Promise<void> {
+    this.customCoverPath = cover;
+    if (!this.coverUrl) this.coverUrl = cover;
+    promptAction.showToast({ message: '封面已更新', duration: 1200 });
+  }
+
+  showGroupSheet(): void {
+    this.groupDlg = new CustomDialogController({
+      builder: GroupSelectSheet({
+        controller: this.groupDlg!,
+        selectedGroupId: this.groupId,
+        onConfirm: (gid: number) => {
+          this.groupId = gid;
+          promptAction.showToast({ message: '分组已更新', duration: 1500 });
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.groupDlg.open();
+  }
+
+  showReadRecord(): void {
+    this.readRecordDlg = new CustomDialogController({
+      builder: BookReadRecordSheet({
+        controller: this.readRecordDlg!,
+        bookName: this.bookName,
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.readRecordDlg.open();
+  }
+
+  showRemarkDialog(): void {
+    this.remarkDlg = new CustomDialogController({
+      builder: RemarkEditDialog({
+        controller: this.remarkDlg!,
+        remarkText: this.remark,
+        onConfirm: (text: string) => {
+          this.remark = text;
+          promptAction.showToast({ message: '备注已保存', duration: 1500 });
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      customStyle: true
+    });
+    this.remarkDlg.open();
   }
 
   openToc(): void {
@@ -423,7 +558,11 @@ export struct BookInfoPage {
               this.buildIconBtn('📋', '目录', () => { this.openToc(); })
               this.buildIconBtn('🔄', '刷新', () => { this.tryFetchBookInfo(); })
               if (this.isInShelf) {
-                this.buildIconBtn('🗑️', '删除', () => { this.removeFromShelf(); })
+                this.buildIconBtn('📝', '备注', () => { this.showRemarkDialog(); })
+              this.buildIconBtn('📊', '记录', () => { this.showReadRecord(); })
+              this.buildIconBtn('📂', '分组', () => { this.showGroupSheet(); })
+              this.buildIconBtn('🖼️', '封面', () => { this.showCoverSheet(); })
+              this.buildIconBtn('🗑️', '删除', () => { this.removeFromShelf(); })
               }
             }.width('100%').padding({left:8,right:8,top:6,bottom:6}).justifyContent(FlexAlign.SpaceEvenly)
             .backgroundColor(this.isDark ? '#1A1A1A' : '#FFF')

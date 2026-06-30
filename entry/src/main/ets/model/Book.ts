@@ -55,6 +55,7 @@ export interface Book {
   kind: string;         // 分类
   wordCount: string;    // 字数
   introduce: string;    // 简介
+  remark: string;       // 用户备注
   lastUpdateTime: string;
 
   // 时间戳
@@ -94,6 +95,7 @@ export function createDefaultBook(): Book {
     kind: '',
     wordCount: '',
     introduce: '',
+    remark: '',
     lastUpdateTime: '',
     lastOpenTime: 0,
     createTime: 0,

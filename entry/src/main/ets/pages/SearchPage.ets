@@ -139,6 +139,7 @@ struct SearchPage {
       noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
       introduce: item.introduce || '', kind: item.kind || '',
       sourceCount: item.sourceCount, sourceOrigins: JSON.stringify(item.sourceOrigins || []),
+      cachedSources: JSON.stringify(this.results),
     }});
   }
 

@@ -22,6 +22,8 @@ export interface SearchResult {
   wordCount: string;
   /** 最后更新时间 */
   lastUpdateTime: string;
+  /** 最新章节标题 */
+  latestChapterTitle: string;
   /** 简介 */
   introduce: string;
   /** 帮助信息（用于调试） */
@@ -76,7 +78,7 @@ export function getBookMergeKey(name: string, author: string): string {
 export function createSearchResult(): SearchResult {
   return {
     key: '', name: '', author: '', coverUrl: '', noteUrl: '',
-    origin: '', originUrl: '', kind: '', wordCount: '', lastUpdateTime: '',
+    origin: '', originUrl: '', kind: '', wordCount: '', lastUpdateTime: '', latestChapterTitle: '',
     introduce: '', helperMsg: '', duration: 0, searchTime: 0,
     sourceCount: 1, sourceOrigins: []
   };
@@ -104,6 +106,9 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
       if ((r.introduce || '').length > (existing.introduce || '').length) {
         existing.introduce = r.introduce;
       }
+      if (r.latestChapterTitle && !existing.latestChapterTitle) {
+        existing.latestChapterTitle = r.latestChapterTitle;
+      }
     } else {
       map.set(mergeKey, {
         key: r.key, name: r.name, author: r.author,
@@ -113,7 +118,8 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
         introduce: r.introduce, helperMsg: r.helperMsg,
         duration: r.duration, searchTime: r.searchTime,
         sourceCount: 1,
-        sourceOrigins: r.origin ? [r.origin] : []
+        sourceOrigins: r.origin ? [r.origin] : [],
+        latestChapterTitle: r.latestChapterTitle || ''
       });
     }
   }
