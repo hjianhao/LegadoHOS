@@ -938,7 +938,7 @@ export class SourceExecutor {
         if (chapters.length === 0) {
           chapters = this.parseTocFromRules(bodyText, tocRules);
         }
-        // 去重 + 排序
+        // 去重
         const seen = new Set<string>();
         const deduped: BookSourceChapter[] = [];
         for (let ci = 0; ci < chapters.length; ci++) { const ch = chapters[ci];
@@ -949,11 +949,40 @@ export class SourceExecutor {
           }
         }
         chapters = deduped;
-        chapters.forEach((ch, idx) => { ch.index = idx; });
+        // 智能排序：如果 ruleToc 有 -/+ 前缀则按规则，否则按标题中的章节号排序
         if (reverseToc) {
           chapters.reverse();
-          chapters.forEach((ch, idx) => { ch.index = idx; });
+        } else if (!tocListRule.startsWith('$.')) {
+          // 尝试按章节号排序（如"第1105章" → 1105）
+          const extractChapterNum = (title: string): number => {
+            const m = title.match(/第[\d]+章/);
+            if (m) {
+              const n = parseInt(m[0]);
+              return isNaN(n) ? 0 : n;
+            }
+            return 0;
+          };
+          const nums: number[] = [];
+          let hasNums = false;
+          for (let ci = 0; ci < chapters.length; ci++) {
+            const n = extractChapterNum(chapters[ci].title);
+            nums.push(n);
+            if (n > 0) hasNums = true;
+          }
+          if (hasNums && nums.length >= 2) {
+            // 检测前几个是否递减（倒数章节在前）
+            const firstNums = nums.slice(0, Math.min(5, nums.length));
+            let desc = 0;
+            for (let i = 1; i < firstNums.length; i++) {
+              if (firstNums[i] > 0 && firstNums[i-1] > 0 && firstNums[i] < firstNums[i-1]) desc++;
+            }
+            if (desc >= 2) {
+              // 前半是倒序，按章节号排序
+              chapters.sort((a, b) => extractChapterNum(a.title) - extractChapterNum(b.title));
+            }
+          }
         }
+        chapters.forEach((ch, idx) => { ch.index = idx; });
         console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)');
         if (chapters.length > 0) {
           return chapters.map(ch => ({
