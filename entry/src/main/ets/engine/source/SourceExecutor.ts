@@ -838,25 +838,23 @@ export class SourceExecutor {
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
-    console.info('[SrcEx] getToc ruleTocNextTocUrl:', JSON.stringify(source.ruleTocNextTocUrl));
     try {
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const resp = await this.fetchWithOpts(tocUrl, headers);
+      let resp = await this.fetchWithOpts(tocUrl, headers);
       if (!resp || resp.length < 100) return [];
-      // dump 企鹅 TOC 响应
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
-
-      const maxTocPages = 60;
+      let currentTocUrl = tocUrl;
+      const tocBodies: string[] = [];
       const visitedToc = new Set<string>();
-      visitedToc.add(tocUrl);
 
-      // 预提取所有分页URL（从第1页 HTML 中一次性提取 select option 列表）
+      // 预提取所有分页 URL（从第一页 select option 列表）
+      let pageUrls: string[] = [currentTocUrl];
       const nextRule = source.ruleTocNextTocUrl || '';
       if (nextRule) {
         try {
@@ -865,40 +863,41 @@ export class SourceExecutor {
           const normRule = this.normalizeCssRule(nextRule);
           const attrMatch = normRule.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
           if (attrMatch) {
-            const cssSel = attrMatch[1].trim();
-            const attrSuffix = attrMatch[2].toLowerCase();
-            const allSel = cssSel.replace(/\.\d+$/, '');
-            const allOptions = parser.querySelectorAll(doc, allSel);
-            console.info('[SrcEx] getToc all options: css=' + allSel + ' found=' + allOptions.length);
-            for (let oi = 0; oi < allOptions.length && visitedToc.size < maxTocPages; oi++) {
-              const val = allOptions[oi].attributes[attrSuffix] || '';
-              if (!val) continue;
-              const fullUrl = this.resolvePageUrl(val, tocUrl);
-              if (fullUrl && !visitedToc.has(fullUrl)) {
-                visitedToc.add(fullUrl);
+            const cssFull = attrMatch[1].trim();
+            const attrName = attrMatch[2];
+            const cssBase = cssFull.replace(/\.\d+$/, '');
+            const opts = parser.querySelectorAll(doc, cssBase);
+            for (let oi = 0; oi < opts.length; oi++) { const opt = opts[oi];
+              const v = opt.attributes[attrName];
+              if (v) {
+                const u = this.resolvePageUrl(v, currentTocUrl);
+                if (u && !visitedToc.has(u)) {
+                  visitedToc.add(u);
+                  pageUrls.push(u);
+                }
               }
             }
           }
-        } catch (_ne) { /* ignore */ }
+        } catch (_e) { /* ignore */ }
+      }
+      console.info('[SrcEx] getToc pageUrls:', pageUrls.length);
+
+      // 逐页加载
+      for (let i = 0; i < pageUrls.length && i < 60; i++) {
+        const url = pageUrls[i];
+        if (i === 0) {
+          tocBodies.push(resp);
+        } else {
+          try {
+            const b = await this.fetchWithOpts(url, headers);
+            if (b && b.length > 100) tocBodies.push(b);
+          } catch (_e2) { /* skip */ }
+        }
       }
 
-      // 逐页加载并解析章节（避免 join 大文本）
-      const tocPages: string[] = [resp];
-      for (const pageUrl of visitedToc) {
-        if (pageUrl === tocUrl || tocPages.length >= maxTocPages) continue;
-        try {
-          const pageBody = await this.fetchWithOpts(pageUrl, headers);
-          if (pageBody && pageBody.length > 100) {
-            tocPages.push(pageBody);
-            console.info('[SrcEx] getToc page', tocPages.length, pageUrl.substring(pageUrl.lastIndexOf('/') + 1));
-          }
-        } catch (_pf) { /* skip */ }
-      }
+      const bodyText = tocBodies.join('\n');
 
-      const bodyText = tocPages.join('\n');
-      console.info('[SrcEx] getToc got ' + tocPages.length + ' pages, total ' + bodyText.length + ' chars');
-
-      // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
+      // 规则解析
       let tocListRule = source.ruleToc || '';
       let reverseToc = false;
       if (tocListRule.startsWith('-')) {
@@ -913,23 +912,32 @@ export class SourceExecutor {
         tocUrlItem: source.ruleTocUrlItem || '',
       };
       if (tocRules.toc) {
-        // 检测 JSON 响应 + JSONPath 规则
         let chapters: BookSourceChapter[] = [];
         if (tocRules.toc.startsWith('$.')) {
           try {
-            const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
-            chapters = this.parseJsonToc(jsonObj, tocRules, tocUrl);
-          } catch (_je) { /* fallback to CSS parser */ }
+            chapters = this.parseJsonToc(JSON.parse(bodyText) as Record<string, unknown>, tocRules, tocUrl);
+          } catch (_je) { /* fallback */ }
         }
         if (chapters.length === 0) {
           chapters = this.parseTocFromRules(bodyText, tocRules);
         }
-        // 排序：分页 join 后统一重赋 index
+        // 去重 + 排序
+        const seen = new Set<string>();
+        const deduped: BookSourceChapter[] = [];
+        for (let ci = 0; ci < chapters.length; ci++) { const ch = chapters[ci];
+          const key = ch.title + '|' + ch.url;
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(ch);
+          }
+        }
+        chapters = deduped;
         chapters.forEach((ch, idx) => { ch.index = idx; });
         if (reverseToc) {
           chapters.reverse();
           chapters.forEach((ch, idx) => { ch.index = idx; });
         }
+        console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)');
         if (chapters.length > 0) {
           return chapters.map(ch => ({
             ...ch,
@@ -938,7 +946,7 @@ export class SourceExecutor {
         }
       }
 
-      // 兜底：从 HTML 中提取章节链接      // 兜底：从 HTML 中提取章节链接
+      // 兜底：从 HTML 中提取章节链接
       const tocChapters = this.extractTocFromHtml(bodyText, source);
       if (tocChapters.length > 0) return tocChapters;
 
