@@ -845,76 +845,54 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      let resp = await this.fetchWithOpts(tocUrl, headers);
+      const resp = await this.fetchWithOpts(tocUrl, headers);
       if (!resp || resp.length < 100) return [];
       // dump 企鹅 TOC 响应
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
-      let bodyText = resp;
-      let currentTocUrl = tocUrl;
-      const tocBodies: string[] = [];
+
+      const tocBodies: string[] = [resp];
       const visitedToc = new Set<string>();
-      const maxTocPages = 20;
+      visitedToc.add(tocUrl);
+
+      // 预提取所有分页URL（从第1页 HTML 中一次性提取 select option 列表）
       const nextRule = source.ruleTocNextTocUrl || '';
-      // 预提取所有分页URL（某些网站 select option 列表固定，需一次提取全部分页链接）
-      const tocPageUrls: string[] = [currentTocUrl];
+      const maxTocPages = 20;
       if (nextRule) {
-        const parser = getHtmlParser();
-        const doc = parser.parse(bodyText);
-        // 提取 nextUrl 规则中除 @value 外的选择器部分，然后 querySelectorAll 获取所有 option
-        const normRule = this.normalizeCssRule(nextRule);
-        const attrMatch = normRule.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
-        if (attrMatch) {
-          const cssSel = attrMatch[1].trim();
-          const attrSuffix = attrMatch[2].toLowerCase();
-          // 去掉位置索引 .N，获取所有同类元素
-          const allSel = cssSel.replace(/\.\d+$/, '');
-          const allOptions = parser.querySelectorAll(doc, allSel);
-          console.info('[SrcEx] getToc all options: css=' + allSel + ' found=' + allOptions.length);
-          for (let oi = 0; oi < Math.min(allOptions.length, 20); oi++) {
-            const opt = allOptions[oi];
-            const val = opt.attributes[attrSuffix] || '';
-            if (val) {
-              const fullUrl = this.resolvePageUrl(val, currentTocUrl);
+        try {
+          const parser = getHtmlParser();
+          const doc = parser.parse(resp);
+          const normRule = this.normalizeCssRule(nextRule);
+          const attrMatch = normRule.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
+          if (attrMatch) {
+            const cssSel = attrMatch[1].trim();
+            const attrSuffix = attrMatch[2].toLowerCase();
+            const allSel = cssSel.replace(/\.\d+$/, '');
+            const allOptions = parser.querySelectorAll(doc, allSel);
+            console.info('[SrcEx] getToc all options: css=' + allSel + ' found=' + allOptions.length);
+            for (let oi = 0; oi < allOptions.length; oi++) {
+              const val = allOptions[oi].attributes[attrSuffix] || '';
+              if (!val) continue;
+              const fullUrl = this.resolvePageUrl(val, tocUrl);
               if (fullUrl && !visitedToc.has(fullUrl)) {
-                tocPageUrls.push(fullUrl);
+                visitedToc.add(fullUrl);
+                console.info('[SrcEx] getToc pageUrl[' + oi + ']:', fullUrl.substring(fullUrl.lastIndexOf('/') + 1));
+                if (tocBodies.length >= maxTocPages) break;
+                try {
+                  const pageBody = await this.fetchWithOpts(fullUrl, headers);
+                  if (pageBody && pageBody.length > 100) {
+                    tocBodies.push(pageBody);
+                  }
+                } catch (_pf) { /* page fetch failed, skip */ }
               }
             }
           }
-        }
+        } catch (_ne) { /* nextRule extraction failed */ }
       }
-      for (let page = 0; page < Math.min(maxTocPages, tocPageUrls.length); page++) {
-        currentTocUrl = tocPageUrls[page];
-        if (visitedToc.has(currentTocUrl)) continue;
-        visitedToc.add(currentTocUrl);
-        // debug: dump select innerHtml and structure
-        const parser = getHtmlParser();
-        const doc = parser.parse(bodyText);
-        const selects = parser.querySelectorAll(doc, '.listpage select');
-        console.info('[SrcEx] getToc select count=' + selects.length);
-        for (let si = 0; si < Math.min(selects.length, 2); si++) {
-          const sel = selects[si];
-          console.info('[SrcEx] getToc select[' + si + ']: children=' + sel.children.length + ' innerHtml=' + JSON.stringify(sel.innerHtml?.substring(0,300)) + ' ownText=' + JSON.stringify(sel.ownText?.substring(0,100)));
-          for (let ci = 0; ci < Math.min(sel.children.length, 10); ci++) {
-            const ch = sel.children[ci];
-            console.info('[SrcEx] getToc   child[' + ci + ']: tag=' + ch.tagName + ' value=' + ch.attributes['value'] + ' ownText=' + JSON.stringify(ch.ownText?.substring(0,30)));
-          }
-        }
-        // test with normalized rule
-        const normRule = this.normalizeCssRule(nextRule);
-        console.info('[SrcEx] getToc normalized:', normRule);
-        const nextUrlRaw = this.extractHtmlRuleValue(bodyText, nextRule);
-        console.info('[SrcEx] getToc nextUrlRaw:', JSON.stringify(nextUrlRaw));
-        const nextUrl = this.resolvePageUrl(nextUrlRaw, currentTocUrl);
-        if (!nextUrl || visitedToc.has(nextUrl)) break;
-        currentTocUrl = nextUrl;
-        const nextBody = await this.fetchWithOpts(currentTocUrl, headers);
-        if (!nextBody || nextBody.length < 100) break;
-        bodyText = nextBody;
-        console.info('[SrcEx] getToc next page', page + 2, currentTocUrl.substring(0, 100));
-      }
-      bodyText = tocBodies.join('\n');
+
+      const bodyText = tocBodies.join('\n');
+      console.info('[SrcEx] getToc got ' + tocBodies.length + ' pages, total ' + bodyText.length + ' chars');
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
       let tocListRule = source.ruleToc || '';
@@ -931,7 +909,7 @@ export class SourceExecutor {
         tocUrlItem: source.ruleTocUrlItem || '',
       };
       if (tocRules.toc) {
-        // 检测 JSON 响应 + JSONPath 规则（$.xxx），用 JSON path 解析
+        // 检测 JSON 响应 + JSONPath 规则
         let chapters: BookSourceChapter[] = [];
         if (tocRules.toc.startsWith('$.')) {
           try {
@@ -942,14 +920,13 @@ export class SourceExecutor {
         if (chapters.length === 0) {
           chapters = this.parseTocFromRules(bodyText, tocRules);
         }
-        // 排序：分页 join 后章节顺序可能混乱，统一按原始顺序重赋 index
+        // 排序：分页 join 后统一重赋 index
         chapters.forEach((ch, idx) => { ch.index = idx; });
         if (reverseToc) {
           chapters.reverse();
           chapters.forEach((ch, idx) => { ch.index = idx; });
         }
         if (chapters.length > 0) {
-          const baseUrl = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
           return chapters.map(ch => ({
             ...ch,
             url: this.resolveTocUrlTemplate(ch.url, tocUrl) || ch.url,
@@ -957,7 +934,7 @@ export class SourceExecutor {
         }
       }
 
-      // 兜底：从 HTML 中提取章节链接
+      // 兜底：从 HTML 中提取章节链接      // 兜底：从 HTML 中提取章节链接
       const tocChapters = this.extractTocFromHtml(bodyText, source);
       if (tocChapters.length > 0) return tocChapters;
 
