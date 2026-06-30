@@ -3,29 +3,44 @@
 > 鸿蒙原生开源阅读 App，基于 ArkTS（ArkUI）开发。
 > 详细设计文档见 `doc/` 目录。
 
-## HarmonyOS 构建环境（macOS）
+## HarmonyOS 构建环境（macOS / Windows）
 
-### 工具链路径
-- **Node.js**: `/Applications/DevEco-Studio.app/Contents/tools/node/bin/node` (v24.14.1)
-- **Hvigor**: `/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw` (v6.26.1)
-- **HDC**: `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc` (v3.2.0e)
-- **Ohpm**: `/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin/ohpm`
-- **SDK**: `/Applications/DevEco-Studio.app/Contents/sdk` (HarmonyOS 26.0.0 Beta1)
+### 工具链路径策略
+- **macOS 默认 DevEco Home**: `/Applications/DevEco-Studio.app/Contents`
+- **Windows 默认 DevEco Home**: 通常为 `C:\Program Files\Huawei\DevEco Studio`
+- **Node.js**: `$DEVECO_HOME/tools/node`
+- **Hvigor**: `$DEVECO_HOME/tools/hvigor/bin/hvigorw` 或 `hvigorw.bat`
+- **HDC**: `$DEVECO_SDK_HOME/default/openharmony/toolchains/hdc`
+- **Ohpm**: `$DEVECO_HOME/tools/ohpm/bin/ohpm`
+- **SDK**: `$DEVECO_HOME/sdk`，可用 `DEVECO_SDK_HOME` 覆盖
 
-### 环境变量（构建前设置）
+### macOS 环境变量（构建前设置）
 ```bash
-export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:$PATH"
-export DEVECO_SDK_HOME="/Applications/DevEco-Studio.app/Contents/sdk"
-export NODE_HOME="/Applications/DevEco-Studio.app/Contents/tools/node"
+export DEVECO_HOME="/Applications/DevEco-Studio.app/Contents"
+export DEVECO_SDK_HOME="$DEVECO_HOME/sdk"
+export NODE_HOME="$DEVECO_HOME/tools/node"
+export PATH="$NODE_HOME/bin:$DEVECO_HOME/tools/ohpm/bin:$DEVECO_SDK_HOME/default/openharmony/toolchains:$PATH"
+```
+
+### Windows PowerShell 环境变量（构建前设置）
+```powershell
+$env:DEVECO_HOME = "C:\Program Files\Huawei\DevEco Studio"
+$env:DEVECO_SDK_HOME = "$env:DEVECO_HOME\sdk"
+$env:NODE_HOME = "$env:DEVECO_HOME\tools\node"
+$env:Path = "$env:NODE_HOME;$env:DEVECO_HOME\tools\ohpm\bin;$env:DEVECO_SDK_HOME\default\openharmony\toolchains;$env:Path"
 ```
 
 ### 构建命令
 ```bash
 cd /Users/hjianhao/Code/ai/LegadoHOS && ./scripts/build.sh [debug|release]
 ```
+```powershell
+cd <repo-root>
+.\scripts\build.ps1 [debug|release]
+```
 
 ### 签名证书
-位于 `~/.ohos/config/`，已配置好 debug 签名（cert/key/profile/store 齐全）。
+签名材料是每台机器本地配置。macOS 通常位于 `~/.ohos/config/`，Windows 通常位于用户目录下的 `.ohos/config/`。跨平台协作时不要提交个人证书或本机私钥。
 
 ## 项目结构要点
 - **ArkTS 源码**: `entry/src/main/ets/`
@@ -50,7 +65,7 @@ cd /Users/hjianhao/Code/ai/LegadoHOS && ./scripts/build.sh [debug|release]
 
 1. 用 CodeGraph 理解现有代码
 2. 修改代码（ArkTS / C++ / 配置文件）
-3. 运行 `./scripts/build.sh` 编译
+3. macOS 运行 `./scripts/build.sh` 编译，Windows 运行 `.\scripts\build.ps1`
 4. 编译通过后运行 `codegraph sync` 更新符号数据库
 
 ## deveco-cli MCP 服务

@@ -1,6 +1,10 @@
 /node_modules
 /oh_modules
 /local.properties
+/build-profile.json5
+/build-profile.local.json5
+/.signing
+/.codegenie
 /.idea
 **/build
 /.hvigor
@@ -15,3 +19,14 @@
 /test
 /.claude
 /.codegraph
+
+# Machine-local signing, debug dumps, and temporary snapshots
+*.bak
+*.old
+*.tmp
+*.log
+/full_dump_hos_*.json
+/simple_dump_hos_*.txt
+/screenshot/*.png
+/screenshot/*.jpg
+/screenshot/*.jpeg
