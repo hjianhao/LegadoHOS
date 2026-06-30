@@ -1,0 +1,8 @@
+# Copy this file to local.properties and adjust paths for each machine.
+# local.properties is intentionally ignored by git.
+
+# macOS example:
+# arkui-x.dir=/Users/<user>/Library/ArkUI-X/Sdk
+
+# Windows example:
+# arkui-x.dir=C:\\Users\\<user>\\AppData\\Local\\Huawei\\ArkUI-X\\Sdk
