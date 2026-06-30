@@ -127,3 +127,9 @@ cd /Users/hjianhao/Code/ai/LegadoHOS && ./scripts/build.sh [debug|release]
 5. codegraph sync                                      ← 更新符号索引
 6. mcp-harmonyos (install / launch / hilog)             ← 真机调试
 ```
+
+## 代码安全规则
+
+**禁止使用 `git checkout` 回退文件！** 工作区中可能含有尚未 commit 的重要代码。
+如需查看历史版本，使用 `git show <commit>:<path>` 输出到临时文件。
+如需重置某个文件，仅当确认工作区改动全部不需要时才可执行 checkout。

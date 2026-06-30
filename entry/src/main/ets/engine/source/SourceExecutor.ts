@@ -870,7 +870,17 @@ export class SourceExecutor {
         tocUrlItem: source.ruleTocUrlItem || '',
       };
       if (tocRules.toc) {
-        const chapters = this.parseTocFromRules(bodyText, tocRules);
+        // 检测 JSON 响应 + JSONPath 规则（$.xxx），用 JSON path 解析
+        let chapters: BookSourceChapter[] = [];
+        if (tocRules.toc.startsWith('$.')) {
+          try {
+            const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
+            chapters = this.parseJsonToc(jsonObj, tocRules, tocUrl);
+          } catch (_je) { /* fallback to CSS parser */ }
+        }
+        if (chapters.length === 0) {
+          chapters = this.parseTocFromRules(bodyText, tocRules);
+        }
         if (chapters.length > 0) {
           const baseUrl = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
           return chapters.map(ch => ({
@@ -896,7 +906,16 @@ export class SourceExecutor {
         if (altUrl && altUrl !== tocUrl && bookId) {
           const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
           if (altResp && altResp.length > 100) {
-            const altChapters = this.parseTocFromRules(altResp, tocRules);
+            let altChapters: BookSourceChapter[] = [];
+            if (tocRules.toc.startsWith('$.')) {
+              try {
+                const jsonObj = JSON.parse(altResp) as Record<string, unknown>;
+                altChapters = this.parseJsonToc(jsonObj, tocRules, altUrl || tocUrl);
+              } catch (_je2) { /* fallback */ }
+            }
+            if (altChapters.length === 0) {
+              altChapters = this.parseTocFromRules(altResp, tocRules);
+            }
             if (altChapters.length > 0) {
               console.info('[SrcEx] AltToc got', altChapters.length, 'chapters, first=', altChapters[0].title || 'EMPTY', 'second=', altChapters.length > 1 ? altChapters[1].title : 'N/A', 'fifth=', altChapters.length > 4 ? altChapters[4].title : 'N/A');
               return altChapters.map(ch => ({
@@ -1549,6 +1568,87 @@ export class SourceExecutor {
 
   private stripHtml(html: string): string {
     return HtmlUtil.stripHtml(html);
+  }
+
+  /**
+   * 从 JSON 响应解析目录列表（$.xxx JSONPath）
+   */
+  private parseJsonToc(json: Record<string, unknown>, rules: Record<string, string>, baseUrl: string): BookSourceChapter[] {
+    const tocRule = rules['toc'] || '';
+    if (!tocRule) return [];
+
+    let list: unknown[] = [];
+    const raw = this.getPath(json, tocRule);
+    if (Array.isArray(raw)) list = raw;
+
+    if (list.length === 0) {
+      for (const p of ['data', 'list', 'rows', 'items', 'data.list', 'data.rows', 'data.items']) {
+        const v = this.getPath(json, p);
+        if (Array.isArray(v)) { list = v; break; }
+      }
+    }
+
+    const titleRule = rules['tocTitle'] || '';
+    const urlItemRule = rules['tocUrlItem'] || '';
+
+    return list.map((item: unknown, index: number): BookSourceChapter => {
+      const itemObj = item as Record<string, unknown>;
+
+      let title = '';
+      if (titleRule) {
+        let cleanTitleRule = titleRule;
+        let postProcs: string[] = [];
+        if (titleRule.includes('##')) {
+          const parts = titleRule.split('##');
+          cleanTitleRule = parts[0];
+          postProcs = parts.slice(1);
+        }
+        const val = this.getPath(itemObj, cleanTitleRule);
+        if (val !== undefined && val !== null) {
+          title = String(val);
+          for (const proc of postProcs) {
+            try {
+              const regex = new RegExp(proc);
+              const m = title.match(regex);
+              if (m && m.length > 1 && m[1] !== undefined) {
+                title = m[1];
+              } else {
+                title = title.replace(regex, '');
+              }
+            } catch (_e) { /* ignore */ }
+          }
+        }
+      }
+      if (!title) {
+        title = String(itemObj['title'] || itemObj['name'] || itemObj['serialName'] || '第' + (index + 1) + '章');
+      }
+
+      let url = '';
+      if (urlItemRule) {
+        // 检查是否是复杂模板（如 method/body/headers JSON 格式）
+        if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
+          url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
+        } else {
+          const val = this.getPath(itemObj, urlItemRule);
+          if (val !== undefined && val !== null) {
+            url = String(val);
+          }
+        }
+        url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
+          const v = this.getPath(itemObj, '$.' + path);
+          return v !== undefined ? String(v) : '';
+        });
+      }
+      if (!url) {
+        url = String(itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || '');
+        if (url && !url.startsWith('http') && !url.startsWith('//')) {
+          const prefix = baseUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+          url = prefix + (url.startsWith('/') ? '' : '/') + url;
+        }
+      }
+
+      return { title: title || '第' + (index + 1) + '章', url, index };
+    });
   }
 
   /**
