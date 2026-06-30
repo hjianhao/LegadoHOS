@@ -166,7 +166,7 @@ export class HtmlParser {
     // 分离属性后缀: expr@text | expr@href | expr@src | expr@html | expr@ownText | expr@textNodes
     let attrSuffix = 'text';
     let cssSel = s;
-    const attrMatch = s.match(/^(.*?)@(text|href|src|html|ownText|textNodes)$/i);
+    const attrMatch = s.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
     if (attrMatch) {
       cssSel = attrMatch[1].trim();
       attrSuffix = attrMatch[2].toLowerCase();
@@ -221,7 +221,7 @@ export class HtmlParser {
 
     let attrSuffix = 'text';
     let cssSel = cleanSelector;
-    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes)$/i);
+    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
     if (attrMatch) {
       cssSel = attrMatch[1].trim();
       attrSuffix = attrMatch[2].toLowerCase();
@@ -257,6 +257,9 @@ export class HtmlParser {
         break;
       case 'html':
         result = el.innerHtml;
+        break;
+      case 'value':
+        result = el.attributes['value'] || '';
         break;
       default:
         result = el.attributes[attrSuffix] || this.cleanText(el.text);
