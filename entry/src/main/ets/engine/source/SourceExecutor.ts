@@ -852,13 +852,12 @@ export class SourceExecutor {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
 
-      const tocBodies: string[] = [resp];
+      const maxTocPages = 60;
       const visitedToc = new Set<string>();
       visitedToc.add(tocUrl);
 
       // 预提取所有分页URL（从第1页 HTML 中一次性提取 select option 列表）
       const nextRule = source.ruleTocNextTocUrl || '';
-      const maxTocPages = 20;
       if (nextRule) {
         try {
           const parser = getHtmlParser();
@@ -871,28 +870,33 @@ export class SourceExecutor {
             const allSel = cssSel.replace(/\.\d+$/, '');
             const allOptions = parser.querySelectorAll(doc, allSel);
             console.info('[SrcEx] getToc all options: css=' + allSel + ' found=' + allOptions.length);
-            for (let oi = 0; oi < allOptions.length; oi++) {
+            for (let oi = 0; oi < allOptions.length && visitedToc.size < maxTocPages; oi++) {
               const val = allOptions[oi].attributes[attrSuffix] || '';
               if (!val) continue;
               const fullUrl = this.resolvePageUrl(val, tocUrl);
               if (fullUrl && !visitedToc.has(fullUrl)) {
                 visitedToc.add(fullUrl);
-                console.info('[SrcEx] getToc pageUrl[' + oi + ']:', fullUrl.substring(fullUrl.lastIndexOf('/') + 1));
-                if (tocBodies.length >= maxTocPages) break;
-                try {
-                  const pageBody = await this.fetchWithOpts(fullUrl, headers);
-                  if (pageBody && pageBody.length > 100) {
-                    tocBodies.push(pageBody);
-                  }
-                } catch (_pf) { /* page fetch failed, skip */ }
               }
             }
           }
-        } catch (_ne) { /* nextRule extraction failed */ }
+        } catch (_ne) { /* ignore */ }
       }
 
-      const bodyText = tocBodies.join('\n');
-      console.info('[SrcEx] getToc got ' + tocBodies.length + ' pages, total ' + bodyText.length + ' chars');
+      // 逐页加载并解析章节（避免 join 大文本）
+      const tocPages: string[] = [resp];
+      for (const pageUrl of visitedToc) {
+        if (pageUrl === tocUrl || tocPages.length >= maxTocPages) continue;
+        try {
+          const pageBody = await this.fetchWithOpts(pageUrl, headers);
+          if (pageBody && pageBody.length > 100) {
+            tocPages.push(pageBody);
+            console.info('[SrcEx] getToc page', tocPages.length, pageUrl.substring(pageUrl.lastIndexOf('/') + 1));
+          }
+        } catch (_pf) { /* skip */ }
+      }
+
+      const bodyText = tocPages.join('\n');
+      console.info('[SrcEx] getToc got ' + tocPages.length + ' pages, total ' + bodyText.length + ' chars');
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
       let tocListRule = source.ruleToc || '';
