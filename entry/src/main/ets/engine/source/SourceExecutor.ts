@@ -882,17 +882,34 @@ export class SourceExecutor {
       }
       console.info('[SrcEx] getToc pageUrls:', pageUrls.length);
 
-      // 逐页加载
-      for (let i = 0; i < pageUrls.length && i < 60; i++) {
-        const url = pageUrls[i];
-        if (i === 0) {
-          tocBodies.push(resp);
-        } else {
+      // 并发加载分页（限制并发数=5，保留原始顺序）
+      const maxConcurrency = 5;
+      const totalPages = Math.min(pageUrls.length, 60);
+      const pageResults: (string | null)[] = new Array(totalPages);
+      pageResults[0] = resp; // 第0页已有
+
+      let nextIdx = 1;
+      const workers: Promise<void>[] = [];
+      const fetchPage = async (): Promise<void> => {
+        while (nextIdx < totalPages) {
+          const i = nextIdx++;
+          const url = pageUrls[i];
           try {
             const b = await this.fetchWithOpts(url, headers);
-            if (b && b.length > 100) tocBodies.push(b);
-          } catch (_e2) { /* skip */ }
+            if (b && b.length > 100) {
+              pageResults[i] = b;
+            }
+          } catch (_pf) { /* skip */ }
         }
+      };
+      const workerCount = Math.min(maxConcurrency, totalPages - 1);
+      for (let w = 0; w < workerCount; w++) {
+        workers.push(fetchPage());
+      }
+      await Promise.all(workers);
+
+      for (let i = 0; i < totalPages; i++) {
+        if (pageResults[i]) tocBodies.push(pageResults[i]!);
       }
 
       const bodyText = tocBodies.join('\n');
