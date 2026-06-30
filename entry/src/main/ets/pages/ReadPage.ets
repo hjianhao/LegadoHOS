@@ -24,6 +24,8 @@ import { BookChapter } from '../model/BookChapter';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
 import { SourceChangePanel } from '../components/reader/SourceChangePanel';
+import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
+import { ReadAloudEngine, AloudState } from '../service/ReadAloudEngine';
 import promptAction from '@ohos.promptAction';
 
 @Entry
@@ -62,6 +64,7 @@ struct ReadPage {
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
   @State showSourcePanel: boolean = false;
+  @State showAloud: boolean = false;
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
@@ -79,6 +82,7 @@ struct ReadPage {
   private targetIdx_: number = -1;
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
+  private aloudEngine_: ReadAloudEngine | null = null;
 
   aboutToAppear(): void {
     const p = router.getParams() as Record<string, Object>;
@@ -216,6 +220,7 @@ struct ReadPage {
           console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
           this.text = cached.content;
           this.layoutText(cached.content);
+          this.initAloudEngine_();
           this.isLoading = false;
           this.saveProgress();
           this.preloadNextChapter_(idx);
@@ -614,6 +619,26 @@ struct ReadPage {
 
   private footerH_(): number { return 20; }
 
+  private initAloudEngine_(): void {
+    if (this.aloudEngine_) {
+      try { this.aloudEngine_.release(); } catch (_) {}
+      this.aloudEngine_ = null;
+    }
+    this.aloudEngine_ = new ReadAloudEngine({
+      onStateChange: (s: AloudState) => {
+        console.info('[ReadPage] Aloud state: ' + s);
+      },
+      onProgress: (_charIdx: number, _total: number) => { },
+      onChapterEnd: () => {
+        this.onNextChapter();
+      },
+      onError: (msg: string) => {
+        console.error('[ReadPage] Aloud error: ' + msg);
+        promptAction.showToast({ message: msg, duration: 2000 });
+      },
+    });
+  }
+
   build() {
     Stack() {
       if (this.isLoading) {
@@ -705,7 +730,7 @@ struct ReadPage {
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
           ReadBottomMenu({
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
-            onReadAloud: () => { this.showMenu = false; promptAction.showToast({message:'朗读功能开发中',duration:1500}); },
+            onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { promptAction.showToast({message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
             onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
@@ -749,6 +774,20 @@ struct ReadPage {
             onDismiss: () => { this.showCacheDialog = false; },
             onCacheComplete: () => { promptAction.showToast({ message: '缓存完成', duration: 1500 }); },
             onCacheStart: () => {},
+          })
+        }.width('100%').height('100%')
+      }
+
+      if (this.showAloud) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showAloud = false; })
+          ReadAloudPanel({
+            text: this.text,
+            chapterTitle: this.chapters[this.currentIndex]?.title || '',
+            externalEngine: this.aloudEngine_!,
+            onDismiss: () => { this.showAloud = false; },
+            onNextChapter: () => { this.showAloud = false; this.onNextChapter(); },
+            onPrevChapter: () => { this.showAloud = false; this.onPrevChapter(); },
           })
         }.width('100%').height('100%')
       }
