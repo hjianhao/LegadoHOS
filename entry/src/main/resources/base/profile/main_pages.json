@@ -16,6 +16,7 @@
     "pages/RssSourceManagePage",
     "pages/RssSourceEditPage",
     "pages/RssArticlesPage",
-    "pages/ExploreBookPage"
+    "pages/ExploreBookPage",
+    "pages/BookshelfManagePage"
   ]
 }

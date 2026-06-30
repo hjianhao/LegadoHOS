@@ -171,15 +171,36 @@ export struct ChangeSourceSheet {
     }
   }
 
-  /** 对齐 Legado getDbSearchBooks() — 直接展示缓存 */
+  /**
+   * 对齐 Legado getDbSearchBooks() — 从缓存中筛选精确匹配的源
+   * 过滤逻辑与 ChangeBookSourceComposeViewModel.initData → getDbSearchBooks 一致：
+   *   fName == name && (!checkAuthor || fAuthor.contains(author))
+   */
   showCachedSources(): void {
-    this.results = this.cachedSources.sort((a: SearchResult, b: SearchResult) => {
+    const targetName = this.bookName.replace(/\s/g, '');
+    const targetAuthor = this.bookAuthor.replace(/\s/g, '');
+    // 只保留精确匹配书名 + 可选匹配作者的源
+    const matched = this.cachedSources.filter((r: SearchResult) => {
+      const rname = (r.name || '').replace(/\s/g, '');
+      if (rname !== targetName) return false;
+      if (targetAuthor) {
+        const rauthor = (r.author || '').replace(/\s/g, '');
+        if (!rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
+      }
+      return true;
+    });
+    this.results = matched.sort((a: SearchResult, b: SearchResult) => {
       let sa = 0;
       let sb = 0;
       if (a.originUrl === this.currentOriginUrl) sa -= 1000;
       if (b.originUrl === this.currentOriginUrl) sb -= 1000;
       return sb - sa;
     });
+    // 缓存中没有精确匹配结果时回退到网络搜索
+    if (this.results.length === 0) {
+      this.cachedSources = [];
+      this.searchSources();
+    }
   }
 
   /** 对齐 Legado startSearch() — 网络搜索 */

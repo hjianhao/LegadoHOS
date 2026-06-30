@@ -133,6 +133,7 @@ export class AppDatabase {
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE search_results ADD COLUMN source_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN remark TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
@@ -143,7 +144,7 @@ export class AppDatabase {
   /** 从 raw_json 重新解析规则字段，修复旧导入缺少规则列的问题 */
   private async reparseSourceRules(): Promise<void> {
     const rs = await this.rdbStore_.querySql(
-      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != '' AND (rule_toc_title = '' OR rule_book_content = '' OR rule_toc LIKE '{%')"
+      "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != ''"
     );
     if (rs.rowCount === 0) { rs.close(); return; }
     let fixedCount = 0;
@@ -171,20 +172,29 @@ export class AppDatabase {
           'rule_search_author': toStr(obj['ruleSearchAuthor'] || rs2['author'] || ''),
           'rule_search_cover': toStr(obj['ruleSearchCover'] || rs2['coverUrl'] || ''),
           'rule_search_note_url': toStr(obj['ruleSearchNoteUrl'] || rs2['bookUrl'] || ''),
+          'rule_search_kind': toStr(obj['ruleSearchKind'] || rs2['kind'] || ''),
+          'rule_search_word_count': toStr(obj['ruleSearchWordCount'] || rs2['wordCount'] || ''),
+          'rule_search_last_update_time': toStr(obj['ruleSearchLastUpdateTime'] || rs2['lastUpdateTime'] || ''),
+          'rule_search_introduce': toStr(obj['ruleSearchIntroduce'] || rs2['intro'] || rs2['introduce'] || ''),
           'rule_book_info_init': toStr(obj['ruleBookInfoInit'] || bi['init'] || ''),
           'rule_book_info_name': toStr(obj['ruleBookInfoName'] || bi['name'] || ''),
           'rule_book_info_author': toStr(obj['ruleBookInfoAuthor'] || bi['author'] || ''),
           'rule_book_info_cover': toStr(obj['ruleBookInfoCover'] || bi['coverUrl'] || ''),
           'rule_book_info_introduce': toStr(obj['ruleBookInfoIntroduce'] || bi['intro'] || ''),
+          'rule_book_info_kind': toStr(obj['ruleBookInfoKind'] || bi['kind'] || ''),
+          'rule_book_info_word_count': toStr(obj['ruleBookInfoWordCount'] || bi['wordCount'] || ''),
+          'rule_book_info_last_update_time': toStr(obj['ruleBookInfoLastUpdateTime'] || bi['lastUpdateTime'] || ''),
           'rule_book_info_toc_url': toStr(obj['ruleBookInfoTocUrl'] || bi['tocUrl'] || obj['tocUrl'] || ''),
           'rule_toc_url': toStr(obj['ruleTocUrl'] || rtc['tocUrl'] || ''),
           'rule_toc': toStr(typeof obj['ruleToc'] === 'object' ? (obj['ruleToc'] as Record<string, Object>)['chapterList'] || '' : obj['ruleToc'] || rtc['chapterList'] || ''),
           'rule_toc_title': toStr(obj['ruleTocTitle'] || rtc['chapterName'] || ''),
+          'rule_toc_url_item': toStr(obj['ruleTocUrlItem'] || rtc['chapterUrl'] || ''),
           'rule_book_content_url': toStr(obj['ruleBookContentUrl'] || rc['contentUrl'] || ''),
           'rule_book_content': (() => {
             const rbc = obj['ruleBookContent'] || rc['content'] || '';
             return typeof rbc === 'string' ? rbc : JSON.stringify(rbc);
           })(),
+          'rule_book_content_next': toStr(obj['ruleBookContentNext'] || rc['nextContentUrl'] || ''),
           'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
           'header': toStr(obj['header'] || ''),
         };

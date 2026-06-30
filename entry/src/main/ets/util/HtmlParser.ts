@@ -431,7 +431,8 @@ export class HtmlParser {
     const lastPart = parts[lastIdx];
     let exclStart = -1;
     let exclEnd = -1;
-    let posIndex = -1;
+    let posIndex = 0;
+    let hasPosIndex = false;
     // 排除先处理（可与位置索引共存）
     let workPart = lastPart;
     const exclMatch = lastPart.match(/^(.*?)!(-?\d+)(?::(-?\d+))?$/);
@@ -445,6 +446,7 @@ export class HtmlParser {
     if (posMatch) {
       parts[lastIdx] = posMatch[1]; // 去掉 .N
       posIndex = parseInt(posMatch[2]);
+      hasPosIndex = true;
     } else if (exclStart >= 0) {
       parts[lastIdx] = workPart; // 只去掉 ! 部分
     }
@@ -484,13 +486,13 @@ export class HtmlParser {
         }
       }
       // 再应用位置索引
-      if (posIndex >= 0 && posIndex < filtered.length) return [filtered[posIndex]];
-      if (posIndex < 0 && filtered.length + posIndex >= 0) return [filtered[filtered.length + posIndex]];
+      if (hasPosIndex && posIndex >= 0 && posIndex < filtered.length) return [filtered[posIndex]];
+      if (hasPosIndex && posIndex < 0 && filtered.length + posIndex >= 0) return [filtered[filtered.length + posIndex]];
       return filtered;
     }
 
     // 应用位置索引
-    if (posIndex >= 0 && results.length > 0) {
+    if (hasPosIndex && results.length > 0) {
       if (posIndex < results.length) return [results[posIndex]];
       if (posIndex < 0 && results.length + posIndex >= 0) return [results[results.length + posIndex]];
       return [];

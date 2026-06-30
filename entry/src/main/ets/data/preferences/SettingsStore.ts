@@ -98,7 +98,67 @@ export class SettingsStore {
     await this.store.flush();
   }
 
-  // ---- 搜索历史 ----
+  // ---- 书架设置 ----
+  async getBookGroupStyle(): Promise<number> { return await this.get('book_group_style', 0); }
+  async setBookGroupStyle(v: number): Promise<void> { await this.put('book_group_style', v); }
+
+  async getBookshelfSortMode(): Promise<number> { return await this.get('bookshelf_sort_mode', 0); }
+  async setBookshelfSortMode(v: number): Promise<void> { await this.put('bookshelf_sort_mode', v); }
+
+  async getBookshelfSortOrder(): Promise<number> { return await this.get('bookshelf_sort_order', 0); }
+  async setBookshelfSortOrder(v: number): Promise<void> { await this.put('bookshelf_sort_order', v); }
+
+  async getBookshelfLayoutMode(): Promise<number> { return await this.get('bookshelf_layout_mode', 0); }
+  async setBookshelfLayoutMode(v: number): Promise<void> { await this.put('bookshelf_layout_mode', v); }
+
+  async getBookshelfLayoutGrid(): Promise<number> { return await this.get('bookshelf_layout_grid', 3); }
+  async setBookshelfLayoutGrid(v: number): Promise<void> { await this.put('bookshelf_layout_grid', v); }
+
+  async getBookshelfGridStyle(): Promise<number> { return await this.get('bookshelf_grid_style', 0); }
+  async setBookshelfGridStyle(v: number): Promise<void> { await this.put('bookshelf_grid_style', v); }
+
+  async getBookshelfShowDivider(): Promise<boolean> { return await this.get('bookshelf_show_divider', true); }
+  async setBookshelfShowDivider(v: boolean): Promise<void> { await this.put('bookshelf_show_divider', v); }
+
+  async getBookshelfCoverWidth(): Promise<number> { return await this.get('bookshelf_cover_width', 84); }
+  async setBookshelfCoverWidth(v: number): Promise<void> { await this.put('bookshelf_cover_width', v); }
+
+  async getBookshelfCompact(): Promise<boolean> { return await this.get('bookshelf_compact', false); }
+  async setBookshelfCompact(v: boolean): Promise<void> { await this.put('bookshelf_compact', v); }
+
+  async getBookshelfCoverShadow(): Promise<boolean> { return await this.get('bookshelf_cover_shadow', false); }
+  async setBookshelfCoverShadow(v: boolean): Promise<void> { await this.put('bookshelf_cover_shadow', v); }
+
+  async getShowUnread(): Promise<boolean> { return await this.get('show_unread', true); }
+  async setShowUnread(v: boolean): Promise<void> { await this.put('show_unread', v); }
+
+  async getBookshelfShowTip(): Promise<boolean> { return await this.get('bookshelf_show_tip', true); }
+  async setBookshelfShowTip(v: boolean): Promise<void> { await this.put('bookshelf_show_tip', v); }
+
+  async getShowBookIntro(): Promise<boolean> { return await this.get('show_book_intro', true); }
+  async setShowBookIntro(v: boolean): Promise<void> { await this.put('show_book_intro', v); }
+
+  async getBookshelfShowTag(): Promise<boolean> { return await this.get('bookshelf_show_tag', true); }
+  async setBookshelfShowTag(v: boolean): Promise<void> { await this.put('bookshelf_show_tag', v); }
+
+  async getBookshelfShowLatestChapter(): Promise<boolean> { return await this.get('bookshelf_show_latest', true); }
+  async setBookshelfShowLatestChapter(v: boolean): Promise<void> { await this.put('bookshelf_show_latest', v); }
+
+  async getBookshelfIntroMaxLines(): Promise<number> { return await this.get('bookshelf_intro_lines', 2); }
+  async setBookshelfIntroMaxLines(v: number): Promise<void> { await this.put('bookshelf_intro_lines', v); }
+
+  async getAutoUpdate(): Promise<boolean> { return await this.get('auto_update', true); }
+  async setAutoUpdate(v: boolean): Promise<void> { await this.put('auto_update', v); }
+
+  async getBookshelfTitleMaxLines(): Promise<number> { return await this.get('bookshelf_title_lines', 2); }
+  async setBookshelfTitleMaxLines(v: number): Promise<void> { await this.put('bookshelf_title_lines', v); }
+
+  async getShowLastUpdateTime(): Promise<boolean> { return await this.get('show_last_update', true); }
+  async setShowLastUpdateTime(v: boolean): Promise<void> { await this.put('show_last_update', v); }
+
+  async getBookshelfRefreshLimit(): Promise<number> { return await this.get('bookshelf_refresh_limit', 0); }
+  async setBookshelfRefreshLimit(v: number): Promise<void> { await this.put('bookshelf_refresh_limit', v); }
+
   async getSearchHistory(): Promise<string[]> { return await this.get<string[]>('search_history', []); }
   async setSearchHistory(history: string[]): Promise<void> { await this.put('search_history', history); }
 

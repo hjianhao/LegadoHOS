@@ -9,6 +9,7 @@ import UIAbility from '@ohos.app.ability.UIAbility';
 import Window from '@ohos.window';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
+import { GlobalConfig } from '../data/preferences/GlobalConfig';
 
 export default class MainAbility extends UIAbility {
   onCreate(want, launchParam): void {
@@ -29,6 +30,12 @@ export default class MainAbility extends UIAbility {
       console.info('[MainAbility] Theme loaded');
     } catch (err) {
       console.warn('[MainAbility] Theme load failed:', err);
+    }
+    try {
+      await GlobalConfig.getInstance().load();
+      console.info('[MainAbility] GlobalConfig loaded');
+    } catch (err) {
+      console.warn('[MainAbility] GlobalConfig load failed:', err);
     }
   }
 
