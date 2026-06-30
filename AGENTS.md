@@ -96,7 +96,7 @@ cd <repo-root>
 ## arkts-lsp-proxy MCP 服务
 
 已配置，提供 ArkTS 语言智能支持（桥接 DevEco ace-server）。
-
+    
 ### 提供的工具
 - **arkts_project_info** — 获取项目 ace-server 初始化元数据
 - **arkts_document_symbols** — 解析 .ets 文件的符号结构
