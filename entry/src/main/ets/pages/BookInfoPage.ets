@@ -9,6 +9,7 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
+import { SearchResult } from '../model/SearchResult';
 import {
   ChangeCoverSheet,
   ChangeSourceSheet,
@@ -16,7 +17,6 @@ import {
   BookReadRecordSheet,
   RemarkEditDialog
 } from '../components/BookInfoSheets';
-import { SearchResult } from '../model/SearchResult';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 
