@@ -838,6 +838,7 @@ export class SourceExecutor {
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
+    console.info('[SrcEx] getToc ruleTocNextTocUrl:', JSON.stringify(source.ruleTocNextTocUrl));
     try {
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
@@ -860,8 +861,27 @@ export class SourceExecutor {
         visitedToc.add(currentTocUrl);
         tocBodies.push(bodyText);
         const nextRule = source.ruleTocNextTocUrl || '';
-        if (!nextRule) break;
-        const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(bodyText, nextRule), currentTocUrl);
+        console.info('[SrcEx] getToc nextRule:', JSON.stringify(nextRule));
+        if (!nextRule) { console.info('[SrcEx] getToc no nextRule, break'); break; }
+        // debug: dump select innerHtml and structure
+        const parser = getHtmlParser();
+        const doc = parser.parse(bodyText);
+        const selects = parser.querySelectorAll(doc, '.listpage select');
+        console.info('[SrcEx] getToc select count=' + selects.length);
+        for (let si = 0; si < Math.min(selects.length, 2); si++) {
+          const sel = selects[si];
+          console.info('[SrcEx] getToc select[' + si + ']: children=' + sel.children.length + ' innerHtml=' + JSON.stringify(sel.innerHtml?.substring(0,300)) + ' ownText=' + JSON.stringify(sel.ownText?.substring(0,100)));
+          for (let ci = 0; ci < Math.min(sel.children.length, 10); ci++) {
+            const ch = sel.children[ci];
+            console.info('[SrcEx] getToc   child[' + ci + ']: tag=' + ch.tagName + ' value=' + ch.attributes['value'] + ' ownText=' + JSON.stringify(ch.ownText?.substring(0,30)));
+          }
+        }
+        // test with normalized rule
+        const normRule = this.normalizeCssRule(nextRule);
+        console.info('[SrcEx] getToc normalized:', normRule);
+        const nextUrlRaw = this.extractHtmlRuleValue(bodyText, nextRule);
+        console.info('[SrcEx] getToc nextUrlRaw:', JSON.stringify(nextUrlRaw));
+        const nextUrl = this.resolvePageUrl(nextUrlRaw, currentTocUrl);
         if (!nextUrl || visitedToc.has(nextUrl)) break;
         currentTocUrl = nextUrl;
         const nextBody = await this.fetchWithOpts(currentTocUrl, headers);

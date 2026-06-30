@@ -474,8 +474,9 @@ export class HtmlParser {
       }
     } else {
       const ancestors = this.findElements(root, parts[0]);
+      const remainingSelector = parts.slice(1).join(' ');
       for (const a of ancestors) {
-        const descendants = this.findAllDescendants(a, parts.slice(1).join(' '));
+        const descendants = this.findElements(a, remainingSelector);
         results.push(...descendants);
       }
     }
