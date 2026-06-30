@@ -854,7 +854,8 @@ export class SourceExecutor {
       let currentTocUrl = tocUrl;
       const tocBodies: string[] = [];
       const visitedToc = new Set<string>();
-      for (let page = 0; page < 20; page++) {
+      const maxTocPages = 20;
+      for (let page = 0; page < maxTocPages; page++) {
         if (visitedToc.has(currentTocUrl)) break;
         visitedToc.add(currentTocUrl);
         tocBodies.push(bodyText);
@@ -871,8 +872,16 @@ export class SourceExecutor {
       bodyText = tocBodies.join('\n');
 
       // 规则解析：直接使用书源的目录规则，不通过 QuickJS（避免大数据传参溢出）
+      let tocListRule = source.ruleToc || '';
+      let reverseToc = false;
+      if (tocListRule.startsWith('-')) {
+        reverseToc = true;
+        tocListRule = tocListRule.substring(1);
+      } else if (tocListRule.startsWith('+')) {
+        tocListRule = tocListRule.substring(1);
+      }
       const tocRules: Record<string, string> = {
-        toc: source.ruleToc || '',
+        toc: tocListRule,
         tocTitle: source.ruleTocTitle || '',
         tocUrlItem: source.ruleTocUrlItem || '',
       };
@@ -887,6 +896,12 @@ export class SourceExecutor {
         }
         if (chapters.length === 0) {
           chapters = this.parseTocFromRules(bodyText, tocRules);
+        }
+        // 排序：分页 join 后章节顺序可能混乱，统一按原始顺序重赋 index
+        chapters.forEach((ch, idx) => { ch.index = idx; });
+        if (reverseToc) {
+          chapters.reverse();
+          chapters.forEach((ch, idx) => { ch.index = idx; });
         }
         if (chapters.length > 0) {
           const baseUrl = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');

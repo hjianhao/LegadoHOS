@@ -3,7 +3,9 @@
     "harmonyos": {
       "command": "npx",
       "args": ["-y", "mcp-harmonyos@latest"],
-      "env": {}
+      "env": {
+        "PATH": "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
     }
   }
 }
