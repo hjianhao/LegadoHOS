@@ -129,28 +129,14 @@ export struct ChapterListPage {
     if (volumeCount > 0) console.info('[ChapterList] Detected', volumeCount, 'volumes');
   }
 
-  /** 按章节数字强制升序排列（无数字的章节排最后） */
+  /** 确保目录排序正确（依赖 getToc 已排序，仅做最终兜底反转） */
   ensureAscendingOrder(): void {
     if (this.chapters.length < 3) return;
     const getNum = (s: string): number => {
       const m = s.match(/(\d+)/);
       return m ? parseInt(m[1]) : -1;
     };
-    // 检测前5章和后5章趋势，覆盖倒序章节在前的情况
-    const headEnd = Math.min(5, this.chapters.length);
-    const tailStart = Math.max(0, this.chapters.length - 5);
-    let headDesc = 0, tailAsc = 0;
-    for (let i = 1; i < headEnd; i++) {
-      const a = getNum(this.chapters[i-1].title), b = getNum(this.chapters[i].title);
-      if (a > 0 && b > 0 && a > b) headDesc++;
-    }
-    for (let i = tailStart + 1; i < this.chapters.length; i++) {
-      const a = getNum(this.chapters[i-1].title), b = getNum(this.chapters[i].title);
-      if (a > 0 && b > 0 && a < b) tailAsc++;
-    }
-    // 如果前5章递减 >=2 且 后5章递增 >=2，说明开头是倒序 → 排序
-    const needSort = headDesc >= 2 && tailAsc >= 2;
-    // 回退：等距采样法
+    // 等距采样20个点，如果多数递减则反转（兜底 getToc 未处理的场景）
     let ascCount = 0, descCount = 0;
     const sampleCount = Math.min(20, this.chapters.length);
     const step = Math.max(1, Math.floor(this.chapters.length / sampleCount));
@@ -164,27 +150,13 @@ export struct ChapterListPage {
       if (n > 0) prevNum = n;
     }
     const rev = descCount > ascCount;
-    console.info('[ChapterList] trend: headDesc=' + headDesc + ' tailAsc=' + tailAsc + ' needSort=' + needSort + ' asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
-    if (!needSort && !rev) return;
+    console.info('[ChapterList] trend: asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
+    if (!rev) return;
     console.info('[ChapterList] sorting ' + this.chapters.length + ' chapters');
-    const nums: number[] = [];
+    const tmp = [...this.chapters];
+    tmp.reverse();
     for (let i = 0; i < this.chapters.length; i++) {
-      nums.push(getNum(this.chapters[i].title));
-    }
-    for (let i = 0; i < this.chapters.length - 1; i++) {
-      let minIdx = i;
-      for (let j = i + 1; j < this.chapters.length; j++) {
-        if (nums[j] >= 0 && (nums[minIdx] < 0 || nums[j] < nums[minIdx])) {
-          minIdx = j;
-        }
-      }
-      if (minIdx !== i) {
-        const tmpCh = this.chapters[i]; this.chapters[i] = this.chapters[minIdx]; this.chapters[minIdx] = tmpCh;
-        const tmpN = nums[i]; nums[i] = nums[minIdx]; nums[minIdx] = tmpN;
-      }
-    }
-    // 排序后重新分配 index，使 ch.index 与数组位置一致
-    for (let i = 0; i < this.chapters.length; i++) {
+      this.chapters[i] = tmp[i];
       this.chapters[i].index = i;
     }
   }
