@@ -138,12 +138,16 @@ export struct BookInfoPage {
           matched = existing.find(b => b.isShelf && (b.name === this.bookName || (this.bookAuthor && b.author === this.bookAuthor))) || null;
         }
         if (matched && matched.isShelf) {
+          // 保存 router param 传入的 coverUrl（避免被 DB 中的错误值覆盖）
+          const paramCoverUrl = this.coverUrl;
+          const paramCustomCover = this.customCoverPath;
           this.isInShelf = true;
           this.bookId = matched.id;
           if (matched.name) this.bookName = matched.name;
           if (matched.author) this.bookAuthor = matched.author;
-          if (matched.coverUrl) this.coverUrl = matched.coverUrl;
-          if (matched.customCoverPath) this.customCoverPath = matched.customCoverPath;
+          // DB 读取时，优先用 router 传进来的封面 URL（最新搜索结果的），DB 中的仅做兜底
+          if (!this.coverUrl) this.coverUrl = matched.coverUrl;
+          if (!this.customCoverPath) this.customCoverPath = matched.customCoverPath;
           if (matched.origin) this.origin = matched.origin;
           if (matched.originUrl) this.originUrl = matched.originUrl;
           if (matched.bookUrl) this.noteUrl = matched.bookUrl;
@@ -288,23 +292,25 @@ export struct BookInfoPage {
       const bookTable = new BookTable(db);
 
       // 去重检查：严格按 bookUrl 匹配，不同源的书允许同名
-      const now = Date.now();
+      const nowTs = Date.now();
       if (this.noteUrl) {
         const existing = await bookTable.getBookByUrl(this.noteUrl);
         if (existing) {
           if (!existing.isShelf) {
             existing.isShelf = true;
-            existing.updateTime = now;
+            existing.updateTime = nowTs;
           }
-          // 始终用详情页最新数据更新关键字段（包括 coverUrl）
-          if (this.coverUrl && !existing.coverUrl) existing.coverUrl = this.coverUrl;
+          // 始终用详情页最新数据更新关键字段（coverUrl 用有效值）
+          const effectiveCover = this.getEffectiveCoverUrl();
+      const insertTime = Date.now();
+          if (effectiveCover) existing.coverUrl = effectiveCover;
           if (this.customCoverPath && !existing.customCoverPath) existing.customCoverPath = this.customCoverPath;
           if (this.kind && !existing.kind) existing.kind = this.kind;
           if (this.wordCount && !existing.wordCount) existing.wordCount = this.wordCount;
           if (this.introduce && !existing.introduce) existing.introduce = this.introduce;
           if (this.origin && !existing.origin) existing.origin = this.origin;
           if (this.originUrl && !existing.originUrl) existing.originUrl = this.originUrl;
-          existing.updateTime = now;
+          existing.updateTime = nowTs;
           await bookTable.updateBook(existing);
           this.isInShelf = true;
           this.bookId = existing.id;
@@ -317,11 +323,13 @@ export struct BookInfoPage {
         }
       }
 
+      const effectiveCover = this.getEffectiveCoverUrl();
+      const insertTime = Date.now();
       const book: Book = {
         id: 0,
         name: this.bookName,
         author: this.bookAuthor,
-        coverUrl: this.coverUrl,
+        coverUrl: effectiveCover,
         customCoverPath: this.customCoverPath,
         bookUrl: this.noteUrl,
         origin: this.origin,
@@ -347,8 +355,8 @@ export struct BookInfoPage {
         remark: '',
         lastUpdateTime: '',
         lastOpenTime: 0,
-        createTime: Date.now(),
-        updateTime: Date.now()
+        createTime: insertTime,
+        updateTime: insertTime
       };
 
       const id = await bookTable.insertBook(book);
@@ -434,12 +442,13 @@ export struct BookInfoPage {
         }
       }
 
-      const now = Date.now();
+      const effectiveCover = this.getEffectiveCoverUrl();
+      const insertTime = Date.now();
       const book: Book = {
         id: 0,
         name: this.bookName,
         author: this.bookAuthor,
-        coverUrl: this.coverUrl,
+        coverUrl: effectiveCover,
         customCoverPath: this.customCoverPath,
         bookUrl: this.noteUrl,
         origin: this.origin,
@@ -464,9 +473,9 @@ export struct BookInfoPage {
         introduce: this.introduce,
         remark: this.remark,
         lastUpdateTime: this.lastUpdateTime,
-        lastOpenTime: now,
-        createTime: now,
-        updateTime: now,
+        lastOpenTime: insertTime,
+        createTime: insertTime,
+        updateTime: insertTime,
       };
 
       const id = await bookTable.insertBook(book);
@@ -614,12 +623,21 @@ export struct BookInfoPage {
     }});
   }
 
+  /**
+   * 确保封面 URL 有效 ——
+   * 详情页封面图片: Image(this.getDisplayCover()) 使用的是 customCoverPath || coverUrl
+   * 保存到 DB 时也需用相同的优先级
+   */
+  private getEffectiveCoverUrl(): string {
+    return this.customCoverPath || this.coverUrl || '';
+  }
+
   build() {
     Stack() {
-      // 背景层：对齐 Android BookInfoBackdrop，使用封面大图 + 遮罩 + 向下过渡到内容底色
+      // 背景层：对齐 Android BookInfoBackdrop，使用封面大图 + 遮罩
       Column() {
-        if (this.getDisplayCover()) {
-          Image(this.getDisplayCover())
+        if (this.getEffectiveCoverUrl()) {
+          Image(this.getEffectiveCoverUrl())
             .width('100%')
             .height(500)
             .objectFit(ImageFit.Cover)
