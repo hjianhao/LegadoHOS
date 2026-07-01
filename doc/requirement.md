@@ -1,9 +1,10 @@
-# LegadoHOS — 需求说明书
+# LegadoHOS — 需求说明书（v2.0）
 
 > 鸿蒙原生开源阅读 App，基于 ArkTS（ArkUI）开发，兼容 Legado（阅读）书源生态。
 > 目标：提供与 Android 版 Legado 功能对等的鸿蒙阅读体验。
 >
 > **编写目的**：便于 AI / 后续开发者快速理解已实现的功能范围、设计取舍和待完善项。
+> **更新日期**：2026-07-01（全面审计后更新，新增 RSS / AI 书源生成 / 书架分组 / 阅读朗读等模块）
 
 ---
 
@@ -16,7 +17,7 @@
 | 目标设备 | Phone / Tablet |
 | 最低 API | API 9+（兼容 API 12 推荐方式） |
 | 包名 / module | `entry` |
-| 数据库 | RDB（`@ohos.data.relationalStore`，12 张核心表） |
+| 数据库 | RDB（`@ohos.data.relationalStore`，17 张核心表） |
 | JS 引擎 | QuickJS（通过 NAPI 桥接，支持降级 Mock） |
 | 书源格式 | 兼容 Legado 书源 JSON（规则式 + JS 脚本式） |
 
@@ -32,9 +33,11 @@
 | R-002 | 按最后阅读时间排序 | ✅ 完成 | 最近阅读的书籍排在前面 |
 | R-003 | 空书架状态 | ✅ 完成 | 显示"书架是空的"占位提示 |
 | R-004 | 点击继续阅读 | ✅ 完成 | 跳转到 ReadPage，传入当前阅读进度 |
-| R-005 | 长按/点击移除书籍 | ✅ 完成 | 弹出对话框确认后移除，从书架移除（isShelf=false） |
+| R-005 | 移除书籍 | ✅ 完成 | 长按弹出对话框确认后移除 |
 | R-006 | 封面颜色映射 | ✅ 完成 | 书名首字哈希映射到 12 种预设颜色 |
 | R-007 | 书籍数量统计 | ✅ 完成 | 顶部显示"N本" |
+| R-008 | 分组标签切换 | ✅ 完成 | 系统分组（全部/未分组/本地）+自定义分组标签 |
+| R-009 | 书架配置 | ✅ 完成 | 封面/进度/时间等显示开关（BookshelfConfigDialog） |
 
 ### 2.2 发现 / 搜索（ExplorePage）
 
@@ -50,6 +53,8 @@
 | R-017 | 搜索进度提示 | ✅ 完成 | 显示"搜索中... | 已合并 N 条" |
 | R-018 | 搜索无结果状态 | ✅ 完成 | 显示"没有找到结果"占位 |
 | R-019 | 书源加载计数 | ✅ 完成 | 底部显示"已加载 N 个书源" |
+| R-019a | 搜索历史 | ✅ 完成 | 搜索关键词记录（SearchKeywordTable） |
+| R-019b | 发现书单 | ✅ 完成 | ExploreBookPage 按分类/排行榜浏览 |
 
 ### 2.3 书籍详情（BookInfoPage）
 
@@ -59,7 +64,7 @@
 | R-021 | 加入/移出书架 | ✅ 完成 | 按钮切换，同步更新数据库 |
 | R-022 | 开始阅读 | ✅ 完成 | 跳转 ReadPage，自动获取目录和正文 |
 | R-023 | 查看目录 | ✅ 完成 | 展开目录列表，点击跳转章节 |
-| R-024 | 书源切换 | ✅ 完成 | 查看其他可用的书源 |
+| R-024 | 书源切换 | ✅ 完成 | 查看其他可用的书源（ChangeSourceSheet） |
 
 ### 2.4 阅读（ReadPage）
 
@@ -69,12 +74,18 @@
 | R-031 | 目录获取 | ✅ 完成 | 支持 CSS/XPath/正则/JSON 规则解析目录 |
 | R-032 | 目录反转自动检测 | ✅ 完成 | 检测最新章在前的情况，自动反转列表 |
 | R-033 | 定位第一章 | ✅ 完成 | 自动跳过引言/公告定位首个真实章节 |
-| R-034 | 上一章/下一章 | ✅ 完成 | 底部翻页按钮 |
+| R-034 | 上一章/下一章 | ✅ 完成 | 底部翻页按钮 / 滑动手势 |
 | R-035 | 目录弹窗 | ✅ 完成 | 侧滑目录列表，高亮当前章节，点击跳转 |
-| R-036 | 阅读设置面板 | ✅ 完成 | 字体大小（14-32）、行高（24-52）、背景色切换 |
-| R-037 | 深色阅读背景 | ✅ 完成 | 提供#1E1E1E暗色背景 |
+| R-036 | 阅读设置面板 | ✅ 完成 | 字体大小（14-32）、行高（24-52）、背景色切换（StylePanel） |
+| R-037 | 深色阅读背景 | ✅ 完成 | 提供暗色背景切换 |
 | R-038 | 阅读进度自动保存 | ✅ 完成 | 换章时保存到数据库（章节索引、标题、最新章节） |
 | R-039 | 正文内容兜底清理 | ✅ 完成 | 无规则时使用 HtmlUtil.stripHtml 清理 HTML 标签 |
+| R-039a | 分页翻页（PageView） | ✅ 完成 | 文本分页排版、翻页动画（滑动/覆盖/无） |
+| R-039b | 点击区域配置 | ✅ 完成 | 上/中/下三区自定义动作（菜单/翻页前/翻页后/无） |
+| R-039c | 底部阅读菜单 | ✅ 完成 | 目录/夜间模式/设置/朗读/缓存/换源 |
+| R-039d | 章节缓存管理 | ✅ 完成 | 查看/预缓存章节（CacheDialog） |
+| R-039e | 繁简转换 | ✅ 完成 | 阅读内容简繁体转换（ChineseConverter） |
+| R-039f | 阅读换源 | ✅ 完成 | 阅读中切换其他书源查看同一章节 |
 
 ### 2.5 书源管理（BookSourcePage / ImportSourceDialog）
 
@@ -85,6 +96,8 @@
 | R-042 | 书源启用/禁用 | ✅ 完成 | 开关控制 |
 | R-043 | 书源 JSON 解析 | ✅ 完成 | 兼容 Legado 书源 JSON 格式的多种字段命名 |
 | R-044 | 规则字段序列化 | ✅ 完成 | 支持字符串/JSON 对象/JSON 数组三种规则格式 |
+| R-045 | 书源编辑 | ✅ 完成 | BookSourceEditPage 编辑搜索/详情/目录/正文规则 |
+| R-046 | 书源校验 | ✅ 完成 | SourceChecker 搜索/发现/详情/目录/正文多步校验 |
 
 ### 2.6 我的 / 设置（MyPage / SettingsPage）
 
@@ -104,7 +117,7 @@
 | R-060 | TXT 解析（TxtParser） | ✅ 完成 | 支持章节分割、编码检测、大文件分页读取 |
 | R-061 | EPUB 解析（EpubParser） | ✅ 完成 | OPF + NCX 目录解析、manifest 资源管理 |
 | R-062 | MOBI 解析（MobiParser） | ✅ 完成 | PDB 头解析、文本/图像记录提取 |
-| R-063 | PDF 解析（PdfParser） | ✅ 完成 | 元数据提取、目录结构（需集成 PDF 渲染） |
+| R-063 | PDF 解析（PdfParser） | ⚠️ 部分 | 元数据提取、目录结构（PDF 页面渲染待集成） |
 
 ### 2.8 书源引擎（SourceExecutor / ScriptEngine）
 
@@ -113,30 +126,33 @@
 | R-070 | HTTP 网络请求 | ✅ 完成 | 封装 `@ohos.net.http`，支持 GET/POST/PUT |
 | R-071 | 规则解析（RuleParser） | ✅ 完成 | 支持 JSONPath / CSS 选择器 / XPath / 正则 |
 | R-072 | QuickJS 引擎集成 | ✅ 完成 | NAPI 桥接，支持 JS 书源脚本执行 |
-| R-073 | JS polyfill 注入 | ✅ 完成 | 执行前注入环境 polyfill |
+| R-073 | JS polyfill 注入 | ✅ 完成 | ScriptApi.ts 1073 行 polyfill（MD5/Base64/AES/时间格式化） |
 | R-074 | HTTP 请求委托 | ✅ 完成 | JS 侧请求由 ArkTS 侧实际发起，避免 NAPI 死锁 |
 | R-075 | 引擎降级 | ✅ 完成 | 原生 QuickJS 不可用时降级为 Mock（直接解析） |
-| R-076 | 模板 URL 构建 | ✅ 完成 | 支持 `{{key}}`、`{{page}}`、`{{bookUrl}}` 等占位符替换 |
+| R-076 | 模板 URL 构建 | ✅ 完成 | 支持 {{key}}、{{page}}、{{bookUrl}} 等占位符替换 |
 | R-077 | 自定义请求头 | ✅ 完成 | 书源 JSON 中的 header 字段支持 |
 | R-078 | JSON 搜索结果解析 | ✅ 完成 | 直接 JSON 解析 + 字段映射 |
 | R-079 | HTML 搜索结果解析 | ✅ 完成 | 规则解析 + 兜底文本提取 |
 | R-080 | HTML 目录提取安全兜底 | ✅ 完成 | 多层模式匹配 + 导航链接过滤 + "最近更新"分段过滤 |
-| R-081 | 正文内容规则提取 | ✅ 完成 | `ruleBookContent` 支持 |
-| R-082 | 书源脚本标准接口 | ✅ 完成 | `search()` / `getBookInfo()` / `getToc()` / `getContent()` |
+| R-081 | 正文内容规则提取 | ✅ 完成 | ruleBookContent 支持 |
+| R-082 | 书源脚本标准接口 | ✅ 完成 | search() / getBookInfo() / getToc() / getContent() |
 | R-083 | 并发搜索池 | ✅ 完成 | 固定并发数，逐个启动，每完成一个触发回调 |
-| R-084 | JSONPath 简化实现 | ✅ 完成 | `$.list[*].name` 路径导航 |
+| R-084 | JSONPath 简化实现 | ✅ 完成 | $.list[*].name 路径导航 |
 
 ### 2.9 引擎子模块
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
 | R-090 | 发现页引擎（ExploreEngine） | ✅ 完成 | 发现页模块 / 规则项管理 |
-| R-091 | 书源切换器（SourceSwitcher） | ✅ 完成 | 源间章节比较、切换选择 |
+| R-091 | 书源切换器（SourceSwitcher） | ✅ 完成 | 源间章节比较、切换选择（SourceSwitchStore 持久化） |
 | R-092 | 缓存管理（CacheManager） | ✅ 完成 | 章节缓存读写、过期清理 |
 | R-093 | 内容替换引擎（ContentReplace） | ✅ 完成 | 正则替换规则，支持作用域和排序 |
 | R-094 | 章节管理器（ChapterManager） | ✅ 完成 | 预加载、并发下载、排序 |
-| R-095 | 文字排版引擎（TextLayout） | ✅ 完成 | 分页/分行布局计算 |
+| R-095 | 文字排版引擎（TextLayout） | ✅ 完成 | 分页/分行布局计算（基于 MeasureText） |
 | R-096 | 翻译引擎（TranslationEngine） | ✅ 完成 | 多翻译提供商接口（Google/DeepL/Baidu 等） |
+| R-097 | WebView 取内容（WebViewFetcher） | ✅ 完成 | Cloudflare 保护站点 WebView 兜底，支持 cookie 注入 |
+| R-098 | JS 表达式求值（JsExpressionEvaluator） | ✅ 完成 | 规则 URL 中 @js: 表达式独立计算 |
+| R-099 | Worker JS 执行（JsEvalWorker） | ✅ 完成 | 独立线程执行 JS 规则（RSS 排序等） |
 
 ### 2.10 音频 / TTS
 
@@ -145,7 +161,10 @@
 | R-100 | TTS 朗读（TTSPlayer） | ✅ 完成 | 章节朗读、暂停、继续、停止 |
 | R-101 | 音频播放器（AudioPlayer） | ✅ 完成 | 有声书播放，支持暂停/继续/seek |
 | R-102 | 播放列表管理（PlaylistManager） | ✅ 完成 | 顺序/循环/随机/单曲循环 |
-| R-103 | 阅读定时器（ReadTimer） | ✅ 完成 | 定时关闭（15/30/45/60 分钟） |
+| R-103 | 阅读定时器（ReadTimer） | ✅ 完成 | 定时关闭（15/30/45/60/90 分钟） |
+| R-104 | 朗读面板（ReadAloudPanel） | ✅ 完成 | 阅读页朗读控制面板（511 行），暂停/继续/语速/音色 |
+| R-105 | 朗读引擎（ReadAloudEngine） | ✅ 完成 | 后台朗读引擎（352 行），状态管理（播放/暂停/停止/完成） |
+| R-106 | TTS 控制面板（TtsControlPanel） | ✅ 完成 | 语速/音色配置浮层 |
 
 ### 2.11 服务
 
@@ -157,61 +176,133 @@
 | R-113 | 朗读服务（ReadAloudService） | ✅ 完成 | 后台朗读服务（RemoteObject，支持跨 Ability 通信） |
 | R-114 | Web 服务（WebService） | ✅ 完成 | HTTP 服务器，提供阅读内容远程访问 |
 | R-115 | 控制器服务（ControllerService） | ✅ 完成 | 全局播放控制、通知管理 |
+| R-116 | 书架传输服务（BookshelfTransferService） | ✅ 完成 | 导入时自动匹配书源、下载目录、upsert 书籍 |
 
-### 2.12 主题
-
-| # | 需求 | 状态 | 说明 |
-|---|------|------|------|
-| R-120 | 主题管理（AppTheme） | ✅ 完成 | 全局单例，亮/暗主题切换 |
-| R-121 | 色彩方案（ColorScheme） | ✅ 完成 | MD3 配色体系，支持自定义 |
-| R-122 | 主题模式（ThemeMode） | ✅ 完成 | 亮色/暗色/跟随系统，预设色板 |
-| R-123 | 设置持久化 | ✅ 完成 | 主题选择保存到 Preferences |
-
-### 2.13 工具类
+### 2.12 书架管理（BookshelfManagePage）
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-130 | HTML 清理（HtmlUtil） | ✅ 完成 | 标签剥离、实体解码、纯文本提取 |
-| R-131 | 网络请求（NetUtil） | ✅ 完成 | HTTP(S) GET/POST/PUT，超时控制 |
-| R-132 | 文件操作（FileUtil） | ✅ 完成 | 文件读写、目录管理、路径工具 |
-| R-133 | 字符串处理（StrUtil） | ✅ 完成 | 相似度计算、格式校验等 |
-| R-134 | 加密工具（CryptoUtil） | ✅ 完成 | MD5/SHA/Base64 |
-| R-135 | ZIP 解压（ZipReader） | ✅ 完成 | Zip 文件读取，支持 EPUB/MOBI |
-| R-136 | 封面生成（BookCoverUtil） | ✅ 完成 | 文字封面生成 |
+| R-120 | 批量选择 | ✅ 完成 | 多选模式，全选/取消全选 |
+| R-121 | 分组筛选 | ✅ 完成 | 系统分组 + 自定义分组下拉筛选 |
+| R-122 | 搜索过滤 | ✅ 完成 | 书名/作者关键字过滤 |
+| R-123 | 导出书架 | ✅ 完成 | 导出为 JSON 文件 |
+| R-124 | 导入书架 | ✅ 完成 | 从 JSON 文件导入，自动匹配书源 |
+| R-125 | 批量移动分组 | ✅ 完成 | 选中书籍移动到指定分组 |
+| R-126 | 批量删除 | ✅ 完成 | 选中书籍从书架移除 |
+| R-127 | 分组管理 | ✅ 完成 | GroupManageDialog 新建/编辑/删除自定义分组 |
+| R-128 | URL 添加书籍 | ✅ 完成 | AddBookUrlDialog 输入书源 URL 或详情页 URL |
 
-### 2.14 数据库
-
-| # | 需求 | 状态 | 说明 |
-|---|------|------|------|
-| R-140 | RDB 初始化（AppDatabase） | ✅ 完成 | 懒加载单例，12 表建表 + 迁移 |
-| R-141 | BookTable | ✅ 完成 | 书籍 CRUD + 书架查询 + 进度保存 |
-| R-142 | ChapterTable | ✅ 完成 | 章节 CRUD |
-| R-143 | BookSourceTable | ✅ 完成 | 书源 CRUD + 启用查询 |
-| R-144 | BookmarkTable | ✅ 完成 | 书签 CRUD |
-| R-145 | ReadRecordTable | ✅ 完成 | 阅读记录 + 详情 |
-| R-146 | ReplaceRuleTable | ✅ 完成 | 替换规则 CRUD |
-| R-147 | RSSSourceTable | ✅ 完成 | RSS 源 + 文章 CRUD |
-| R-148 | CacheTable | ✅ 完成 | 章节缓存 + TXT 目录规则 |
-| R-149 | SearchResultTable | ✅ 完成 | 搜索结果缓存 |
-| R-150 | 数据库迁移 | ✅ 完成 | ALTER TABLE 添加列（幂等处理） |
-
-### 2.15 窗口小部件
+### 2.13 主题
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-155 | 最近阅读 Widget | ✅ 完成 | 桌面小部件显示最近阅读 |
-| R-156 | 搜索 Widget | ✅ 完成 | 桌面快捷搜索 |
+| R-130 | 主题管理（AppTheme） | ✅ 完成 | 全局单例，亮/暗主题切换 |
+| R-131 | 色彩方案（ColorScheme） | ✅ 完成 | MD3 配色体系，支持自定义 |
+| R-132 | 主题模式（ThemeMode） | ✅ 完成 | 亮色/暗色/跟随系统，预设色板 |
+| R-133 | 设置持久化 | ✅ 完成 | 主题选择保存到 Preferences |
 
-### 2.16 QuickJS NAPI 桥接
+### 2.14 工具类
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-160 | 多方式加载 | ✅ 完成 | `import('libquickjs_bridge.so')` / `requireNapi('quickjs_bridge')` / Mock 降级 |
-| R-161 | 引擎生命周期管理 | ✅ 完成 | createEngine / destroyEngine |
-| R-162 | JS 脚本执行 | ✅ 完成 | executeScript |
-| R-163 | JS 函数调用 | ✅ 完成 | callFunction（传参/返回 JSON 字符串） |
-| R-164 | HTTP 请求委托 | ✅ 完成 | registerHttpHandler / onHttpResponse |
-| R-165 | 原生 C++ 实现 | ✅ 完成 | libraries/quickjs/src/napi_bridge.cpp |
+| R-140 | HTML 解析（HtmlParser） | ✅ 完成 | 951 行自研解析器，支持 CSS/Default 规则、位置索引、排除索引、属性选择器、伪类 |
+| R-141 | HTML 清理（HtmlUtil） | ✅ 完成 | 标签剥离、实体解码、纯文本提取 |
+| R-142 | 网络请求（NetUtil） | ✅ 完成 | HTTP(S) GET/POST/PUT，超时控制、UA/编码检测 |
+| R-143 | 文件操作（FileUtil） | ✅ 完成 | 文件读写、目录管理、路径工具 |
+| R-144 | 字符串处理（StrUtil） | ✅ 完成 | 相似度计算（Levenshtein/Cosine）、格式校验 |
+| R-145 | 加密工具（CryptoUtil） | ✅ 完成 | MD5/SHA1/SHA256/Base64 |
+| R-146 | ZIP 解压（ZipReader） | ✅ 完成 | Zip 文件读取（store/deflate），流式读取，支持 EPUB/MOBI |
+| R-147 | 封面生成（BookCoverUtil） | ✅ 完成 | 文字封面 Canvas 生成，颜色映射 |
+| R-148 | 繁简转换（ChineseConverter） | ✅ 完成 | 简繁双向转换（OpenCC 兼容词表，260 行） |
+| R-149 | 内容缓存（ContentCache） | ✅ 完成 | 章节内容内存缓存 |
+| R-150 | 内容清理（ContentCleaner） | ✅ 完成 | 广告/脚本/空行清理（248 行） |
+| R-151 | 章节缓存（ChapterCache） | ✅ 完成 | 章节内容缓存助手 |
+| R-152 | 源切换存储（SourceSwitchStore） | ✅ 完成 | 换源结果持久化 |
+| R-153 | 应用上下文（AppContext） | ✅ 完成 | 全局 Context 单例 |
+
+### 2.15 数据库
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-160 | RDB 初始化（AppDatabase） | ✅ 完成 | 懒加载单例，17 表建表 + 迁移 |
+| R-161 | BookTable | ✅ 完成 | 书籍 CRUD + 书架查询 + 进度保存 + 分组字段 |
+| R-162 | ChapterTable | ✅ 完成 | 章节 CRUD |
+| R-163 | BookSourceTable | ✅ 完成 | 书源 CRUD + 启用查询 + 权重排序 |
+| R-164 | BookSourcesCacheTable | ✅ 完成 | 书源搜索结果缓存 |
+| R-165 | BookmarkTable | ✅ 完成 | 书签 CRUD |
+| R-166 | ReadRecordTable | ✅ 完成 | 阅读记录 + 详情（2 张表：read_records + read_record_details） |
+| R-167 | ReplaceRuleTable | ✅ 完成 | 替换规则 CRUD |
+| R-168 | RSSSourceTable | ✅ 完成 | RSS 源 + 文章 + 星标 + 阅读记录（4 张表） |
+| R-169 | CacheTable | ✅ 完成 | 章节缓存 + TXT 目录规则（2 张表：caches + txt_toc_rules） |
+| R-170 | SearchResultTable | ✅ 完成 | 搜索结果缓存 |
+| R-171 | BookGroupTable | ✅ 完成 | 书架分组 CRUD |
+| R-172 | SearchKeywordTable | ✅ 完成 | 搜索历史记录 |
+| R-173 | 数据库迁移 | ✅ 完成 | ALTER TABLE 添加列 + 新表创建（幂等处理） |
+
+### 2.16 窗口小部件
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-180 | 最近阅读 Widget | ✅ 完成 | 桌面小部件显示最近阅读 |
+| R-181 | 搜索 Widget | ✅ 完成 | 桌面快捷搜索 |
+
+### 2.17 RSS 订阅
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-190 | RSS 主页（RssMainPage） | ✅ 完成 | 显示已订阅源列表，下拉刷新，管理入口 |
+| R-191 | RSS 文章列表（RssArticlesPage） | ✅ 完成 | 文章列表，按源/收藏/搜索过滤 |
+| R-192 | RSS 文章阅读（RssReadPage） | ✅ 完成 | 文章内容展示（309 行），WebView 渲染 |
+| R-193 | RSS 收藏（RssFavoritesPage） | ✅ 完成 | 星标文章列表（285 行），取消收藏 |
+| R-194 | RSS 排序规则（RssSortPage） | ✅ 完成 | 自定义排序 URL 管理（442 行），JS 规则执行 |
+| R-195 | RSS 源管理（RssSourceManagePage） | ✅ 完成 | 启用/禁用/编辑/删除 RSS 源 |
+| R-196 | RSS 源编辑（RssSourceEditPage） | ✅ 完成 | 编辑源名称/URL/分组/规则（229 行） |
+| R-197 | RSS 导入（RssImportDialog） | ✅ 完成 | URL/JSON 导入 RSS 源 |
+| R-198 | RSS 解析引擎（RssService） | ✅ 完成 | 默认 RSS 解析 + 规则式解析（270 行） |
+| R-199 | 规则式 RSS 解析（RssParserByRule） | ✅ 完成 | 基于 Legado 规则的 RSS 文章提取（399 行） |
+| R-199a | 默认 RSS 解析（RssParserDefault） | ✅ 完成 | 标准 RSS/Atom feed 解析 |
+| R-199b | RSS 导入模型（RSSImport） | ✅ 完成 | Legado 备份格式 RSS 数据解析 |
+
+### 2.18 AI 书源生成
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-200 | AI 配置（AiConfigPage） | ✅ 完成 | API 端点/密钥/模型配置 |
+| R-201 | AI 源生成（AiSourceGeneratePage） | ✅ 完成 | 多步 UI 引导生成书源（221 行） |
+| R-202 | AI 生成引擎（AiSourceAgent） | ✅ 完成 | 6 步 LLM 驱动分析（382 行）：首页→搜索→详情→目录→正文→汇总 |
+| R-203 | WebView 兜底 | ✅ 完成 | AI 生成时 Cloudflare 站点走 WebView 渲染 |
+
+### 2.19 Web 取内容
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-210 | Web 取内容页（WebFetchPage） | ✅ 完成 | 手动 WebView 获取页面内容 |
+| R-211 | WebView 取内容对话框 | ✅ 完成 | Cloudflare 检测后弹出 WebView 获取内容（WebViewFetchDialog） |
+| R-212 | WebView 引擎组件 | ✅ 完成 | 可复用 WebView 组件（WebViewEngine） |
+
+### 2.20 辅助页面
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-220 | 搜索主页（SearchPage） | ✅ 完成 | 全局搜索入口 |
+| R-221 | 错误页面（ErrorPage） | ✅ 完成 | 错误提示页 |
+| R-222 | 简版阅读页（SimplePage） | ✅ 完成 | 纯文本阅读视图 |
+| R-223 | 书签页面（BookmarkPage） | ✅ 完成 | 书签列表管理 |
+| R-224 | 阅读记录（ReadRecordPage） | ✅ 完成 | 阅读历史记录 |
+| R-225 | 换源页（ChangeSourcePage） | ✅ 完成 | 搜索其他书源 |
+| R-226 | 章节列表（ChapterListPage） | ✅ 完成 | 全章节目录列表 |
+| R-227 | 规则订阅页（RuleSubPage） | ✅ 完成 | 书源规则远程订阅管理 |
+
+### 2.21 QuickJS NAPI 桥接
+
+| # | 需求 | 状态 | 说明 |
+|---|------|------|------|
+| R-230 | 多方式加载 | ✅ 完成 | `import('libquickjs_bridge.so')` / `requireNapi('quickjs_bridge')` / Mock 降级 |
+| R-231 | 引擎生命周期管理 | ✅ 完成 | createEngine / destroyEngine |
+| R-232 | JS 脚本执行 | ✅ 完成 | executeScript |
+| R-233 | JS 函数调用 | ✅ 完成 | callFunction（传参/返回 JSON 字符串） |
+| R-234 | HTTP 请求委托 | ✅ 完成 | registerHttpHandler / onHttpResponse |
+| R-235 | 原生 C++ 实现 | ✅ 完成 | libraries/quickjs/src/napi_bridge.cpp |
 
 ---
 
@@ -219,14 +310,13 @@
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-200 | RSS 页面 | ⚠️ 骨架 | MainPage 有 RSS Tab 占位，但 RSSPage.ets 尚未完全接入 |
-| R-201 | 漫画阅读 | ⚠️ 部分 | ComicReader 模型就绪，ComicReadPage 页面需完善 |
-| R-202 | 听书页面 | ⚠️ 部分 | TTSPlayer/AudioPlayer 引擎就绪，UI 层需接入 |
-| R-203 | Web 服务页面 | ⚠️ 部分 | WebServer/WebServicePage 基础实现，功能待完善 |
-| R-204 | 本地文件导入 | 📋 规划 | 本地 TXT/EPUB 文件的导入 UI 尚未实现 |
-| R-205 | PDF 渲染 | 📋 规划 | PdfParser 元数据解析完成，PDF 页面渲染待集成 |
-| R-206 | 书架分组 | 📋 规划 | BookGroup 枚举已定义，分组 UI 未实现 |
-| R-207 | 阅读进度同步 | 📋 规划 | 多设备阅读进度同步（WebDAV 已有，设备间同步待完成） |
+| R-300 | 漫画阅读 | 📋 规划 | ComicReader 引擎就绪，ComicReadPage 为占位页面（17 行，"功能开发中"） |
+| R-301 | 本地文件导入 | 📋 规划 | 本地 TXT/EPUB 文件的导入 UI 尚未实现 |
+| R-302 | PDF 渲染 | 📋 规划 | PdfParser 元数据解析完成，PDF 页面渲染待集成 |
+| R-303 | Web 服务完善 | ⚠️ 部分 | WebServer/WebServicePage 基础实现，远程管理功能待完善 |
+| R-304 | 多设备阅读进度同步 | 📋 规划 | WebDAV 已有，设备间自动同步待完成 |
+| R-305 | 有声书完整支持 | ⚠️ 部分 | AudioPlayer 引擎就绪，UI 层待接入 |
+| R-306 | 漫画阅读完整实现 | 📋 规划 | ComicReader 模型就绪，需完整实现阅读器 |
 
 ---
 
@@ -237,6 +327,7 @@
 - 备份格式：兼容 Legado 备份 JSON 格式
 - 规则语法：支持 JSONPath / CSS 选择器 / XPath / 正则表达式四种规则类型
 - HarmonyOS API：兼容 API 9+，推荐 API 12（NAPI 原生模块加载方式）
+- RSS 源格式：兼容标准 RSS 2.0 / Atom feed，兼容 Legado RSS 源 JSON 格式
 
 ---
 
@@ -249,6 +340,7 @@
 | P-003 | 大文件分页读取 | TXTParser 支持大文件分段读取 |
 | P-004 | 搜索结果增量更新 | 每完成一个书源即触发 UI 更新（setInterval 轮询），避免全部完成才显示 |
 | P-005 | HTTP 超时配置 | 默认 30 秒，可配置 |
+| P-006 | WebView 资源管理 | WebViewFetcher 使用后自动清理，防内存泄漏 |
 
 ---
 
@@ -257,3 +349,5 @@
 - 不使用第三方依赖库（HarmonyOS 纯原生开发）
 - 纯 ArkTS + C++（QuickJS 原生模块）
 - API 9 最低兼容，API 12 新特性（NAPI 动态加载）可选
+- HTML 解析为自研 HtmlParser（951 行），不依赖 Jsoup 等库
+- 书源规则标准化模块 `normalizeCssRule` 处理 Legado → 标准 CSS 转换
