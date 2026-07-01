@@ -301,9 +301,8 @@ export struct BookInfoPage {
             existing.updateTime = nowTs;
           }
           // 始终用详情页最新数据更新关键字段（coverUrl 用有效值）
-          const effectiveCover = this.getEffectiveCoverUrl();
-      const insertTime = Date.now();
-          if (effectiveCover) existing.coverUrl = effectiveCover;
+          const shelfCover = this.getEffectiveCoverUrl();
+          if (shelfCover) existing.coverUrl = shelfCover;
           if (this.customCoverPath && !existing.customCoverPath) existing.customCoverPath = this.customCoverPath;
           if (this.kind && !existing.kind) existing.kind = this.kind;
           if (this.wordCount && !existing.wordCount) existing.wordCount = this.wordCount;
