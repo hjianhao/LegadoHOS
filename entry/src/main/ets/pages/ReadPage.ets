@@ -23,7 +23,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
-import { SourceChangePanel } from '../components/reader/SourceChangePanel';
+import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState } from '../service/ReadAloudEngine';
 import promptAction from '@ohos.promptAction';
@@ -50,6 +50,7 @@ struct ReadPage {
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
   private isPreloading_: boolean = false;
+  private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
   private bookId_: number = -1;
   private cacheSize_: number = 10;
   private isCaching_: boolean = false;
@@ -63,7 +64,6 @@ struct ReadPage {
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
-  @State showSourcePanel: boolean = false;
   @State showAloud: boolean = false;
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
@@ -83,6 +83,7 @@ struct ReadPage {
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
   private aloudEngine_: ReadAloudEngine | null = null;
+  private sourceDlg?: CustomDialogController;
 
   aboutToAppear(): void {
     const p = router.getParams() as Record<string, Object>;
@@ -209,43 +210,25 @@ struct ReadPage {
     this.currentIndex = idx;
     this.pageIndex = 0;
     const ch = this.allChapters_[idx];
-    const url = ch.url || this.bookUrl;
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
-    if (!forceFetch && this.bookId_ > 0) {
-      try {
-        const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
-        const cached = await ct.getChapterByIndex(this.bookId_, idx);
-        if (cached && cached.content && cached.content.length > 50) {
-          console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
-          this.text = cached.content;
-          this.layoutText(cached.content);
-          this.initAloudEngine_();
-          this.isLoading = false;
-          this.saveProgress();
-          this.preloadNextChapter_(idx);
-          this.cacheSurrounding_(idx);
-          return;
-        }
-      } catch (_e) { /* fall through to network fetch */ }
+    if (!forceFetch) {
+      const cachedContent = await this.readChapterCache_(idx);
+      if (cachedContent && cachedContent.length > 50) {
+        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
+        this.applyChapterContent_(idx, cachedContent);
+        this.isLoading = false;
+        this.saveProgress();
+        this.preloadNextChapter_(idx);
+        this.cacheSurrounding_(idx);
+        return;
+      }
     }
 
     try {
-      let content = '';
-      if (this.source_) {
-        content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
-      }
-      if (!content && url && url.startsWith('http')) {
-        const r = await NetUtil.httpGet(url);
-        if (r) content = HtmlUtil.stripHtml(r);
-      }
+      const content = await this.fetchChapterContent_(idx);
       if (content && content.length > 50) {
-        // 简繁转换
-        if (this.cfg.chineseMode !== 'original') {
-          content = convertChinese(content, this.cfg.chineseMode);
-        }
-        this.text = content;
-        this.layoutText(content);
+        this.applyChapterContent_(idx, content);
       } else {
         this.text = content || '加载失败';
         this.layoutText(this.text);
@@ -264,48 +247,106 @@ struct ReadPage {
     this.cacheSurrounding_(idx);
   }
 
+  private async readChapterCache_(idx: number): Promise<string> {
+    if (this.bookId_ <= 0) return '';
+    try {
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      const cached = await ct.getChapterByIndex(this.bookId_, idx);
+      return cached?.content || '';
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  private async fetchChapterContent_(idx: number): Promise<string> {
+    const ch = this.allChapters_[idx];
+    if (!ch) return '';
+    const url = ch.url || this.bookUrl;
+    let content = '';
+    if (this.source_) {
+      content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
+    }
+    if (!content && url && url.startsWith('http')) {
+      const r = await NetUtil.httpGet(url);
+      if (r) content = HtmlUtil.stripHtml(r);
+    }
+    if (content && content.length > 50 && this.cfg.chineseMode !== 'original') {
+      content = convertChinese(content, this.cfg.chineseMode);
+    }
+    return content;
+  }
+
+  private applyChapterContent_(idx: number, content: string): void {
+    this.currentIndex = idx;
+    this.pageIndex = 0;
+    this.text = content;
+    this.layoutText(content);
+    this.initAloudEngine_();
+  }
+
   /** 预加载下一章文本，用于无缝翻页 */
-  private async preloadNextChapter_(currentIdx: number): Promise<void> {
+  private preloadNextChapter_(currentIdx: number): void {
     const nextIdx = currentIdx + 1;
-    if (nextIdx >= this.allChapters_.length || this.isPreloading_) return;
+    if (nextIdx >= this.allChapters_.length || this.preloadingChapterPromises_.has(nextIdx)) return;
     this.isPreloading_ = true;
 
-    // 先尝试从数据库缓存加载
-    if (this.bookId_ > 0) {
-      try {
-        const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
-        const cached = await ct.getChapterByIndex(this.bookId_, nextIdx);
-        if (cached && cached.content && cached.content.length > 50) {
-          this.nextChapterContent_ = cached.content;
-          this.nextChapterIdx_ = nextIdx;
-          console.info('[ReadPage] Preloaded from cache:', nextIdx);
-          this.isPreloading_ = false;
-          return;
-        }
-      } catch (_e) { /* fall through */ }
-    }
-
     const ch = this.allChapters_[nextIdx];
-    const url = ch.url || this.bookUrl;
-    try {
-      let content = '';
-      if (this.source_) {
-        content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
-      }
-      if (!content && url && url.startsWith('http')) {
-        const r = await NetUtil.httpGet(url);
-        if (r) content = HtmlUtil.stripHtml(r);
-      }
-      if (content && content.length > 50) {
-        if (this.cfg.chineseMode !== 'original') {
-          content = convertChinese(content, this.cfg.chineseMode);
+    const preloadBookUrl = this.bookUrl;
+    const promise = this.readChapterCache_(nextIdx)
+      .then((cached: string): Promise<string> | string => {
+        if (cached && cached.length > 50) return cached;
+        return this.fetchChapterContent_(nextIdx);
+      });
+    this.preloadingChapterPromises_.set(nextIdx, promise);
+    promise
+      .then(async (content: string): Promise<void> => {
+        if (preloadBookUrl !== this.bookUrl) return;
+        if (content && content.length > 50) {
+          this.nextChapterContent_ = content;
+          this.nextChapterIdx_ = nextIdx;
+          await this.saveToDbCache_(nextIdx, content);
+          console.info('[ReadPage] Preloaded next chapter:', nextIdx, ch.title?.substring(0, 20));
         }
-        this.nextChapterContent_ = content;
-        this.nextChapterIdx_ = nextIdx;
-        console.info('[ReadPage] Preloaded next chapter:', nextIdx, ch.title?.substring(0, 20));
+      })
+      .catch((_e: Error) => { /* ignore preload failure */ })
+      .then(() => {
+        if (this.preloadingChapterPromises_.get(nextIdx) === promise) {
+          this.preloadingChapterPromises_.delete(nextIdx);
+        }
+        this.isPreloading_ = this.preloadingChapterPromises_.size > 0;
+      });
+  }
+
+  private async tryUsePreloadedChapter_(idx: number): Promise<boolean> {
+    let content = '';
+    if (this.nextChapterIdx_ === idx && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
+      content = this.nextChapterContent_;
+    } else {
+      const pending = this.preloadingChapterPromises_.get(idx);
+      if (pending) {
+        try {
+          content = await pending;
+        } catch (_e) {
+          content = '';
+        }
       }
-    } catch (_e) { /* ignore */ }
-    this.isPreloading_ = false;
+      if (!content) {
+        content = await this.readChapterCache_(idx);
+      }
+    }
+    if (!content || content.length <= 50) return false;
+    console.info('[ReadPage] Seamless switch to chapter:', idx);
+    this.applyChapterContent_(idx, content);
+    if (this.nextChapterIdx_ === idx) {
+      this.nextChapterContent_ = '';
+      this.nextChapterIdx_ = -1;
+    }
+    this.isLoading = false;
+    this.saveProgress();
+    this.saveToDbCache_(idx, content);
+    this.preloadNextChapter_(idx);
+    this.cacheSurrounding_(idx);
+    return true;
   }
 
   /** 将章节内容存入数据库缓存 */
@@ -342,40 +383,23 @@ struct ReadPage {
     const start = Math.max(0, currentIdx - this.cacheSize_);
     const end = Math.min(total - 1, currentIdx + this.cacheSize_);
     try {
-      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
       let count = 0;
       for (let i = start; i <= end; i++) {
         if (i === currentIdx) continue; // 当前章节已缓存
-        const existing = await ct.getChapterByIndex(this.bookId_, i);
-        if (existing && existing.content && existing.content.length > 50) continue;
         const ch = this.allChapters_[i];
         if (!ch) continue;
         try {
-          let content = await globalSourceExecutor.getContent(this.source_, ch.url || this.bookUrl, this.bookUrl);
-          if (!content && (ch.url || '').startsWith('http')) {
-            const r = await NetUtil.httpGet(ch.url);
-            if (r) content = HtmlUtil.stripHtml(r);
+          let content = await this.readChapterCache_(i);
+          if (content && content.length > 50) continue;
+
+          const pending = this.preloadingChapterPromises_.get(i);
+          if (pending) {
+            content = await pending;
+          } else {
+            content = await this.fetchChapterContent_(i);
           }
           if (content && content.length > 50) {
-            if (this.cfg.chineseMode !== 'original') {
-              content = convertChinese(content, this.cfg.chineseMode);
-            }
-            const now = Date.now();
-            if (existing) {
-              existing.content = content;
-              existing.contentLength = content.length;
-              existing.isCached = true;
-              existing.updateTime = now;
-              await ct.updateChapter(existing);
-            } else {
-              await ct.insertChapters([{
-                id: 0, bookId: this.bookId_, index: i, volumeIndex: 0,
-                title: ch.title || '', url: ch.url || '',
-                content: content, contentLength: content.length,
-                isRead: false, isDownloaded: false, isCached: true,
-                duration: 0, audioUrl: '', createTime: now, updateTime: now,
-              }]);
-            }
+            await this.saveToDbCache_(i, content);
             count++;
           }
         } catch (_e) { /* skip individual chapter errors */ }
@@ -398,7 +422,21 @@ struct ReadPage {
     return Math.min(100, Math.round((this.currentIndex / this.totalChapters_) * 100));
   }
 
+  private normalizeReaderText_(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map((line: string): string => line.trim())
+      .join('\n')
+      .replace(/[ \t\u00a0]+/g, ' ')
+      .replace(/\n[ \t]*\n+/g, '\n')
+      .trim();
+  }
+
   private layoutText(text: string): void {
+    text = this.normalizeReaderText_(text);
     // 构建带缩进的滚动文本
     let scrollText = text;
     const indentSize = this.cfg.indentSize;
@@ -486,29 +524,20 @@ struct ReadPage {
       });
     }
   }
-  private onNextChapter(): void {
+  private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
     if (n >= this.totalChapters_) return;
     // 无缝翻页：尝试使用预加载内容
-    if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
-      console.info('[ReadPage] Seamless switch to chapter:', n);
-      this.currentIndex = n;
-      this.pageIndex = 0;
-      this.text = this.nextChapterContent_;
-      this.layoutText(this.text);
-      this.nextChapterContent_ = '';
-      this.nextChapterIdx_ = -1;
-      this.saveProgress();
-      this.preloadNextChapter_(n);
+    if (await this.tryUsePreloadedChapter_(n)) {
       this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
       this.justLoadedChapter_ = true;
-    } else {
-      console.info('[ReadPage] Fallback loadChapter for:', n);
-      this.loadChapter(n).then(() => {
-        this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-        this.justLoadedChapter_ = true;
-      });
+      return;
     }
+    console.info('[ReadPage] Fallback loadChapter for:', n);
+    this.loadChapter(n).then(() => {
+      this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+      this.justLoadedChapter_ = true;
+    });
   }
   private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
@@ -534,6 +563,7 @@ struct ReadPage {
     this.nextChapterContent_ = '';
     this.nextChapterIdx_ = -1;
     this.isPreloading_ = false;
+    this.preloadingChapterPromises_.clear();
     this.scrollAtTop_ = true;
     this.justLoadedChapter_ = false;
     ChapterCache.bookUrl = '';
@@ -553,7 +583,6 @@ struct ReadPage {
       return;
     }
 
-    this.showSourcePanel = false;
     this.showMenu = false;
     const oldBookUrl = this.bookUrl;
     try {
@@ -608,6 +637,26 @@ struct ReadPage {
       this.isLoading = false;
       promptAction.showToast({ message: '换源失败', duration: 1500 });
     }
+  }
+
+  private openSourceSheet(): void {
+    this.sourceDlg = new CustomDialogController({
+      builder: ChangeSourceSheet({
+        controller: this.sourceDlg!,
+        bookName: this.bookName,
+        bookAuthor: this.bookAuthor,
+        currentOriginUrl: this.originUrl,
+        cachedSources: [],
+        onReplace: (result: SearchResult) => { this.applySourceChange(result); },
+        onAddAsNew: (_result: SearchResult) => {
+          promptAction.showToast({ message: '阅读页暂不支持作为新书加入', duration: 1500 });
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.sourceDlg.open();
   }
 
   private formatCurTime(): string {
@@ -734,21 +783,9 @@ struct ReadPage {
             onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
-            onSource: () => { this.showMenu = false; this.showSourcePanel = true; },
+            onSource: () => { this.showMenu = false; this.openSourceSheet(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
             onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },
-          })
-        }.width('100%').height('100%')
-      }
-      if (this.showSourcePanel) {
-        Column() {
-          Column().width('100%').layoutWeight(1).onClick(() => { this.showSourcePanel = false; })
-          SourceChangePanel({
-            bookName: this.bookName,
-            bookAuthor: this.bookAuthor,
-            currentOriginUrl: this.originUrl,
-            onReplace: (result: SearchResult) => { this.applySourceChange(result); },
-            onDismiss: () => { this.showSourcePanel = false; },
           })
         }.width('100%').height('100%')
       }
@@ -767,6 +804,7 @@ struct ReadPage {
           CacheDialog({
             bookName: this.bookName,
             bookOriginUrl: this.bookUrl,
+            bookId: this.bookId_,
             source: this.source_,
             chapters: this.allChapters_,
             totalChapters: this.totalChapters_,

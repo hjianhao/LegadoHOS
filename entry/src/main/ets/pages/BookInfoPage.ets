@@ -2,6 +2,7 @@ import { AppTheme } from '../theme/AppTheme';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
+import { ChapterTable } from '../data/database/ChapterTable';
 import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceChapter } from '../model/BookSource';
@@ -202,9 +203,37 @@ export struct BookInfoPage {
       });
       this.isInShelf = false;
       this.bookId = 0;
+      AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
       promptAction.showToast({ message: '已从书架移除', duration: 1500 });
     } catch (_e) {
       promptAction.showToast({ message: '删除失败', duration: 2000 });
+    }
+  }
+
+  private clearCache(): void {
+    if (!this.bookId) {
+      promptAction.showToast({ message: '未在书架中', duration: 1500 });
+      return;
+    }
+    promptAction.showDialog({
+      title: '清除缓存',
+      message: '清除《' + this.bookName + '》已缓存的章节内容？目录和阅读进度会保留。',
+      buttons: [
+        { text: '取消', color: '#888' },
+        { text: '清除', color: '#FF9800' }
+      ]
+    }).then((res: Object) => {
+      if ((res as Record<string, Object>)['index'] === 1) this.doClearCache();
+    });
+  }
+
+  private async doClearCache(): Promise<void> {
+    try {
+      const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      await chapterTable.clearContentByBookId(this.bookId);
+      promptAction.showToast({ message: '成功清理缓存', duration: 1500 });
+    } catch (_e) {
+      promptAction.showToast({ message: '清理缓存失败', duration: 1500 });
     }
   }
 
@@ -264,9 +293,15 @@ export struct BookInfoPage {
         if (existing) {
           if (!existing.isShelf) {
             existing.isShelf = true;
+            existing.updateTime = Date.now();
             await bookTable.updateBook(existing);
           }
           this.isInShelf = true;
+          this.bookId = existing.id;
+          this.groupId = existing.groupId;
+          this.durChapterTitle = existing.durChapterTitle || '';
+          this.durChapterIndex = existing.durChapterIndex || 0;
+          AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
           promptAction.showToast({ message: '已加入书架', duration: 1500 });
           return;
         }
@@ -308,7 +343,10 @@ export struct BookInfoPage {
 
       const id = await bookTable.insertBook(book);
       if (id > 0) {
+        this.bookId = id;
         this.isInShelf = true;
+        this.groupId = book.groupId;
+        AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
         promptAction.showToast({ message: '已加入书架', duration: 1500 });
       }
     } catch (err) {
@@ -825,6 +863,7 @@ export struct BookInfoPage {
       this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })
       this.buildMenuItem('备注', () => { this.showMoreMenu = false; this.showRemarkDialog(); })
       if (this.isInShelf) {
+        this.buildMenuItem('清缓存', () => { this.showMoreMenu = false; this.clearCache(); })
         this.buildMenuItem('移出书架', () => { this.showMoreMenu = false; this.removeFromShelf(); }, true)
       }
     }

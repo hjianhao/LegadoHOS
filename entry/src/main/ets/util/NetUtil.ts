@@ -4,6 +4,7 @@
  */
 import rcp from '@hms.collaboration.rcp';
 import util from '@ohos.util';
+import zlib from '@ohos.zlib';
 
 export class NetUtil {
   // ========== DNS 配置 ==========
@@ -83,12 +84,18 @@ export class NetUtil {
       const session = NetUtil.getSession(timeout);
       const response = await session.fetch(request);
       console.info('[NetUtil]', method, url, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        let errorText = '';
+        if (response.body !== undefined && response.body !== null) {
+          const errorBytes = new Uint8Array(response.body);
+          errorText = await NetUtil.decodeBody(errorBytes, url);
+        }
+        throw new Error(`HTTP ${response.statusCode}: ${errorText.substring(0, 200)}`);
+      }
       if (response.body === undefined || response.body === null) return '';
       const uint8 = new Uint8Array(response.body);
-      const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
-      const text = decoder.decodeToString(uint8);
-      if (response.statusCode >= 200 && response.statusCode < 400) return text;
-      throw new Error(`HTTP ${response.statusCode}: ${text.substring(0, 200)}`);
+      const text = await NetUtil.decodeBody(uint8, url);
+      return text;
     } catch (e) {
       const elapsedMs: number = Date.now() - startMs;
       const errMsg: string = (e as Error).message || String(e);
@@ -101,8 +108,62 @@ export class NetUtil {
     return {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/json,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Encoding': 'identity',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       ...(headers || {}),
     };
+  }
+
+  private static async decodeBody(bytes: Uint8Array, url: string): Promise<string> {
+    let bodyBytes = bytes;
+    if (NetUtil.looksCompressed(bytes)) {
+      try {
+        bodyBytes = await NetUtil.inflateBytes(bytes);
+        console.info('[NetUtil] gzip/zlib decompressed:', url, bytes.length, '→', bodyBytes.length);
+      } catch (e) {
+        const errMsg: string = (e as Error).message || String(e);
+        console.warn('[NetUtil] gzip/zlib decompress failed:', url, errMsg);
+      }
+    }
+    const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
+    return decoder.decodeToString(bodyBytes);
+  }
+
+  private static looksCompressed(bytes: Uint8Array): boolean {
+    if (bytes.length < 2) return false;
+    if (bytes[0] === 0x1f && bytes[1] === 0x8b) return true;
+    return bytes[0] === 0x78;
+  }
+
+  private static async inflateBytes(bytes: Uint8Array): Promise<Uint8Array> {
+    let outputSize: number = Math.max(bytes.length * 8, 64 * 1024);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const zip = await zlib.createZip();
+      const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const output = new ArrayBuffer(outputSize);
+      const strm: zlib.ZStream = {
+        nextIn: input,
+        availableIn: bytes.byteLength,
+        nextOut: output,
+        availableOut: outputSize
+      };
+      const initStatus = await zip.inflateInit2(strm, 47);
+      if (initStatus !== zlib.ReturnStatus.OK) {
+        throw new Error('inflateInit2 status ' + initStatus);
+      }
+
+      const status = await zip.inflate(strm, zlib.CompressFlushMode.FINISH);
+      await zip.inflateEnd(strm);
+      if (status === zlib.ReturnStatus.STREAM_END || status === zlib.ReturnStatus.OK) {
+        const totalOut = strm.totalOut || 0;
+        return new Uint8Array(output.slice(0, totalOut));
+      }
+      if (status === zlib.ReturnStatus.BUF_ERROR) {
+        outputSize *= 2;
+        continue;
+      }
+      throw new Error('inflate status ' + status);
+    }
+    throw new Error('inflate output buffer too small');
   }
 }
