@@ -48,9 +48,14 @@ export struct RssSourceManagePage {
   toggleSelect(sourceUrl: string) {
     const idx = this.selectedIds.indexOf(sourceUrl);
     if (idx !== -1) {
-      this.selectedIds.splice(idx, 1);
+      // STATE-002: replace entire array instead of in-place splice
+      const next: string[] = [];
+      for (let i = 0; i < this.selectedIds.length; i++) {
+        if (i !== idx) next.push(this.selectedIds[i]);
+      }
+      this.selectedIds = next;
     } else {
-      this.selectedIds.push(sourceUrl);
+      this.selectedIds = [...this.selectedIds, sourceUrl];
     }
   }
 

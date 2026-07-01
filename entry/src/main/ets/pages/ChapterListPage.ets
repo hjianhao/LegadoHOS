@@ -153,20 +153,33 @@ export struct ChapterListPage {
     console.info('[ChapterList] trend: asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
     if (!rev) return;
     console.info('[ChapterList] sorting ' + this.chapters.length + ' chapters');
-    const tmp = [...this.chapters];
-    tmp.reverse();
-    for (let i = 0; i < this.chapters.length; i++) {
-      this.chapters[i] = tmp[i];
-      this.chapters[i].index = i;
+    // STATE-002: build new array instead of in-place reverse + element-by-element mutation
+    const reordered: BookSourceChapter[] = [];
+    for (let i = this.chapters.length - 1; i >= 0; i--) {
+      const src = this.chapters[i];
+      reordered.push({
+        title: src.title,
+        url: src.url,
+        index: reordered.length,
+        isVolume: src.isVolume
+      });
     }
+    this.chapters = reordered;
   }
 
   /** 排序 */
   applySort(ascending: boolean): void {
     this.isAscending = ascending;
-    const sorted = [...this.chapters];
-    if (!ascending) {
-      sorted.reverse();
+    // STATE-002: use new array instead of in-place reverse
+    const sorted: BookSourceChapter[] = [];
+    if (ascending) {
+      for (let i = 0; i < this.chapters.length; i++) {
+        sorted.push(this.chapters[i]);
+      }
+    } else {
+      for (let i = this.chapters.length - 1; i >= 0; i--) {
+        sorted.push(this.chapters[i]);
+      }
     }
     this.displayChapters = sorted;
   }
