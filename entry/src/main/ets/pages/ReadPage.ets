@@ -165,6 +165,16 @@ struct ReadPage {
       this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
         sources.find(s => s.sourceName === this.origin) || null;
+      if (!this.tocUrl) {
+        try {
+          const bookTable = new BookTable(db);
+          const book = await bookTable.getBookByUrl(this.bookUrl);
+          if (book) {
+            this.bookId_ = book.id;
+            this.tocUrl = book.tocUrl || '';
+          }
+        } catch (_) { /* ignore */ }
+      }
 
       let chapters: BookSourceChapter[] = [];
       if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
@@ -195,7 +205,10 @@ struct ReadPage {
       try {
         const bookTable = new BookTable(db);
         const book = await bookTable.getBookByUrl(this.bookUrl);
-        if (book) { this.bookId_ = book.id; }
+        if (book) {
+          this.bookId_ = book.id;
+          if (!this.tocUrl) this.tocUrl = book.tocUrl || '';
+        }
       } catch (_) { /* ignore */ }
       await this.loadChapter(this.currentIndex);
     } catch (e) {
@@ -545,7 +558,7 @@ struct ReadPage {
   private onOpenToc(): void {
     ChapterCache.chapters = this.allChapters_;
     ChapterCache.bookUrl = this.bookUrl;
-    router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
+    router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
   }
 
   private onOpenSearchContent(): void {

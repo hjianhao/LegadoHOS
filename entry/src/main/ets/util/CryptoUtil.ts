@@ -2,6 +2,8 @@
  * 加密工具
  * 提供书源脚本需要的 MD5/SHA 等加密功能
  */
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+
 export class CryptoUtil {
   /**
    * MD5 哈希
@@ -21,49 +23,88 @@ export class CryptoUtil {
    * Base64 编码
    */
   static base64Encode(str: string): string {
-    try {
-      const Base64 = requireNapi('util.Base64');
-      return Base64.encode(str);
-    } catch {
-      // 手动实现
-      const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-      let result = '';
-      const bytes = new Uint8Array(str.split('').map(c => c.charCodeAt(0)));
-      for (let i = 0; i < bytes.length; i += 3) {
-        const b0 = bytes[i], b1 = bytes[i + 1] || 0, b2 = bytes[i + 2] || 0;
-        result += b64[b0 >> 2];
-        result += b64[((b0 & 3) << 4) | (b1 >> 4)];
-        result += (i + 1 < bytes.length) ? b64[((b1 & 0xF) << 2) | (b2 >> 6)] : '=';
-        result += (i + 2 < bytes.length) ? b64[b2 & 0x3F] : '=';
-      }
-      return result;
+    const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let result = '';
+    const bytes = new Uint8Array(str.split('').map(c => c.charCodeAt(0)));
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0 = bytes[i], b1 = bytes[i + 1] || 0, b2 = bytes[i + 2] || 0;
+      result += b64[b0 >> 2];
+      result += b64[((b0 & 3) << 4) | (b1 >> 4)];
+      result += (i + 1 < bytes.length) ? b64[((b1 & 0xF) << 2) | (b2 >> 6)] : '=';
+      result += (i + 2 < bytes.length) ? b64[b2 & 0x3F] : '=';
     }
+    return result;
   }
 
   /**
    * Base64 解码
    */
   static base64Decode(str: string): string {
-    try {
-      const Base64 = requireNapi('util.Base64');
-      return Base64.decode(str);
-    } catch {
-      const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-      const lookup: Record<string, number> = {};
-      for (let i = 0; i < b64.length; i++) lookup[b64[i]] = i;
-
-      let result = '';
-      const clean = str.replace(/=+$/, '');
-      for (let i = 0; i < clean.length; i += 4) {
-        const b0 = lookup[clean[i]] || 0;
-        const b1 = lookup[clean[i + 1]] || 0;
-        const b2 = lookup[clean[i + 2]] || 0;
-        const b3 = lookup[clean[i + 3]] || 0;
-        result += String.fromCharCode((b0 << 2) | (b1 >> 4));
-        if (i + 2 < clean.length) result += String.fromCharCode(((b1 & 0xF) << 4) | (b2 >> 2));
-        if (i + 3 < clean.length) result += String.fromCharCode(((b2 & 3) << 6) | b3);
-      }
-      return result;
+    const bytes = CryptoUtil.base64ToBytes(str);
+    let result = '';
+    for (let i = 0; i < bytes.length; i++) {
+      result += String.fromCharCode(bytes[i]);
     }
+    return result;
+  }
+
+  /**
+   * Legado 兼容：java.aesBase64DecodeToString(content, key, "AES/CBC/PKCS5Padding", iv)
+   */
+  static async aesBase64DecodeToString(encoded: string, key: string, transformation: string, iv: string): Promise<string> {
+    if (!encoded || !key) return encoded || '';
+    try {
+      const keyBytes = CryptoUtil.stringToBytes(key);
+      const ivBytes = CryptoUtil.stringToBytes(iv || '');
+      const keyBits = keyBytes.length * 8;
+      if (keyBits !== 128 && keyBits !== 192 && keyBits !== 256) return encoded;
+      const upper = (transformation || '').toUpperCase();
+      const mode = upper.includes('/CBC/') ? 'CBC' : 'CBC';
+      const padding = upper.includes('NOPADDING') ? 'NoPadding' : 'PKCS7';
+      const generator = cryptoFramework.createSymKeyGenerator('AES' + keyBits);
+      const symKey = await generator.convertKey({ data: keyBytes });
+      const cipher = cryptoFramework.createCipher('AES' + keyBits + '|' + mode + '|' + padding);
+      const params = {
+        algName: 'IvParamsSpec',
+        iv: { data: ivBytes }
+      } as cryptoFramework.IvParamsSpec;
+      await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
+      const decoded = await cipher.doFinal({ data: CryptoUtil.base64ToBytes(encoded) });
+      return CryptoUtil.bytesToString(decoded.data);
+    } catch (_e) {
+      return encoded;
+    }
+  }
+
+  private static stringToBytes(str: string): Uint8Array {
+    const bytes = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) {
+      bytes[i] = str.charCodeAt(i) & 0xFF;
+    }
+    return bytes;
+  }
+
+  private static bytesToString(bytes: Uint8Array): string {
+    let result = '';
+    for (let i = 0; i < bytes.length; i++) {
+      result += String.fromCharCode(bytes[i]);
+    }
+    return result;
+  }
+
+  private static base64ToBytes(str: string): Uint8Array {
+    const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const clean = str.replace(/\s/g, '').replace(/=+$/, '');
+    const out: number[] = [];
+    for (let i = 0; i < clean.length; i += 4) {
+      const b0 = Math.max(0, b64.indexOf(clean.charAt(i)));
+      const b1 = Math.max(0, b64.indexOf(clean.charAt(i + 1)));
+      const b2 = Math.max(0, b64.indexOf(clean.charAt(i + 2)));
+      const b3 = Math.max(0, b64.indexOf(clean.charAt(i + 3)));
+      out.push((b0 << 2) | (b1 >> 4));
+      if (i + 2 < clean.length) out.push(((b1 & 0xF) << 4) | (b2 >> 2));
+      if (i + 3 < clean.length) out.push(((b2 & 3) << 6) | b3);
+    }
+    return new Uint8Array(out);
   }
 }

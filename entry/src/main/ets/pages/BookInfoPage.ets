@@ -42,6 +42,7 @@ export struct BookInfoPage {
   @State isBusy: boolean = false;
   @State isInShelf: boolean = false;
   @State sourceHeader: string = '';
+  @State sourceTocUrl: string = '';
   @State sourceCount: number = 1;
   @State chapterCount: number = 0;
   @State latestChapter: string = '';
@@ -104,7 +105,7 @@ export struct BookInfoPage {
       const matched = sources.find(s => s.sourceUrl === this.originUrl || s.sourceName === this.origin);
       if (!matched) return;
       // 获取书籍详情
-      if (!this.introduce || !this.kind || !this.wordCount) {
+      if (!this.introduce || !this.kind || !this.wordCount || (matched.ruleBookInfoTocUrl && !this.sourceTocUrl)) {
         const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
         if (info.name && !this.bookName) this.bookName = info.name;
         if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
@@ -112,9 +113,10 @@ export struct BookInfoPage {
         if (info.introduce && !this.introduce) this.introduce = info.introduce;
         if (info.kind && !this.kind) this.kind = info.kind;
         if (info.wordCount && !this.wordCount) this.wordCount = info.wordCount;
+        if (info.tocUrl) this.sourceTocUrl = info.tocUrl;
       }
       // 获取目录统计
-      const chapters = await globalSourceExecutor.getToc(matched, this.noteUrl);
+      const chapters = await globalSourceExecutor.getToc(matched, this.sourceTocUrl || this.noteUrl);
       if (chapters.length > 0) {
         this.chapterCount = chapters.length;
         const last = chapters[chapters.length - 1];
@@ -151,6 +153,7 @@ export struct BookInfoPage {
           if (matched.origin) this.origin = matched.origin;
           if (matched.originUrl) this.originUrl = matched.originUrl;
           if (matched.bookUrl) this.noteUrl = matched.bookUrl;
+          if (matched.tocUrl) this.sourceTocUrl = matched.tocUrl;
           if (matched.kind) this.kind = matched.kind;
           if (matched.wordCount) this.wordCount = matched.wordCount;
           if (matched.introduce) this.introduce = matched.introduce;
@@ -309,6 +312,7 @@ export struct BookInfoPage {
           if (this.introduce && !existing.introduce) existing.introduce = this.introduce;
           if (this.origin && !existing.origin) existing.origin = this.origin;
           if (this.originUrl && !existing.originUrl) existing.originUrl = this.originUrl;
+          if (this.sourceTocUrl) existing.tocUrl = this.sourceTocUrl;
           existing.updateTime = nowTs;
           await bookTable.updateBook(existing);
           this.isInShelf = true;
@@ -331,11 +335,11 @@ export struct BookInfoPage {
         coverUrl: effectiveCover,
         customCoverPath: this.customCoverPath,
         bookUrl: this.noteUrl,
+        tocUrl: this.sourceTocUrl,
         origin: this.origin,
         originUrl: this.originUrl,
         type: BookType.TEXT,
         groupId: BookGroup.ALL,
-        tocUrl: '',
         chapterCount: this.chapterCount,
         totalChapterNum: this.chapterCount,
         latestChapterTitle: '',
@@ -394,6 +398,7 @@ export struct BookInfoPage {
         name: this.bookName,
         author: this.bookAuthor,
         bookUrl: this.noteUrl,
+        tocUrl: this.sourceTocUrl,
         origin: this.origin,
         originUrl: this.originUrl,
         header: this.sourceHeader,
@@ -456,7 +461,7 @@ export struct BookInfoPage {
         originUrl: this.originUrl,
         type: BookType.TEXT,
         groupId: BookGroup.ALL,
-        tocUrl: '',
+        tocUrl: this.sourceTocUrl,
         chapterCount: this.chapterCount,
         totalChapterNum: this.chapterCount,
         latestChapterTitle: this.latestChapter,
@@ -620,6 +625,7 @@ export struct BookInfoPage {
     router.pushUrl({ url: 'pages/ChapterListPage', params: {
       from: 'BookInfoPage', bookName: this.bookName, bookAuthor: this.bookAuthor,
       bookUrl: this.noteUrl, originUrl: this.originUrl, origin: this.origin,
+      tocUrl: this.sourceTocUrl,
       header: this.sourceHeader,
     }});
   }

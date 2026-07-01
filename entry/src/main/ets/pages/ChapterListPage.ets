@@ -66,6 +66,7 @@ export struct ChapterListPage {
   @State origin: string = '';
   @State originUrl: string = '';
   @State header: string = '';
+  @State tocUrl: string = '';
   @State durChapterIndex: number = 0;     // 当前阅读进度
   @State bookDetailUrl: string = '';       // 原始书籍详情页 URL（用于正文加载兜底）
 
@@ -88,6 +89,7 @@ export struct ChapterListPage {
       this.origin = params['origin'] || '';
       this.originUrl = params['originUrl'] || '';
       this.header = params['header'] || '';
+      this.tocUrl = params['tocUrl'] || '';
       this.durChapterIndex = parseInt(params['durChapterIndex'] || '0');
     }
     this.loadChapters();
@@ -115,7 +117,7 @@ export struct ChapterListPage {
           matched = sources.find(s => s.ruleToc) || sources.find(s => s.ruleSearchUrl);
         }
         if (matched && this.bookUrl) {
-          const tocChapters = await globalSourceExecutor.getToc(matched, this.bookUrl);
+          const tocChapters = await globalSourceExecutor.getToc(matched, this.tocUrl || this.bookUrl);
           if (tocChapters.length > 0) {
             this.chapters_ = tocChapters;
             // 更新缓存
@@ -279,6 +281,7 @@ export struct ChapterListPage {
           bookName: this.bookName,
           bookAuthor: this.bookAuthor,
           bookUrl: this.bookUrl,
+          tocUrl: this.tocUrl,
           originUrl: this.originUrl,
           header: this.header,
           durChapterIndex: ch.index,

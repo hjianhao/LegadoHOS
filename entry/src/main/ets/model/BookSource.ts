@@ -173,6 +173,7 @@ export interface BookSourceBookInfo {
   kind: string;
   wordCount: string;
   lastUpdateTime: string;
+  tocUrl?: string;
   chapters: BookSourceChapter[];
 }
 
