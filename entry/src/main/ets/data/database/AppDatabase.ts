@@ -17,6 +17,7 @@ import { RSSSourceTable, RSSSourceTableCreate, RSSArticleTableCreate, RSSArticle
 import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } from './CacheTable';
 
 import { SearchResultTable, SearchResultTableCreate } from './SearchResultTable';
+import { SearchKeywordTable, SearchKeywordTableCreate } from './SearchKeywordTable';
 
 const DATABASE_NAME = 'legado_hos.db';
 const DATABASE_VERSION = 1;
@@ -97,6 +98,7 @@ export class AppDatabase {
     await this.rdbStore_.executeSql(CacheTableCreate);
     await this.rdbStore_.executeSql(TxtTocRuleTableCreate);
     await this.rdbStore_.executeSql(SearchResultTableCreate);
+    await this.rdbStore_.executeSql(SearchKeywordTableCreate);
 
     // 数据库迁移：为已有表添加新列
     try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
@@ -224,3 +226,4 @@ export { RSSSourceTable } from './RSSSourceTable';
 export { CacheTable, TxtTocRuleTable } from './CacheTable';
 
 export { SearchResultTable } from './SearchResultTable';
+export { SearchKeywordTable } from './SearchKeywordTable';

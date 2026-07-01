@@ -5,7 +5,8 @@
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookTable } from '../data/database/BookTable';
-import { Book } from '../model/Book';
+import { SearchKeywordTable } from '../data/database/SearchKeywordTable';
+import { Book, BookGroup, BookType } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
@@ -26,6 +27,12 @@ interface SourceTypeOption {
   value: number;
   label: string;
   count: number;
+}
+
+interface ParsedSearchScope {
+  isSource: boolean;
+  groups: string[];
+  sourceUrls: string[];
 }
 
 @Entry
@@ -61,15 +68,37 @@ struct SearchPage {
   @State expandedSourceUrl: string = '';
   @State shelfBookUrls: string[] = [];
   @State shelfNameAuthorKeys: string[] = [];
+  @State showPreviewSheet: boolean = false;
 
   private searchRunId: number = 0;
   private hintRunId: number = 0;
+  private queryHintTimer: number = -1;
+  private initialized: boolean = false;
+  private previewItem: SearchResult | null = null;
 
   aboutToAppear(): void {
-    this.loadSources();
-    this.loadHistory();
-    this.loadSearchPrefs();
-    this.refreshShelfStates();
+    this.initPage();
+  }
+
+  aboutToDisappear(): void {
+    if (this.queryHintTimer >= 0) {
+      clearTimeout(this.queryHintTimer);
+      this.queryHintTimer = -1;
+    }
+  }
+
+  async initPage(): Promise<void> {
+    if (this.initialized) {
+      this.refreshShelfStates();
+      return;
+    }
+    this.initialized = true;
+    await AppDatabase.getInstance().waitForInit();
+    await this.loadSearchPrefs();
+    await this.loadSources();
+    await this.loadHistory();
+    await this.refreshShelfStates();
+    await this.applyRouteParams();
   }
 
   async loadSearchPrefs(): Promise<void> {
@@ -77,9 +106,13 @@ struct SearchPage {
       const s = SettingsStore.getInstance();
       await s.init(getContext());
       this.layoutMode = await s.get<number>('search_layout_mode', 0);
-      this.matchModeExact = false;
-      this.selectedSourceTypes = [];
-      console.info('[SearchPage] prefs loaded layout=' + this.layoutMode.toString() + ' exact=false typeFilter=0');
+      this.matchModeExact = (await s.get<number>('search_match_mode', 0)) === 1;
+      this.selectedSourceTypes = await s.get<number[]>('search_source_types', []);
+      this.applySearchScope(await s.get<string>('search_scope', ''), false);
+      console.info('[SearchPage] prefs loaded layout=' + this.layoutMode.toString()
+        + ' exact=' + (this.matchModeExact ? 'true' : 'false')
+        + ' typeFilter=' + JSON.stringify(this.selectedSourceTypes)
+        + ' scope=' + this.getScopeLabel());
     } catch (_e) { /* ignore */ }
   }
 
@@ -87,46 +120,73 @@ struct SearchPage {
     try {
       const s = SettingsStore.getInstance();
       await s.put('search_layout_mode', this.layoutMode);
+      await s.put('search_match_mode', this.matchModeExact ? 1 : 0);
+      await s.put('search_source_types', this.selectedSourceTypes);
+      await s.put('search_scope', this.encodeSearchScope());
     } catch (_e) { /* ignore */ }
   }
 
   async loadHistory(): Promise<void> {
     try {
-      const s = SettingsStore.getInstance();
-      await s.init(getContext());
-      this.history = await s.getSearchHistory();
+      const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
+      let items = await table.getRecent(30);
+      if (items.length === 0) {
+        const s = SettingsStore.getInstance();
+        await s.init(getContext());
+        const legacy = await s.getSearchHistory();
+        for (const word of legacy) {
+          await table.save(word);
+        }
+        items = await table.getRecent(30);
+      }
+      this.history = items.map(item => item.word);
       this.showSuggestions = this.history.length > 0;
     } catch (_e) { this.history = []; }
   }
 
   async saveHistory(): Promise<void> {
-    try {
-      const s = SettingsStore.getInstance();
-      await s.setSearchHistory(this.history);
-    } catch (_e) { /* ignore */ }
+    // 主搜索历史已迁移到 SearchKeywordTable；保留空实现避免旧调用产生双写。
   }
 
-  addToHistory(kw: string): void {
+  async addToHistory(kw: string): Promise<void> {
     const q = kw.trim();
     if (!q) return;
-    this.history = [q, ...this.history.filter((h: string) => h !== q)].slice(0, 30);
-    this.saveHistory();
+    try {
+      const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
+      await table.save(q);
+      await table.trimHistory(100);
+      this.history = (await table.getRecent(30)).map(item => item.word);
+    } catch (_e) {
+      this.history = [q, ...this.history.filter((h: string) => h !== q)].slice(0, 30);
+    }
   }
 
-  removeHistory(idx: number): void {
+  async removeHistory(idx: number): Promise<void> {
     // STATE-002: use filter instead of splice to trigger re-render
+    const word = this.history[idx] || '';
     const next: string[] = [];
     for (let i = 0; i < this.history.length; i++) {
       if (i !== idx) next.push(this.history[i]);
     }
     this.history = next;
-    this.saveHistory();
+    try {
+      if (word) {
+        const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
+        await table.delete(word);
+      }
+    } catch (_e) { /* ignore */ }
     this.showSuggestions = this.keyword.trim().length > 0 || this.history.length > 0 || this.bookshelfHints.length > 0;
   }
 
-  clearHistory(): void {
+  async clearHistory(): Promise<void> {
     this.history = [];
-    this.saveHistory();
+    try {
+      const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
+      await table.deleteAll();
+      const s = SettingsStore.getInstance();
+      await s.init(getContext());
+      await s.setSearchHistory([]);
+    } catch (_e) { /* ignore */ }
     this.showClearHistoryDialog = false;
     this.showSuggestions = this.keyword.trim().length > 0 && this.bookshelfHints.length > 0;
   }
@@ -170,11 +230,32 @@ struct SearchPage {
     }
   }
 
+  async applyRouteParams(): Promise<void> {
+    try {
+      const params = router.getParams() as Record<string, Object>;
+      if (!params) return;
+      const scopeRaw = String(params['searchScope'] || params['scope'] || '');
+      if (scopeRaw) {
+        this.applySearchScope(scopeRaw, false);
+      }
+      const key = String(params['key'] || params['keyword'] || '');
+      if (key.trim()) {
+        this.keyword = key.trim();
+        this.showSuggestions = false;
+        await this.doSearch(key);
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   onQueryChanged(v: string): void {
     this.keyword = v;
     const q = v.trim();
     this.showSuggestions = !this.hasSearched || q !== this.committedKeyword;
-    this.loadBookshelfHints(q);
+    if (this.queryHintTimer >= 0) clearTimeout(this.queryHintTimer);
+    this.queryHintTimer = setTimeout(() => {
+      this.queryHintTimer = -1;
+      this.loadBookshelfHints(this.keyword.trim());
+    }, 200);
   }
 
   shouldShowSuggestions(): boolean {
@@ -196,16 +277,36 @@ struct SearchPage {
   }
 
   isExactMatched(item: SearchResult, keyword: string): boolean {
-    const q = this.normalize(keyword);
-    if (!q) return true;
-    return this.normalize(item.name) === q;
+    return this.getSearchPriority(item, keyword) <= 2;
   }
 
   filterResultsByMode(items: SearchResult[], keyword: string): SearchResult[] {
-    if (!this.matchModeExact) return items;
-    const filtered = items.filter((item: SearchResult): boolean => this.isExactMatched(item, keyword));
-    console.info('[SearchPage] exact filter keyword=' + keyword + ' raw=' + items.length.toString() + ' shown=' + filtered.length.toString());
-    return filtered;
+    const source = this.matchModeExact
+      ? items.filter((item: SearchResult): boolean => this.isExactMatched(item, keyword))
+      : items;
+    const sorted = source.slice().sort((a: SearchResult, b: SearchResult): number => {
+      const pa = this.getSearchPriority(a, keyword);
+      const pb = this.getSearchPriority(b, keyword);
+      if (pa !== pb) return pa - pb;
+      if (a.sourceCount !== b.sourceCount) return b.sourceCount - a.sourceCount;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    if (this.matchModeExact) {
+      console.info('[SearchPage] exact filter keyword=' + keyword + ' raw=' + items.length.toString() + ' shown=' + sorted.length.toString());
+    }
+    return sorted;
+  }
+
+  getSearchPriority(item: SearchResult, keyword: string): number {
+    const q = this.normalize(keyword);
+    if (!q) return 3;
+    const name = this.normalize(item.name);
+    const author = this.normalize(item.author);
+    const kind = this.normalize(item.kind);
+    if (name === q || author === q) return 0;
+    if (kind.includes(q)) return 1;
+    if (name.includes(q) || author.includes(q)) return 2;
+    return 3;
   }
 
   sourceGroupsOf(source: BookSource): string[] {
@@ -232,12 +333,19 @@ struct SearchPage {
       } else {
         options.push({
           value: source.sourceType,
-          label: source.sourceType === 0 ? '出版' : (source.sourceType === 1 ? '网络' : '类型' + source.sourceType),
+          label: this.sourceTypeLabel(source.sourceType),
           count: 1
         });
       }
     });
     return options.sort((a: SourceTypeOption, b: SourceTypeOption): number => a.value - b.value);
+  }
+
+  sourceTypeLabel(type: number): string {
+    if (type === 0) return '小说';
+    if (type === 1) return '音频';
+    if (type === 2) return '漫画';
+    return '类型' + type.toString();
   }
 
   sourceInSelectedGroups(source: BookSource): boolean {
@@ -292,6 +400,30 @@ struct SearchPage {
       this.selectedSourceTypes = [...this.selectedSourceTypes, value];
     }
     this.saveSearchPrefs();
+    this.restartCommittedSearchIfNeeded();
+  }
+
+  setMatchModeExact(exact: boolean): void {
+    if (this.matchModeExact === exact) return;
+    this.matchModeExact = exact;
+    this.saveSearchPrefs();
+    this.restartCommittedSearchIfNeeded();
+    if (this.hasSearched && this.committedKeyword && this.manualStop) {
+      this.results = this.filterResultsByMode(this.allResults.length > 0 ? this.allResults : this.results, this.committedKeyword);
+    }
+  }
+
+  setLayoutMode(mode: number): void {
+    if (this.layoutMode === mode) return;
+    this.layoutMode = mode;
+    if (mode === 0) this.expandedSourceUrl = '';
+    this.saveSearchPrefs();
+  }
+
+  finishScopeSheet(): void {
+    this.showScopeSheet = false;
+    this.saveSearchPrefs();
+    this.restartCommittedSearchIfNeeded();
   }
 
   toggleGroup(group: string): void {
@@ -302,6 +434,7 @@ struct SearchPage {
     } else {
       this.selectedGroups = [...this.selectedGroups, group];
     }
+    this.saveSearchPrefs();
   }
 
   toggleSource(source: BookSource): void {
@@ -312,12 +445,76 @@ struct SearchPage {
     } else {
       this.selectedSourceUrls = [...this.selectedSourceUrls, source.sourceUrl];
     }
+    this.saveSearchPrefs();
   }
 
   selectAllScope(): void {
     this.scopeBySource = false;
     this.selectedGroups = [];
     this.selectedSourceUrls = [];
+    this.saveSearchPrefs();
+  }
+
+  encodeSearchScope(): string {
+    if (this.scopeBySource && this.selectedSourceUrls.length > 0) {
+      const parts = this.sources
+        .filter((source: BookSource): boolean => this.selectedSourceUrls.includes(source.sourceUrl))
+        .map((source: BookSource): string => '{"name":' + JSON.stringify(source.sourceName.replace(/[:,]/g, '')) + ',"url":' + JSON.stringify(source.sourceUrl) + '}');
+      return '{"type":"source","sources":[' + parts.join(',') + ']}';
+    }
+    if (!this.scopeBySource && this.selectedGroups.length > 0) {
+      return '{"type":"group","groups":' + JSON.stringify(this.selectedGroups) + '}';
+    }
+    return '';
+  }
+
+  parseSearchScope(raw: string): ParsedSearchScope {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return { isSource: false, groups: [], sourceUrls: [] };
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, Object>;
+      const type = String(obj['type'] || '');
+      if (type === 'source') {
+        const sources = (obj['sources'] || []) as Array<Record<string, Object>>;
+        return {
+          isSource: true,
+          groups: [],
+          sourceUrls: sources.map((source: Record<string, Object>): string => String(source['url'] || '')).filter((url: string): boolean => url.length > 0)
+        };
+      }
+      if (type === 'group') {
+        const groups = (obj['groups'] || []) as string[];
+        return {
+          isSource: false,
+          groups: groups.map((group: string): string => String(group || '').trim()).filter((group: string): boolean => group.length > 0),
+          sourceUrls: []
+        };
+      }
+    } catch (_e) { /* fallback to legacy format */ }
+
+    const rawItems = trimmed.split(',').map((item: string): string => item.trim()).filter((item: string): boolean => item.length > 0);
+    const legacySources = rawItems
+      .filter((item: string): boolean => item.includes('::'))
+      .map((item: string): string => item.substring(item.indexOf('::') + 2))
+      .filter((url: string): boolean => url.length > 0);
+    if (legacySources.length > 0 && legacySources.length === rawItems.length) {
+      return { isSource: true, groups: [], sourceUrls: legacySources };
+    }
+    return { isSource: false, groups: rawItems, sourceUrls: [] };
+  }
+
+  applySearchScope(raw: string, persist: boolean = true): void {
+    const parsed = this.parseSearchScope(raw);
+    this.scopeBySource = parsed.isSource;
+    this.selectedGroups = parsed.isSource ? [] : parsed.groups;
+    this.selectedSourceUrls = parsed.isSource ? parsed.sourceUrls : [];
+    if (persist) this.saveSearchPrefs();
+  }
+
+  restartCommittedSearchIfNeeded(): void {
+    if (this.committedKeyword && this.hasSearched && !this.showSuggestions && !this.manualStop) {
+      this.doSearch(this.committedKeyword);
+    }
   }
 
   stopSearch(): void {
@@ -355,7 +552,7 @@ struct SearchPage {
     this.results = [];
     this.processedSources = 0;
     this.totalSources = searchable.length;
-    this.addToHistory(q);
+    await this.addToHistory(q);
     console.info('[SearchPage] start q=' + q
       + ' exact=' + (this.matchModeExact ? 'true' : 'false')
       + ' activeSources=' + searchable.length.toString()
@@ -384,7 +581,8 @@ struct SearchPage {
         + ' shown=' + this.results.length.toString()
         + ' exact=' + (this.matchModeExact ? 'true' : 'false')
         + ' first=' + this.results.slice(0, 5).map((r: SearchResult): string => r.name + '/' + r.sourceCount.toString()).join(','));
-      this.hasMore = merged.length > 0;
+      const exactShouldStop = this.matchModeExact && this.currentPage === 1 && this.results.length <= 3;
+      this.hasMore = merged.length > 0 && !exactShouldStop;
     } catch (_e) {
       if (runId === this.searchRunId) {
         promptAction.showToast({ message: '搜索失败', duration: 1500 });
@@ -405,6 +603,7 @@ struct SearchPage {
     const nextPage = this.currentPage + 1;
     const runId = ++this.searchRunId;
     const baseResults = this.allResults.length > 0 ? this.allResults : this.results;
+    const beforeCount = baseResults.length;
     this.isLoadingMore = true;
     this.manualStop = false;
     this.processedSources = 0;
@@ -419,14 +618,15 @@ struct SearchPage {
           this.results = this.filterResultsByMode(this.allResults, this.committedKeyword);
         }, nextPage);
       if (runId !== this.searchRunId || this.manualStop) return;
-      if (pageResults.length === 0) {
+      const mergedCount = this.allResults.length;
+      if (pageResults.length === 0 || mergedCount <= beforeCount) {
         this.hasMore = false;
         promptAction.showToast({ message: '没有更多结果', duration: 1200 });
       } else {
         this.currentPage = nextPage;
         this.allResults = mergeSearchResults([...baseResults, ...pageResults]);
         this.results = this.filterResultsByMode(this.allResults, this.committedKeyword);
-        this.hasMore = pageResults.length > 0;
+        this.hasMore = this.allResults.length > beforeCount;
         this.fetchMissingCovers();
       }
     } catch (_e) {
@@ -569,6 +769,75 @@ struct SearchPage {
     }});
   }
 
+  showPreview(item: SearchResult): void {
+    this.previewItem = item;
+    this.showPreviewSheet = true;
+  }
+
+  async addPreviewToShelf(): Promise<void> {
+    const item = this.previewItem;
+    if (!item) return;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+      const now = Date.now();
+      const existing = item.noteUrl ? await bookTable.getBookByUrl(item.noteUrl) : null;
+      if (existing) {
+        existing.isShelf = true;
+        existing.coverUrl = existing.coverUrl || item.coverUrl;
+        existing.kind = existing.kind || item.kind;
+        existing.wordCount = existing.wordCount || item.wordCount;
+        existing.introduce = existing.introduce || item.introduce;
+        existing.origin = existing.origin || item.origin;
+        existing.originUrl = existing.originUrl || item.originUrl;
+        existing.latestChapterTitle = existing.latestChapterTitle || item.latestChapterTitle;
+        existing.updateTime = now;
+        await bookTable.updateBook(existing);
+      } else {
+        const book: Book = {
+          id: 0,
+          name: item.name,
+          author: item.author,
+          coverUrl: item.coverUrl,
+          customCoverPath: '',
+          bookUrl: item.noteUrl,
+          origin: item.origin,
+          originUrl: item.originUrl,
+          type: BookType.TEXT,
+          groupId: BookGroup.ALL,
+          tocUrl: '',
+          chapterCount: 0,
+          totalChapterNum: 0,
+          latestChapterTitle: item.latestChapterTitle || '',
+          durChapterTitle: '',
+          durChapterIndex: 0,
+          durChapterPos: 0,
+          durChapterProgress: 0,
+          isRead: false,
+          isAudio: false,
+          isManga: false,
+          isShelf: true,
+          order: 0,
+          kind: item.kind,
+          wordCount: item.wordCount,
+          introduce: item.introduce,
+          remark: '',
+          lastUpdateTime: item.lastUpdateTime,
+          lastOpenTime: 0,
+          createTime: now,
+          updateTime: now
+        };
+        await bookTable.insertBook(book);
+      }
+      this.showPreviewSheet = false;
+      this.refreshShelfStates();
+      AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+      promptAction.showToast({ message: '已加入书架', duration: 1500 });
+    } catch (_e) {
+      promptAction.showToast({ message: '加入书架失败', duration: 1500 });
+    }
+  }
+
   primaryColor(): string { return '#0A7F70'; }
   bgColor(): string { return this.isDark ? '#111314' : '#F6F7F7'; }
   surfaceColor(): string { return this.isDark ? '#1B1E20' : '#FFFFFF'; }
@@ -633,6 +902,11 @@ struct SearchPage {
         this.buildDimLayer(() => { this.showClearHistoryDialog = false; })
         this.buildClearHistoryDialog()
       }
+
+      if (this.showPreviewSheet) {
+        this.buildDimLayer(() => { this.showPreviewSheet = false; })
+        this.buildPreviewSheet()
+      }
     }
     .width('100%')
     .height('100%')
@@ -659,11 +933,7 @@ struct SearchPage {
           this.showScopeSheet = false;
         })
         this.buildIconAction('准', this.matchModeExact, () => {
-          this.matchModeExact = !this.matchModeExact;
-          if (this.hasSearched && this.committedKeyword) {
-            this.results = this.filterResultsByMode(this.allResults.length > 0 ? this.allResults : this.results, this.committedKeyword);
-          }
-          this.saveSearchPrefs();
+          this.setMatchModeExact(!this.matchModeExact);
         })
         this.buildIconAction('滤', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
           this.showScopeSheet = true;
@@ -677,6 +947,12 @@ struct SearchPage {
 
       Row() {
         Row() {
+          Text('⌕')
+            .fontSize(18)
+            .fontColor(this.subTextColor())
+            .width(34)
+            .height(42)
+            .textAlign(TextAlign.Center)
           TextInput({ placeholder: '搜索书名或作者...', text: this.keyword })
             .height(42)
             .layoutWeight(1)
@@ -684,7 +960,7 @@ struct SearchPage {
             .fontSize(15)
             .fontColor(this.textColor())
             .placeholderColor(this.subTextColor())
-            .padding({ left: 12 })
+            .padding({ left: 0 })
             .onChange((v: string) => { this.onQueryChanged(v); })
             .onSubmit(() => { this.doSearch(); })
             .onFocus(() => {
@@ -693,7 +969,7 @@ struct SearchPage {
               }
             })
           if (this.keyword) {
-            Text('x')
+            Text('×')
               .fontSize(16)
               .fontColor(this.subTextColor())
               .width(34)
@@ -758,11 +1034,7 @@ struct SearchPage {
         this.showScopeSheet = true;
       })
       this.buildTinyChip(this.matchModeExact ? '精确匹配' : '普通匹配', this.matchModeExact, () => {
-        this.matchModeExact = !this.matchModeExact;
-        if (this.hasSearched && this.committedKeyword) {
-          this.results = this.filterResultsByMode(this.allResults.length > 0 ? this.allResults : this.results, this.committedKeyword);
-        }
-        this.saveSearchPrefs();
+        this.setMatchModeExact(!this.matchModeExact);
       })
       if (this.selectedSourceTypes.length > 0) {
         this.buildTinyChip('已筛类型', true, () => { this.showSettingsSheet = true; })
@@ -991,6 +1263,11 @@ struct SearchPage {
     .height('100%')
     .width('100%')
     .padding({ top: 6, bottom: 16 })
+    .onReachEnd(() => {
+      if (!this.isSearching && !this.isLoadingMore && this.hasMore && this.results.length > 0) {
+        this.loadMore();
+      }
+    })
   }
 
   @Builder buildGroupedResults() {
@@ -1054,6 +1331,11 @@ struct SearchPage {
     .height('100%')
     .width('100%')
     .padding({ top: 6, bottom: 16 })
+    .onReachEnd(() => {
+      if (!this.isSearching && !this.isLoadingMore && this.hasMore && this.results.length > 0) {
+        this.loadMore();
+      }
+    })
   }
 
   @Builder buildBookListItem(item: SearchResult) {
@@ -1156,6 +1438,7 @@ struct SearchPage {
     .padding({ left: 16, right: 14, top: 10, bottom: 10 })
     .backgroundColor(this.surfaceColor())
     .onClick(() => { this.goToBookInfo(item); })
+    .gesture(LongPressGesture().onAction(() => { this.showPreview(item); }))
   }
 
   @Builder buildGridItem(item: SearchResult) {
@@ -1197,6 +1480,7 @@ struct SearchPage {
     .width(108)
     .margin({ right: 8 })
     .onClick(() => { this.goToBookInfo(item); })
+    .gesture(LongPressGesture().onAction(() => { this.showPreview(item); }))
   }
 
   @Builder buildFooter() {
@@ -1321,13 +1605,10 @@ struct SearchPage {
         .margin({ left: 18, top: 8, bottom: 8 })
       Row() {
         this.buildSegment('列表', this.layoutMode === 0, () => {
-          this.layoutMode = 0;
-          this.expandedSourceUrl = '';
-          this.saveSearchPrefs();
+          this.setLayoutMode(0);
         })
         this.buildSegment('按源分组', this.layoutMode === 1, () => {
-          this.layoutMode = 1;
-          this.saveSearchPrefs();
+          this.setLayoutMode(1);
         })
       }
       .width('100%')
@@ -1355,18 +1636,10 @@ struct SearchPage {
         .margin({ left: 18, top: 18, bottom: 8 })
       Row() {
         this.buildSelectionChip('精确搜索', this.matchModeExact, () => {
-          this.matchModeExact = !this.matchModeExact;
-          if (this.hasSearched && this.committedKeyword) {
-            this.results = this.filterResultsByMode(this.allResults.length > 0 ? this.allResults : this.results, this.committedKeyword);
-          }
-          this.saveSearchPrefs();
+          this.setMatchModeExact(true);
         })
         this.buildSelectionChip('普通搜索', !this.matchModeExact, () => {
-          this.matchModeExact = false;
-          if (this.hasSearched && this.committedKeyword) {
-            this.results = this.filterResultsByMode(this.allResults.length > 0 ? this.allResults : this.results, this.committedKeyword);
-          }
-          this.saveSearchPrefs();
+          this.setMatchModeExact(false);
         })
       }
       .width('100%')
@@ -1423,7 +1696,7 @@ struct SearchPage {
         Text('完成')
           .fontSize(14)
           .fontColor(this.primaryColor())
-          .onClick(() => { this.showScopeSheet = false; })
+          .onClick(() => { this.finishScopeSheet(); })
       }
       .width('100%')
       .height(52)
@@ -1569,5 +1842,108 @@ struct SearchPage {
     .backgroundColor(this.surfaceColor())
     .borderRadius(18)
     .position({ x: '9%', y: '38%' })
+  }
+
+  @Builder buildPreviewSheet() {
+    if (this.previewItem) {
+      Column() {
+        Row() {
+          Text('书籍预览')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.textColor())
+            .layoutWeight(1)
+          Text('关闭')
+            .fontSize(14)
+            .fontColor(this.primaryColor())
+            .onClick(() => { this.showPreviewSheet = false; })
+        }
+        .width('100%')
+        .height(52)
+        .padding({ left: 18, right: 18 })
+
+        Row() {
+          BookCover({
+            name: this.previewItem.name,
+            coverUrl: this.previewItem.coverUrl,
+            coverWidth: 96,
+            coverHeight: 134
+          })
+            .margin({ right: 14 })
+          Column() {
+            Text(this.previewItem.name)
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.textColor())
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(this.previewItem.author || '未知作者')
+              .fontSize(13)
+              .fontColor(this.subTextColor())
+              .margin({ top: 6 })
+            Text((this.previewItem.origin || '未知书源') + (this.previewItem.sourceCount > 1 ? ' · ' + this.previewItem.sourceCount + '源' : ''))
+              .fontSize(12)
+              .fontColor(this.primaryColor())
+              .margin({ top: 8 })
+            if (this.previewItem.latestChapterTitle) {
+              Text('最新: ' + this.previewItem.latestChapterTitle)
+                .fontSize(12)
+                .fontColor(this.subTextColor())
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 6 })
+            }
+          }
+          .layoutWeight(1)
+          .height(134)
+          .justifyContent(FlexAlign.Center)
+        }
+        .width('100%')
+        .padding({ left: 18, right: 18, top: 4 })
+
+        if (this.previewItem.introduce) {
+          Text(this.previewItem.introduce.replace(/\s+/g, ''))
+            .fontSize(13)
+            .fontColor(this.textColor())
+            .lineHeight(20)
+            .maxLines(5)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+            .padding({ left: 18, right: 18, top: 16 })
+        }
+
+        Row() {
+          Button('加入书架')
+            .fontSize(14)
+            .fontColor(this.primaryColor())
+            .layoutWeight(1)
+            .height(42)
+            .backgroundColor(this.surfaceAltColor())
+            .borderRadius(21)
+            .onClick(() => { this.addPreviewToShelf(); })
+          Button('查看详情')
+            .fontSize(14)
+            .fontColor('#FFFFFF')
+            .layoutWeight(1)
+            .height(42)
+            .backgroundColor(this.primaryColor())
+            .borderRadius(21)
+            .margin({ left: 10 })
+            .onClick(() => {
+              if (this.previewItem) {
+                const item = this.previewItem;
+                this.showPreviewSheet = false;
+                this.goToBookInfo(item);
+              }
+            })
+        }
+        .width('100%')
+        .padding({ left: 18, right: 18, top: 20, bottom: 18 })
+      }
+      .width('100%')
+      .backgroundColor(this.surfaceColor())
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .position({ x: 0, y: '54%' })
+    }
   }
 }

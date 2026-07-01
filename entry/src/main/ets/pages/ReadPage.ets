@@ -548,6 +548,26 @@ struct ReadPage {
     router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
   }
 
+  private onOpenSearchContent(): void {
+    if (this.allChapters_.length === 0) {
+      promptAction.showToast({ message: '章节列表未加载', duration: 1500 });
+      return;
+    }
+    ChapterCache.chapters = this.allChapters_;
+    ChapterCache.bookUrl = this.bookUrl;
+    router.pushUrl({
+      url: 'pages/SearchContentPage',
+      params: {
+        bookId: this.bookId_,
+        bookName: this.bookName,
+        bookAuthor: this.bookAuthor,
+        bookUrl: this.bookUrl,
+        originUrl: this.originUrl,
+        currentIndex: this.currentIndex,
+      }
+    });
+  }
+
   private resetReadStateForSourceChange_(): void {
     this.source_ = null;
     this.bookId_ = -1;
@@ -792,6 +812,7 @@ struct ReadPage {
             onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
+            onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
             onSource: () => { this.showMenu = false; this.openSourceSheet(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
             onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },

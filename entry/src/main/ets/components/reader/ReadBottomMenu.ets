@@ -10,6 +10,7 @@ export struct ReadBottomMenu {
   onStyle?: () => void;
   onFont?: () => void;
   onSettings?: () => void;
+  onSearch?: () => void;
   onSource?: () => void;
   onCache?: () => void;
   onRefresh?: () => void;
@@ -36,6 +37,10 @@ export struct ReadBottomMenu {
         Text('⚙️').fontSize(20)
         Text('设置').fontSize(10).fontColor(this.isDark ? '#CCCCCC' : '#666').margin({top: 2})
       }.onClick(() => { this.onSettings?.() })
+      Column() {
+        Text('🔎').fontSize(20)
+        Text('搜索').fontSize(10).fontColor(this.isDark ? '#CCCCCC' : '#666').margin({top: 2})
+      }.onClick(() => { this.onSearch?.() })
       Column() {
         Text('🔄').fontSize(20)
         Text('换源').fontSize(10).fontColor(this.isDark ? '#CCCCCC' : '#666').margin({top: 2})
