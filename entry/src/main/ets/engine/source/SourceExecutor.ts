@@ -14,6 +14,7 @@ import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from '.
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
+import { CryptoUtil } from '../../util/CryptoUtil';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 
 function getBaseUrl(rawUrl: string): string {
@@ -669,6 +670,9 @@ export class SourceExecutor {
       const body = await this.fetchWithOpts(noteUrl, headers);
       if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
 
+      const jsonInfo = this.parseJsonBookInfo(body, source, noteUrl);
+      if (jsonInfo) return jsonInfo;
+
       const parser = getHtmlParser();
       const doc = parser.parse(body);
       const root: unknown = doc; // HtmlElement
@@ -694,6 +698,59 @@ export class SourceExecutor {
     } catch (_e) {
       return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
     }
+  }
+
+  private parseJsonBookInfo(body: string, source: BookSource, noteUrl: string): BookSourceBookInfo | null {
+    try {
+      const jsonObj = JSON.parse(body) as Record<string, unknown>;
+      let root: Record<string, unknown> = jsonObj;
+      if (source.ruleBookInfoInit) {
+        const initValue = this.getPath(jsonObj, source.ruleBookInfoInit);
+        if (initValue && typeof initValue === 'object' && !Array.isArray(initValue)) {
+          root = initValue as Record<string, unknown>;
+        }
+      }
+      const info: BookSourceBookInfo = {
+        name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
+        author: this.extractJsonRuleValue(source.ruleBookInfoAuthor, root),
+        coverUrl: this.extractJsonRuleValue(source.ruleBookInfoCover, root),
+        introduce: this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root),
+        kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
+        wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
+        lastUpdateTime: this.extractJsonRuleValue(source.ruleBookInfoLastUpdateTime, root),
+        tocUrl: this.resolveRuleTemplate(source.ruleBookInfoTocUrl, root, noteUrl),
+        chapters: [],
+      };
+      if (info.name || info.author || info.coverUrl || info.introduce || info.kind || info.wordCount || info.lastUpdateTime || info.tocUrl) {
+        console.info('[SrcEx] BookInfo JSON OK tocUrl=', (info.tocUrl || '').substring(0, 100));
+        return info;
+      }
+    } catch (_e) {
+      /* not JSON */
+    }
+    return null;
+  }
+
+  private extractJsonRuleValue(rule: string, item: Record<string, unknown>): string {
+    if (!rule) return '';
+    if (rule.includes('{{')) return this.resolveRuleTemplate(rule, item, '');
+    return this.firstStr(item, rule);
+  }
+
+  private resolveRuleTemplate(template: string, item: Record<string, unknown>, baseUrl: string): string {
+    if (!template) return '';
+    let result = template.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
+      const value = this.getPath(item, '$.' + path.trim());
+      return value !== undefined && value !== null ? String(value) : '';
+    });
+    result = result.replace(/\{\{([^}]+)\}\}/g, (_m: string, path: string) => {
+      const value = this.getPath(item, '$.' + path.trim());
+      return value !== undefined && value !== null ? String(value) : '';
+    });
+    if (result && baseUrl && !result.startsWith('http://') && !result.startsWith('https://')) {
+      return this.resolvePageUrl(result, baseUrl);
+    }
+    return result;
   }
 
   // ============ 正文内容 ============
@@ -1035,7 +1092,7 @@ export class SourceExecutor {
         let chapters: BookSourceChapter[] = [];
         if (tocRules.toc.startsWith('$.')) {
           try {
-            chapters = this.parseJsonToc(JSON.parse(bodyText) as Record<string, unknown>, tocRules, tocUrl);
+            chapters = await this.parseJsonToc(JSON.parse(bodyText) as Record<string, unknown>, tocRules, tocUrl);
           } catch (_je) { /* fallback */ }
         }
         if (chapters.length === 0) {
@@ -1124,7 +1181,7 @@ export class SourceExecutor {
             if (tocRules.toc.startsWith('$.')) {
               try {
                 const jsonObj = JSON.parse(altResp) as Record<string, unknown>;
-                altChapters = this.parseJsonToc(jsonObj, tocRules, altUrl || tocUrl);
+                altChapters = await this.parseJsonToc(jsonObj, tocRules, altUrl || tocUrl);
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
@@ -1377,10 +1434,12 @@ export class SourceExecutor {
       if (!coverUrl && rawCover) {
         console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
       }
-      let noteUrl = this.firstStr(itemObj, source.ruleSearchNoteUrl, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
+      let noteUrl = source.ruleSearchNoteUrl && source.ruleSearchNoteUrl.includes('{{')
+        ? this.resolveRuleTemplate(source.ruleSearchNoteUrl, itemObj, baseUrl)
+        : this.firstStr(itemObj, source.ruleSearchNoteUrl, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
-        noteUrl = (baseUrl || '') + pathStr;
+        noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
       }
       const kind = this.firstStr(itemObj, source.ruleSearchKind || '', 'kind', 'type', 'category');
       const wordCount = this.firstStr(itemObj, source.ruleSearchWordCount || '', 'wordCount', 'wordNum', 'words');
@@ -1495,6 +1554,15 @@ export class SourceExecutor {
       console.info('[SrcEx] PostRule tmpl: ' + result.substring(0, 100));
     }
     return result;
+  }
+
+  private async postProcessRuleAsync(rule: string, value: string): Promise<string> {
+    if (!rule || !value) return value;
+    const aesMatch = rule.match(/java\.aesBase64DecodeToString\s*\(\s*result\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/);
+    if (aesMatch) {
+      return await CryptoUtil.aesBase64DecodeToString(value, aesMatch[1], aesMatch[2], aesMatch[3]);
+    }
+    return this.postProcessRule(rule, value);
   }
 
   private firstStr(item: Record<string, unknown>, ...paths: (string | undefined)[]): string {
@@ -1792,7 +1860,7 @@ export class SourceExecutor {
   /**
    * 从 JSON 响应解析目录列表（$.xxx JSONPath）
    */
-  private parseJsonToc(json: Record<string, unknown>, rules: Record<string, string>, baseUrl: string): BookSourceChapter[] {
+  private async parseJsonToc(json: Record<string, unknown>, rules: Record<string, string>, baseUrl: string): Promise<BookSourceChapter[]> {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
 
@@ -1810,7 +1878,9 @@ export class SourceExecutor {
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
-    return list.map((item: unknown, index: number): BookSourceChapter => {
+    const chapters: BookSourceChapter[] = [];
+    for (let index = 0; index < list.length; index++) {
+      const item = list[index];
       const itemObj = item as Record<string, unknown>;
 
       let title = '';
@@ -1848,9 +1918,11 @@ export class SourceExecutor {
         if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
           url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
         } else {
-          const val = this.getPath(itemObj, urlItemRule);
+          const cleanUrlRule = this.cleanRule(urlItemRule);
+          const val = this.getPath(itemObj, cleanUrlRule);
           if (val !== undefined && val !== null) {
             url = String(val);
+            url = await this.postProcessRuleAsync(urlItemRule, url);
           }
         }
         url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
@@ -1866,8 +1938,9 @@ export class SourceExecutor {
         }
       }
 
-      return { title: title || '第' + (index + 1) + '章', url, index };
-    });
+      chapters.push({ title: title || '第' + (index + 1) + '章', url, index });
+    }
+    return chapters;
   }
 
   /**
