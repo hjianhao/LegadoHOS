@@ -354,7 +354,23 @@ export struct BookInfoPage {
     }
   }
 
-  startRead(): void {
+  /**
+   * 开始阅读（对齐 Android readBook + openReader）：
+   * 1. 不在书架 → 隐式保存（标记 notShelf），加入数据库后再打开阅读器
+   * 2. 已在书架 → 更新 lastOpenTime 后打开
+   */
+  async startRead(): Promise<void> {
+    if (!this.isInShelf) {
+      // 不在书架：隐式保存书籍（对齐 Android BookType.notShelf 语义）
+      const saved = await this.saveBookImplicitly();
+      if (!saved) {
+        promptAction.showToast({ message: '保存失败，请重试', duration: 1500 });
+        return;
+      }
+    } else if (this.bookId > 0) {
+      // 已在书架：更新最后打开时间
+      await this.updateLastOpenTime();
+    }
     router.pushUrl({
       url: 'pages/ReadPage',
       params: {
@@ -363,7 +379,9 @@ export struct BookInfoPage {
         bookUrl: this.noteUrl,
         origin: this.origin,
         originUrl: this.originUrl,
-        header: this.sourceHeader
+        header: this.sourceHeader,
+        bookId: this.bookId,
+        inBookshelf: this.isInShelf,
       }
     });
   }
@@ -379,8 +397,96 @@ export struct BookInfoPage {
         originUrl: this.originUrl,
         header: this.sourceHeader,
         durChapterIndex: index,
+        bookId: this.bookId,
+        inBookshelf: this.isInShelf,
       }
     });
+  }
+
+  /**
+   * 不在书架时隐式保存书籍（对齐 Android readBook() 中 BookType.notShelf 逻辑）
+   * 保存后 isShelf = false，后续进入书架页不会展示
+   */
+  private async saveBookImplicitly(): Promise<boolean> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      const bookTable = new BookTable(db);
+
+      // 检查是否已存在（通过 bookUrl）
+      if (this.noteUrl) {
+        const existing = await bookTable.getBookByUrl(this.noteUrl);
+        if (existing) {
+          this.bookId = existing.id;
+          await this.updateLastOpenTime();
+          AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+          return true;
+        }
+      }
+
+      const now = Date.now();
+      const book: Book = {
+        id: 0,
+        name: this.bookName,
+        author: this.bookAuthor,
+        coverUrl: this.coverUrl,
+        customCoverPath: this.customCoverPath,
+        bookUrl: this.noteUrl,
+        origin: this.origin,
+        originUrl: this.originUrl,
+        type: BookType.TEXT,
+        groupId: BookGroup.ALL,
+        tocUrl: '',
+        chapterCount: this.chapterCount,
+        totalChapterNum: this.chapterCount,
+        latestChapterTitle: this.latestChapter,
+        durChapterTitle: this.durChapterTitle,
+        durChapterIndex: this.durChapterIndex,
+        durChapterPos: 0,
+        durChapterProgress: 0,
+        isRead: false,
+        isAudio: false,
+        isManga: false,
+        isShelf: false,  // 关键：不在书架（对齐 Android BookType.notShelf）
+        order: 0,
+        kind: this.kind,
+        wordCount: this.wordCount,
+        introduce: this.introduce,
+        remark: this.remark,
+        lastUpdateTime: this.lastUpdateTime,
+        lastOpenTime: now,
+        createTime: now,
+        updateTime: now,
+      };
+
+      const id = await bookTable.insertBook(book);
+      if (id > 0) {
+        this.bookId = id;
+        AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[BookInfo] saveBookImplicitly failed:', (err as Error).message);
+      return false;
+    }
+  }
+
+  /** 更新最后打开时间 */
+  private async updateLastOpenTime(): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      const bookTable = new BookTable(db);
+      const book = await bookTable.getBookById(this.bookId);
+      if (book) {
+        book.lastOpenTime = Date.now();
+        book.updateTime = Date.now();
+        await bookTable.updateBook(book);
+      }
+    } catch (_e) {
+      /* non-critical */
+    }
   }
 
   changeSource(): void {
@@ -660,21 +766,25 @@ export struct BookInfoPage {
       .height('100%')
 
       // 阅读 FAB：对齐 Android ExtendedFloatingActionButton，固定右下角
-      Button() {
-        Row() {
-          Text('书').fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.fabTextColor())
-          Text('阅读').fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.fabTextColor())
-            .margin({ left: 8 })
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        Button() {
+          Row() {
+            Text('书').fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.fabTextColor())
+            Text('阅读').fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.fabTextColor())
+              .margin({ left: 8 })
+          }
         }
+        .height(54)
+        .padding({ left: 18, right: 22 })
+        .borderRadius(27)
+        .backgroundColor(this.fabColor())
+        .shadow({ radius: 18, color: '#00000030', offsetX: 0, offsetY: 8 })
+        .margin({ right: 16, bottom: 16 })
+        .onClick((): void => { this.startRead(); })
       }
-      .height(54)
-      .padding({ left: 18, right: 22 })
-      .borderRadius(27)
-      .backgroundColor(this.fabColor())
-      .shadow({ radius: 18, color: '#00000030', offsetX: 0, offsetY: 8 })
-      .position({ x: 'calc(100% - 128vp)', y: 'calc(100% - 84vp)' })
-      .zIndex(20)
-      .onClick((): void => { this.startRead(); })
+      .width('100%')
+      .height('100%')
+      .hitTestBehavior(HitTestMode.None)
 
       if (this.showMoreMenu) {
         this.buildOverflowMenu()
