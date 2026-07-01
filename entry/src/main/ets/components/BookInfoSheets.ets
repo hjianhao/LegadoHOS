@@ -323,8 +323,14 @@ export struct ChangeSourceSheet {
     return raw.filter(r => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (!rname) return false;
-      // 书名精确匹配 或 互相包含
-      return rname === targetName || rname.includes(targetName) || targetName.includes(rname);
+      // 放宽匹配：精确匹配、互相包含，或关键字中包含书名的核心部分
+      if (rname === targetName) return true;
+      if (rname.includes(targetName)) return true;
+      if (targetName.includes(rname)) return true;
+      // 取中文核心部分（去掉常见后缀/前缀后再比对）
+      const rcore = rname.replace(/[的之·•\-—\s（(）)]/g, '');
+      const tcore = targetName.replace(/[的之·•\-—\s（(）)]/g, '');
+      return rcore.includes(tcore) || tcore.includes(rcore);
     });
   }
 
