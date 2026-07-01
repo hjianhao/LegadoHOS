@@ -6,6 +6,15 @@
       "env": {
         "PATH": "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
       }
+    },
+    "arkts-lsp": {
+      "command": "npx",
+      "args": ["-y", "--package", "arkts-lsp-proxy@latest", "arkts-lsp-mcp"],
+      "env": {
+        "ARKTS_LSP_SYNC": "auto",
+        "DEVECO_HOME": "/Applications/DevEco-Studio.app/Contents",
+        "PATH": "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
     }
   }
 }

@@ -58,7 +58,7 @@ find_deveco_home
 
 export DEVECO_SDK_HOME="${DEVECO_SDK_HOME:-$DEVECO_HOME/sdk}"
 export NODE_HOME="${NODE_HOME:-$DEVECO_HOME/tools/node}"
-export PATH="$NODE_HOME/bin:$DEVECO_HOME/tools/ohpm/bin:$DEVECO_SDK_HOME/default/openharmony/toolchains:$PATH"
+export PATH="$NODE_HOME/bin:$DEVECO_HOME/tools/ohpm/bin:$DEVECO_HOME/tools/hvigor/bin:$DEVECO_SDK_HOME/default/openharmony/toolchains:$PATH"
 
 BUILD_MODE="${1:-debug}"
 HVIGORW="${HVIGORW:-$DEVECO_HOME/tools/hvigor/bin/hvigorw}"
@@ -70,6 +70,9 @@ fi
 
 echo "🔨 构建模式: $BUILD_MODE"
 check_signing_material
+
+echo "📦 同步依赖..."
+"$DEVECO_HOME/tools/ohpm/bin/ohpm" install
 
 # 优先用 deveco-cli，fallback 到 hvigorw
 if command -v devecocli &>/dev/null; then
