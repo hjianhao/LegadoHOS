@@ -364,3 +364,48 @@ JS 代码 → 预处理 (无 with-block 提升) → QuickJS NAPI (C++ 桥) → A
 | 多行 JSON 归一化 | `SourceExecutor.ts:27` |
 | 连接操作符 \|\| / && / %% | `RuleParser.ts` |
 | 正则 AllInOne / OnlyOne / 净化 | `AnalyzeByRegex.ts` + `HtmlParser.ts` |
+
+
+---
+
+## 10. 近期实现更新（2026-06-27 ~ 2026-07-01）
+
+### 10.1 HtmlParser 更新
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| `@value` 后缀 | ✅ | `HtmlParser.ts` extractAttr 中新增 `value` 属性提取 |
+| findElements 递归修复 | ✅ | 多级选择器递归改为调用 `findElements` 自身而非 `querySelectorAll` |
+| `:nth-of-type(n)` | ✅ | 已实现，CSS 伪类完整支持 |
+
+### 10.2 getToc 重构
+
+| 改进 | 说明 |
+|------|------|
+| 分页加载 | 5 并发 + 预提取全部 URL → 顺序遍历页面合并 |
+| 章节去重 | 基于 title+url 去重 |
+| 智能排序 | 通用数字排序（提取章节号按数值排序） |
+| JSONPath 目录 | `$.rows` 路径解析 JSON API 响应 |
+| POST 支持 | JSON 选项中 method:POST + body 模板 |
+| 兜底目录 | ruleBookInfoTocUrl 全目录 URL 兜底 |
+
+### 10.3 阅读器增强
+
+| 功能 | 说明 |
+|------|------|
+| 像素级分页 | 基于 MeasureText 二分搜索定位换行点 |
+| 9 区点击配置 | 上/中/下 × 左/中/右，每区自定义动作 |
+| 页脚信息 | 显示章节名/进度/时间 |
+| 自动缓存 | 阅读时自动缓存后续章节 |
+| 无缝章节导航 | 到达页首/页尾时自动切换章节 |
+| 朗读面板 | ReadAloudPanel 集成 TTS 控制 |
+
+### 10.4 CSS 伪类全部支持
+
+| 伪类 | 状态 |
+|------|------|
+| `:contains(text)` | ✅ |
+| `:not(selector)` | ✅ |
+| `:has(selector)` | ✅ |
+| `:nth-child(n)` | ✅ |
+| `:nth-of-type(n)` | ✅ |
