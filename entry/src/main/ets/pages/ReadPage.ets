@@ -640,13 +640,22 @@ struct ReadPage {
   }
 
   private openSourceSheet(): void {
+    // 读取保存的搜索结果缓存（从 BookInfoPage 进入时写入了 router params）
+    let cachedForSheet: SearchResult[] = [];
+    try {
+      const p = router.getParams() as Record<string, Object>;
+      if (p['cachedSources']) {
+        cachedForSheet = JSON.parse(String(p['cachedSources'])) as SearchResult[];
+      }
+    } catch (_e) { /* ignore */ }
+
     this.sourceDlg = new CustomDialogController({
       builder: ChangeSourceSheet({
         controller: this.sourceDlg!,
         bookName: this.bookName,
         bookAuthor: this.bookAuthor,
         currentOriginUrl: this.originUrl,
-        cachedSources: [],
+        cachedSources: cachedForSheet,
         onReplace: (result: SearchResult) => { this.applySourceChange(result); },
         onAddAsNew: (_result: SearchResult) => {
           promptAction.showToast({ message: '阅读页暂不支持作为新书加入', duration: 1500 });

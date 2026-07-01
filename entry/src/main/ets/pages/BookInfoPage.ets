@@ -399,6 +399,7 @@ export struct BookInfoPage {
         header: this.sourceHeader,
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
+        cachedSources: JSON.stringify(this.cachedSearchResults),
       }
     });
   }
@@ -416,6 +417,7 @@ export struct BookInfoPage {
         durChapterIndex: index,
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
+        cachedSources: JSON.stringify(this.cachedSearchResults),
       }
     });
   }
