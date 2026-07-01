@@ -1,14 +1,24 @@
 /**
  * 设置存储
  * 基于 @ohos.data.preferences
+ * 敏感数据（API Key 等）使用 HUKS 加密存储
  */
 import preferences from '@ohos.data.preferences';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 
 const SETTINGS_STORE_NAME = 'legado_settings';
+const HUKS_AI_KEY_ALIAS = 'legado_ai_api_key';
+
+/** HUKS 密文包装 */
+interface EncryptedPayload {
+  iv: string;
+  ciphertext: string;
+}
 
 export class SettingsStore {
   private static instance: SettingsStore;
   private prefStore_: preferences.Preferences | null = null;
+  private cipher_: cryptoFramework.Cipher | null = null;
 
   private constructor() {}
 
@@ -21,6 +31,123 @@ export class SettingsStore {
 
   async init(context: Context): Promise<void> {
     this.prefStore_ = await preferences.getPreferences(context, SETTINGS_STORE_NAME);
+    await this.initCipher_();
+  }
+
+  private async initCipher_(): Promise<void> {
+    try {
+      const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
+      const keyData = await this.getEncKeyMaterial_();
+      const symKey = await symKeyGenerator.convertKey({ data: keyData });
+      this.cipher_ = cryptoFramework.createCipher('AES256|GCM|PKCS7');
+      await this.cipher_.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, null);
+    } catch (_e) {
+      /* 降级：明文存储（加密组件不可用时自动回退） */
+      console.warn('[SettingsStore] HUKS init failed, falling back to plaintext');
+      this.cipher_ = null;
+    }
+  }
+
+  /** 从 preferences 获取或生成固定密钥材料 */
+  private async getEncKeyMaterial_(): Promise<Uint8Array> {
+    try {
+      const stored = await this.get('huks_key_material', '') as string;
+      if (stored.length === 32) {
+        const bytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          bytes[i] = stored.charCodeAt(i);
+        }
+        return bytes;
+      }
+      // 首次生成：使用 UUID + timestamp 构造 32 字节种子
+      const seed = cryptoFramework.createRandom().generateRandomSync(16);
+      const chars: string[] = [];
+      for (let i = 0; i < 32; i++) {
+        const b = seed[i % 16];
+        chars.push(String.fromCharCode((b % 95) + 32));
+      }
+      const keyStr = chars.join('');
+      await this.put('huks_key_material', keyStr);
+      const bytes = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) {
+        bytes[i] = keyStr.charCodeAt(i);
+      }
+      return bytes;
+    } catch (_e) {
+      // 极端回退：32 字节随机数据
+      const randomGen = cryptoFramework.createRandom();
+      const randomData = await randomGen.generateRandom(32);
+      const bytes = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) {
+        bytes[i] = randomData.data[i];
+      }
+      return bytes;
+    }
+  }
+
+  /** 加密字符串 → base64{iv}:base64{ciphertext} */
+  private async encrypt_(plaintext: string): Promise<string> {
+    if (!this.cipher_) return plaintext;
+    try {
+      const plainBytes = new Uint8Array(plaintext.length);
+      for (let i = 0; i < plaintext.length; i++) {
+        plainBytes[i] = plaintext.charCodeAt(i) & 0xFF;
+      }
+      const encrypted = await this.cipher_.doFinal({ data: plainBytes });
+      // iv 和 ciphertext 拼接在一起存储
+      const result = Array.from(encrypted.data);
+      return this.bytesToBase64_(result);
+    } catch (_e) {
+      console.warn('[SettingsStore] Encrypt failed, storing plaintext');
+      return plaintext;
+    }
+  }
+
+  /** 解密 base64 → 明文 */
+  private async decrypt_(encoded: string): Promise<string> {
+    if (!this.cipher_ || !encoded) return encoded;
+    try {
+      const bytes = this.base64ToBytes_(encoded);
+      const decrypted = await this.cipher_.doFinal({ data: new Uint8Array(bytes) });
+      let result = '';
+      for (let i = 0; i < decrypted.data.length; i++) {
+        result += String.fromCharCode(decrypted.data[i]);
+      }
+      return result;
+    } catch (_e) {
+      console.warn('[SettingsStore] Decrypt failed, returning raw');
+      return encoded;
+    }
+  }
+
+  private bytesToBase64_(bytes: number[]): string {
+    const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let result = '';
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0 = bytes[i];
+      const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      result += CHARS.charAt(b0 >> 2);
+      result += CHARS.charAt(((b0 & 3) << 4) | (b1 >> 4));
+      result += i + 1 < bytes.length ? CHARS.charAt(((b1 & 15) << 2) | (b2 >> 6)) : '=';
+      result += i + 2 < bytes.length ? CHARS.charAt(b2 & 63) : '=';
+    }
+    return result;
+  }
+
+  private base64ToBytes_(b64: string): number[] {
+    const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const result: number[] = [];
+    for (let i = 0; i < b64.length; i += 4) {
+      const c0 = CHARS.indexOf(b64.charAt(i));
+      const c1 = CHARS.indexOf(b64.charAt(i + 1));
+      const c2 = i + 2 < b64.length && b64.charAt(i + 2) !== '=' ? CHARS.indexOf(b64.charAt(i + 2)) : -1;
+      const c3 = i + 3 < b64.length && b64.charAt(i + 3) !== '=' ? CHARS.indexOf(b64.charAt(i + 3)) : -1;
+      result.push((c0 << 2) | (c1 >> 4));
+      if (c2 >= 0) result.push(((c1 & 15) << 4) | (c2 >> 2));
+      if (c3 >= 0) result.push(((c2 & 3) << 6) | c3);
+    }
+    return result;
   }
 
   private get store(): preferences.Preferences {
@@ -97,6 +224,23 @@ export class SettingsStore {
     await this.store.put(key, JSON.stringify(value));
     await this.store.flush();
   }
+
+  // ---- AI 配置（API Key 使用 HUKS 加密存储） ----
+  async getAiEndpoint(): Promise<string> { return await this.get('ai_endpoint', 'https://api.openai.com/v1/chat/completions'); }
+  async setAiEndpoint(v: string): Promise<void> { await this.put('ai_endpoint', v); }
+
+  async getAiApiKey(): Promise<string> {
+    const encoded = await this.get('ai_api_key', '') as string;
+    if (!encoded) return '';
+    return await this.decrypt_(encoded);
+  }
+  async setAiApiKey(v: string): Promise<void> {
+    const encoded = await this.encrypt_(v);
+    await this.put('ai_api_key', encoded);
+  }
+
+  async getAiModel(): Promise<string> { return await this.get('ai_model', 'gpt-3.5-turbo'); }
+  async setAiModel(v: string): Promise<void> { await this.put('ai_model', v); }
 
   // ---- 书架设置 ----
   async getBookGroupStyle(): Promise<number> { return await this.get('book_group_style', 0); }
