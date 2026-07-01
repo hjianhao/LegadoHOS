@@ -267,24 +267,16 @@ export class HtmlParser {
     }
 
     // 应用 ## 后缀 post-processing
-    for (const proc of postProcessors) {
-      if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
-        result = result.trim();
-      } else {
-        try {
-          const regex = new RegExp(proc);
-          const match = result.match(regex);
-          if (match && match.length > 1 && match[1] !== undefined) {
-            // 有捕获组 → 取第一个捕获组的值
-            result = match[1];
-          } else {
-            // 无捕获组 → 替换匹配内容为空（删除匹配）
-            result = result.replace(regex, '');
-          }
-        } catch (e) {
-          // 正则无效，忽略
-          console.warn('[HtmlParser] Invalid regex in ## suffix:', proc);
-        }
+    // Legado 约定: ##regex1##replacement1##regex2##replacement2...
+    // (成对处理，而不是逐个当作独立后处理器)
+    for (let i = 0; i + 1 < postProcessors.length; i += 2) {
+      const pattern = postProcessors[i];
+      const replacement = postProcessors[i + 1];
+      if (!pattern) continue;
+      try {
+        result = result.replace(new RegExp(pattern, 'g'), replacement);
+      } catch (e) {
+        console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
       }
     }
 
@@ -341,7 +333,7 @@ export class HtmlParser {
   }
 
   private buildHtml(el: HtmlElement): void {
-    let inner = '';
+    let inner: string = el.ownText;
     for (const child of el.children) {
       this.buildHtml(child);
       inner += child.outerHtml;

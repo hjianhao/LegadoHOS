@@ -290,8 +290,8 @@ export struct ChangeSourceSheet {
       // 对齐 Legado：搜索结果中只保留同书名/同作者的
       const filtered = this.filterResults(rawResults);
 
-      // 排序（对齐 Legado filterResults 中的排序逻辑）
-      this.results = filtered.sort((a: SearchResult, b: SearchResult) => {
+      // 展开合并结果：一条 SearchResult 可能包含多个源（sourceOrigins），换源面板需要逐源展示
+      this.results = this.expandCachedSources(filtered).sort((a: SearchResult, b: SearchResult) => {
         let sa = 0;
         let sb = 0;
         if (a.originUrl === this.currentOriginUrl) sa -= 1000;
@@ -323,14 +323,21 @@ export struct ChangeSourceSheet {
     return raw.filter(r => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (!rname) return false;
-      // 放宽匹配：精确匹配、互相包含，或关键字中包含书名的核心部分
+      // 放宽匹配：精确匹配 + 互相包含（含最小长度门限），防止残缺书名被误匹配
       if (rname === targetName) return true;
+      // rname 完全包含 targetName（搜索结果书名包含完整的目标书名）
       if (rname.includes(targetName)) return true;
-      if (targetName.includes(rname)) return true;
-      // 取中文核心部分（去掉常见后缀/前缀后再比对）
+      // targetName 包含 rname：仅当 rname 长度 ≥ 4 个非英文且 ≥ targetName 的 80% 才通过
+      if (targetName.includes(rname)) {
+        const cnLen = (s: string): number => s.replace(/[a-zA-Z0-9]/g, '').length;
+        const rl = cnLen(rname);
+        const tl = cnLen(targetName);
+        if (rl >= 4 && rl >= tl * 0.8) return true;
+      }
+      // 去核心分隔符后的精确匹配
       const rcore = rname.replace(/[的之·•\-—\s（(）)]/g, '');
       const tcore = targetName.replace(/[的之·•\-—\s（(）)]/g, '');
-      return rcore.includes(tcore) || tcore.includes(rcore);
+      return rcore === tcore;
     });
   }
 

@@ -442,6 +442,9 @@ export class SourceExecutor {
 
       let bodyText = '';
       if (method === 'POST') {
+        if (!headers['Content-Type'] && !headers['content-type']) {
+          headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
         bodyText = await NetUtil.httpPost(url, body || '', headers, 15000);
       } else {
         bodyText = await NetUtil.httpGet(url, headers, 15000);
@@ -815,12 +818,29 @@ export class SourceExecutor {
 
           const result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
           if (result && result.length > 0) {
-            contentParts.push(this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex));
+            const cleaned = this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex);
+            contentParts.push(cleaned);
+            console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars, cleaned', cleaned.length, 'chars');
+          } else {
+            console.info('[SrcEx] getContent page', page + 1, 'empty result, ruleBookContent=[' + source.ruleBookContent + '] htmlLen=' + pageHtml.length);
           }
 
           const nextRule = source.ruleBookContentNext || '';
-          if (!nextRule) break;
-          const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, nextRule), pageUrl);
+          // 兜底：如果 DB 中 ruleBookContentNext 为空，从 rawJson 解析 ruleContent.nextContentUrl
+          let nextFromRaw: string = '';
+          if (!nextRule) {
+            try {
+              const rawJson = (source as unknown as Record<string, Object>)['rawJson'] as string;
+              if (rawJson) {
+                const rj = JSON.parse(rawJson) as Record<string, Object>;
+                const rc = rj['ruleContent'] as Record<string, string>;
+                if (rc && rc['nextContentUrl']) nextFromRaw = rc['nextContentUrl'];
+              }
+            } catch (_e) { /* ignore */ }
+          }
+          const effectiveNextRule = nextRule || nextFromRaw;
+          if (!effectiveNextRule) break;
+          const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl);
           if (!nextUrl || visited.has(nextUrl)) break;
           pageUrl = nextUrl;
           pageHtml = await this.fetchWithOpts(pageUrl, headers);
@@ -967,12 +987,40 @@ export class SourceExecutor {
         if (reverseToc) {
           chapters.reverse();
         } else if (chapters.length > 1) {
-          // 通用排序：按标题中的数字排序
-          const getNum = (title: string): number => {
-            const m = title.match(/(\d+)/);
-            return m ? parseInt(m[1]) : 0;
+          // 通用排序：按标题中的数字排序（支持中文数字如"第四百九十八"）
+          const cnNumMap: Record<string, number> = {
+            '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
+            '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+            '十': 10, '百': 100, '千': 1000, '万': 10000,
           };
-          chapters.sort((a, b) => getNum(a.title) - getNum(b.title));
+          const extractChapterNum = (title: string): number => {
+            // 优先：阿拉伯数字
+            const arabicM = title.match(/(\d+)/);
+            if (arabicM) return parseInt(arabicM[1]);
+            // 中文数字：第xxx章 → xxx
+            const cnM = title.match(/第([零一二三四五六七八九十百千万]+)章/);
+            if (cnM) {
+              let cn = cnM[1];
+              let result = 0;
+              let section = 0;
+              for (let i = 0; i < cn.length; i++) {
+                const ch = cn.charAt(i);
+                const num = cnNumMap[ch];
+                if (num === undefined) continue;
+                if (num >= 10) {
+                  section = (section || 1) * num;
+                  result += section;
+                  section = 0;
+                } else {
+                  section = num;
+                }
+              }
+              result += section;
+              return result > 0 ? result : 0;
+            }
+            return 0;
+          };
+          chapters.sort((a, b) => extractChapterNum(a.title) - extractChapterNum(b.title));
         }
         chapters.forEach((ch, idx) => { ch.index = idx; });
         console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)');
@@ -1164,6 +1212,10 @@ export class SourceExecutor {
 
       // 封面
       let coverUrl = getCover(item);
+      // 兜底: 饿狼小说等通过正则从 bookUrl 生成封面URL，IMPORTANT DEBUG
+      if (coverUrl && idx < 3) {
+        console.info('[SrcEx] Cover OK idx=' + idx + ' url=' + coverUrl.substring(0, 80));
+      }
       if (!coverUrl) {
         // 取第一个图片（尝试多种 src 属性）
         const imgs = parser.querySelectorAll(item, 'img');
