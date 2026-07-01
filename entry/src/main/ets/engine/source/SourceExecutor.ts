@@ -174,7 +174,66 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
 
 function parseHeader(headerStr: string): Record<string, string> {
   if (!headerStr) return {};
-  try { return JSON.parse(headerStr) as Record<string, string>; } catch (_e) { return {}; }
+  const text = headerStr.trim();
+  if (!text) return {};
+  try {
+    return normalizeHeaderMap(JSON.parse(text) as Record<string, unknown>);
+  } catch (_e) {
+    // 部分 Legado 书源使用 {'User-Agent':'xxx'} 这类 JS 对象写法，非严格 JSON。
+  }
+
+  let body = text;
+  if (body.startsWith('{') && body.endsWith('}')) {
+    body = body.substring(1, body.length - 1);
+  }
+  const headers: Record<string, string> = {};
+  const quotedPair = /['"]?([^'",\n\r:]+)['"]?\s*:\s*(['"])(.*?)\2/g;
+  let foundQuoted = false;
+  let match: RegExpExecArray | null = quotedPair.exec(body);
+  while (match) {
+    const key = stripHeaderQuote(match[1]).trim();
+    if (key) {
+      headers[key] = match[3];
+      foundQuoted = true;
+    }
+    match = quotedPair.exec(body);
+  }
+  if (foundQuoted) return headers;
+
+  const parts = body.split(/[\n\r,]+/);
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i].trim();
+    if (!part) continue;
+    const colon = part.indexOf(':');
+    if (colon <= 0) continue;
+    const key = stripHeaderQuote(part.substring(0, colon)).trim();
+    const value = stripHeaderQuote(part.substring(colon + 1)).trim();
+    if (key) headers[key] = value;
+  }
+  return headers;
+}
+
+function normalizeHeaderMap(obj: Record<string, unknown>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  Object.keys(obj).forEach((key: string) => {
+    const value = obj[key];
+    if (value !== undefined && value !== null) {
+      headers[key] = String(value);
+    }
+  });
+  return headers;
+}
+
+function stripHeaderQuote(raw: string): string {
+  let text = raw.trim();
+  if (text.length >= 2) {
+    const first = text.charAt(0);
+    const last = text.charAt(text.length - 1);
+    if ((first === '\'' && last === '\'') || (first === '"' && last === '"')) {
+      text = text.substring(1, text.length - 1);
+    }
+  }
+  return text;
 }
 
 export class SourceExecutor {
@@ -716,6 +775,16 @@ export class SourceExecutor {
     return url;
   }
 
+  private extractBookIdFromUrl(url: string): string {
+    if (!url) return '';
+    const bookIdMatch = url.match(/bookid[=:]([^&#/?]+)/i);
+    if (bookIdMatch) return decodeURIComponent(bookIdMatch[1]);
+    const novelMatch = url.match(/\/novel\/([^/?#]+)/i);
+    if (novelMatch) return decodeURIComponent(novelMatch[1]);
+    const lastPathMatch = url.match(/\/([^/?#]+)(?:[?#].*)?$/);
+    return lastPathMatch ? decodeURIComponent(lastPathMatch[1]) : '';
+  }
+
   async getContent(source: BookSource, contentUrl: string, bookUrl?: string): Promise<string> {
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
     console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
@@ -1038,15 +1107,18 @@ export class SourceExecutor {
 
       // 无结果？尝试 ruleBookInfoTocUrl
       if (source.ruleBookInfoTocUrl) {
-        const idMatch = tocUrl.match(/bookid[=:](\d+)/i);
-        const bookId = idMatch ? idMatch[1] : '';
+        const bookId = this.extractBookIdFromUrl(tocUrl);
         const altUrl = source.ruleBookInfoTocUrl
           .replace(/\{\{bookUrl\}\}/g, tocUrl)
           .replace(/\{\{id\}\}/g, bookId)
           .replace(/\{\{\$\.resourceID\}\}/g, bookId)
           .replace(/\{\{[^}]*\}\}/g, '');
         if (altUrl && altUrl !== tocUrl && bookId) {
-          const altResp = await this.fetchWithOpts(altUrl, { 'Accept': 'application/json,*/*', 'Referer': source.sourceUrl || '' });
+          const altResp = await this.fetchWithOpts(altUrl, {
+            'Accept': 'application/json,*/*',
+            'Referer': source.sourceUrl || '',
+            ...parseHeader(source.header)
+          });
           if (altResp && altResp.length > 100) {
             let altChapters: BookSourceChapter[] = [];
             if (tocRules.toc.startsWith('$.')) {
@@ -1072,6 +1144,7 @@ export class SourceExecutor {
       console.warn('[SrcEx] getToc failed:', (err as Error).message);
       return [];
     }
+    return [];
   }
 
   // ============ JS 引擎加载 ============
