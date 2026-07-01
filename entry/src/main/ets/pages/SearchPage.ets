@@ -35,6 +35,26 @@ interface ParsedSearchScope {
   sourceUrls: string[];
 }
 
+interface SearchPageSnapshot {
+  keyword: string;
+  committedKeyword: string;
+  allResults: SearchResult[];
+  results: SearchResult[];
+  hasSearched: boolean;
+  manualStop: boolean;
+  hasMore: boolean;
+  currentPage: number;
+  processedSources: number;
+  totalSources: number;
+  layoutMode: number;
+  matchModeExact: boolean;
+  selectedSourceTypes: number[];
+  selectedGroups: string[];
+  selectedSourceUrls: string[];
+  scopeBySource: boolean;
+  savedAt: number;
+}
+
 @Entry
 @Component
 struct SearchPage {
@@ -58,6 +78,7 @@ struct SearchPage {
   @State showScopeSheet: boolean = false;
   @State showSettingsSheet: boolean = false;
   @State showClearHistoryDialog: boolean = false;
+  @State showRelaxFilterDialog: boolean = false;
   @State matchModeExact: boolean = false;
   @State layoutMode: number = 0; // 0=列表，1=按源分组
   @State selectedSourceTypes: number[] = [];
@@ -94,6 +115,7 @@ struct SearchPage {
       clearTimeout(this.queryHintTimer);
       this.queryHintTimer = -1;
     }
+    this.saveSearchSnapshot();
   }
 
   async initPage(): Promise<void> {
@@ -107,6 +129,7 @@ struct SearchPage {
     await this.loadSources();
     await this.loadHistory();
     await this.refreshShelfStates();
+    await this.restoreSearchSnapshot();
     await this.applyRouteParams();
   }
 
@@ -132,6 +155,79 @@ struct SearchPage {
       await s.put('search_match_mode', this.matchModeExact ? 1 : 0);
       await s.put('search_source_types', this.selectedSourceTypes);
       await s.put('search_scope', this.encodeSearchScope());
+    } catch (_e) { /* ignore */ }
+  }
+
+  async restoreSearchSnapshot(): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(getContext());
+      const empty: SearchPageSnapshot = {
+        keyword: '',
+        committedKeyword: '',
+        allResults: [],
+        results: [],
+        hasSearched: false,
+        manualStop: false,
+        hasMore: false,
+        currentPage: 1,
+        processedSources: 0,
+        totalSources: 0,
+        layoutMode: this.layoutMode,
+        matchModeExact: this.matchModeExact,
+        selectedSourceTypes: [],
+        selectedGroups: [],
+        selectedSourceUrls: [],
+        scopeBySource: false,
+        savedAt: 0,
+      };
+      const snap = await s.get<SearchPageSnapshot>('search_last_snapshot', empty);
+      if (!snap.committedKeyword || Date.now() - snap.savedAt > 24 * 60 * 60 * 1000) return;
+      this.keyword = snap.keyword || snap.committedKeyword;
+      this.committedKeyword = snap.committedKeyword;
+      this.allResults = snap.allResults || [];
+      this.results = snap.results || [];
+      this.hasSearched = snap.hasSearched;
+      this.manualStop = snap.manualStop;
+      this.hasMore = snap.hasMore;
+      this.currentPage = snap.currentPage || 1;
+      this.processedSources = snap.processedSources || snap.totalSources || 0;
+      this.totalSources = snap.totalSources || 0;
+      this.layoutMode = snap.layoutMode;
+      this.matchModeExact = snap.matchModeExact;
+      this.selectedSourceTypes = snap.selectedSourceTypes || [];
+      this.selectedGroups = snap.selectedGroups || [];
+      this.selectedSourceUrls = snap.selectedSourceUrls || [];
+      this.scopeBySource = snap.scopeBySource;
+      this.showSuggestions = false;
+    } catch (_e) { /* ignore */ }
+  }
+
+  async saveSearchSnapshot(): Promise<void> {
+    if (!this.committedKeyword || this.results.length === 0) return;
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(getContext());
+      const snap: SearchPageSnapshot = {
+        keyword: this.keyword,
+        committedKeyword: this.committedKeyword,
+        allResults: this.allResults.slice(0, 300),
+        results: this.results.slice(0, 300),
+        hasSearched: this.hasSearched,
+        manualStop: this.manualStop,
+        hasMore: this.hasMore,
+        currentPage: this.currentPage,
+        processedSources: this.processedSources,
+        totalSources: this.totalSources,
+        layoutMode: this.layoutMode,
+        matchModeExact: this.matchModeExact,
+        selectedSourceTypes: this.selectedSourceTypes,
+        selectedGroups: this.selectedGroups,
+        selectedSourceUrls: this.selectedSourceUrls,
+        scopeBySource: this.scopeBySource,
+        savedAt: Date.now(),
+      };
+      await s.put('search_last_snapshot', snap);
     } catch (_e) { /* ignore */ }
   }
 
@@ -254,6 +350,26 @@ struct SearchPage {
         await this.doSearch(key);
       }
     } catch (_e) { /* ignore */ }
+  }
+
+  hasRelaxableFilters(): boolean {
+    return this.selectedGroups.length > 0
+      || this.selectedSourceUrls.length > 0
+      || this.selectedSourceTypes.length > 0
+      || this.matchModeExact;
+  }
+
+  async relaxFiltersAndSearch(mode: number): Promise<void> {
+    if (mode === 0 || mode === 2) {
+      this.matchModeExact = false;
+    }
+    if (mode === 1 || mode === 2) {
+      this.selectedSourceTypes = [];
+      this.selectAllScope();
+    }
+    this.showRelaxFilterDialog = false;
+    await this.saveSearchPrefs();
+    this.doSearch(this.committedKeyword || this.keyword);
   }
 
   onQueryChanged(v: string): void {
@@ -601,6 +717,9 @@ struct SearchPage {
     if (runId === this.searchRunId) {
       this.isSearching = false;
       this.processedSources = this.totalSources;
+      if (this.results.length === 0 && this.hasRelaxableFilters()) {
+        this.showRelaxFilterDialog = true;
+      }
       this.refreshShelfStates();
       this.fetchMissingCovers();
     }
@@ -970,6 +1089,11 @@ struct SearchPage {
         this.buildClearHistoryDialog()
       }
 
+      if (this.showRelaxFilterDialog) {
+        this.buildDimLayer(() => { this.showRelaxFilterDialog = false; })
+        this.buildRelaxFilterDialog()
+      }
+
       if (this.showPreviewSheet) {
         this.buildDimLayer(() => { this.showPreviewSheet = false; })
         this.buildPreviewSheet()
@@ -1003,14 +1127,14 @@ struct SearchPage {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textColor())
           .layoutWeight(1)
-        this.buildIconAction('设', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
+        this.buildIconAction('⚙', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
           this.showSettingsSheet = true;
           this.showScopeSheet = false;
         })
-        this.buildIconAction('准', this.matchModeExact, () => {
+        this.buildIconAction('=', this.matchModeExact, () => {
           this.setMatchModeExact(!this.matchModeExact);
         })
-        this.buildIconAction('滤', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
+        this.buildIconAction('☰', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
           this.showScopeSheet = true;
           this.showSettingsSheet = false;
         })
@@ -1030,6 +1154,7 @@ struct SearchPage {
             .textAlign(TextAlign.Center)
           TextInput({ placeholder: '搜索书名或作者...', text: this.keyword })
             .height(42)
+            .defaultFocus(true)
             .layoutWeight(1)
             .backgroundColor(Color.Transparent)
             .fontSize(15)
@@ -1600,7 +1725,7 @@ struct SearchPage {
         .fontSize(12)
         .fontColor(this.subTextColor())
         .margin({ top: 4 })
-      if (this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0 || this.selectedSourceTypes.length > 0 || this.matchModeExact) {
+      if (this.hasRelaxableFilters()) {
         Button('放宽筛选')
           .fontSize(14)
           .fontColor('#FFFFFF')
@@ -1609,13 +1734,7 @@ struct SearchPage {
           .backgroundColor(this.primaryColor())
           .borderRadius(19)
           .margin({ top: 18 })
-          .onClick(() => {
-            this.matchModeExact = false;
-            this.selectedSourceTypes = [];
-            this.selectAllScope();
-            this.saveSearchPrefs();
-            this.doSearch(this.committedKeyword || this.keyword);
-          })
+          .onClick(() => { this.showRelaxFilterDialog = true; })
       }
     }
     .width('100%')
@@ -1913,6 +2032,65 @@ struct SearchPage {
     .backgroundColor(this.surfaceColor())
     .borderRadius(18)
     .position({ x: '9%', y: '38%' })
+  }
+
+  @Builder buildRelaxFilterDialog() {
+    Column() {
+      Text('放宽搜索条件')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.textColor())
+        .margin({ top: 20 })
+      Text('当前筛选可能过严，可以关闭精确匹配或切回全部书源后重新搜索。')
+        .fontSize(14)
+        .fontColor(this.subTextColor())
+        .lineHeight(20)
+        .textAlign(TextAlign.Center)
+        .padding({ left: 20, right: 20 })
+        .margin({ top: 10, bottom: 16 })
+      if (this.matchModeExact) {
+        Button('关闭精确匹配')
+          .fontSize(14)
+          .fontColor('#FFFFFF')
+          .width('100%')
+          .height(40)
+          .backgroundColor(this.primaryColor())
+          .borderRadius(20)
+          .margin({ bottom: 8 })
+          .onClick(() => { this.relaxFiltersAndSearch(0); })
+      }
+      if (this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0 || this.selectedSourceTypes.length > 0) {
+        Button('切回全部书源')
+          .fontSize(14)
+          .fontColor(this.primaryColor())
+          .width('100%')
+          .height(40)
+          .backgroundColor(this.surfaceAltColor())
+          .borderRadius(20)
+          .margin({ bottom: 8 })
+          .onClick(() => { this.relaxFiltersAndSearch(1); })
+      }
+      Button('全部放宽')
+        .fontSize(14)
+        .fontColor(this.textColor())
+        .width('100%')
+        .height(40)
+        .backgroundColor(this.surfaceAltColor())
+        .borderRadius(20)
+        .onClick(() => { this.relaxFiltersAndSearch(2); })
+      Text('取消')
+        .fontSize(14)
+        .fontColor(this.subTextColor())
+        .height(40)
+        .textAlign(TextAlign.Center)
+        .margin({ top: 8, bottom: 12 })
+        .onClick(() => { this.showRelaxFilterDialog = false; })
+    }
+    .width('82%')
+    .padding({ left: 20, right: 20 })
+    .backgroundColor(this.surfaceColor())
+    .borderRadius(18)
+    .position({ x: '9%', y: '30%' })
   }
 
   @Builder buildExpandedSourceSheet() {

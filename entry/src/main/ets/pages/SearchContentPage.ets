@@ -310,7 +310,11 @@ struct SearchContentPage {
     const end = Math.min(source.length, idx + len + 80);
     const prefix = start > 0 ? '...' : '';
     const suffix = end < source.length ? '...' : '';
-    const body = source.substring(start, end).replace(/\s+/g, ' ');
+    const rawBody = source.substring(start, end);
+    const relStart = Math.max(0, idx - start);
+    const relEnd = Math.min(rawBody.length, relStart + Math.max(len, 1));
+    const body = (rawBody.substring(0, relStart) + '【' + rawBody.substring(relStart, relEnd) + '】' + rawBody.substring(relEnd))
+      .replace(/\s+/g, ' ');
     return `${prefix}${body}${suffix}`;
   }
 
@@ -412,6 +416,7 @@ struct SearchContentPage {
         Row() {
           TextInput({ placeholder: '搜索章节内容', text: this.keyword })
             .height(42)
+            .defaultFocus(true)
             .layoutWeight(1)
             .backgroundColor(Color.Transparent)
             .fontSize(15)

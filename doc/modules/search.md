@@ -26,6 +26,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | 模块 | 文件 |
 |------|------|
 | 主搜索页 | `entry/src/main/ets/pages/SearchPage.ets` |
+| 书内搜索页 | `entry/src/main/ets/pages/SearchContentPage.ets` |
 | 搜索引擎 | `entry/src/main/ets/engine/source/SourceExecutor.ts` |
 | 搜索结果模型 | `entry/src/main/ets/model/SearchResult.ts` |
 | 搜索历史表 | `entry/src/main/ets/data/database/SearchKeywordTable.ts` |
@@ -61,7 +62,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 
 | # | 规格 | Android 行为 | 鸿蒙当前状态 | 差距说明 |
 |---|------|--------------|--------------|----------|
-| S-001 | 顶部搜索框 | 自动聚焦、单行输入、左侧搜索图标、IME Search 提交、右侧清空按钮 | 部分实现 | 鸿蒙有单行输入、左侧搜索图标、提交、清空；未见自动聚焦/弹键盘 |
+| S-001 | 顶部搜索框 | 自动聚焦、单行输入、左侧搜索图标、IME Search 提交、右侧清空按钮 | 已实现 | 鸿蒙有默认聚焦、单行输入、左侧搜索图标、提交和清空 |
 | S-002 | 搜索提交 | `trim()` 后非空提交，清空旧结果，从第 1 页搜索 | 已实现 | `doSearch()` 已处理关键词归一、清空旧状态、重置分页 |
 | S-003 | 输入防抖 | 输入变化 200ms 防抖同步 ViewModel，不实时搜索 | 已实现 | 输入变化后 200ms 防抖加载书架建议，不实时发起网络搜索 |
 | S-004 | 外部带关键词打开 | `SearchActivity.start(key)` 非空自动搜索 | 已实现 | 读取路由参数 `key` / `keyword`，非空时自动提交搜索 |
@@ -79,7 +80,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | S-016 | 匹配模式：普通/精确 | 顶部按钮切换，持久化 MATCH_MODE，变更后自动重搜 | 已实现 | 持久化 `search_match_mode`，已有提交关键词时切换会自动重搜 |
 | S-017 | 精确搜索策略 | Android 匹配书名、作者、分类，精确模式会影响结果收集和分页 | 已实现 | 按书名/作者完全匹配、分类匹配、书名/作者包含匹配保留结果，过滤其他项 |
 | S-018 | 空范围保护 | 无可用书源时报错提示 | 已实现 | Toast “当前范围没有可搜索书源” |
-| S-019 | 空结果放宽筛选 | Android 弹窗引导关闭精确或切回全部范围 | 部分实现 | 鸿蒙空态提供“放宽筛选”按钮，一次性关闭精确、类型和范围筛选 |
+| S-019 | 空结果放宽筛选 | Android 弹窗引导关闭精确或切回全部范围 | 已实现 | 无结果且筛选过严时弹窗引导关闭精确、切回全部书源或全部放宽 |
 | S-020 | 书源类型筛选 | Android 支持小说、漫画、音频 | 已实现 | 按 `sourceType` 动态展示并标注为小说/音频/漫画，变更后自动重搜 |
 | S-021 | 设置弹层 | Android 支持布局模式和书源类型 | 已实现 | 鸿蒙 `buildSettingsSheet()` 支持布局、类型、匹配 |
 | S-022 | 布局模式 | Android 支持列表/按源分组，持久化 | 已实现 | 鸿蒙支持 `layoutMode` 并持久化 `search_layout_mode` |
@@ -99,12 +100,12 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | S-036 | 按源分组结果 | Android 分组显示，每源可展开更多 | 已实现 | 鸿蒙支持按源分组、横向预览，并可打开单源结果 Sheet |
 | S-037 | 查看单源全部结果 | Android `ExpandedSourceSheet` 可对单源继续分页 | 已实现 | 点击分组“全部”打开单源 Sheet，支持该书源独立分页加载 |
 | S-038 | 点击搜索结果 | 打开书籍详情，携带 name/author/bookUrl/origin/cover | 已实现 | 鸿蒙 `goToBookInfo()` |
-| S-039 | 搜索结果缓存传递 | Android 返回详情后保留结果和滚动；详情可利用缓存换源 | 部分实现 | 鸿蒙进入详情传 `cachedSources`，但返回搜索页的滚动/搜索状态保持依赖页面实例，缺少显式保存恢复 |
-| S-040 | 结果滚动位置恢复 | Android 离开/返回保存 LazyList 位置 | 未实现 | 鸿蒙当前没有保存搜索列表滚动位置 |
-| S-041 | 搜索框视觉 | Android 使用 Material/Miuix SearchBar，图标按钮和 tooltip | 部分实现 | 搜索框已有搜索图标和清空按钮；设置/精确/筛选仍是文字按钮，Tooltip/无障碍仍弱于 Android |
+| S-039 | 搜索结果缓存传递 | Android 返回详情后保留结果和滚动；详情可利用缓存换源 | 已实现 | 鸿蒙进入详情传 `cachedSources`，并显式保存/恢复搜索词、筛选、页码和结果快照 |
+| S-040 | 结果滚动位置恢复 | Android 离开/返回保存 LazyList 位置 | 部分实现 | 已恢复搜索状态和结果，但未精确恢复列表像素滚动位置 |
+| S-041 | 搜索框视觉 | Android 使用 Material/Miuix SearchBar，图标按钮和 tooltip | 部分实现 | 搜索框已有搜索图标、清空按钮和符号化设置/精确/筛选按钮；Tooltip/无障碍仍弱于 Android |
 | S-042 | WebView 兜底 | Android 书源可触发 WebView；鸿蒙搜索页内挂隐藏 WebViewEngine | 已实现 | 鸿蒙 `WebViewEngine` 隐藏挂载，`SourceExecutor` 可检测 403/Cloudflare 后 WebView 获取 |
 | S-043 | 搜索历史数据表 | Android 使用 SearchKeyword 实体 | 已实现 | 主搜索页已使用 `SearchKeywordTable`，旧偏好历史仅用于迁移 |
-| S-044 | 书内搜索 | Android 书内搜索支持实时搜索、替换、正则、历史范围、定位当前章节 | 部分实现 | 已新增 `SearchContentPage` 和阅读页入口，支持实时搜索、停止、替换、正则、历史范围、定位/回跳；结果高亮为摘要级，尚非富文本逐词高亮 |
+| S-044 | 书内搜索 | Android 书内搜索支持实时搜索、替换、正则、历史范围、定位当前章节 | 部分实现 | 已新增 `SearchContentPage` 和阅读页入口，支持实时搜索、停止、替换、正则、历史范围、定位/回跳；摘要中以命中标记显示关键词，尚非富文本逐词高亮 |
 
 ---
 
@@ -458,7 +459,7 @@ Android 还有独立的书内搜索框，功能包括：
 | 正则开关 | 关键词按正则处理 | 已实现 |
 | 停止搜索 | FAB 停止当前搜索 | 已实现 |
 | 定位当前章节 | 搜索完成后 FAB 定位当前章节结果 | 已实现 |
-| 结果高亮 | 标题/内容高亮关键词 | 部分实现 |
+| 结果高亮 | 标题/内容高亮关键词 | 部分实现：摘要用命中标记，非富文本逐词高亮 |
 | 点击结果返回阅读页定位 | 传回结果集合和 index | 已实现 |
 
 鸿蒙已新增独立 `SearchContentPage`，阅读页底部菜单提供入口。搜索时优先使用章节缓存，未缓存正文会按当前书源逐章拉取并回写缓存；点击结果通过 `ChapterCache.targetIndex` 返回阅读页定位章节。
@@ -471,9 +472,7 @@ Android 还有独立的书内搜索框，功能包括：
 
 | 项目 | 说明 |
 |------|------|
-| 滚动位置保存 | 进入详情返回后恢复列表位置 |
-| 图标化按钮 | 继续替换 `设/准/滤/<` 等文字按钮 |
-| 自动聚焦与键盘 | 搜索页进入时可选自动聚焦并弹键盘 |
+| 滚动像素位置保存 | 进入详情返回后恢复列表精确位置 |
 | Tooltip/无障碍描述 | 为设置、精确、筛选、清空、停止等按钮提供语义 |
 
 ### P1：书内搜索后续细化
