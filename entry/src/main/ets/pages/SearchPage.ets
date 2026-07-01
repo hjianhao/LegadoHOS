@@ -69,9 +69,18 @@ struct SearchPage {
   @State shelfBookUrls: string[] = [];
   @State shelfNameAuthorKeys: string[] = [];
   @State showPreviewSheet: boolean = false;
+  @State showExpandedSourceSheet: boolean = false;
+  @State expandedSourceName: string = '';
+  @State expandedSourceSheetUrl: string = '';
+  @State expandedSourceBooks: SearchResult[] = [];
+  @State expandedSourcePage: number = 1;
+  @State expandedSourceLoading: boolean = false;
+  @State expandedSourceHasMore: boolean = true;
+  @State expandedSourceError: string = '';
 
   private searchRunId: number = 0;
   private hintRunId: number = 0;
+  private expandedSourceRunId: number = 0;
   private queryHintTimer: number = -1;
   private initialized: boolean = false;
   private previewItem: SearchResult | null = null;
@@ -547,6 +556,7 @@ struct SearchPage {
     this.showSuggestions = false;
     this.showScopeSheet = false;
     this.showSettingsSheet = false;
+    this.showExpandedSourceSheet = false;
     this.expandedSourceUrl = '';
     this.allResults = [];
     this.results = [];
@@ -635,6 +645,63 @@ struct SearchPage {
     if (runId === this.searchRunId) {
       this.isLoadingMore = false;
       this.processedSources = this.totalSources;
+    }
+  }
+
+  openExpandedSourceSheet(group: SearchSourceGroup): void {
+    this.expandedSourceRunId++;
+    this.expandedSourceName = group.sourceName;
+    this.expandedSourceSheetUrl = group.sourceUrl;
+    this.expandedSourceBooks = group.items;
+    this.expandedSourcePage = Math.max(1, this.currentPage);
+    this.expandedSourceLoading = false;
+    this.expandedSourceHasMore = !!this.committedKeyword;
+    this.expandedSourceError = '';
+    this.showExpandedSourceSheet = true;
+  }
+
+  mergeExpandedSourceItems(base: SearchResult[], incoming: SearchResult[]): SearchResult[] {
+    const map = new Map<string, SearchResult>();
+    for (const item of base) {
+      map.set((item.noteUrl || item.key || item.name + item.author), item);
+    }
+    for (const item of incoming) {
+      const key = item.noteUrl || item.key || item.name + item.author;
+      if (!map.has(key)) map.set(key, item);
+    }
+    return Array.from(map.values());
+  }
+
+  async loadMoreExpandedSource(): Promise<void> {
+    if (this.expandedSourceLoading || !this.expandedSourceHasMore || !this.committedKeyword) return;
+    const source = this.sources.find((item: BookSource): boolean => item.sourceUrl === this.expandedSourceSheetUrl);
+    if (!source) {
+      this.expandedSourceError = '未找到该书源';
+      this.expandedSourceHasMore = false;
+      return;
+    }
+    const nextPage = this.expandedSourcePage + 1;
+    const runId = ++this.expandedSourceRunId;
+    const base = this.expandedSourceBooks;
+    this.expandedSourceLoading = true;
+    this.expandedSourceError = '';
+    try {
+      const pageResults = await globalSourceExecutor.search(this.committedKeyword, [source], undefined, nextPage);
+      if (runId !== this.expandedSourceRunId) return;
+      const merged = this.mergeExpandedSourceItems(base, pageResults);
+      this.expandedSourceBooks = merged;
+      this.expandedSourcePage = nextPage;
+      if (pageResults.length === 0 || merged.length <= base.length) {
+        this.expandedSourceHasMore = false;
+        this.expandedSourceError = '没有更多结果';
+      }
+    } catch (_e) {
+      if (runId === this.expandedSourceRunId) {
+        this.expandedSourceError = '加载更多失败';
+      }
+    }
+    if (runId === this.expandedSourceRunId) {
+      this.expandedSourceLoading = false;
     }
   }
 
@@ -906,6 +973,14 @@ struct SearchPage {
       if (this.showPreviewSheet) {
         this.buildDimLayer(() => { this.showPreviewSheet = false; })
         this.buildPreviewSheet()
+      }
+
+      if (this.showExpandedSourceSheet) {
+        this.buildDimLayer(() => {
+          this.expandedSourceRunId++;
+          this.showExpandedSourceSheet = false;
+        })
+        this.buildExpandedSourceSheet()
       }
     }
     .width('100%')
@@ -1290,14 +1365,10 @@ struct SearchPage {
                 .backgroundColor(this.surfaceAltColor())
                 .borderRadius(10)
                 .margin({ right: 8 })
-              if (group.items.length > 6) {
-                Text(this.expandedSourceUrl === group.sourceUrl ? '收起' : '全部')
-                  .fontSize(12)
-                  .fontColor(this.primaryColor())
-                  .onClick(() => {
-                    this.expandedSourceUrl = this.expandedSourceUrl === group.sourceUrl ? '' : group.sourceUrl;
-                  })
-              }
+              Text('全部')
+                .fontSize(12)
+                .fontColor(this.primaryColor())
+                .onClick(() => { this.openExpandedSourceSheet(group); })
             }
             .width('100%')
             .padding({ left: 16, right: 16, top: 10, bottom: 8 })
@@ -1842,6 +1913,91 @@ struct SearchPage {
     .backgroundColor(this.surfaceColor())
     .borderRadius(18)
     .position({ x: '9%', y: '38%' })
+  }
+
+  @Builder buildExpandedSourceSheet() {
+    Column() {
+      Row() {
+        Column() {
+          Text(this.expandedSourceName || '书源结果')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.textColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.expandedSourceBooks.length + ' 本 · 第 ' + this.expandedSourcePage + ' 页')
+            .fontSize(12)
+            .fontColor(this.subTextColor())
+            .margin({ top: 3 })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Text('关闭')
+          .fontSize(14)
+          .fontColor(this.primaryColor())
+          .onClick(() => {
+            this.expandedSourceRunId++;
+            this.showExpandedSourceSheet = false;
+          })
+      }
+      .width('100%')
+      .height(58)
+      .padding({ left: 18, right: 18 })
+
+      List({ space: 1 }) {
+        ForEach(this.expandedSourceBooks, (item: SearchResult) => {
+          ListItem() {
+            this.buildBookListItem(item)
+          }
+        }, (item: SearchResult): string => item.key + item.noteUrl)
+
+        ListItem() {
+          Column() {
+            if (this.expandedSourceLoading) {
+              LoadingProgress()
+                .width(22)
+                .height(22)
+                .color(this.primaryColor())
+              Text('正在加载该书源下一页')
+                .fontSize(12)
+                .fontColor(this.subTextColor())
+                .margin({ top: 8 })
+            } else if (this.expandedSourceHasMore) {
+              Button('加载更多')
+                .fontSize(14)
+                .fontColor(this.primaryColor())
+                .height(38)
+                .padding({ left: 18, right: 18 })
+                .backgroundColor(this.surfaceAltColor())
+                .borderRadius(19)
+                .onClick(() => { this.loadMoreExpandedSource(); })
+            } else if (this.expandedSourceError) {
+              Text(this.expandedSourceError)
+                .fontSize(12)
+                .fontColor(this.subTextColor())
+            }
+          }
+          .width('100%')
+          .height(72)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+        }
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .divider({ strokeWidth: 0.5, color: this.isDark ? '#333333' : '#E7E7E7' })
+      .onReachEnd(() => {
+        if (this.expandedSourceHasMore && !this.expandedSourceLoading) {
+          this.loadMoreExpandedSource();
+        }
+      })
+    }
+    .width('100%')
+    .height('82%')
+    .padding({ bottom: 18 })
+    .backgroundColor(this.surfaceColor())
+    .borderRadius({ topLeft: 20, topRight: 20 })
+    .position({ x: 0, y: '18%' })
   }
 
   @Builder buildPreviewSheet() {
