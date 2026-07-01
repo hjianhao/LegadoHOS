@@ -114,8 +114,12 @@ struct SearchPage {
   }
 
   removeHistory(idx: number): void {
-    this.history.splice(idx, 1);
-    this.history = [...this.history];
+    // STATE-002: use filter instead of splice to trigger re-render
+    const next: string[] = [];
+    for (let i = 0; i < this.history.length; i++) {
+      if (i !== idx) next.push(this.history[i]);
+    }
+    this.history = next;
     this.saveHistory();
     this.showSuggestions = this.keyword.trim().length > 0 || this.history.length > 0 || this.bookshelfHints.length > 0;
   }
