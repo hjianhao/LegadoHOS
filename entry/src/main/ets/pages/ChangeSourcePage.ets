@@ -17,7 +17,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSourcesCacheTable, SourceCacheEntry } from '../data/database/BookSourcesCacheTable';
 import { BookSource } from '../model/BookSource';
-import { SearchResult, createSearchResult, getBookNameKey } from '../model/SearchResult';
+import { SearchResult, createSearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SourceSwitchStore } from '../util/SourceSwitchStore';
 
@@ -99,7 +99,7 @@ export struct ChangeSourcePage {
       r.searchTime = Date.now();
       r.sourceCount = 0;
       r.sourceOrigins = [c.sourceName];
-      r.sourceUrls = [c.sourceUrl];
+      r.sourceOriginUrls = [c.sourceUrl];
       r.sourceNoteUrls = [c.noteUrl];
       return r;
     });
@@ -216,8 +216,8 @@ export struct ChangeSourcePage {
         for (let i = 0; i < r.sourceOrigins.length; i++) {
           allSources.push({
             sourceName: r.sourceOrigins[i] || '',
-            sourceUrl: r.sourceUrls[i] || '',
-            noteUrl: r.sourceNoteUrls[i] || '',
+            sourceUrl: (r.sourceOriginUrls || [])[i] || '',
+            noteUrl: (r.sourceNoteUrls || [])[i] || '',
             coverUrl: r.coverUrl || '',
             kind: r.kind || '',
             wordCount: r.wordCount || '',
@@ -230,102 +230,68 @@ export struct ChangeSourcePage {
     } catch (_e) { /* ignore */ }
   }
 
-	  /** 过滤结果：精确匹配书名（换源场景只需要同一本书的源） */
-	  private filterResults(raw: SearchResult[]): SearchResult[] {
-	    const targetName = this.bookName;
-	    const targetKey = getBookNameKey(targetName);
-	    console.info('[ChangeSrc] filterResults: bookName="' + this.bookName
-	      + '" targetKey="' + targetKey + '" totalRaw=' + raw.length);
-	    if (!targetKey) return raw;
-	    const matched = raw.filter(r => {
-	      const rKey = getBookNameKey(r.name || '');
-	      // 1. 归一化键精确匹配
-	      if (rKey === targetKey) return true;
-	      // 2. 去空格后包含匹配
-	      const cleanTarget = targetName.replace(/\s/g, '');
-	      const cleanName = (r.name || '').replace(/\s/g, '');
-	      if (cleanName.includes(cleanTarget) || cleanTarget.includes(cleanName)) return true;
-	      console.info('[ChangeSrc]  FILTERED_OUT: name="' + (r.name || '') + '"');
-	      return false;
-	    });
-		    // 3. 按归一化 key 再次合并（兼容同书不同 merge key 导致的重复条目）
-		    const dedupMap = new Map<string, SearchResult>();
-		    for (const r of matched) {
-		      const key = getBookNameKey(r.name || '');
-		      const existing = dedupMap.get(key);
-		      if (existing) {
-		        // 合并源信息
-		        existing.sourceCount += r.sourceCount;
-		        // 手动合并去重（ArkTS 不支持 Set + 展开）
-		        const seenOrigins = new Set<string>();
-		        const mergedOrigins: string[] = [];
-		        for (const o of existing.sourceOrigins.concat(r.sourceOrigins)) {
-		          if (!seenOrigins.has(o)) { seenOrigins.add(o); mergedOrigins.push(o); }
-		        }
-		        existing.sourceOrigins = mergedOrigins;
-		        const seenUrls = new Set<string>();
-		        const mergedUrls: string[] = [];
-		        for (const u of existing.sourceUrls.concat(r.sourceUrls || [])) {
-		          if (!seenUrls.has(u)) { seenUrls.add(u); mergedUrls.push(u); }
-		        }
-		        existing.sourceUrls = mergedUrls;
-		        const seenNoteUrls = new Set<string>();
-		        const mergedNoteUrls: string[] = [];
-		        for (const nu of existing.sourceNoteUrls.concat(r.sourceNoteUrls || [])) {
-		          if (!seenNoteUrls.has(nu)) { seenNoteUrls.add(nu); mergedNoteUrls.push(nu); }
-		        }
-		        existing.sourceNoteUrls = mergedNoteUrls;
-		        // 保留更好的作者
-		        if (r.author && (!existing.author || existing.author.length > r.author.length)) {
-		          existing.author = r.author;
-		        }
-		      } else {
-		        // 手动复制 r（ArkTS 不支持对象展开）
-		        const copy: SearchResult = {
-		          key: r.key, name: r.name, author: r.author,
-		          coverUrl: r.coverUrl, noteUrl: r.noteUrl,
-		          origin: r.origin, originUrl: r.originUrl,
-		          kind: r.kind, wordCount: r.wordCount, lastUpdateTime: r.lastUpdateTime,
-		          introduce: r.introduce, helperMsg: r.helperMsg,
-		          duration: r.duration, searchTime: r.searchTime,
-		          sourceCount: r.sourceCount,
-		          sourceOrigins: r.sourceOrigins,
-		          sourceUrls: r.sourceUrls,
-		          sourceNoteUrls: r.sourceNoteUrls,
-		        };
-		        dedupMap.set(key, copy);
-		      }
-		    }
-			    // 展开：每个去重结果拆成每源一行，展示格式与缓存一致
-			    const expanded: SearchResult[] = [];
-			    const entries = Array.from(dedupMap.entries());
-			    for (const ent of entries) {
-			      const merged = ent[1];
-			      for (let i = 0; i < merged.sourceOrigins.length; i++) {
-			        const row = createSearchResult();
-			        row.name = merged.name;
-			        row.author = merged.author;
-			        row.coverUrl = merged.coverUrl;
-			        row.noteUrl = merged.sourceNoteUrls[i] || merged.noteUrl;
-			        row.origin = merged.sourceOrigins[i] || '未知';
-			        row.originUrl = merged.sourceUrls[i] || '';
-			        row.kind = merged.kind;
-			        row.wordCount = merged.wordCount;
-			        row.lastUpdateTime = merged.lastUpdateTime;
-			        row.introduce = merged.introduce;
-			        row.sourceCount = 1;
-			        row.sourceOrigins = [row.origin];
-			        row.sourceUrls = [row.originUrl];
-			        row.sourceNoteUrls = [row.noteUrl];
-			        expanded.push(row);
-			      }
-			    }
-			    console.info('[ChangeSrc] filterResults kept=' + matched.length + ' dedup=' + dedupMap.size + ' expand=' + expanded.length + '/' + raw.length);
-			    for (const k of expanded) {
-			      console.info('[ChangeSrc]  KEPT: origin="' + (k.origin || '') + '"');
-			    }
-			    return expanded;
-	  }
+  /** 过滤结果：精确匹配书名（换源场景只需要同一本书的源） */
+  private filterResults(raw: SearchResult[]): SearchResult[] {
+    const targetName = this.bookName.replace(/\s/g, '');
+    console.info('[ChangeSrc] filterResults: bookName="' + this.bookName
+      + '" totalRaw=' + raw.length);
+    if (!targetName) return raw;
+    const matched = raw.filter(r => {
+      const rname = (r.name || '').replace(/\s/g, '');
+      if (!rname) return false;
+      // 1. 精确匹配
+      if (rname === targetName) return true;
+      // 2. 搜索结果书名包含目标书名
+      if (rname.includes(targetName)) return true;
+      // 3. 目标书名包含搜索结果书名（加长度门限）
+      if (targetName.includes(rname)) {
+        const cnLen = (s: string): number => s.replace(/[a-zA-Z0-9]/g, '').length;
+        if (cnLen(rname) >= 4 && cnLen(rname) >= cnLen(targetName) * 0.8) return true;
+      }
+      // 4. 去核心分隔符后精确匹配
+      const strip = (s: string): string => s.replace(/[的之·•\-—\s（(）)]/g, '');
+      if (strip(rname) === strip(targetName)) return true;
+      console.info('[ChangeSrc]  FILTERED_OUT: name="' + (r.name || '') + '"');
+      return false;
+    });
+    // 按（name, originUrl）去重
+    const dedupMap = new Map<string, SearchResult>();
+    for (const r of matched) {
+      const dedupKey = (r.name || '') + '|' + (r.originUrl || '');
+      const existing = dedupMap.get(dedupKey);
+      if (existing) {
+        if (!existing.sourceOrigins.includes(r.origin)) {
+          existing.sourceOrigins = existing.sourceOrigins.concat([r.origin]);
+        }
+        existing.sourceCount = existing.sourceOrigins.length;
+        if (!(existing.sourceOriginUrls || []).includes(r.originUrl)) {
+          existing.sourceOriginUrls = (existing.sourceOriginUrls || []).concat([r.originUrl]);
+        }
+        if (!(existing.sourceNoteUrls || []).includes(r.noteUrl)) {
+          existing.sourceNoteUrls = (existing.sourceNoteUrls || []).concat([r.noteUrl]);
+        }
+        if (!existing.coverUrl && r.coverUrl) {
+          existing.coverUrl = r.coverUrl;
+        }
+      } else {
+        dedupMap.set(dedupKey, {
+          key: r.key, name: r.name, author: r.author,
+          coverUrl: r.coverUrl, noteUrl: r.noteUrl,
+          origin: r.origin, originUrl: r.originUrl,
+          kind: r.kind, wordCount: r.wordCount, lastUpdateTime: r.lastUpdateTime,
+          latestChapterTitle: r.latestChapterTitle,
+          introduce: r.introduce, helperMsg: r.helperMsg,
+          duration: r.duration, searchTime: r.searchTime,
+          sourceCount: r.sourceCount,
+          sourceOrigins: r.sourceOrigins,
+          sourceOriginUrls: r.sourceOriginUrls,
+          sourceNoteUrls: r.sourceNoteUrls,
+        });
+      }
+    }
+    console.info('[ChangeSrc] filterResults matched=' + matched.length + ' dedup=' + dedupMap.size + '/' + raw.length);
+    return Array.from(dedupMap.values());
+  }
 
   /** 选择源并返回 */
   onSourceSelect(item: SearchResult): void {

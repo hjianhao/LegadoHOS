@@ -158,8 +158,9 @@ export struct ChapterListPage {
       const t = ch.title.trim();
       if (t.length < 1) continue;
       const hasDigits = /\d/.test(t);
+      const hasCnChapter = /第[零一二三四五六七八九十百千万]+章/.test(t);
       const hasVol = /卷|部分|篇\s*$|部\s*$/.test(t);
-      if ((!hasDigits && t.length <= 10) || hasVol) {
+      if ((!hasDigits && !hasCnChapter && t.length <= 10) || hasVol) {
         ch.isVolume = true;
         volumeCount++;
       } else {
@@ -173,9 +174,34 @@ export struct ChapterListPage {
   /** 确保目录排序正确（依赖 getToc 已排序，仅做最终兜底反转） */
   ensureAscendingOrder(): void {
     if (this.chapters_.length < 3) return;
-    const getNum = (s: string): number => {
-      const m = s.match(/(\d+)/);
-      return m ? parseInt(m[1]) : -1;
+    const cnNumMap: Record<string, number> = {
+      '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
+      '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+      '十': 10, '百': 100, '千': 1000, '万': 10000,
+    };
+    const extractNum = (s: string): number => {
+      const arabicM = s.match(/(\d+)/);
+      if (arabicM) return parseInt(arabicM[1]);
+      const cnM = s.match(/第([零一二三四五六七八九十百千万]+)章/);
+      if (cnM) {
+        let cn = cnM[1];
+        let result = 0;
+        let section = 0;
+        for (let i = 0; i < cn.length; i++) {
+          const nv = cnNumMap[cn.charAt(i)];
+          if (nv === undefined) continue;
+          if (nv >= 10) {
+            section = (section || 1) * nv;
+            result += section;
+            section = 0;
+          } else {
+            section = nv;
+          }
+        }
+        result += section;
+        return result > 0 ? result : -1;
+      }
+      return -1;
     };
     // 等距采样20个点，如果多数递减则反转（兜底 getToc 未处理的场景）
     let ascCount = 0, descCount = 0;
@@ -183,7 +209,7 @@ export struct ChapterListPage {
     const step = Math.max(1, Math.floor(this.chapters_.length / sampleCount));
     let prevNum = -1;
     for (let i = 0; i < this.chapters_.length; i += step) {
-      const n = getNum(this.chapters_[i].title);
+      const n = extractNum(this.chapters_[i].title);
       if (n > 0 && prevNum > 0) {
         if (n > prevNum) ascCount++;
         else if (n < prevNum) descCount++;
