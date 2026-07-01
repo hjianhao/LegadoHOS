@@ -3,6 +3,7 @@
     "pages/MainPage",
     "pages/SettingsPage",
     "pages/SearchPage",
+    "pages/SearchContentPage",
     "pages/ReadPage",
     "pages/BookInfoPage",
     "pages/BookSourcePage",
