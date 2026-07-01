@@ -288,14 +288,24 @@ export struct BookInfoPage {
       const bookTable = new BookTable(db);
 
       // 去重检查：严格按 bookUrl 匹配，不同源的书允许同名
+      const now = Date.now();
       if (this.noteUrl) {
         const existing = await bookTable.getBookByUrl(this.noteUrl);
         if (existing) {
           if (!existing.isShelf) {
             existing.isShelf = true;
-            existing.updateTime = Date.now();
-            await bookTable.updateBook(existing);
+            existing.updateTime = now;
           }
+          // 始终用详情页最新数据更新关键字段（包括 coverUrl）
+          if (this.coverUrl && !existing.coverUrl) existing.coverUrl = this.coverUrl;
+          if (this.customCoverPath && !existing.customCoverPath) existing.customCoverPath = this.customCoverPath;
+          if (this.kind && !existing.kind) existing.kind = this.kind;
+          if (this.wordCount && !existing.wordCount) existing.wordCount = this.wordCount;
+          if (this.introduce && !existing.introduce) existing.introduce = this.introduce;
+          if (this.origin && !existing.origin) existing.origin = this.origin;
+          if (this.originUrl && !existing.originUrl) existing.originUrl = this.originUrl;
+          existing.updateTime = now;
+          await bookTable.updateBook(existing);
           this.isInShelf = true;
           this.bookId = existing.id;
           this.groupId = existing.groupId;
@@ -312,7 +322,7 @@ export struct BookInfoPage {
         name: this.bookName,
         author: this.bookAuthor,
         coverUrl: this.coverUrl,
-        customCoverPath: '',
+        customCoverPath: this.customCoverPath,
         bookUrl: this.noteUrl,
         origin: this.origin,
         originUrl: this.originUrl,
