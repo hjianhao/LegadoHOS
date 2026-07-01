@@ -75,7 +75,7 @@ export class CacheManager {
     try {
       const rdb = AppDatabase.getInstance().rdbStore;
       // 清空章节内容（保留元数据）
-      await rdb.executeSql('UPDATE chapters SET content = \'\', is_cached = 0');
+      await rdb.executeSql('UPDATE chapters SET content = \'\', content_length = 0, is_cached = 0, is_downloaded = 0');
       // 清空缓存表
       await rdb.executeSql('DELETE FROM caches');
       console.info('[CacheManager] All cache cleared');
@@ -91,7 +91,7 @@ export class CacheManager {
     try {
       const rdb = AppDatabase.getInstance().rdbStore;
       await rdb.executeSql(
-        'UPDATE chapters SET content = \'\', is_cached = 0 WHERE book_id = ?',
+        'UPDATE chapters SET content = \'\', content_length = 0, is_cached = 0, is_downloaded = 0 WHERE book_id = ?',
         [bookId]
       );
     } catch (err) {

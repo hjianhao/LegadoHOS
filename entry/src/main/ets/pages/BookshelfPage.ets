@@ -8,7 +8,7 @@
  * - 排序切换：最后阅读 / 书名 / 更新时间
  * - 布局切换：列表 / 网格（3列）
  * - 每个条目：封面、书名、作者、当前章节、最新章节、更新数徽章、进度条
- * - 点击阅读 / 长按菜单(详情/删除)
+ * - 点击阅读 / 长按菜单(详情/清缓存/删除)
  */
 import { Book } from '../model/Book';
 import { AppTheme } from '../theme/AppTheme';
@@ -457,12 +457,37 @@ export struct BookshelfPage {
     }
   }
 
+  private confirmClearBookCache(book: Book): void {
+    promptAction.showDialog({
+      title: '清除缓存',
+      message: `清除《${book.name}》已缓存的章节内容？目录和阅读进度会保留。`,
+      buttons: [
+        { text: '取消', color: '#888' },
+        { text: '清除', color: '#FF9800' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) this.clearBookCache(book);
+    });
+  }
+
+  private async clearBookCache(book: Book): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      await chapterDao.clearContentByBookId(book.id);
+      promptAction.showToast({ message: '已清除《' + book.name + '》缓存', duration: 1500 });
+    } catch (_e) {
+      promptAction.showToast({ message: '清除缓存失败', duration: 1500 });
+    }
+  }
+
   showContextMenu(book: Book): void {
     promptAction.showDialog({
       title: book.name,
       message: '作者: ' + (book.author || '未知'),
       buttons: [
         { text: '详情', color: '#0078D7' },
+        { text: '清除缓存', color: '#FF9800' },
         { text: '删除', color: '#FF5722' },
         { text: '取消', color: '#888' }
       ]
@@ -475,6 +500,8 @@ export struct BookshelfPage {
           introduce: book.introduce || '', kind: book.kind || ''
         }});
       } else if (idx === 1) {
+        this.confirmClearBookCache(book);
+      } else if (idx === 2) {
         this.confirmRemove(book);
       }
     });

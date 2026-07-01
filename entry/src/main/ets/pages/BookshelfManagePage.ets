@@ -133,7 +133,7 @@ struct BookshelfManagePage {
     try {
       const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
       for (const id of this.selectedBookIds) {
-        await chapterDao.deleteChaptersByBookId(id);
+        await chapterDao.clearContentByBookId(id);
       }
       promptAction.showToast({ message: '已清除章节缓存', duration: 1500 });
       await this.loadData();

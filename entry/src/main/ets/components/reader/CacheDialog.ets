@@ -27,6 +27,7 @@ export struct CacheDialog {
   /** 外部传入的书籍信息 */
   bookName: string = '';
   bookOriginUrl: string = '';
+  bookId: number = -1;
   source: BookSource | null = null;
   chapters: Object[] = [];
   totalChapters: number = 0;
@@ -215,8 +216,15 @@ export struct CacheDialog {
       const db = AppDatabase.getInstance().rdbStore;
       const chapterTable = new ChapterTable(db);
       const bookTable = new BookTable(db);
-      const book = await bookTable.getBookByName(this.bookName, '');
-      const bookId = book ? book.id : 0;
+      let bookId = this.bookId;
+      if (bookId <= 0 && this.bookOriginUrl) {
+        const bookByUrl = await bookTable.getBookByUrl(this.bookOriginUrl);
+        if (bookByUrl) bookId = bookByUrl.id;
+      }
+      if (bookId <= 0) {
+        const book = await bookTable.getBookByName(this.bookName, '');
+        if (book) bookId = book.id;
+      }
 
       for (let idx = startIdx; idx <= endIdx; idx++) {
         if (!this.isCaching) break; // 允许取消

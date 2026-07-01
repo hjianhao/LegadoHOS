@@ -66,13 +66,23 @@ function resolveFieldRule(rule: string, fn: (subRule: string) => string): string
   return values[0] || '';
 }
 
-function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
+function replaceSearchTemplateVars(template: string, keyword: string, page: number): string {
   const encoded = encodeURIComponent(keyword);
-  let url = template
-    .replace(/\{\{key\}\}/g, encoded)
-    .replace(/\{\{keyword\}\}/g, encoded)
-    .replace(/\{\{page\}\}/g, String(page))
-    .replace(/\{\{pageNum\}\}/g, String(page + 1));
+  return template
+    .replace(/\{\{\s*(page|pageNum)\s*([+-])\s*(\d+)\s*\}\}/g,
+      (_match: string, name: string, op: string, rawNum: string): string => {
+        const base = name === 'pageNum' ? page + 1 : page;
+        const offset = parseInt(rawNum, 10);
+        return String(op === '-' ? base - offset : base + offset);
+      })
+    .replace(/\{\{\s*key\s*\}\}/g, encoded)
+    .replace(/\{\{\s*keyword\s*\}\}/g, encoded)
+    .replace(/\{\{\s*page\s*\}\}/g, String(page))
+    .replace(/\{\{\s*pageNum\s*\}\}/g, String(page + 1));
+}
+
+function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
+  let url = replaceSearchTemplateVars(template, keyword, page);
   // 移除剩余未处理的 {{}} JS 表达式
   url = url.replace(/\{\{[^}]*\}\}/g, '');
 
@@ -123,10 +133,7 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     try {
       const opts = JSON.parse(jsonOptMatch[2]);
       if (opts.method) method = opts.method.toUpperCase();
-      if (opts.body) body = opts.body
-        .replace(/\{\{key\}\}/g, encoded)
-        .replace(/\{\{keyword\}\}/g, encoded)
-        .replace(/\{\{page\}\}/g, String(page));
+      if (opts.body) body = replaceSearchTemplateVars(opts.body, keyword, page);
       if (opts.charset) charset = opts.charset;
       if (opts.webView !== undefined) webView = !!opts.webView;
       if (opts.webview !== undefined) webView = !!opts.webview;
@@ -138,10 +145,10 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
       if (charsetMatch) charset = charsetMatch[1];
       const bodyMatch = raw.match(/'body'\s*:\s*'(.*)'\s*[,}]?\s*$/);
       if (bodyMatch) {
-        body = bodyMatch[1].replace(/\{\{key\}\}/g, encoded).replace(/\{\{keyword\}\}/g, encoded).replace(/\{\{page\}\}/g, String(page));
+        body = replaceSearchTemplateVars(bodyMatch[1], keyword, page);
       } else {
         const bodyMatch2 = raw.match(/'body'\s*:\s*'(.*)'\s*[,}]/);
-        if (bodyMatch2) body = bodyMatch2[1].replace(/\{\{key\}\}/g, encoded).replace(/\{\{keyword\}\}/g, encoded).replace(/\{\{page\}\}/g, String(page));
+        if (bodyMatch2) body = replaceSearchTemplateVars(bodyMatch2[1], keyword, page);
       }
     }
   }
@@ -448,9 +455,9 @@ export class SourceExecutor {
       return this.parseResponse(bodyText, source, baseUrl, 0);
     } catch (err) {
       const msg = (err as Error).message;
-      if ((msg.includes('403') || msg.includes('Cloudflare')) && WebViewFetcher.isReady()) {
+      if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
         this.lastBlockedUrl = url;
-        console.info('[SrcEx] 403/Cloudflare detected, trying WebView for', source.sourceName);
+        console.info('[SrcEx] HTTP block/error detected, trying WebView for', source.sourceName, ':', msg);
         try {
           const wvResult = await WebViewFetcher.fetch(url, 20000);
           const wvHtml = wvResult.html;
@@ -731,6 +738,13 @@ export class SourceExecutor {
       }
     }
     if (!contentUrl) return '';
+    if (!contentUrl.startsWith('http://') && !contentUrl.startsWith('https://')) {
+      const baseForContent = bookUrl || source.sourceUrl || '';
+      if (baseForContent) {
+        contentUrl = this.resolvePageUrl(contentUrl, baseForContent);
+        console.info('[SrcEx] getContent resolved relative URL:', contentUrl.substring(0, 80));
+      }
+    }
     console.info('[SrcEx] getContent final URL:', contentUrl.substring(0, 80));
     try {
       // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）

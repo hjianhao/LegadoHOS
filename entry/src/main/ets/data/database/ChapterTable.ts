@@ -82,6 +82,7 @@ export class ChapterTable {
       'content': '',
       'content_length': 0,
       'is_cached': 0,
+      'is_downloaded': 0,
       'update_time': Date.now(),
     }, predicates);
   }
