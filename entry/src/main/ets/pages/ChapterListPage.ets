@@ -16,6 +16,45 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import router from '@ohos.router';
 
+/** PERF-001: LazyForEach IDataSource — 章节数据源 */
+class ChapterDataSource implements IDataSource {
+  private chapters_: BookSourceChapter[] = [];
+  private listeners_: DataChangeListener[] = [];
+
+  totalCount(): number {
+    return this.chapters_.length;
+  }
+
+  getData(index: number): BookSourceChapter {
+    return this.chapters_[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    const found = this.listeners_.find(l => l === listener);
+    if (!found) {
+      this.listeners_.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const idx = this.listeners_.indexOf(listener);
+    if (idx !== -1) {
+      this.listeners_.splice(idx, 1);
+    }
+  }
+
+  setChapters(chapters: BookSourceChapter[]): void {
+    this.chapters_ = chapters;
+    for (const l of this.listeners_) {
+      l.onDataReloaded();
+    }
+  }
+
+  getChapter(index: number): BookSourceChapter {
+    return this.chapters_[index];
+  }
+}
+
 @Entry
 @Component
 export struct ChapterListPage {
@@ -30,9 +69,11 @@ export struct ChapterListPage {
   @State durChapterIndex: number = 0;     // 当前阅读进度
   @State bookDetailUrl: string = '';       // 原始书籍详情页 URL（用于正文加载兜底）
 
-  // 章节数据
-  @State chapters: BookSourceChapter[] = [];
-  @State displayChapters: BookSourceChapter[] = [];  // 排序后的显示列表
+  // 章节数据 — 使用 LazyForEach IDataSource 以支持 2000+ 章节流畅滚动
+  private dataSource_: ChapterDataSource = new ChapterDataSource();
+
+  // 保留原始数组用于排序等操作
+  private chapters_: BookSourceChapter[] = [];
   @State isAscending: boolean = true;      // 是否正序（默认正序）
   @State isLoading: boolean = true;
   @State showVolumes: boolean = false;      // 是否检测到卷分组
@@ -55,8 +96,8 @@ export struct ChapterListPage {
   async loadChapters(): Promise<void> {
     // 1) 优先从缓存读取
     if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
-      this.chapters = ChapterCache.chapters;
-      console.info('[ChapterList] Loaded', this.chapters.length, 'chapters from cache');
+      this.chapters_ = ChapterCache.chapters;
+      console.info('[ChapterList] Loaded', this.chapters_.length, 'chapters from cache');
     } else {
       // 2) 缓存缺失，从书源获取
       console.info('[ChapterList] Cache miss, fetching from source');
@@ -76,7 +117,7 @@ export struct ChapterListPage {
         if (matched && this.bookUrl) {
           const tocChapters = await globalSourceExecutor.getToc(matched, this.bookUrl);
           if (tocChapters.length > 0) {
-            this.chapters = tocChapters;
+            this.chapters_ = tocChapters;
             // 更新缓存
             ChapterCache.chapters = tocChapters;
             ChapterCache.bookUrl = this.bookUrl;
@@ -88,21 +129,21 @@ export struct ChapterListPage {
       }
     }
     // 调试：确认章节顺序
-    if (this.chapters.length >= 2) {
-      const f = this.chapters[0].title;
-      const l = this.chapters[this.chapters.length - 1].title;
+    if (this.chapters_.length >= 2) {
+      const f = this.chapters_[0].title;
+      const l = this.chapters_[this.chapters_.length - 1].title;
       console.info('[ChapterList] first:', f.substring(0, 30));
       console.info('[ChapterList] last:', l.substring(0, 30));
     }
     // 兜底检测：如果 getToc 的倒序检测未生效，在此修正
-    if (this.chapters.length >= 6) {
+    if (this.chapters_.length >= 6) {
       console.info('[ChL] order check:',
-        'ch0=' + this.chapters[0].title.substring(0, 20),
-        'ch1=' + this.chapters[1].title.substring(0, 20),
-        'ch2=' + this.chapters[2].title.substring(0, 20),
-        '... ch' + (this.chapters.length - 3) + '=' + this.chapters[this.chapters.length - 3].title.substring(0, 20),
-        'ch' + (this.chapters.length - 2) + '=' + this.chapters[this.chapters.length - 2].title.substring(0, 20),
-        'ch' + (this.chapters.length - 1) + '=' + this.chapters[this.chapters.length - 1].title.substring(0, 20));
+        'ch0=' + this.chapters_[0].title.substring(0, 20),
+        'ch1=' + this.chapters_[1].title.substring(0, 20),
+        'ch2=' + this.chapters_[2].title.substring(0, 20),
+        '... ch' + (this.chapters_.length - 3) + '=' + this.chapters_[this.chapters_.length - 3].title.substring(0, 20),
+        'ch' + (this.chapters_.length - 2) + '=' + this.chapters_[this.chapters_.length - 2].title.substring(0, 20),
+        'ch' + (this.chapters_.length - 1) + '=' + this.chapters_[this.chapters_.length - 1].title.substring(0, 20));
     }
     this.ensureAscendingOrder();
     this.detectVolumes();
@@ -113,7 +154,7 @@ export struct ChapterListPage {
   /** 检测卷标题：标题不含数字或含"卷"字的视为卷标题 */
   private detectVolumes(): void {
     let volumeCount = 0;
-    for (const ch of this.chapters) {
+    for (const ch of this.chapters_) {
       const t = ch.title.trim();
       if (t.length < 1) continue;
       const hasDigits = /\d/.test(t);
@@ -131,18 +172,18 @@ export struct ChapterListPage {
 
   /** 确保目录排序正确（依赖 getToc 已排序，仅做最终兜底反转） */
   ensureAscendingOrder(): void {
-    if (this.chapters.length < 3) return;
+    if (this.chapters_.length < 3) return;
     const getNum = (s: string): number => {
       const m = s.match(/(\d+)/);
       return m ? parseInt(m[1]) : -1;
     };
     // 等距采样20个点，如果多数递减则反转（兜底 getToc 未处理的场景）
     let ascCount = 0, descCount = 0;
-    const sampleCount = Math.min(20, this.chapters.length);
-    const step = Math.max(1, Math.floor(this.chapters.length / sampleCount));
+    const sampleCount = Math.min(20, this.chapters_.length);
+    const step = Math.max(1, Math.floor(this.chapters_.length / sampleCount));
     let prevNum = -1;
-    for (let i = 0; i < this.chapters.length; i += step) {
-      const n = getNum(this.chapters[i].title);
+    for (let i = 0; i < this.chapters_.length; i += step) {
+      const n = getNum(this.chapters_[i].title);
       if (n > 0 && prevNum > 0) {
         if (n > prevNum) ascCount++;
         else if (n < prevNum) descCount++;
@@ -152,11 +193,11 @@ export struct ChapterListPage {
     const rev = descCount > ascCount;
     console.info('[ChapterList] trend: asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
     if (!rev) return;
-    console.info('[ChapterList] sorting ' + this.chapters.length + ' chapters');
+    console.info('[ChapterList] sorting ' + this.chapters_.length + ' chapters');
     // STATE-002: build new array instead of in-place reverse + element-by-element mutation
     const reordered: BookSourceChapter[] = [];
-    for (let i = this.chapters.length - 1; i >= 0; i--) {
-      const src = this.chapters[i];
+    for (let i = this.chapters_.length - 1; i >= 0; i--) {
+      const src = this.chapters_[i];
       reordered.push({
         title: src.title,
         url: src.url,
@@ -164,7 +205,7 @@ export struct ChapterListPage {
         isVolume: src.isVolume
       });
     }
-    this.chapters = reordered;
+    this.chapters_ = reordered;
   }
 
   /** 排序 */
@@ -173,15 +214,15 @@ export struct ChapterListPage {
     // STATE-002: use new array instead of in-place reverse
     const sorted: BookSourceChapter[] = [];
     if (ascending) {
-      for (let i = 0; i < this.chapters.length; i++) {
-        sorted.push(this.chapters[i]);
+      for (let i = 0; i < this.chapters_.length; i++) {
+        sorted.push(this.chapters_[i]);
       }
     } else {
-      for (let i = this.chapters.length - 1; i >= 0; i--) {
-        sorted.push(this.chapters[i]);
+      for (let i = this.chapters_.length - 1; i >= 0; i--) {
+        sorted.push(this.chapters_[i]);
       }
     }
-    this.displayChapters = sorted;
+    this.dataSource_.setChapters(sorted);
   }
 
   toggleSort(): void {
@@ -192,7 +233,7 @@ export struct ChapterListPage {
   onChapterClick(ch: BookSourceChapter): void {
     console.info('[ChapterList] Select chapter:', ch.index, ch.title);
     // 将当前章节列表缓存给 ReadPage 用
-    ChapterCache.chapters = this.chapters;
+    ChapterCache.chapters = this.chapters_;
     ChapterCache.bookUrl = this.bookUrl;
     ChapterCache.targetIndex = ch.index;
     if (this.from === 'ReadPage') {
@@ -252,16 +293,16 @@ export struct ChapterListPage {
       // ===== 加载中 =====
       if (this.isLoading) {
         LoadingProgress().color('#0078D7').margin({ top: 100 })
-      } else if (this.chapters.length === 0) {
+      } else if (this.chapters_.length === 0) {
         // ===== 空状态 =====
         Column() {
           Text('暂无目录').fontSize(16).fontColor(this.isDark ? '#AAAAAA' : '#888').margin({ top: 80 })
           Text('请确认书源支持目录获取').fontSize(13).fontColor('#AAA').margin({ top: 8 })
         }.width('100%').alignItems(HorizontalAlign.Center)
       } else {
-        // ===== 章节列表 =====
+        // ===== 章节列表 — PERF-001 使用 LazyForEach 替代 ForEach =====
         List({ space: 0 }) {
-          ForEach(this.displayChapters, (ch: BookSourceChapter, idx?: number) => {
+          LazyForEach(this.dataSource_, (ch: BookSourceChapter, idx: number) => {
             ListItem() {
               if (ch.isVolume) {
                 // 卷标题
@@ -298,10 +339,11 @@ export struct ChapterListPage {
           }, (ch: BookSourceChapter) => ch.index.toString())
         }
         .layoutWeight(1).width('100%')
+        .cachedCount(5)
 
         // ===== 底部信息 =====
         Row() {
-          Text('共 ' + this.chapters.length + ' 章')
+          Text('共 ' + this.chapters_.length + ' 章')
             .fontSize(12).fontColor(this.isDark ? '#888' : '#999')
           Blank()
           Text(this.isAscending ? '正序 ▲' : '倒序 ▼')
