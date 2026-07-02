@@ -354,10 +354,10 @@ export class SourceExecutor {
           continue;
         }
 
-        // 3. 用清洗后的名字计算 merge key
-        const key = getBookMergeKey(cleanName, rawAuthor);
+       // 3. 用清洗后的名字计算 merge key
+       const key = getBookMergeKey(cleanName, rawAuthor);
 
-        // 4. 追踪已见过的 originUrl（去重依据）
+       // 4. 追踪已见过的 originUrl（去重依据）
         if (!seenUrlsByKey.has(key)) {
           seenUrlsByKey.set(key, new Set<string>());
         }
@@ -371,11 +371,14 @@ export class SourceExecutor {
           if (isNewSource) {
             // 新来源 → 记录 URL 并合并
             urlSet.add(r.originUrl!);
-            const merged: SearchResult = {
-              key: existing.key,
-              name: existing.name,
-              author: existing.author,
-              coverUrl: existing.coverUrl || r.coverUrl,
+            if (r.author && !existing.author) {
+              console.info("[SrcEx] Merge fills author", r.origin || r.originUrl, r.author);
+            }
+           const merged: SearchResult = {
+             key: existing.key,
+             name: existing.name,
+             author: existing.author || r.author,
+             coverUrl: existing.coverUrl || r.coverUrl,
               noteUrl: existing.noteUrl || r.noteUrl,
               origin: existing.origin,       // 保留第一个源的显示名
               originUrl: existing.originUrl,
@@ -400,6 +403,11 @@ export class SourceExecutor {
         } else {
           urlSet.add(r.originUrl || '');
           // 新书籍
+          if (!rawAuthor) {
+            console.info("[SrcEx] New entry no author", r.origin || r.originUrl,
+              "key=" + key, "name=\"" + cleanName.substring(0, 20) + "\"",
+              "author=\"" + (r.author || "") + "\"");
+          }
           mergedMap.set(key, {
             key: r.key,
             name: cleanName,           // 使用清洗后的书名
@@ -1333,12 +1341,12 @@ export class SourceExecutor {
       }
       if (!name || name.length < 1) continue;
 
-      // 作者
-      let author = getAuthor(item);
-      if (!author && idx === 0) {
-        console.info('[SrcEx] Author not found for', source.sourceName,
-          'authorRule:', authorRule);
-      }
+     // 作者
+     let author = getAuthor(item);
+     if (idx < 3 || !author) {
+       console.info('[SrcEx] Author debug', source.sourceName,
+         'rule=' + authorRule, 'got="' + author + '"', 'name="' + name.substring(0, 20) + '"');
+     }
 
       // 封面
       let coverUrl = getCover(item);
@@ -1427,8 +1435,12 @@ export class SourceExecutor {
     return list.map((item: unknown) => {
       const itemObj = item as Record<string, unknown>;
       const name = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
-      const author = this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author');
-      let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
+     const author = this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author');
+     if (!author) {
+       console.info('[SrcEx] Author debug JSON', source.sourceName,
+         'rule=' + (source.ruleSearchAuthor || ''), 'name="' + name.substring(0, 20) + '"');
+     }
+     let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
       // 过滤非 URL 的封面值（数字 ID 等）
       const coverUrl = (rawCover && /^(https?:\/\/|\/\/|data:)/.test(rawCover)) ? rawCover : '';
       if (!coverUrl && rawCover) {
