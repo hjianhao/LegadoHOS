@@ -34,3 +34,7 @@
 # Codex workspace config
 /.codex
 /.deveco
+
+# Agent workspace config
+CLAUDE.md
+.harmonyos-ai-workspace.manifest
