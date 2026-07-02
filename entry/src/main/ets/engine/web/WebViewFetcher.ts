@@ -355,19 +355,18 @@ export class WebViewFetcher {
 
   /** 停止轮询 */
   private static stopPolling(): void {
- 
-   /** 取消所有待处理的 WebView 请求（页面退出时调用） */
-   static cancelPending(): void {
-     WebViewFetcher.stopPolling();
-     WebViewFetcher.controller = null;
-     WebViewFetcher.pendingResolve = null;
-     WebViewFetcher.pendingReject = null;
-   }
- 
-   if (WebViewFetcher.pollIntervalId >= 0) {
+    if (WebViewFetcher.pollIntervalId >= 0) {
       clearInterval(WebViewFetcher.pollIntervalId);
       WebViewFetcher.pollIntervalId = -1;
     }
+  }
+
+  /** 取消所有待处理的 WebView 请求（页面退出时调用） */
+  static cancelPending(): void {
+    WebViewFetcher.stopPolling();
+    WebViewFetcher.controller = null;
+    WebViewFetcher.pendingResolve = null;
+    WebViewFetcher.pendingReject = null;
   }
 
   /** 清除所有定时器 */
