@@ -30,3 +30,7 @@
 /screenshot/*.png
 /screenshot/*.jpg
 /screenshot/*.jpeg
+
+# Codex workspace config
+/.codex
+/.deveco
