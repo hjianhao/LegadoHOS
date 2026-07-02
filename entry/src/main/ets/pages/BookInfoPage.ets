@@ -18,12 +18,11 @@ import {
   BookReadRecordSheet,
   RemarkEditDialog
 } from '../components/BookInfoSheets';
-import router from '@ohos.router';
-import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
-export struct BookInfoPage {
+struct BookInfoPage {
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State coverUrl: string = '';
@@ -59,6 +58,7 @@ export struct BookInfoPage {
   @State groupId: number = BookGroup.ALL;
 
   private cachedSearchResults: SearchResult[] = [];
+  private sourceTocOriginUrl: string = '';
   private coverDlg?: CustomDialogController;
   private sourceDlg?: CustomDialogController;
   private groupDlg?: CustomDialogController;
@@ -67,7 +67,7 @@ export struct BookInfoPage {
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.bookName = params['name'] || '';
       this.bookAuthor = params['author'] || '';
@@ -113,10 +113,13 @@ export struct BookInfoPage {
         if (info.introduce && !this.introduce) this.introduce = info.introduce;
         if (info.kind && !this.kind) this.kind = info.kind;
         if (info.wordCount && !this.wordCount) this.wordCount = info.wordCount;
-        if (info.tocUrl) this.sourceTocUrl = info.tocUrl;
+        if (info.tocUrl) {
+          this.sourceTocUrl = info.tocUrl;
+          this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
+        }
       }
       // 获取目录统计
-      const chapters = await globalSourceExecutor.getToc(matched, this.sourceTocUrl || this.noteUrl);
+      const chapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl);
       if (chapters.length > 0) {
         this.chapterCount = chapters.length;
         const last = chapters[chapters.length - 1];
@@ -153,7 +156,10 @@ export struct BookInfoPage {
           if (matched.origin) this.origin = matched.origin;
           if (matched.originUrl) this.originUrl = matched.originUrl;
           if (matched.bookUrl) this.noteUrl = matched.bookUrl;
-          if (matched.tocUrl) this.sourceTocUrl = matched.tocUrl;
+          if (matched.tocUrl) {
+            this.sourceTocUrl = matched.tocUrl;
+            this.sourceTocOriginUrl = matched.originUrl || this.originUrl;
+          }
           if (matched.kind) this.kind = matched.kind;
           if (matched.wordCount) this.wordCount = matched.wordCount;
           if (matched.introduce) this.introduce = matched.introduce;
@@ -180,10 +186,10 @@ export struct BookInfoPage {
   /** 从书架删除 */
   async removeFromShelf(): Promise<void> {
     if (!this.bookId) {
-      promptAction.showToast({ message: '未在书架中', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '未在书架中', duration: 1500 });
       return;
     }
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '确认删除',
       message: '从书架中移除 "' + this.bookName + '"？',
       buttons: [
@@ -211,18 +217,18 @@ export struct BookInfoPage {
       this.isInShelf = false;
       this.bookId = 0;
       AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
-      promptAction.showToast({ message: '已从书架移除', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已从书架移除', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '删除失败', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败', duration: 2000 });
     }
   }
 
   private clearCache(): void {
     if (!this.bookId) {
-      promptAction.showToast({ message: '未在书架中', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '未在书架中', duration: 1500 });
       return;
     }
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '清除缓存',
       message: '清除《' + this.bookName + '》已缓存的章节内容？目录和阅读进度会保留。',
       buttons: [
@@ -238,9 +244,9 @@ export struct BookInfoPage {
     try {
       const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
       await chapterTable.clearContentByBookId(this.bookId);
-      promptAction.showToast({ message: '成功清理缓存', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '成功清理缓存', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '清理缓存失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '清理缓存失败', duration: 1500 });
     }
   }
 
@@ -312,7 +318,7 @@ export struct BookInfoPage {
           if (this.introduce && !existing.introduce) existing.introduce = this.introduce;
           if (this.origin && !existing.origin) existing.origin = this.origin;
           if (this.originUrl && !existing.originUrl) existing.originUrl = this.originUrl;
-          if (this.sourceTocUrl) existing.tocUrl = this.sourceTocUrl;
+          if (this.getCurrentTocUrl()) existing.tocUrl = this.getCurrentTocUrl();
           existing.updateTime = nowTs;
           await bookTable.updateBook(existing);
           this.isInShelf = true;
@@ -321,7 +327,7 @@ export struct BookInfoPage {
           this.durChapterTitle = existing.durChapterTitle || '';
           this.durChapterIndex = existing.durChapterIndex || 0;
           AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
-          promptAction.showToast({ message: '已加入书架', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '已加入书架', duration: 1500 });
           return;
         }
       }
@@ -335,7 +341,7 @@ export struct BookInfoPage {
         coverUrl: effectiveCover,
         customCoverPath: this.customCoverPath,
         bookUrl: this.noteUrl,
-        tocUrl: this.sourceTocUrl,
+        tocUrl: this.getCurrentTocUrl(),
         origin: this.origin,
         originUrl: this.originUrl,
         type: BookType.TEXT,
@@ -368,10 +374,10 @@ export struct BookInfoPage {
         this.isInShelf = true;
         this.groupId = book.groupId;
         AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
-        promptAction.showToast({ message: '已加入书架', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '已加入书架', duration: 1500 });
       }
     } catch (err) {
-      promptAction.showToast({ message: '加入书架失败', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '加入书架失败', duration: 2000 });
     }
   }
 
@@ -385,20 +391,20 @@ export struct BookInfoPage {
       // 不在书架：隐式保存书籍（对齐 Android BookType.notShelf 语义）
       const saved = await this.saveBookImplicitly();
       if (!saved) {
-        promptAction.showToast({ message: '保存失败，请重试', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '保存失败，请重试', duration: 1500 });
         return;
       }
     } else if (this.bookId > 0) {
       // 已在书架：更新最后打开时间
       await this.updateLastOpenTime();
     }
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ReadPage',
       params: {
         name: this.bookName,
         author: this.bookAuthor,
         bookUrl: this.noteUrl,
-        tocUrl: this.sourceTocUrl,
+        tocUrl: this.getCurrentTocUrl(),
         origin: this.origin,
         originUrl: this.originUrl,
         header: this.sourceHeader,
@@ -410,12 +416,13 @@ export struct BookInfoPage {
   }
 
   startReadAt(index: number): void {
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ReadPage',
       params: {
         name: this.bookName,
         author: this.bookAuthor,
         bookUrl: this.noteUrl,
+        tocUrl: this.getCurrentTocUrl(),
         origin: this.origin,
         originUrl: this.originUrl,
         header: this.sourceHeader,
@@ -461,7 +468,7 @@ export struct BookInfoPage {
         originUrl: this.originUrl,
         type: BookType.TEXT,
         groupId: BookGroup.ALL,
-        tocUrl: this.sourceTocUrl,
+        tocUrl: this.getCurrentTocUrl(),
         chapterCount: this.chapterCount,
         totalChapterNum: this.chapterCount,
         latestChapterTitle: this.latestChapter,
@@ -534,23 +541,50 @@ export struct BookInfoPage {
   }
 
   private replaceWithSource(result: SearchResult): void {
+    const oldNoteUrl = this.noteUrl;
+    const newOriginUrl = result.originUrl || this.originUrl;
+    const newNoteUrl = result.noteUrl || this.noteUrl;
+    const sourceChanged = newOriginUrl !== this.originUrl || newNoteUrl !== this.noteUrl;
+
     this.origin = result.origin || this.origin;
-    this.originUrl = result.originUrl || this.originUrl;
-    this.noteUrl = result.noteUrl || this.noteUrl;
+    this.originUrl = newOriginUrl;
+    this.noteUrl = newNoteUrl;
     if (result.coverUrl) this.coverUrl = result.coverUrl;
     if (result.kind) this.kind = result.kind;
     if (result.wordCount) this.wordCount = result.wordCount;
     if (result.introduce) this.introduce = result.introduce;
     this.sourceHeader = '';
-    this.recentChapters = [];
+    if (sourceChanged) {
+      this.sourceTocUrl = '';
+      this.sourceTocOriginUrl = '';
+      this.chapterCount = 0;
+      this.latestChapter = result.latestChapterTitle || '';
+      this.recentChapters = [];
+      this.chapters = [];
+      this.isInShelf = false;
+      this.bookId = 0;
+      this.durChapterTitle = '';
+      this.durChapterIndex = 0;
+      this.lastReadTime = '';
+      if (ChapterCache.bookUrl === oldNoteUrl || ChapterCache.bookUrl === newNoteUrl) {
+        ChapterCache.bookUrl = '';
+        ChapterCache.chapters = [];
+        ChapterCache.targetIndex = -1;
+      }
+      console.info('[BookInfo] Source switched:',
+        'originUrl=' + this.originUrl.substring(0, 80),
+        'noteUrl=' + this.noteUrl.substring(0, 80));
+    } else {
+      this.recentChapters = [];
+    }
     this.loadSourceHeader();
     this.tryFetchBookInfo();
     this.tryFetchCover();
-    promptAction.showToast({ message: '已更换书源', duration: 1500 });
+    UiUtil.showToast(this.getUIContext(), { message: '已更换书源', duration: 1500 });
   }
 
   private addSourceAsNewBook(result: SearchResult): void {
-    promptAction.showToast({ message: '已作为新书加入书架', duration: 1500 });
+    UiUtil.showToast(this.getUIContext(), { message: '已作为新书加入书架', duration: 1500 });
   }
 
   showCoverSheet(): void {
@@ -571,7 +605,7 @@ export struct BookInfoPage {
   private async updateCover(cover: string): Promise<void> {
     this.customCoverPath = cover;
     if (!this.coverUrl) this.coverUrl = cover;
-    promptAction.showToast({ message: '封面已更新', duration: 1200 });
+    UiUtil.showToast(this.getUIContext(), { message: '封面已更新', duration: 1200 });
   }
 
   showGroupSheet(): void {
@@ -581,7 +615,7 @@ export struct BookInfoPage {
         selectedGroupId: this.groupId,
         onConfirm: (gid: number) => {
           this.groupId = gid;
-          promptAction.showToast({ message: '分组已更新', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '分组已更新', duration: 1500 });
         }
       }),
       autoCancel: true,
@@ -611,7 +645,7 @@ export struct BookInfoPage {
         remarkText: this.remark,
         onConfirm: (text: string) => {
           this.remark = text;
-          promptAction.showToast({ message: '备注已保存', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '备注已保存', duration: 1500 });
         }
       }),
       autoCancel: true,
@@ -622,10 +656,10 @@ export struct BookInfoPage {
   }
 
   openToc(): void {
-    router.pushUrl({ url: 'pages/ChapterListPage', params: {
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: {
       from: 'BookInfoPage', bookName: this.bookName, bookAuthor: this.bookAuthor,
       bookUrl: this.noteUrl, originUrl: this.originUrl, origin: this.origin,
-      tocUrl: this.sourceTocUrl,
+      tocUrl: this.getCurrentTocUrl(),
       header: this.sourceHeader,
     }});
   }
@@ -637,6 +671,18 @@ export struct BookInfoPage {
    */
   private getEffectiveCoverUrl(): string {
     return this.customCoverPath || this.coverUrl || '';
+  }
+
+  private getCurrentTocUrl(): string {
+    if (!this.sourceTocUrl) return '';
+    if (this.sourceTocOriginUrl && this.sourceTocOriginUrl !== this.originUrl) {
+      console.warn('[BookInfo] Ignore stale tocUrl:',
+        'tocOrigin=' + this.sourceTocOriginUrl.substring(0, 80),
+        'currentOrigin=' + this.originUrl.substring(0, 80),
+        'tocUrl=' + this.sourceTocUrl.substring(0, 80));
+      return '';
+    }
+    return this.sourceTocUrl;
   }
 
   build() {
@@ -679,12 +725,12 @@ export struct BookInfoPage {
         Row() {
           Button() { Text('‹').fontSize(30).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
-            .onClick((): void => { router.back(); })
+            .onClick((): void => { UiUtil.back(this.getUIContext()); })
           Blank()
           Button() { Text('↗').fontSize(20).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
             .onClick(() => {
-              promptAction.showToast({ message: '分享功能待完善', duration: 1200 });
+              UiUtil.showToast(this.getUIContext(), { message: '分享功能待完善', duration: 1200 });
             })
           Button() { Text('⋮').fontSize(24).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
@@ -750,7 +796,7 @@ export struct BookInfoPage {
                   .width('100%')
                   .margin({ top: 6 })
                   .onClick(() => {
-                    promptAction.showToast({ message: this.originUrl || this.origin || '暂无书源信息', duration: 1500 });
+                    UiUtil.showToast(this.getUIContext(), { message: this.originUrl || this.origin || '暂无书源信息', duration: 1500 });
                   })
                 }
                 .layoutWeight(1)

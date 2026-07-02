@@ -7,6 +7,7 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
 import { avSession } from '@kit.AVSessionKit';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../../util/UiUtil';
 
 @Component
 export struct ReadAloudPanel {
@@ -51,7 +52,7 @@ export struct ReadAloudPanel {
   private async loadVoicePreference_(): Promise<void> {
     try {
       const settings = SettingsStore.getInstance();
-      await settings.init(getContext());
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
       this.selectedVoiceLanguage = await settings.get('tts_voice_language', TtsVoiceManager.DEFAULT_VOICE.language);
       this.selectedVoicePerson = await settings.get('tts_voice_person', TtsVoiceManager.DEFAULT_VOICE.person);
       this.selectedVoiceStyle = await settings.get('tts_voice_style', TtsVoiceManager.DEFAULT_VOICE.style);
@@ -64,7 +65,7 @@ export struct ReadAloudPanel {
   private async saveVoicePreference_(voice: ReadAloudVoice): Promise<void> {
     try {
       const settings = SettingsStore.getInstance();
-      await settings.init(getContext());
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
       await settings.put('tts_voice_language', voice.language);
       await settings.put('tts_voice_person', voice.person);
       await settings.put('tts_voice_style', voice.style);
@@ -149,7 +150,7 @@ export struct ReadAloudPanel {
       await TtsVoiceManager.downloadVoice(voice, (progress: string) => {
         this.voiceDownloadProgress = progress;
       });
-      promptAction.showToast({ message: '音色下载完成', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '音色下载完成', duration: 1500 });
       await this.loadVoices_();
       const refreshed = this.voices.find((item: ReadAloudVoice) => item.key === voice.key) || voice;
       refreshed.downloaded = true;
@@ -159,7 +160,7 @@ export struct ReadAloudPanel {
     } catch (e) {
       const msg = (e as Error).message || String(e);
       this.errorText = msg;
-      promptAction.showToast({ message: msg, duration: 1800 });
+      UiUtil.showToast(this.getUIContext(), { message: msg, duration: 1800 });
       return false;
     } finally {
       this.downloadingVoiceKey = '';
@@ -182,7 +183,7 @@ export struct ReadAloudPanel {
   async createAvSession_(): Promise<void> {
     if (this.avSession_) return;
     try {
-      this.avSession_ = await avSession.createAVSession(getContext(), 'legado_tts', 'audio');
+      this.avSession_ = await avSession.createAVSession(UiUtil.getHostContext(this.getUIContext()), 'legado_tts', 'audio');
       // 设置 WantAgent 后激活（播控中心点击拉起应用）
       if (!this.wantAgent_) {
         this.wantAgent_ = await this.createWantAgent_();
@@ -217,14 +218,18 @@ export struct ReadAloudPanel {
   }
 
   private async createWantAgent_(): Promise<object> {
-    const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
-    console.info('[Aloud] creating WantAgent for bundle=' + info.name);
-    return await wantAgent.getWantAgent({
-      wants: [{ bundleName: info.name, abilityName: 'MainAbility' }],
-      operationType: wantAgent.OperationType.START_ABILITIES,
-      requestCode: 0,
-      wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
-    });
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+      console.info('[Aloud] creating WantAgent for bundle=' + info.name);
+      return await wantAgent.getWantAgent({
+        wants: [{ bundleName: info.name, abilityName: 'MainAbility' }],
+        operationType: wantAgent.OperationType.START_ABILITIES,
+        requestCode: 0,
+        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
+      });
+    } catch (err) {
+      throw new Error(String(err));
+    }
   }
 
   async startBgTask_(): Promise<void> {
@@ -235,7 +240,7 @@ export struct ReadAloudPanel {
         this.wantAgent_ = await this.createWantAgent_();
       }
       await backgroundTaskManager.startBackgroundRunning(
-        getContext(), backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, this.wantAgent_);
+        UiUtil.getHostContext(this.getUIContext()), backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, this.wantAgent_);
       this.bgTaskActive_ = true;
       console.info('[Aloud] bgTask started');
     } catch (e) {
@@ -246,7 +251,7 @@ export struct ReadAloudPanel {
   async stopBgTask_(): Promise<void> {
     if (!this.bgTaskActive_) return;
     try {
-      await backgroundTaskManager.stopBackgroundRunning(getContext());
+      await backgroundTaskManager.stopBackgroundRunning(UiUtil.getHostContext(this.getUIContext()));
     } catch (_e) { /* ignore */ }
     this.bgTaskActive_ = false;
   }

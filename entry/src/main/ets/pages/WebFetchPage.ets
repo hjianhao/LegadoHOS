@@ -6,6 +6,7 @@
  */
 import webview from '@ohos.web.webview';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -16,7 +17,7 @@ export struct WebFetchPage {
   @State isLoaded: boolean = false;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.fetchUrl = params['url'] || '';
     }
@@ -44,7 +45,7 @@ export struct WebFetchPage {
     ).then((result: string): void => {
       console.info('[WebFetch] Content extracted, length:', result.length);
       // 返回结果
-      router.back({
+      UiUtil.back(this.getUIContext(), {
         url: 'pages/MainPage',
         params: {
           'webFetchResult': result,
@@ -53,7 +54,7 @@ export struct WebFetchPage {
       });
     }).catch((err: Error): void => {
       console.error('[WebFetch] JS execution failed:', err.message);
-      router.back({
+      UiUtil.back(this.getUIContext(), {
         url: 'pages/MainPage',
         params: {
           'webFetchResult': '',
@@ -95,7 +96,7 @@ export struct WebFetchPage {
       if (this.isLoaded) {
         Button('返回').margin(16).fontSize(14)
           .onClick((): void => {
-            router.back({ url: 'pages/MainPage' });
+            UiUtil.back(this.getUIContext(), { url: 'pages/MainPage' });
           })
       }
     }

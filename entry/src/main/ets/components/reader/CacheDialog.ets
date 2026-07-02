@@ -9,10 +9,10 @@ import { BookSource } from '../../model/BookSource';
 import { BookSourceChapter } from '../../model/BookSource';
 import { globalSourceExecutor } from '../../engine/source/SourceExecutor';
 import promptAction from '@ohos.promptAction';
-import notification from '@ohos.notification';
-import { notificationManager } from '@kit.NotificationKit';
+import notificationManager from '@ohos.notificationManager';
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
 import wantAgent from '@ohos.app.ability.wantAgent';
+import { UiUtil } from '../../util/UiUtil';
 
 @Component
 export struct CacheDialog {
@@ -164,7 +164,7 @@ export struct CacheDialog {
       const request: notificationManager.NotificationRequest = {
         id: this.notifId_,
         content: {
-          contentType: notification.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
+          contentType: 0,
           normal: {
             title: '离线缓存',
             text: '已缓存 ' + progress + '/' + total + ' 章',
@@ -190,11 +190,11 @@ export struct CacheDialog {
     const start = parseInt(this.startChapter) || 1;
     const end = parseInt(this.endChapter) || this.totalChapters;
     if (start < 1 || end > this.totalChapters || start > end) {
-      promptAction.showToast({ message: '章节范围无效', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '章节范围无效', duration: 1500 });
       return;
     }
     if (!this.source) {
-      promptAction.showToast({ message: '书源不可用', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '书源不可用', duration: 1500 });
       return;
     }
     const startIdx = start - 1;
@@ -281,7 +281,7 @@ export struct CacheDialog {
       this.progressText = '缓存完成！共 ' + completed + ' 章';
       // 更新通知为完成状态
       this.publishNotif(completed, totalCh);
-      promptAction.showToast({ message: '缓存完成: ' + completed + ' 章', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '缓存完成: ' + completed + ' 章', duration: 2000 });
       this.onCacheComplete?.();
     } catch (err) {
       this.progressText = '缓存出错: ' + (err as Error).message;
@@ -301,7 +301,7 @@ export struct CacheDialog {
         operationType: wantAgent.OperationType.START_ABILITY, requestCode: 0,
       });
       await backgroundTaskManager.startBackgroundRunning(
-        getContext(), ['dataTransfer'], want);
+        UiUtil.getHostContext(this.getUIContext()), ['dataTransfer'], want);
       this.bgTaskActive_ = true;
       console.info('[Cache] bg task started');
     } catch (e) {
@@ -312,7 +312,7 @@ export struct CacheDialog {
   private async stopBgTask(): Promise<void> {
     if (!this.bgTaskActive_) return;
     try {
-      await backgroundTaskManager.stopBackgroundRunning(getContext());
+      await backgroundTaskManager.stopBackgroundRunning(UiUtil.getHostContext(this.getUIContext()));
       this.bgTaskActive_ = false;
       console.info('[Cache] bg task stopped');
     } catch (e) {

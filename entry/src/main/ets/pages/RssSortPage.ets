@@ -10,6 +10,7 @@ import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import http from '@ohos.net.http';
+import { UiUtil } from '../util/UiUtil';
 
 interface SortTab {
   name: string;
@@ -49,7 +50,7 @@ export struct RssSortPage {
   private db: AppDatabase = AppDatabase.getInstance();
 
   aboutToAppear() {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.sourceUrl = params['sourceUrl'] || '';
       this.sourceName = params['sourceName'] || '';
@@ -64,7 +65,7 @@ export struct RssSortPage {
       await this.db.waitForInit();
       const source = await this.db.rssSourceTable.getByKey(this.sourceUrl);
       if (!source) {
-        promptAction.showToast({ message: '订阅源不存在' });
+        UiUtil.showToast(this.getUIContext(), { message: '订阅源不存在' });
         return;
       }
       this.source = source;
@@ -244,7 +245,7 @@ export struct RssSortPage {
     this.db.rssArticleTable.update(updated);
     article.read = true;
 
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/RssReadPage',
       params: {
         title: article.title,
@@ -264,7 +265,7 @@ export struct RssSortPage {
       // ===== 顶部栏 =====
       Row() {
         Text('←').fontSize(22).fontColor('#0078D7')
-          .onClick(() => router.back())
+          .onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
           .margin({ left: 8 })

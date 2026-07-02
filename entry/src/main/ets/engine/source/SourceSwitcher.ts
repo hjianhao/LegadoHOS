@@ -65,7 +65,7 @@ export class SourceSwitcher {
         // 获取详细信息和目录
         try {
           const info = await globalSourceExecutor.getBookInfo(source, match.noteUrl);
-          const chapters = await globalSourceExecutor.getToc(source, match.noteUrl);
+          const chapters = await globalSourceExecutor.getToc(source, info?.tocUrl || match.noteUrl);
 
           results.push({
             source,

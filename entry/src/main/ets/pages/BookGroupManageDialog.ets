@@ -13,6 +13,7 @@ import { BookGroupTable } from '../data/database/BookGroupTable';
 import { BookTable } from '../data/database/BookTable';
 import { BookGroupItem, BookGroup } from '../model/BookGroup';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct BookGroupManageDialog {
@@ -42,7 +43,7 @@ export struct BookGroupManageDialog {
 
   async doAddGroup(): Promise<void> {
     const name = this.addGroupName.trim();
-    if (!name) { promptAction.showToast({ message: '请输入分组名', duration: 1500 }); return; }
+    if (!name) { UiUtil.showToast(this.getUIContext(), { message: '请输入分组名', duration: 1500 }); return; }
     try {
       await AppDatabase.getInstance().waitForInit();
       const groupDao = new BookGroupTable(AppDatabase.getInstance().rdbStore);
@@ -51,8 +52,8 @@ export struct BookGroupManageDialog {
       this.showAddInput = false;
       await this.loadGroups();
       if (this.onGroupChanged) this.onGroupChanged();
-      promptAction.showToast({ message: '分组已添加', duration: 1500 });
-    } catch (_e) { promptAction.showToast({ message: '添加失败', duration: 1500 }); }
+      UiUtil.showToast(this.getUIContext(), { message: '分组已添加', duration: 1500 });
+    } catch (_e) { UiUtil.showToast(this.getUIContext(), { message: '添加失败', duration: 1500 }); }
   }
 
   startRename(g: BookGroupItem): void {
@@ -77,11 +78,11 @@ export struct BookGroupManageDialog {
       this.editingName = '';
       await this.loadGroups();
       if (this.onGroupChanged) this.onGroupChanged();
-    } catch (_e) { promptAction.showToast({ message: '重命名失败', duration: 1500 }); }
+    } catch (_e) { UiUtil.showToast(this.getUIContext(), { message: '重命名失败', duration: 1500 }); }
   }
 
   confirmDelete(g: BookGroupItem): void {
-    AlertDialog.show({
+    UiUtil.showAlertDialog(this.getUIContext(), {
       title: '删除分组',
       message: `确定删除 "${g.name}"？分组内书籍将移回"全部"`,
       primaryButton: { value: '取消', action: (): void => {} },

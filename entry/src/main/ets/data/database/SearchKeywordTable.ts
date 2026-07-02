@@ -4,6 +4,7 @@
  */
 import relationalStore from '@ohos.data.relationalStore';
 import { SearchKeyword } from '../../model/SearchKeyword';
+import { RdbUtil } from './RdbUtil';
 
 export const SearchKeywordTableCreate = `
   CREATE TABLE IF NOT EXISTS search_keywords (
@@ -29,16 +30,16 @@ export class SearchKeywordTable {
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
       predicates.orderByDesc('last_use_time');
       predicates.limitAs(limit);
-      const rs = await this.db.query(predicates, ['word', 'usage', 'last_use_time']);
+      const rs = await RdbUtil.query(this.db, predicates, ['word', 'usage', 'last_use_time']);
       const items: SearchKeyword[] = [];
-      while (rs.goToNextRow()) {
+      while (RdbUtil.next(rs)) {
         items.push({
-          word: rs.getString(rs.getColumnIndex('word')),
-          usage: rs.getLong(rs.getColumnIndex('usage')),
-          lastUseTime: rs.getLong(rs.getColumnIndex('last_use_time')),
+          word: RdbUtil.string(rs, 'word'),
+          usage: RdbUtil.long(rs, 'usage'),
+          lastUseTime: RdbUtil.long(rs, 'last_use_time'),
         });
       }
-      rs.close();
+      RdbUtil.close(rs);
       return items;
     } catch (_e) {
       return [];
@@ -54,16 +55,16 @@ export class SearchKeywordTable {
       predicates.like('word', '%' + key + '%');
       predicates.orderByDesc('usage');
       predicates.limitAs(limit);
-      const rs = await this.db.query(predicates, ['word', 'usage', 'last_use_time']);
+      const rs = await RdbUtil.query(this.db, predicates, ['word', 'usage', 'last_use_time']);
       const items: SearchKeyword[] = [];
-      while (rs.goToNextRow()) {
+      while (RdbUtil.next(rs)) {
         items.push({
-          word: rs.getString(rs.getColumnIndex('word')),
-          usage: rs.getLong(rs.getColumnIndex('usage')),
-          lastUseTime: rs.getLong(rs.getColumnIndex('last_use_time')),
+          word: RdbUtil.string(rs, 'word'),
+          usage: RdbUtil.long(rs, 'usage'),
+          lastUseTime: RdbUtil.long(rs, 'last_use_time'),
         });
       }
-      rs.close();
+      RdbUtil.close(rs);
       return items;
     } catch (_e) {
       return [];
@@ -80,27 +81,27 @@ export class SearchKeywordTable {
       // 先检查是否存在
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
       predicates.equalTo('word', key);
-      const rs = await this.db.query(predicates, ['word', 'usage']);
-      if (rs.goToNextRow()) {
-        const oldUsage = rs.getLong(rs.getColumnIndex('usage'));
-        rs.close();
+      const rs = await RdbUtil.query(this.db, predicates, ['word', 'usage']);
+      if (RdbUtil.next(rs)) {
+        const oldUsage = RdbUtil.long(rs, 'usage');
+        RdbUtil.close(rs);
         // 更新
         const updatePredicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
         updatePredicates.equalTo('word', key);
-        await this.db.update({
+        await RdbUtil.update(this.db, {
           word: key,
           usage: oldUsage + 1,
           last_use_time: Date.now(),
         }, updatePredicates);
       } else {
-        rs.close();
+        RdbUtil.close(rs);
         // 插入新记录
         const row: relationalStore.ValuesBucket = {
           word: key,
           usage: 1,
           last_use_time: Date.now(),
         };
-        await this.db.insert(SearchKeywordTable.TABLE_NAME, row);
+        await RdbUtil.insert(this.db, SearchKeywordTable.TABLE_NAME, row);
       }
     } catch (_e) {
       // 插入失败（可能并发），忽略
@@ -114,7 +115,7 @@ export class SearchKeywordTable {
     try {
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
       predicates.equalTo('word', word);
-      await this.db.delete(predicates);
+      await RdbUtil.delete(this.db, predicates);
     } catch (_e) { /* ignore */ }
   }
 
@@ -124,7 +125,7 @@ export class SearchKeywordTable {
   async deleteAll(): Promise<void> {
     try {
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
-      await this.db.delete(predicates);
+      await RdbUtil.delete(this.db, predicates);
     } catch (_e) { /* ignore */ }
   }
 
@@ -134,13 +135,13 @@ export class SearchKeywordTable {
   async count(): Promise<number> {
     try {
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
-      const rs = await this.db.query(predicates, ['COUNT(*) as cnt']);
-      if (rs.goToNextRow()) {
-        const cnt = rs.getLong(rs.getColumnIndex('cnt'));
-        rs.close();
+      const rs = await RdbUtil.query(this.db, predicates, ['COUNT(*) as cnt']);
+      if (RdbUtil.next(rs)) {
+        const cnt = RdbUtil.long(rs, 'cnt');
+        RdbUtil.close(rs);
         return cnt;
       }
-      rs.close();
+      RdbUtil.close(rs);
       return 0;
     } catch (_e) {
       return 0;
@@ -154,15 +155,15 @@ export class SearchKeywordTable {
     try {
       const predicates = new relationalStore.RdbPredicates(SearchKeywordTable.TABLE_NAME);
       predicates.orderByDesc('last_use_time');
-      const rs = await this.db.query(predicates, ['word', 'last_use_time']);
+      const rs = await RdbUtil.query(this.db, predicates, ['word', 'last_use_time']);
       const items: { word: string; time: number }[] = [];
-      while (rs.goToNextRow()) {
+      while (RdbUtil.next(rs)) {
         items.push({
-          word: rs.getString(rs.getColumnIndex('word')),
-          time: rs.getLong(rs.getColumnIndex('last_use_time')),
+          word: RdbUtil.string(rs, 'word'),
+          time: RdbUtil.long(rs, 'last_use_time'),
         });
       }
-      rs.close();
+      RdbUtil.close(rs);
       if (items.length > maxCount) {
         // 删除超出部分（最旧的）
         const toDelete = items.slice(maxCount);

@@ -3,6 +3,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct BookshelfImportDialog {
@@ -23,16 +24,16 @@ export struct BookshelfImportDialog {
       fileIo.readSync(f.fd, buffer);
       fileIo.closeSync(f);
       const decoder = util.TextDecoder.create('utf-8');
-      this.inputText = decoder.decodeWithStream(new Uint8Array(buffer));
+      this.inputText = decoder.decodeToString(new Uint8Array(buffer));
       this.statusText = '已读取文件，准备导入';
     } catch (_e) {
-      promptAction.showToast({ message: '读取文件失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '读取文件失败', duration: 1500 });
     }
   }
 
   private async doImport(): Promise<void> {
     if (!this.inputText.trim()) {
-      promptAction.showToast({ message: '请粘贴 JSON 或 URL', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请粘贴 JSON 或 URL', duration: 1500 });
       return;
     }
     this.isRunning = true;
@@ -45,7 +46,7 @@ export struct BookshelfImportDialog {
       this.showResult(result);
       if (result.success > 0 && this.onImportSuccess) this.onImportSuccess();
     } catch (e) {
-      promptAction.showToast({ message: '导入失败: ' + ((e as Error).message || ''), duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '导入失败: ' + ((e as Error).message || ''), duration: 2000 });
     }
     this.isRunning = false;
   }
@@ -53,7 +54,7 @@ export struct BookshelfImportDialog {
   private showResult(result: BookshelfTransferResult): void {
     const message = '成功 ' + result.success + ' 本，跳过 ' + result.skipped + ' 本，失败 ' + result.failed + ' 本';
     this.statusText = message + (result.messages.length > 0 ? '\n' + result.messages.slice(0, 4).join('\n') : '');
-    promptAction.showToast({ message: message, duration: 2000 });
+    UiUtil.showToast(this.getUIContext(), { message: message, duration: 2000 });
   }
 
   build() {

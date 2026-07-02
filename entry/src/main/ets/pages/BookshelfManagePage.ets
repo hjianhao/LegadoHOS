@@ -14,6 +14,7 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -42,7 +43,7 @@ struct BookshelfManagePage {
       this.allBooks = await bookDao.getAllShelfBooks();
       this.applyFilters();
     } catch (_e) {
-      promptAction.showToast({ message: '加载书架失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '加载书架失败', duration: 1500 });
     }
     this.isLoading = false;
   }
@@ -98,7 +99,7 @@ struct BookshelfManagePage {
 
   requireSelection(): boolean {
     if (this.selectedBookIds.length === 0) {
-      promptAction.showToast({ message: '请先选择书籍', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请先选择书籍', duration: 1500 });
       return false;
     }
     return true;
@@ -106,7 +107,7 @@ struct BookshelfManagePage {
 
   async removeSelected(): Promise<void> {
     if (!this.requireSelection()) return;
-    AlertDialog.show({
+    UiUtil.showAlertDialog(this.getUIContext(), {
       title: '移出书架',
       message: '确定将选中的 ' + this.selectedBookIds.length + ' 本书移出书架？',
       primaryButton: { value: '取消', action: (): void => {} },
@@ -116,12 +117,12 @@ struct BookshelfManagePage {
           try {
             const bookDao = new BookTable(AppDatabase.getInstance().rdbStore);
             await bookDao.setShelfByIds(this.selectedBookIds, false);
-            promptAction.showToast({ message: '已移出 ' + this.selectedBookIds.length + ' 本', duration: 1500 });
+            UiUtil.showToast(this.getUIContext(), { message: '已移出 ' + this.selectedBookIds.length + ' 本', duration: 1500 });
             this.selectedBookIds = [];
             await this.loadData();
             AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
           } catch (_e) {
-            promptAction.showToast({ message: '操作失败', duration: 1500 });
+            UiUtil.showToast(this.getUIContext(), { message: '操作失败', duration: 1500 });
           }
         }
       }
@@ -135,10 +136,10 @@ struct BookshelfManagePage {
       for (const id of this.selectedBookIds) {
         await chapterDao.clearContentByBookId(id);
       }
-      promptAction.showToast({ message: '已清除章节缓存', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已清除章节缓存', duration: 1500 });
       await this.loadData();
     } catch (_e) {
-      promptAction.showToast({ message: '清除失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '清除失败', duration: 1500 });
     }
   }
 
@@ -154,9 +155,9 @@ struct BookshelfManagePage {
         await download.downloadBook(book, chapters);
         queued += chapters.length;
       }
-      promptAction.showToast({ message: queued > 0 ? '已加入缓存队列 ' + queued + ' 章' : '选中书籍暂无目录', duration: 1800 });
+      UiUtil.showToast(this.getUIContext(), { message: queued > 0 ? '已加入缓存队列 ' + queued + ' 章' : '选中书籍暂无目录', duration: 1800 });
     } catch (_e) {
-      promptAction.showToast({ message: '加入缓存失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '加入缓存失败', duration: 1500 });
     }
   }
 
@@ -169,9 +170,9 @@ struct BookshelfManagePage {
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
       fileIo.writeSync(f.fd, json);
       fileIo.closeSync(f);
-      promptAction.showToast({ message: '已导出选中书籍', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已导出选中书籍', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '导出失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '导出失败', duration: 1500 });
     }
   }
 
@@ -181,12 +182,12 @@ struct BookshelfManagePage {
       const bookDao = new BookTable(AppDatabase.getInstance().rdbStore);
       await bookDao.batchUpdateGroup(this.selectedBookIds, groupId);
       this.showGroupChooser = false;
-      promptAction.showToast({ message: '已移动分组', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已移动分组', duration: 1500 });
       this.selectedBookIds = [];
       await this.loadData();
       AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
     } catch (_e) {
-      promptAction.showToast({ message: '移动失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '移动失败', duration: 1500 });
     }
   }
 
@@ -201,7 +202,7 @@ struct BookshelfManagePage {
         Row() {
           Button() { Text('←').fontSize(20).fontColor('#0078D7') }
             .backgroundColor(Color.Transparent)
-            .onClick(() => { router.back(); })
+            .onClick(() => { UiUtil.back(this.getUIContext()); })
           Text('书架管理').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
           Text('选中 ' + this.selectedBookIds.length).fontSize(13).fontColor('#888')
         }

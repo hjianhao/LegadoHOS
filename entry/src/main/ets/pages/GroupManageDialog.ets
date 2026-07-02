@@ -10,6 +10,7 @@
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct GroupManageDialog {
@@ -42,11 +43,11 @@ export struct GroupManageDialog {
   private async onAddGroup(): Promise<void> {
     const name = this.addGroupName.trim();
     if (!name) {
-      promptAction.showToast({ message: '请输入分组名称', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请输入分组名称', duration: 1500 });
       return;
     }
     if (this.groups.includes(name)) {
-      promptAction.showToast({ message: '分组已存在', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '分组已存在', duration: 1500 });
       return;
     }
     try {
@@ -57,7 +58,7 @@ export struct GroupManageDialog {
       this.showAddInput = false;
       await this.loadGroups();
       if (this.onGroupChanged) this.onGroupChanged();
-      promptAction.showToast({ message: '已添加分组 ' + name, duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已添加分组 ' + name, duration: 1500 });
     } catch (_e) { /* ignore */ }
   }
 
@@ -70,7 +71,7 @@ export struct GroupManageDialog {
   private async onSaveEdit(): Promise<void> {
     const newName = this.editGroupName.trim();
     if (!newName) {
-      promptAction.showToast({ message: '分组名称不能为空', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '分组名称不能为空', duration: 1500 });
       return;
     }
     if (newName === this.editingGroup) {
@@ -78,7 +79,7 @@ export struct GroupManageDialog {
       return;
     }
     if (this.groups.includes(newName) && newName !== this.editingGroup) {
-      promptAction.showToast({ message: '分组名已存在', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '分组名已存在', duration: 1500 });
       return;
     }
     try {
@@ -88,12 +89,12 @@ export struct GroupManageDialog {
       this.showEditInput = false;
       await this.loadGroups();
       if (this.onGroupChanged) this.onGroupChanged();
-      promptAction.showToast({ message: '已重命名', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已重命名', duration: 1500 });
     } catch (_e) { /* ignore */ }
   }
 
   private confirmDeleteGroup(group: string): void {
-    AlertDialog.show({
+    UiUtil.showAlertDialog(this.getUIContext(), {
       title: '删除分组',
       message: '确定将分组 "' + group + '" 从所有书源中移除？',
       primaryButton: {
@@ -108,7 +109,7 @@ export struct GroupManageDialog {
             await dao.deleteGroup(group);
             await this.loadGroups();
             if (this.onGroupChanged) this.onGroupChanged();
-            promptAction.showToast({ message: '已删除分组', duration: 1500 });
+            UiUtil.showToast(this.getUIContext(), { message: '已删除分组', duration: 1500 });
           } catch (_e) { /* ignore */ }
         }
       },

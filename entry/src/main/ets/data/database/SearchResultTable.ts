@@ -1,4 +1,5 @@
 import relationalStore from '@ohos.data.relationalStore';
+import { RdbUtil } from './RdbUtil';
 
 export const SearchResultTableCreate = `
   CREATE TABLE IF NOT EXISTS search_results (
@@ -22,6 +23,6 @@ export class SearchResultTable {
     const deadline = Date.now() - hours * 3600 * 1000;
     const p = new relationalStore.RdbPredicates(SearchResultTable.TABLE_NAME);
     p.lessThan('create_time', deadline);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 }

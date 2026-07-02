@@ -8,6 +8,7 @@ import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 interface PresetItem { name: string; label: string; endpoint: string; }
 
@@ -40,7 +41,7 @@ struct AiConfigPage {
 
   async load(): Promise<void> {
     const s = SettingsStore.getInstance();
-    await s.init(getContext());
+    await s.init(UiUtil.getHostContext(this.getUIContext()));
     this.endpoint = await s.getAiEndpoint();
     this.apiKey = await s.getAiApiKey();
     this.model = await s.getAiModel();
@@ -59,11 +60,11 @@ struct AiConfigPage {
 
   async save(): Promise<void> {
     const s = SettingsStore.getInstance();
-    await s.init(getContext());
+    await s.init(UiUtil.getHostContext(this.getUIContext()));
     await s.setAiEndpoint(this.endpoint);
     await s.setAiApiKey(this.apiKey);
     await s.setAiModel(this.model);
-    promptAction.showToast({ message: '已保存', duration: 1500 });
+    UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
   }
 
   onPresetTap(p: PresetItem): void {
@@ -93,13 +94,13 @@ struct AiConfigPage {
         this.showModelPicker = true;
       }
     } catch (e) {
-      promptAction.showToast({ message: '获取失败: ' + (e as Error).message?.substring(0, 30), duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '获取失败: ' + (e as Error).message?.substring(0, 30), duration: 2000 });
     }
     this.isFetchingModels = false;
   }
 
   async testConnection(): Promise<void> {
-    if (!this.apiKey) { promptAction.showToast({ message: '请先填写 API Key', duration: 1500 }); return; }
+    if (!this.apiKey) { UiUtil.showToast(this.getUIContext(), { message: '请先填写 API Key', duration: 1500 }); return; }
     this.isTesting = true;
     this.testResult = '测试中...';
     try {
@@ -112,7 +113,7 @@ struct AiConfigPage {
       const json = JSON.parse(resp) as Record<string, Object>;
       if (json['choices']) {
         this.testResult = '✅ 连接成功';
-        promptAction.showToast({ message: '连接成功', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '连接成功', duration: 1500 });
       } else {
         this.testResult = '❌ 响应异常';
       }
@@ -146,7 +147,7 @@ struct AiConfigPage {
     Column() {
       Row() {
         Button('←').fontSize(18).fontColor(this.isDark ? '#CCC' : '#666').width(36).height(36)
-          .backgroundColor('transparent').onClick(() => { router.back(); })
+          .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('AI 配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('保存').fontSize(13).fontColor('#FFF').backgroundColor('#0078D7')
           .height(32).padding({ left: 14, right: 14 }).borderRadius(16)

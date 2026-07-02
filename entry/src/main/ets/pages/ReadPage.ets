@@ -27,6 +27,7 @@ import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState } from '../service/ReadAloudEngine';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -86,7 +87,7 @@ struct ReadPage {
   private sourceDlg?: CustomDialogController;
 
   aboutToAppear(): void {
-    const p = router.getParams() as Record<string, Object>;
+    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookName = String(p['bookName'] || p['name'] || '');
     this.bookAuthor = String(p['bookAuthor'] || p['author'] || '');
     this.bookUrl = String(p['bookUrl'] || '');
@@ -125,7 +126,7 @@ struct ReadPage {
   private async loadSettings(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
-      await s.init(getContext());
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.pageMode = (await s.getPageMode()) !== 0;
       this.cfg.fontSize = await s.getFontSize();
       this.cfg.fontFamily = await s.getFontFamily();
@@ -186,9 +187,10 @@ struct ReadPage {
             ChapterCache.bookUrl.substring(0, 80), 'current=', this.bookUrl.substring(0, 80));
         }
         if (this.source_) {
-          chapters = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
-          if (chapters.length === 0 && this.tocUrl && this.tocUrl !== this.bookUrl) {
-            chapters = await globalSourceExecutor.getToc(this.source_, this.tocUrl);
+          const primaryTocUrl = this.tocUrl || this.bookUrl;
+          chapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
+          if (chapters.length === 0 && primaryTocUrl !== this.bookUrl) {
+            chapters = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
           }
         }
       }
@@ -481,6 +483,7 @@ struct ReadPage {
       chineseMode: this.cfg.chineseMode,
       measuredCharWidth: this.measureCharW_,
       measuredLineHeight: this.measureLineH_,
+      pxToVp: (px: number): number => this.getUIContext().px2vp(px),
     };
     const footerH = this.cfg.showFooter ? this.footerH_() : 0;
     // 精确定位模式：pageHeight 已包含 paddingBottom（页脚在其上方叠加），
@@ -506,7 +509,7 @@ struct ReadPage {
     (async () => {
       try {
         const s = SettingsStore.getInstance();
-        await s.init(getContext());
+        await s.init(UiUtil.getHostContext(this.getUIContext()));
         s.setFontSize(c.fontSize).catch(() => {});
         s.setFontFamily(c.fontFamily).catch(() => {});
         s.setLineHeight(c.lineHeight).catch(() => {});
@@ -558,17 +561,17 @@ struct ReadPage {
   private onOpenToc(): void {
     ChapterCache.chapters = this.allChapters_;
     ChapterCache.bookUrl = this.bookUrl;
-    router.pushUrl({ url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
   }
 
   private onOpenSearchContent(): void {
     if (this.allChapters_.length === 0) {
-      promptAction.showToast({ message: '章节列表未加载', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '章节列表未加载', duration: 1500 });
       return;
     }
     ChapterCache.chapters = this.allChapters_;
     ChapterCache.bookUrl = this.bookUrl;
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/SearchContentPage',
       params: {
         bookId: this.bookId_,
@@ -608,11 +611,11 @@ struct ReadPage {
     const newBookUrl = result.noteUrl || '';
     const newOriginUrl = result.originUrl || '';
     if (!newBookUrl || !newOriginUrl) {
-      promptAction.showToast({ message: '书源信息不完整', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '书源信息不完整', duration: 1500 });
       return;
     }
     if (newBookUrl === this.bookUrl && newOriginUrl === this.originUrl) {
-      promptAction.showToast({ message: '已经是当前书源', duration: 1200 });
+      UiUtil.showToast(this.getUIContext(), { message: '已经是当前书源', duration: 1200 });
       return;
     }
 
@@ -624,7 +627,7 @@ struct ReadPage {
       /* ignore */
     }
 
-    promptAction.showToast({ message: '正在更换书源...', duration: 1000 });
+    UiUtil.showToast(this.getUIContext(), { message: '正在更换书源...', duration: 1000 });
     try {
       await AppDatabase.getInstance().waitForInit();
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
@@ -664,11 +667,11 @@ struct ReadPage {
       }
 
       await this.loadContent();
-      promptAction.showToast({ message: '已更换书源', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已更换书源', duration: 1500 });
     } catch (e) {
       console.error('[ReadPage] applySourceChange failed:', (e as Error).message);
       this.isLoading = false;
-      promptAction.showToast({ message: '换源失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '换源失败', duration: 1500 });
     }
   }
 
@@ -676,7 +679,7 @@ struct ReadPage {
     // 读取保存的搜索结果缓存（从 BookInfoPage 进入时写入了 router params）
     let cachedForSheet: SearchResult[] = [];
     try {
-      const p = router.getParams() as Record<string, Object>;
+      const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
       if (p['cachedSources']) {
         cachedForSheet = JSON.parse(String(p['cachedSources'])) as SearchResult[];
       }
@@ -691,7 +694,7 @@ struct ReadPage {
         cachedSources: cachedForSheet,
         onReplace: (result: SearchResult) => { this.applySourceChange(result); },
         onAddAsNew: (_result: SearchResult) => {
-          promptAction.showToast({ message: '阅读页暂不支持作为新书加入', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '阅读页暂不支持作为新书加入', duration: 1500 });
         }
       }),
       autoCancel: true,
@@ -725,7 +728,7 @@ struct ReadPage {
       },
       onError: (msg: string) => {
         console.error('[ReadPage] Aloud error: ' + msg);
-        promptAction.showToast({ message: msg, duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: msg, duration: 2000 });
       },
     });
   }
@@ -751,14 +754,11 @@ struct ReadPage {
         .onScrollEdge((side: Edge) => {
           if (!this.justLoadedChapter_ && side === Edge.Bottom) { this.onNextChapter(); }
         })
-        .onScroll((_x: number, y: number) => {
-          if (this.justLoadedChapter_) return;
-          if (y <= 0 && !this.scrollAtTop_) {
-            this.scrollAtTop_ = true;
-          }
-        })
         .onScrollStop(() => {
           if (this.justLoadedChapter_) { this.justLoadedChapter_ = false; return; }
+          if (this.scroller_.currentOffset().yOffset <= 0) {
+            this.scrollAtTop_ = true;
+          }
           if (this.scrollAtTop_ && this.currentIndex > 0 &&
               this.scroller_.currentOffset().yOffset <= 0) {
             this.scrollAtTop_ = false;
@@ -821,14 +821,14 @@ struct ReadPage {
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
           ReadBottomMenu({
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
-            onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { promptAction.showToast({message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
-            onBookmark: () => { this.showMenu = false; promptAction.showToast({message:'书签功能开发中',duration:1500}); },
+            onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { UiUtil.showToast(this.getUIContext(), {message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
+            onBookmark: () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), {message:'书签功能开发中',duration:1500}); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
             onSource: () => { this.showMenu = false; this.openSourceSheet(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
-            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); promptAction.showToast({message:'已刷新',duration:1500}); },
+            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); UiUtil.showToast(this.getUIContext(), {message:'已刷新',duration:1500}); },
           })
         }.width('100%').height('100%')
       }
@@ -853,7 +853,7 @@ struct ReadPage {
             totalChapters: this.totalChapters_,
             currentIndex: this.currentIndex,
             onDismiss: () => { this.showCacheDialog = false; },
-            onCacheComplete: () => { promptAction.showToast({ message: '缓存完成', duration: 1500 }); },
+            onCacheComplete: () => { UiUtil.showToast(this.getUIContext(), { message: '缓存完成', duration: 1500 }); },
             onCacheStart: () => {},
           })
         }.width('100%').height('100%')

@@ -3,6 +3,7 @@ import { BookshelfTransferService } from '../service/BookshelfTransferService';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct BookshelfExportDialog {
@@ -20,7 +21,7 @@ export struct BookshelfExportDialog {
     try {
       this.jsonText = await BookshelfTransferService.exportBookshelf(this.books.length > 0 ? this.books : undefined);
     } catch (_e) {
-      promptAction.showToast({ message: '生成导出内容失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '生成导出内容失败', duration: 1500 });
     }
     this.isRunning = false;
   }
@@ -33,9 +34,9 @@ export struct BookshelfExportDialog {
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
       fileIo.writeSync(f.fd, this.jsonText);
       fileIo.closeSync(f);
-      promptAction.showToast({ message: '书架已导出', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '书架已导出', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '保存失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '保存失败', duration: 1500 });
     }
   }
 

@@ -5,6 +5,7 @@
 import relationalStore from '@ohos.data.relationalStore';
 import { RSSSource, RSSArticle, RssStar, RssReadRecord } from '../../model/RSSSource';
 import { RSSImportPreview } from '../../model/RSSImport';
+import { RdbUtil } from './RdbUtil';
 
 // ====== 建表 SQL ======
 
@@ -127,7 +128,7 @@ export class RSSSourceTable {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('enabled', 1);
     p.orderByDesc('custom_order');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readSources(rs);
   }
 
@@ -135,7 +136,7 @@ export class RSSSourceTable {
   async getAll(): Promise<RSSSource[]> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.orderByDesc('custom_order');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readSources(rs);
   }
 
@@ -143,7 +144,7 @@ export class RSSSourceTable {
   async getByKey(sourceUrl: string): Promise<RSSSource | null> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('source_url', sourceUrl);
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     const list = this.readSources(rs);
     return list.length > 0 ? list[0] : null;
   }
@@ -151,7 +152,7 @@ export class RSSSourceTable {
   /** 插入或替换 */
   async insert(source: RSSSource): Promise<void> {
     const row = this.sourceToBucket(source);
-    try { await this.rdbStore.insert(RSSSourceTable.TABLE_NAME, row); } catch (_e_) { const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME); p.equalTo('source_url', row.sourceUrl); await this.rdbStore.update(row, p); }
+    try { await RdbUtil.insert(this.rdbStore, RSSSourceTable.TABLE_NAME, row); } catch (_e_) { const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME); p.equalTo('source_url', row.sourceUrl); await RdbUtil.update(this.rdbStore, row, p); }
   }
 
   /** 更新 */
@@ -159,31 +160,31 @@ export class RSSSourceTable {
     const row = this.sourceToBucket(source);
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('source_url', source.sourceUrl);
-    await this.rdbStore.update(row, p);
+    await RdbUtil.update(this.rdbStore, row, p);
   }
 
   /** 删除 */
 
   async getMaxOrder(): Promise<number> {
-    const rs = await this.rdbStore.querySql('SELECT MAX(custom_order) FROM rss_sources');
+    const rs = await RdbUtil.querySql(this.rdbStore, 'SELECT MAX(custom_order) FROM rss_sources');
     let maxOrder = 0;
-    if (rs.goToFirstRow()) maxOrder = rs.getLong(0) || 0;
-    rs.close();
+    if (RdbUtil.first(rs)) maxOrder = RdbUtil.longAt(rs, 0) || 0;
+    RdbUtil.close(rs);
     return maxOrder;
   }
 
   async getMinOrder(): Promise<number> {
-    const rs = await this.rdbStore.querySql('SELECT MIN(custom_order) FROM rss_sources');
+    const rs = await RdbUtil.querySql(this.rdbStore, 'SELECT MIN(custom_order) FROM rss_sources');
     let minOrder = 0;
-    if (rs.goToFirstRow()) minOrder = rs.getLong(0) || 0;
-    rs.close();
+    if (RdbUtil.first(rs)) minOrder = RdbUtil.longAt(rs, 0) || 0;
+    RdbUtil.close(rs);
     return minOrder;
   }
 
   async delete(sourceUrl: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('source_url', sourceUrl);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   /** 批量导入 — 解析 JSON 为预览列表 */
@@ -236,16 +237,16 @@ export class RSSSourceTable {
   async setEnabled(sourceUrl: string, enabled: boolean): Promise<void> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('source_url', sourceUrl);
-    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, p);
+    await RdbUtil.update(this.rdbStore, { 'enabled': enabled ? 1 : 0 }, p);
   }
 
   /** 获取所有分组 */
   async getAllGroups(): Promise<string[]> {
     const sql = 'SELECT DISTINCT source_group FROM rss_sources WHERE source_group IS NOT NULL AND source_group != \'\'';
-    const rs = await this.rdbStore.querySql(sql);
+    const rs = await RdbUtil.querySql(this.rdbStore, sql);
     const groups = new Set<string>();
-    while (rs.goToNextRow()) {
-      const g = rs.getString(0);
+    while (RdbUtil.next(rs)) {
+      const g = RdbUtil.stringAt(rs, 0);
       if (g) {
         g.split(/[,，]/).forEach((item: string) => {
           const t = item.trim();
@@ -253,7 +254,7 @@ export class RSSSourceTable {
         });
       }
     }
-    rs.close();
+    RdbUtil.close(rs);
     return Array.from(groups).sort();
   }
 
@@ -262,7 +263,7 @@ export class RSSSourceTable {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.like('source_group', `%${group}%`);
     p.orderByDesc('custom_order');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readSources(rs);
   }
 
@@ -275,7 +276,7 @@ export class RSSSourceTable {
     p.or().like('source_group', `%${keyword}%`);
     p.endWrap();
     p.orderByDesc('custom_order');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readSources(rs);
   }
 
@@ -304,15 +305,15 @@ export class RSSSourceTable {
   async updateOrder(sourceUrl: string, order: number): Promise<void> {
     const p = new relationalStore.RdbPredicates(RSSSourceTable.TABLE_NAME);
     p.equalTo('source_url', sourceUrl);
-    await this.rdbStore.update({ 'custom_order': order, 'last_update_time': Date.now() }, p);
+    await RdbUtil.update(this.rdbStore, { 'custom_order': order, 'last_update_time': Date.now() }, p);
   }
 
   /** 计数 */
   async count(): Promise<number> {
-    const rs = await this.rdbStore.querySql('SELECT COUNT(*) FROM rss_sources');
+    const rs = await RdbUtil.querySql(this.rdbStore, 'SELECT COUNT(*) FROM rss_sources');
     let c = 0;
-    if (rs.goToFirstRow()) c = rs.getLong(0);
-    rs.close();
+    if (RdbUtil.first(rs)) c = RdbUtil.longAt(rs, 0);
+    RdbUtil.close(rs);
     return c;
   }
 
@@ -321,56 +322,56 @@ export class RSSSourceTable {
   private readSources(rs: relationalStore.ResultSet): RSSSource[] {
     const list: RSSSource[] = [];
     if (!rs) return list;
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        sourceUrl: rs.getString(rs.getColumnIndex('source_url')) || '',
-        sourceName: rs.getString(rs.getColumnIndex('source_name')) || '',
-        sourceIcon: rs.getString(rs.getColumnIndex('source_icon')) || '',
-        sourceGroup: rs.getString(rs.getColumnIndex('source_group')) || '',
-        sourceComment: rs.getString(rs.getColumnIndex('source_comment')) || '',
-        enabled: rs.getLong(rs.getColumnIndex('enabled')) === 1,
-        variableComment: rs.getString(rs.getColumnIndex('variable_comment')) || '',
-        jsLib: rs.getString(rs.getColumnIndex('js_lib')) || '',
-        enabledCookieJar: rs.getLong(rs.getColumnIndex('enabled_cookie_jar')) === 1,
-        concurrentRate: rs.getString(rs.getColumnIndex('concurrent_rate')) || '',
-        header: rs.getString(rs.getColumnIndex('header')) || '',
-        loginUrl: rs.getString(rs.getColumnIndex('login_url')) || '',
-        loginUi: rs.getString(rs.getColumnIndex('login_ui')) || '',
-        loginCheckJs: rs.getString(rs.getColumnIndex('login_check_js')) || '',
-        coverDecodeJs: rs.getString(rs.getColumnIndex('cover_decode_js')) || '',
-        sortUrl: rs.getString(rs.getColumnIndex('sort_url')) || '',
-        singleUrl: rs.getLong(rs.getColumnIndex('single_url')) === 1,
-        articleStyle: rs.getLong(rs.getColumnIndex('article_style')),
-        ruleArticles: rs.getString(rs.getColumnIndex('rule_articles')) || '',
-        ruleNextPage: rs.getString(rs.getColumnIndex('rule_next_page')) || '',
-        ruleTitle: rs.getString(rs.getColumnIndex('rule_title')) || '',
-        rulePubDate: rs.getString(rs.getColumnIndex('rule_pub_date')) || '',
-        ruleDescription: rs.getString(rs.getColumnIndex('rule_description')) || '',
-        ruleImage: rs.getString(rs.getColumnIndex('rule_image')) || '',
-        ruleLink: rs.getString(rs.getColumnIndex('rule_link')) || '',
-        ruleContent: rs.getString(rs.getColumnIndex('rule_content')) || '',
-        contentWhitelist: rs.getString(rs.getColumnIndex('content_whitelist')) || '',
-        contentBlacklist: rs.getString(rs.getColumnIndex('content_blacklist')) || '',
-        shouldOverrideUrlLoading: rs.getString(rs.getColumnIndex('should_override_url_loading')) || '',
-        style: rs.getString(rs.getColumnIndex('style')) || '',
-        enableJs: rs.getLong(rs.getColumnIndex('enable_js')) === 1,
-        loadWithBaseUrl: rs.getLong(rs.getColumnIndex('load_with_base_url')) === 1,
-        injectJs: rs.getString(rs.getColumnIndex('inject_js')) || '',
-        preloadJs: rs.getString(rs.getColumnIndex('preload_js')) || '',
-        startHtml: rs.getString(rs.getColumnIndex('start_html')) || '',
-        startStyle: rs.getString(rs.getColumnIndex('start_style')) || '',
-        startJs: rs.getString(rs.getColumnIndex('start_js')) || '',
-        showWebLog: rs.getLong(rs.getColumnIndex('show_web_log')) === 1,
-        lastUpdateTime: rs.getLong(rs.getColumnIndex('last_update_time')),
-        customOrder: rs.getLong(rs.getColumnIndex('custom_order')),
-        type: rs.getLong(rs.getColumnIndex('type')),
-        preload: rs.getLong(rs.getColumnIndex('preload')) === 1,
-        cacheFirst: rs.getLong(rs.getColumnIndex('cache_first')) === 1,
-        searchUrl: rs.getString(rs.getColumnIndex('search_url')) || '',
-        redirectPolicy: rs.getString(rs.getColumnIndex('redirect_policy')) || 'ASK_CROSS_ORIGIN',
+        sourceUrl: RdbUtil.string(rs, 'source_url') || '',
+        sourceName: RdbUtil.string(rs, 'source_name') || '',
+        sourceIcon: RdbUtil.string(rs, 'source_icon') || '',
+        sourceGroup: RdbUtil.string(rs, 'source_group') || '',
+        sourceComment: RdbUtil.string(rs, 'source_comment') || '',
+        enabled: RdbUtil.long(rs, 'enabled') === 1,
+        variableComment: RdbUtil.string(rs, 'variable_comment') || '',
+        jsLib: RdbUtil.string(rs, 'js_lib') || '',
+        enabledCookieJar: RdbUtil.long(rs, 'enabled_cookie_jar') === 1,
+        concurrentRate: RdbUtil.string(rs, 'concurrent_rate') || '',
+        header: RdbUtil.string(rs, 'header') || '',
+        loginUrl: RdbUtil.string(rs, 'login_url') || '',
+        loginUi: RdbUtil.string(rs, 'login_ui') || '',
+        loginCheckJs: RdbUtil.string(rs, 'login_check_js') || '',
+        coverDecodeJs: RdbUtil.string(rs, 'cover_decode_js') || '',
+        sortUrl: RdbUtil.string(rs, 'sort_url') || '',
+        singleUrl: RdbUtil.long(rs, 'single_url') === 1,
+        articleStyle: RdbUtil.long(rs, 'article_style'),
+        ruleArticles: RdbUtil.string(rs, 'rule_articles') || '',
+        ruleNextPage: RdbUtil.string(rs, 'rule_next_page') || '',
+        ruleTitle: RdbUtil.string(rs, 'rule_title') || '',
+        rulePubDate: RdbUtil.string(rs, 'rule_pub_date') || '',
+        ruleDescription: RdbUtil.string(rs, 'rule_description') || '',
+        ruleImage: RdbUtil.string(rs, 'rule_image') || '',
+        ruleLink: RdbUtil.string(rs, 'rule_link') || '',
+        ruleContent: RdbUtil.string(rs, 'rule_content') || '',
+        contentWhitelist: RdbUtil.string(rs, 'content_whitelist') || '',
+        contentBlacklist: RdbUtil.string(rs, 'content_blacklist') || '',
+        shouldOverrideUrlLoading: RdbUtil.string(rs, 'should_override_url_loading') || '',
+        style: RdbUtil.string(rs, 'style') || '',
+        enableJs: RdbUtil.long(rs, 'enable_js') === 1,
+        loadWithBaseUrl: RdbUtil.long(rs, 'load_with_base_url') === 1,
+        injectJs: RdbUtil.string(rs, 'inject_js') || '',
+        preloadJs: RdbUtil.string(rs, 'preload_js') || '',
+        startHtml: RdbUtil.string(rs, 'start_html') || '',
+        startStyle: RdbUtil.string(rs, 'start_style') || '',
+        startJs: RdbUtil.string(rs, 'start_js') || '',
+        showWebLog: RdbUtil.long(rs, 'show_web_log') === 1,
+        lastUpdateTime: RdbUtil.long(rs, 'last_update_time'),
+        customOrder: RdbUtil.long(rs, 'custom_order'),
+        type: RdbUtil.long(rs, 'type'),
+        preload: RdbUtil.long(rs, 'preload') === 1,
+        cacheFirst: RdbUtil.long(rs, 'cache_first') === 1,
+        searchUrl: RdbUtil.string(rs, 'search_url') || '',
+        redirectPolicy: RdbUtil.string(rs, 'redirect_policy') || 'ASK_CROSS_ORIGIN',
       });
     }
-    try { rs.close(); } catch (_e) { /* ignore */ }
+    try { RdbUtil.close(rs); } catch (_e) { /* ignore */ }
     return list;
   }
 
@@ -439,7 +440,7 @@ export class RSSArticleTable {
     const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.orderByDesc('order_num');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readArticles(rs);
   }
 
@@ -448,7 +449,7 @@ export class RSSArticleTable {
     p.equalTo('origin', origin);
     if (sort) p.and().equalTo('sort', sort);
     p.orderByDesc('order_num');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readArticles(rs);
   }
 
@@ -456,20 +457,20 @@ export class RSSArticleTable {
     const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.and().equalTo('link', link);
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     const list = this.readArticles(rs);
     return list.length > 0 ? list[0] : null;
   }
 
   async insert(article: RSSArticle): Promise<void> {
     const row = this.articleToBucket(article);
-    await this.rdbStore.insert(RSSArticleTable.TABLE_NAME, row);
+    await RdbUtil.insert(this.rdbStore, RSSArticleTable.TABLE_NAME, row);
   }
 
   /** 插入或替换（主键冲突时更新） */
   async replace(article: RSSArticle): Promise<void> {
     const row = this.articleToBucket(article);
-    try { await this.rdbStore.insert(RSSArticleTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); p2.and().equalTo('sort', row.sort); await this.rdbStore.update(row, p2); }
+    try { await RdbUtil.insert(this.rdbStore, RSSArticleTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); p2.and().equalTo('sort', row.sort); await RdbUtil.update(this.rdbStore, row, p2); }
   }
 
   async batchInsert(articles: RSSArticle[]): Promise<void> {
@@ -484,7 +485,7 @@ export class RSSArticleTable {
     p.equalTo('origin', article.origin);
     p.and().equalTo('link', article.link);
     p.and().equalTo('sort', article.sort);
-    await this.rdbStore.update(row, p);
+    await RdbUtil.update(this.rdbStore, row, p);
   }
 
   async markRead(origin: string, link: string, sort: string): Promise<void> {
@@ -492,14 +493,14 @@ export class RSSArticleTable {
     p.equalTo('origin', origin);
     p.and().equalTo('link', link);
     p.and().equalTo('sort', sort);
-    await this.rdbStore.update({ 'is_read': 1 }, p);
+    await RdbUtil.update(this.rdbStore, { 'is_read': 1 }, p);
   }
 
   async markAllRead(origin: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.and().equalTo('is_read', 0);
-    await this.rdbStore.update({ 'is_read': 1 }, p);
+    await RdbUtil.update(this.rdbStore, { 'is_read': 1 }, p);
   }
 
   async delete(origin: string, link: string, sort: string): Promise<void> {
@@ -507,53 +508,53 @@ export class RSSArticleTable {
     p.equalTo('origin', origin);
     p.and().equalTo('link', link);
     p.and().equalTo('sort', sort);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async deleteByOrigin(origin: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
     p.equalTo('origin', origin);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async getUnreadCount(origin: string): Promise<number> {
     const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.and().equalTo('is_read', 0);
-    const rs = await this.rdbStore.query(p, ['COUNT(*) AS cnt']);
+    const rs = await RdbUtil.query(this.rdbStore, p, ['COUNT(*) AS cnt']);
     let c = 0;
-    if (rs.goToFirstRow()) c = rs.getLong(0);
-    rs.close();
+    if (RdbUtil.first(rs)) c = RdbUtil.longAt(rs, 0);
+    RdbUtil.close(rs);
     return c;
   }
 
   async getRecent(limit: number): Promise<RSSArticle[]> {
     const sql = `SELECT * FROM rss_articles ORDER BY order_num DESC LIMIT ${limit}`;
-    const rs = await this.rdbStore.querySql(sql);
+    const rs = await RdbUtil.querySql(this.rdbStore, sql);
     return this.readArticles(rs);
   }
 
   private readArticles(rs: relationalStore.ResultSet): RSSArticle[] {
     const list: RSSArticle[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        origin: rs.getString(rs.getColumnIndex('origin')) || '',
-        sort: rs.getString(rs.getColumnIndex('sort')) || '',
-        title: rs.getString(rs.getColumnIndex('title')) || '',
-        order: rs.getLong(rs.getColumnIndex('order_num')),
-        link: rs.getString(rs.getColumnIndex('link')) || '',
-        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
-        description: rs.getString(rs.getColumnIndex('description')) || null,
-        content: rs.getString(rs.getColumnIndex('content')) || null,
-        image: rs.getString(rs.getColumnIndex('image')) || null,
-        group: rs.getString(rs.getColumnIndex('group_name')) || '默认分组',
-        read: rs.getLong(rs.getColumnIndex('is_read')) === 1,
-        variable: rs.getString(rs.getColumnIndex('variable')) || null,
-        type: rs.getLong(rs.getColumnIndex('type')),
-        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
+        origin: RdbUtil.string(rs, 'origin') || '',
+        sort: RdbUtil.string(rs, 'sort') || '',
+        title: RdbUtil.string(rs, 'title') || '',
+        order: RdbUtil.long(rs, 'order_num'),
+        link: RdbUtil.string(rs, 'link') || '',
+        pubDate: RdbUtil.string(rs, 'pub_date') || null,
+        description: RdbUtil.string(rs, 'description') || null,
+        content: RdbUtil.string(rs, 'content') || null,
+        image: RdbUtil.string(rs, 'image') || null,
+        group: RdbUtil.string(rs, 'group_name') || '默认分组',
+        read: RdbUtil.long(rs, 'is_read') === 1,
+        variable: RdbUtil.string(rs, 'variable') || null,
+        type: RdbUtil.long(rs, 'type'),
+        durPos: RdbUtil.long(rs, 'dur_pos'),
       });
     }
-    try { rs.close(); } catch (_e) { /* ignore */ }
+    try { RdbUtil.close(rs); } catch (_e) { /* ignore */ }
     return list;
   }
 
@@ -590,7 +591,7 @@ export class RssStarTable {
   async getAll(): Promise<RssStar[]> {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.orderByDesc('star_time');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readStars(rs);
   }
 
@@ -598,14 +599,14 @@ export class RssStarTable {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.and().equalTo('link', link);
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     const list = this.readStars(rs);
     return list.length > 0 ? list[0] : null;
   }
 
   async insert(star: RssStar): Promise<void> {
     const row = this.starToBucket(star);
-    try { await this.rdbStore.insert(RssStarTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); await this.rdbStore.update(row, p2); }
+    try { await RdbUtil.insert(this.rdbStore, RssStarTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('link', row.link); await RdbUtil.update(this.rdbStore, row, p2); }
   }
 
   async update(star: RssStar): Promise<void> {
@@ -613,38 +614,38 @@ export class RssStarTable {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('origin', star.origin);
     p.and().equalTo('link', star.link);
-    await this.rdbStore.update(row, p);
+    await RdbUtil.update(this.rdbStore, row, p);
   }
 
   async delete(origin: string, link: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.and().equalTo('link', link);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async deleteByOrigin(origin: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('origin', origin);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async deleteAll(): Promise<void> {
-    await this.rdbStore.executeSql('DELETE FROM rss_stars');
+    await RdbUtil.executeSql(this.rdbStore, 'DELETE FROM rss_stars');
   }
 
   async deleteByGroup(group: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('group_name', group);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async getGroups(): Promise<string[]> {
     const sql = 'SELECT DISTINCT group_name FROM rss_stars WHERE group_name IS NOT NULL AND group_name != \'\'';
-    const rs = await this.rdbStore.querySql(sql);
+    const rs = await RdbUtil.querySql(this.rdbStore, sql);
     const groups: string[] = [];
-    while (rs.goToNextRow()) groups.push(rs.getString(0) || '');
-    rs.close();
+    while (RdbUtil.next(rs)) groups.push(RdbUtil.stringAt(rs, 0) || '');
+    RdbUtil.close(rs);
     return groups;
   }
 
@@ -652,38 +653,38 @@ export class RssStarTable {
     const p = new relationalStore.RdbPredicates(RssStarTable.TABLE_NAME);
     p.equalTo('group_name', group);
     p.orderByDesc('star_time');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readStars(rs);
   }
 
   async count(): Promise<number> {
-    const rs = await this.rdbStore.querySql('SELECT COUNT(*) FROM rss_stars');
+    const rs = await RdbUtil.querySql(this.rdbStore, 'SELECT COUNT(*) FROM rss_stars');
     let c = 0;
-    if (rs.goToFirstRow()) c = rs.getLong(0);
-    rs.close();
+    if (RdbUtil.first(rs)) c = RdbUtil.longAt(rs, 0);
+    RdbUtil.close(rs);
     return c;
   }
 
   private readStars(rs: relationalStore.ResultSet): RssStar[] {
     const list: RssStar[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        origin: rs.getString(rs.getColumnIndex('origin')) || '',
-        sort: rs.getString(rs.getColumnIndex('sort')) || '',
-        title: rs.getString(rs.getColumnIndex('title')) || '',
-        starTime: rs.getLong(rs.getColumnIndex('star_time')),
-        link: rs.getString(rs.getColumnIndex('link')) || '',
-        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
-        description: rs.getString(rs.getColumnIndex('description')) || null,
-        content: rs.getString(rs.getColumnIndex('content')) || null,
-        image: rs.getString(rs.getColumnIndex('image')) || null,
-        group: rs.getString(rs.getColumnIndex('group_name')) || '默认分组',
-        variable: rs.getString(rs.getColumnIndex('variable')) || null,
-        type: rs.getLong(rs.getColumnIndex('type')),
-        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
+        origin: RdbUtil.string(rs, 'origin') || '',
+        sort: RdbUtil.string(rs, 'sort') || '',
+        title: RdbUtil.string(rs, 'title') || '',
+        starTime: RdbUtil.long(rs, 'star_time'),
+        link: RdbUtil.string(rs, 'link') || '',
+        pubDate: RdbUtil.string(rs, 'pub_date') || null,
+        description: RdbUtil.string(rs, 'description') || null,
+        content: RdbUtil.string(rs, 'content') || null,
+        image: RdbUtil.string(rs, 'image') || null,
+        group: RdbUtil.string(rs, 'group_name') || '默认分组',
+        variable: RdbUtil.string(rs, 'variable') || null,
+        type: RdbUtil.long(rs, 'type'),
+        durPos: RdbUtil.long(rs, 'dur_pos'),
       });
     }
-    try { rs.close(); } catch (_e) { /* ignore */ }
+    try { RdbUtil.close(rs); } catch (_e) { /* ignore */ }
     return list;
   }
 
@@ -718,7 +719,7 @@ export class RssReadRecordTable {
 
   async getRecent(limit: number): Promise<RssReadRecord[]> {
     const sql = `SELECT * FROM rss_read_records ORDER BY read_time DESC LIMIT ${limit}`;
-    const rs = await this.rdbStore.querySql(sql);
+    const rs = await RdbUtil.querySql(this.rdbStore, sql);
     return this.readRecords(rs);
   }
 
@@ -726,37 +727,37 @@ export class RssReadRecordTable {
     const p = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME);
     p.equalTo('origin', origin);
     p.orderByDesc('read_time');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     return this.readRecords(rs);
   }
 
   async insert(record: RssReadRecord): Promise<void> {
     const row = this.recordToBucket(record);
-    try { await this.rdbStore.insert(RssReadRecordTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('record', row.record); await this.rdbStore.update(row, p2); }
+    try { await RdbUtil.insert(this.rdbStore, RssReadRecordTable.TABLE_NAME, row); } catch (_e_) { const p2 = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME); p2.equalTo('origin', row.origin); p2.and().equalTo('record', row.record); await RdbUtil.update(this.rdbStore, row, p2); }
   }
 
   async deleteByOrigin(origin: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(RssReadRecordTable.TABLE_NAME);
     p.equalTo('origin', origin);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   private readRecords(rs: relationalStore.ResultSet): RssReadRecord[] {
     const list: RssReadRecord[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        origin: rs.getString(rs.getColumnIndex('origin')) || '',
-        sort: rs.getString(rs.getColumnIndex('sort')) || '',
-        title: rs.getString(rs.getColumnIndex('title')) || '',
-        readTime: rs.getLong(rs.getColumnIndex('read_time')),
-        record: rs.getString(rs.getColumnIndex('record')) || '',
-        image: rs.getString(rs.getColumnIndex('image')) || null,
-        type: rs.getLong(rs.getColumnIndex('type')),
-        durPos: rs.getLong(rs.getColumnIndex('dur_pos')),
-        pubDate: rs.getString(rs.getColumnIndex('pub_date')) || null,
+        origin: RdbUtil.string(rs, 'origin') || '',
+        sort: RdbUtil.string(rs, 'sort') || '',
+        title: RdbUtil.string(rs, 'title') || '',
+        readTime: RdbUtil.long(rs, 'read_time'),
+        record: RdbUtil.string(rs, 'record') || '',
+        image: RdbUtil.string(rs, 'image') || null,
+        type: RdbUtil.long(rs, 'type'),
+        durPos: RdbUtil.long(rs, 'dur_pos'),
+        pubDate: RdbUtil.string(rs, 'pub_date') || null,
       });
     }
-    try { rs.close(); } catch (_e) { /* ignore */ }
+    try { RdbUtil.close(rs); } catch (_e) { /* ignore */ }
     return list;
   }
 

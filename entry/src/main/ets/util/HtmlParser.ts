@@ -443,8 +443,8 @@ export class HtmlParser {
       exclStart = parseInt(exclMatch[2]);
       exclEnd = exclMatch[3] !== undefined ? parseInt(exclMatch[3]) : exclStart;
     }
-    // 位置索引: tag.N 或 tag.-N（如 a.0, td.2, p.-1）
-    const posMatch = workPart.match(/^([a-zA-Z][\w-]*)(?:\.(-?\d+))$/);
+    // 位置索引: selector.N 或 selector.-N（如 a.0, td.2, .odd.1, p.-1）
+    const posMatch = workPart.match(/^(.+)\.(-?\d+)$/);
     if (posMatch) {
       parts[lastIdx] = posMatch[1]; // 去掉 .N
       posIndex = parseInt(posMatch[2]);
@@ -496,7 +496,7 @@ export class HtmlParser {
 
     // 应用位置索引
     if (hasPosIndex && results.length > 0) {
-      if (posIndex < results.length) return [results[posIndex]];
+      if (posIndex >= 0 && posIndex < results.length) return [results[posIndex]];
       if (posIndex < 0 && results.length + posIndex >= 0) return [results[results.length + posIndex]];
       return [];
     }
@@ -565,8 +565,8 @@ export class HtmlParser {
       exclEnd = exclMatch[3] !== undefined ? parseInt(exclMatch[3]) : exclStart;
     }
 
-    // 位置索引: tag.N 或 tag.-N (如 a.0, td.2, p.-1)
-    const posMatch = exclSelector.match(/^([a-zA-Z][\w-]*)(?:\.(-?\d+))$/);
+    // 位置索引: selector.N 或 selector.-N (如 a.0, td.2, .odd.1, p.-1)
+    const posMatch = exclSelector.match(/^(.+)\.(-?\d+)$/);
     if (posMatch) {
       const baseSel = posMatch[1];
       const position = parseInt(posMatch[2]);

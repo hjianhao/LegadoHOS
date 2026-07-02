@@ -8,6 +8,7 @@ import { RssStar } from '../model/RSSSource';
 import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -94,20 +95,20 @@ export struct RssFavoritesPage {
         await this.db.rssStarTable.delete(origin, link);
       }
     }
-    promptAction.showToast({ message: `已删除 ${this.selectedIds.size} 项` });
+    UiUtil.showToast(this.getUIContext(), { message: `已删除 ${this.selectedIds.size} 项` });
     this.selectedIds = new Set();
     this.loadData();
   }
 
   async deleteAll() {
     await this.db.rssStarTable.deleteAll();
-    promptAction.showToast({ message: '已清空所有收藏' });
+    UiUtil.showToast(this.getUIContext(), { message: '已清空所有收藏' });
     this.loadData();
   }
 
   async deleteGroup(group: string) {
     await this.db.rssStarTable.deleteByGroup(group);
-    promptAction.showToast({ message: `已删除分组「${group}」所有项目` });
+    UiUtil.showToast(this.getUIContext(), { message: `已删除分组「${group}」所有项目` });
     if (this.currentGroup === group) this.currentGroup = '';
     this.loadData();
   }
@@ -139,7 +140,7 @@ export struct RssFavoritesPage {
   }
 
   openRead(star: RssStar) {
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/RssReadPage',
       params: {
         title: star.title,
@@ -152,7 +153,7 @@ export struct RssFavoritesPage {
   groupActionDialog() {
     const msg = '当前: ' + (this.currentGroup || '全部') +
       '\n可用分组: ' + (this.groups.length > 0 ? this.groups.join(', ') : '无');
-    AlertDialog.show({
+    UiUtil.showAlertDialog(this.getUIContext(), {
       title: '分组管理',
       message: msg,
       autoCancel: true,
@@ -169,7 +170,7 @@ export struct RssFavoritesPage {
       // ===== 顶部栏 =====
       Row() {
         Text('←').fontSize(22).fontColor('#0078D7')
-          .onClick(() => router.back())
+          .onClick(() => UiUtil.back(this.getUIContext()))
         Text('收藏文章').fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
           .margin({ left: 8 })

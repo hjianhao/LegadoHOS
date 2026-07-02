@@ -7,10 +7,11 @@ import { RSSSource } from '../model/RSSSource';
 import { RssImportDialog } from './RssImportDialog';
 import promptAction from '@ohos.promptAction';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
-export struct RssSourceManagePage {
+struct RssSourceManagePage {
   @StorageProp('isDark') isDark: boolean = false;
   @State sources: RSSSource[] = [];
   @State isLoading: boolean = true;
@@ -63,7 +64,7 @@ export struct RssSourceManagePage {
     for (let i = 0; i < this.selectedIds.length; i++) {
       await this.db.rssSourceTable.setEnabled(this.selectedIds[i], enabled);
     }
-    promptAction.showToast({ message: enabled ? '已启用' : '已禁用' });
+    UiUtil.showToast(this.getUIContext(), { message: enabled ? '已启用' : '已禁用' });
     this.loadData();
   }
 
@@ -73,20 +74,20 @@ export struct RssSourceManagePage {
         await this.db.rssSourceTable.delete(this.selectedIds[i]);
       }
       this.selectedIds = [];
-      promptAction.showToast({ message: '删除成功' });
+      UiUtil.showToast(this.getUIContext(), { message: '删除成功' });
       this.loadData();
     } catch (e) {
-      promptAction.showToast({ message: '删除失败: ' + e });
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败: ' + e });
     }
   }
 
   async onDeleteSingle(sourceUrl: string) {
     try {
       await this.db.rssSourceTable.delete(sourceUrl);
-      promptAction.showToast({ message: '已删除' });
+      UiUtil.showToast(this.getUIContext(), { message: '已删除' });
       this.loadData();
     } catch (e) {
-      promptAction.showToast({ message: '删除失败' });
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败' });
     }
   }
 
@@ -110,7 +111,7 @@ export struct RssSourceManagePage {
           Text('← 返回').fontSize(16).fontColor('#0078D7')
         }
         .backgroundColor('transparent')
-        .onClick(() => { router.back(); })
+        .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('RSS 管理').fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#333')
           .margin({ left: 8 })
@@ -127,7 +128,7 @@ export struct RssSourceManagePage {
         }
         .backgroundColor('transparent')
         .onClick(() => {
-          router.pushUrl({ url: 'pages/RssSourceEditPage' });
+          UiUtil.pushUrl(this.getUIContext(), { url: 'pages/RssSourceEditPage' });
         })
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })
@@ -199,14 +200,14 @@ export struct RssSourceManagePage {
                 }
                 .backgroundColor('transparent').margin({ right: 4 })
                 .onClick(() => {
-                  router.pushUrl({ url: 'pages/RssSourceEditPage', params: { sourceUrl: source.sourceUrl } });
+                  UiUtil.pushUrl(this.getUIContext(), { url: 'pages/RssSourceEditPage', params: { sourceUrl: source.sourceUrl } });
                 })
                 Button({ type: ButtonType.Normal }) {
                   Text('删除').fontSize(12).fontColor('#F44336')
                 }
                 .backgroundColor('transparent')
                 .onClick(() => {
-                  AlertDialog.show({
+                  UiUtil.showAlertDialog(this.getUIContext(), {
                     title: '删除确认',
                     message: '确定要删除此 RSS 源？',
                     primaryButton: { value: '取消', action: () => {} },

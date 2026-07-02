@@ -11,6 +11,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import { WebViewEngine } from '../components/WebViewEngine';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -98,7 +99,7 @@ struct BookSourcePage {
   }
 
   private async doExport(): Promise<void> {
-    if (this.filtered.length === 0) { promptAction.showToast({message:'无书源',duration:1500}); return; }
+    if (this.filtered.length === 0) { UiUtil.showToast(this.getUIContext(), {message:'无书源',duration:1500}); return; }
     try {
       const dp = new picker.DocumentViewPicker();
       const uris = await dp.save({ newFileNames: ['bookSources.json'] });
@@ -107,9 +108,9 @@ struct BookSourcePage {
         const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
         fileIo.writeSync(f.fd, json);
         fileIo.closeSync(f);
-        promptAction.showToast({message:'已导出 '+this.filtered.length+' 条',duration:2000});
+        UiUtil.showToast(this.getUIContext(), {message:'已导出 '+this.filtered.length+' 条',duration:2000});
       }
-    } catch (_e) { promptAction.showToast({message:'导出失败',duration:1500}); }
+    } catch (_e) { UiUtil.showToast(this.getUIContext(), {message:'导出失败',duration:1500}); }
   }
 
   private toggleSelect(idx: number): void {
@@ -126,7 +127,7 @@ struct BookSourcePage {
     const urls: string[] = [];
     for (let i = 0; i < this.filtered.length; i++) if (this.selected[i]) urls.push(this.filtered[i].sourceUrl);
     if (urls.length === 0) return;
-    this.dao_?.batchDeleteByUrl?.(urls).then(() => { this.load(); this.selectMode = false; promptAction.showToast({message:'已删除 '+urls.length+' 个',duration:1500}); });
+    this.dao_?.batchDeleteByUrl?.(urls).then(() => { this.load(); this.selectMode = false; UiUtil.showToast(this.getUIContext(), {message:'已删除 '+urls.length+' 个',duration:1500}); });
   }
 
   private getCheckDetails(url: string): CheckDetail[] {
@@ -140,7 +141,7 @@ struct BookSourcePage {
   private startCheck(): void {
     const toCheck: BookSource[] = [];
     for (let i = 0; i < this.filtered.length; i++) if (this.selected[i]) toCheck.push(this.filtered[i]);
-    if (toCheck.length === 0) { promptAction.showToast({message:'请先选择书源',duration:1500}); return; }
+    if (toCheck.length === 0) { UiUtil.showToast(this.getUIContext(), {message:'请先选择书源',duration:1500}); return; }
 
     this.isChecking = true;
     this.checkTotal = toCheck.length;
@@ -169,7 +170,7 @@ struct BookSourcePage {
     Column() {
       // 顶部栏
       Row() {
-        Button('←').fontSize(18).fontColor(this.isDark?'#CCC':'#666').width(36).height(36).backgroundColor('transparent').onClick(()=>{router.back()})
+        Button('←').fontSize(18).fontColor(this.isDark?'#CCC':'#666').width(36).height(36).backgroundColor('transparent').onClick(()=>{UiUtil.back(this.getUIContext())})
         Text('书源(' + this.sources.length + ')').fontSize(16).fontWeight(FontWeight.Bold).layoutWeight(1).margin({left:4})
         if (this.selectMode) {
           Button('取消').fontSize(13).fontColor('#0078D7').height(32).padding({left:8,right:8}).onClick(()=>{this.selectMode=false;this.selected.fill(false)})
@@ -213,7 +214,7 @@ struct BookSourcePage {
       else { List(){ForEach(this.getDisplayList(),(s:BookSource,idx:number)=>{ListItem(){this.item(s,idx)}.border({width:{bottom:1},color:this.isDark?'#333':'#E8E8E8'})})}.layoutWeight(1) }
 
       // 批量操作栏（复刻 Android SelectActionBar）
-      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(12).fontColor('#666').margin({left:8}).layoutWeight(1);Button(this.getSelCount()===this.selected.length?'取消':'全选').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{const all=this.getSelCount()===this.selected.length;for(let i=0;i<this.selected.length;i++)this.selected[i]=!all});Button('启用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(false)});Button('分组').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{promptAction.showToast({message:'分组功能待实现',duration:1500})});Button('校验').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).backgroundColor('#FF9800').fontColor('#FFF').onClick(()=>{this.startCheck()}).enabled(!this.isChecking);Button('导出').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(11).height(28).padding({left:6,right:6}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(42).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
+      if (this.selectMode) { Row(){Text('已选'+this.getSelCount()+'项').fontSize(12).fontColor('#666').margin({left:8}).layoutWeight(1);Button(this.getSelCount()===this.selected.length?'取消':'全选').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{const all=this.getSelCount()===this.selected.length;for(let i=0;i<this.selected.length;i++)this.selected[i]=!all});Button('启用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(true)});Button('禁用').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.batchEnable(false)});Button('分组').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{UiUtil.showToast(this.getUIContext(), {message:'分组功能待实现',duration:1500})});Button('校验').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).backgroundColor('#FF9800').fontColor('#FFF').onClick(()=>{this.startCheck()}).enabled(!this.isChecking);Button('导出').fontSize(11).height(28).padding({left:6,right:6}).margin({right:3}).onClick(()=>{this.doExport()});Button('删除',{type:ButtonType.Capsule}).fontSize(11).height(28).padding({left:6,right:6}).backgroundColor('#FF5722').fontColor('#FFF').onClick(()=>{this.batchDelete()})}.width('100%').height(42).backgroundColor(this.isDark?'#1A1A1A':'#F8F8F8')}
 
       // 校验进度条
       if (this.isChecking) {
@@ -271,7 +272,7 @@ struct BookSourcePage {
           Blank()
           if (this.selectMode) { Checkbox({name:'sel_'+idx,group:'srcs'}).select(this.selected[idx]||false).selectedColor('#0078D7').margin({left:4}).onChange((v:boolean)=>{this.selected[idx]=v}) }
           if (!this.selectMode) {
-            Text('✎').fontSize(16).fontColor('#0078D7').margin({left:6}).onClick(()=>{router.pushUrl({url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}})})
+            Text('✎').fontSize(16).fontColor('#0078D7').margin({left:6}).onClick(()=>{UiUtil.pushUrl(this.getUIContext(), {url:'pages/BookSourceEditPage',params:{url:s.sourceUrl}})})
           }
         }.width('100%').margin({top:3})
       }.layoutWeight(1)
@@ -291,11 +292,11 @@ struct BookSourcePage {
         Text('置底').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
           .onClick(()=>{this.contextMenuIdx=-1;this.applyFilters()})
         Text('启用发现').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#4CAF50')
-          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'发现功能待实现',duration:1500})})
+          .onClick(()=>{this.contextMenuIdx=-1;UiUtil.showToast(this.getUIContext(), {message:'发现功能待实现',duration:1500})})
         Text('搜索测试').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(this.isDark?'#CCC':'#333')
-          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'搜索测试待实现',duration:1500})})
+          .onClick(()=>{this.contextMenuIdx=-1;UiUtil.showToast(this.getUIContext(), {message:'搜索测试待实现',duration:1500})})
         Text('调试').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#FF9800')
-          .onClick(()=>{this.contextMenuIdx=-1;promptAction.showToast({message:'调试待实现',duration:1500})})
+          .onClick(()=>{this.contextMenuIdx=-1;UiUtil.showToast(this.getUIContext(), {message:'调试待实现',duration:1500})})
         Text('删除').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor('#FF5722')
           .onClick(()=>{this.contextMenuIdx=-1;this.dao_?.deleteByUrl?.(s.sourceUrl);this.load()})
       }.width(120).backgroundColor(this.isDark?'#2A2A2A':'#FFF').borderRadius(12).shadow({radius:8,color:'#20000000',offsetY:2})
@@ -306,7 +307,10 @@ struct BookSourcePage {
 
   @Builder checkBadge(d: CheckDetail) {
     Row() {
-      Circle({width:6,height:6}).fill(d.passed?'#4CAF50':'#FF5722')
+      Text('')
+        .width(6).height(6)
+        .borderRadius(3)
+        .backgroundColor(d.passed ? '#4CAF50' : '#FF5722')
       if (d.passed) {
         Text(d.name + (d.duration > 0 ? ' ' + d.duration + 'ms' : ''))
           .fontSize(10).fontColor('#4CAF50').margin({left:3})

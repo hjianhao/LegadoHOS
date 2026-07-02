@@ -4,6 +4,7 @@
 import { AppDatabase } from '../data/database/AppDatabase';
 import { RSSSource } from '../model/RSSSource';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 @Component
 export struct RssMainPage {
@@ -42,7 +43,7 @@ export struct RssMainPage {
   }
 
   private onToManage(): void {
-    router.pushUrl({ url: 'pages/RssSourceManagePage' });
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/RssSourceManagePage' });
   }
 
   build() {
@@ -104,7 +105,7 @@ export struct RssMainPage {
                 }
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 }).width('100%')
                 .onClick((): void => {
-                  router.pushUrl({
+                  UiUtil.pushUrl(this.getUIContext(), {
                     url: 'pages/RssArticlesPage',
                     params: { sourceUrl: source.sourceUrl, sourceName: source.sourceName }
                   });

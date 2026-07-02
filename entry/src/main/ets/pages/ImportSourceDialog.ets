@@ -8,6 +8,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct ImportSourceDialog {
@@ -30,21 +31,21 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.items = await dao.importSourcesPreview(json);
       this.statusText = `${this.items.length} 条书源`;
-    } catch (e) { promptAction.showToast({message:'JSON格式错误',duration:1500}); }
+    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误',duration:1500}); }
     this.isLoading = false;
   }
 
   private async doImport(): Promise<void> {
     const sel = this.items.filter(i => i.checked);
-    if (sel.length === 0) { promptAction.showToast({message:'未选中任何书源',duration:1500}); return; }
+    if (sel.length === 0) { UiUtil.showToast(this.getUIContext(), {message:'未选中任何书源',duration:1500}); return; }
     this.isLoading = true; this.statusText = '导入中...';
     try {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       const count = await dao.importSelected(sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup);
-      promptAction.showToast({message:'成功导入 '+count+' 个书源',duration:2000});
+      UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
       this.controller.close();
       if (this.onImportSuccess) this.onImportSuccess();
-    } catch (e) { promptAction.showToast({message:'导入失败',duration:1500}); }
+    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'导入失败',duration:1500}); }
     this.isLoading = false;
   }
 
@@ -59,9 +60,9 @@ export struct ImportSourceDialog {
       fileIo.readSync(f.fd, b);
       fileIo.closeSync(f);
       const td = util.TextDecoder.create('utf-8');
-      const json = td.decodeWithStream(new Uint8Array(b), {stream:false});
+      const json = td.decodeToString(new Uint8Array(b), {stream:false});
       await this.loadPreview(json);
-    } catch (e) { promptAction.showToast({message:'读取失败',duration:1500}); }
+    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'读取失败',duration:1500}); }
   }
 
   private async doUrlImport(): Promise<void> {
@@ -69,7 +70,7 @@ export struct ImportSourceDialog {
     try {
       const json = await NetUtil.httpGet('');
       await this.loadPreview(json);
-    } catch (e) { promptAction.showToast({message:'下载失败',duration:1500}); }
+    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'下载失败',duration:1500}); }
   }
 
   private selectAll(select: boolean): void { for (const i of this.items) i.checked = select; this.items = [...this.items]; }

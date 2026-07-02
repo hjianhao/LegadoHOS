@@ -187,14 +187,17 @@ export class ReadAloudEngine {
       sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
       encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
     };
-    this.audioRenderer_ = await audio.createAudioRenderer({
-      streamInfo: streamInfo,
-      rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_MEDIA, rendererFlags: 0 },
-    });
-
-    this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
-      this.writeData_(buffer);
-    });
+    try {
+      this.audioRenderer_ = await audio.createAudioRenderer({
+        streamInfo: streamInfo,
+        rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK, rendererFlags: 0 },
+      });
+      this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
+        this.writeData_(buffer);
+      });
+    } catch (err) {
+      throw new Error(String(err));
+    }
   }
 
   async speak(text: string, speed: number = 1.0): Promise<void> {

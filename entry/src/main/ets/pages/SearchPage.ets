@@ -12,11 +12,10 @@ import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import { WebViewEngine } from '../components/WebViewEngine';
-import { WebViewFetcher } from '../../engine/web/WebViewFetcher';
+import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
-import promptAction from '@ohos.promptAction';
-import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 interface SearchSourceGroup {
   sourceName: string;
@@ -34,26 +33,6 @@ interface ParsedSearchScope {
   isSource: boolean;
   groups: string[];
   sourceUrls: string[];
-}
-
-interface SearchPageSnapshot {
-  keyword: string;
-  committedKeyword: string;
-  allResults: SearchResult[];
-  results: SearchResult[];
-  hasSearched: boolean;
-  manualStop: boolean;
-  hasMore: boolean;
-  currentPage: number;
-  processedSources: number;
-  totalSources: number;
-  layoutMode: number;
-  matchModeExact: boolean;
-  selectedSourceTypes: number[];
-  selectedGroups: string[];
-  selectedSourceUrls: string[];
-  scopeBySource: boolean;
-  savedAt: number;
 }
 
 @Entry
@@ -117,7 +96,6 @@ struct SearchPage {
       clearTimeout(this.queryHintTimer);
       this.queryHintTimer = -1;
     }
-    this.saveSearchSnapshot();
   }
 
   async initPage(): Promise<void> {
@@ -131,14 +109,13 @@ struct SearchPage {
     await this.loadSources();
     await this.loadHistory();
     await this.refreshShelfStates();
-    await this.restoreSearchSnapshot();
     await this.applyRouteParams();
   }
 
   async loadSearchPrefs(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
-      await s.init(getContext());
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.layoutMode = await s.get<number>('search_layout_mode', 0);
       this.matchModeExact = (await s.get<number>('search_match_mode', 0)) === 1;
       this.selectedSourceTypes = await s.get<number[]>('search_source_types', []);
@@ -160,86 +137,13 @@ struct SearchPage {
     } catch (_e) { /* ignore */ }
   }
 
-  async restoreSearchSnapshot(): Promise<void> {
-    try {
-      const s = SettingsStore.getInstance();
-      await s.init(getContext());
-      const empty: SearchPageSnapshot = {
-        keyword: '',
-        committedKeyword: '',
-        allResults: [],
-        results: [],
-        hasSearched: false,
-        manualStop: false,
-        hasMore: false,
-        currentPage: 1,
-        processedSources: 0,
-        totalSources: 0,
-        layoutMode: this.layoutMode,
-        matchModeExact: this.matchModeExact,
-        selectedSourceTypes: [],
-        selectedGroups: [],
-        selectedSourceUrls: [],
-        scopeBySource: false,
-        savedAt: 0,
-      };
-      const snap = await s.get<SearchPageSnapshot>('search_last_snapshot', empty);
-      if (!snap.committedKeyword || Date.now() - snap.savedAt > 24 * 60 * 60 * 1000) return;
-      this.keyword = snap.keyword || snap.committedKeyword;
-      this.committedKeyword = snap.committedKeyword;
-      this.allResults = snap.allResults || [];
-      this.results = snap.results || [];
-      this.hasSearched = snap.hasSearched;
-      this.manualStop = snap.manualStop;
-      this.hasMore = snap.hasMore;
-      this.currentPage = snap.currentPage || 1;
-      this.processedSources = snap.processedSources || snap.totalSources || 0;
-      this.totalSources = snap.totalSources || 0;
-      this.layoutMode = snap.layoutMode;
-      this.matchModeExact = snap.matchModeExact;
-      this.selectedSourceTypes = snap.selectedSourceTypes || [];
-      this.selectedGroups = snap.selectedGroups || [];
-      this.selectedSourceUrls = snap.selectedSourceUrls || [];
-      this.scopeBySource = snap.scopeBySource;
-      this.showSuggestions = false;
-    } catch (_e) { /* ignore */ }
-  }
-
-  async saveSearchSnapshot(): Promise<void> {
-    if (!this.committedKeyword || this.results.length === 0) return;
-    try {
-      const s = SettingsStore.getInstance();
-      await s.init(getContext());
-      const snap: SearchPageSnapshot = {
-        keyword: this.keyword,
-        committedKeyword: this.committedKeyword,
-        allResults: this.allResults.slice(0, 300),
-        results: this.results.slice(0, 300),
-        hasSearched: this.hasSearched,
-        manualStop: this.manualStop,
-        hasMore: this.hasMore,
-        currentPage: this.currentPage,
-        processedSources: this.processedSources,
-        totalSources: this.totalSources,
-        layoutMode: this.layoutMode,
-        matchModeExact: this.matchModeExact,
-        selectedSourceTypes: this.selectedSourceTypes,
-        selectedGroups: this.selectedGroups,
-        selectedSourceUrls: this.selectedSourceUrls,
-        scopeBySource: this.scopeBySource,
-        savedAt: Date.now(),
-      };
-      await s.put('search_last_snapshot', snap);
-    } catch (_e) { /* ignore */ }
-  }
-
   async loadHistory(): Promise<void> {
     try {
       const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
       let items = await table.getRecent(30);
       if (items.length === 0) {
         const s = SettingsStore.getInstance();
-        await s.init(getContext());
+        await s.init(UiUtil.getHostContext(this.getUIContext()));
         const legacy = await s.getSearchHistory();
         for (const word of legacy) {
           await table.save(word);
@@ -291,7 +195,7 @@ struct SearchPage {
       const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
       await table.deleteAll();
       const s = SettingsStore.getInstance();
-      await s.init(getContext());
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       await s.setSearchHistory([]);
     } catch (_e) { /* ignore */ }
     this.showClearHistoryDialog = false;
@@ -339,7 +243,7 @@ struct SearchPage {
 
   async applyRouteParams(): Promise<void> {
     try {
-      const params = router.getParams() as Record<string, Object>;
+      const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
       if (!params) return;
       const scopeRaw = String(params['searchScope'] || params['scope'] || '');
       if (scopeRaw) {
@@ -651,7 +555,7 @@ struct SearchPage {
     this.isSearching = false;
     this.isLoadingMore = false;
     this.hasMore = this.results.length > 0;
-    promptAction.showToast({ message: '已停止搜索', duration: 1200 });
+    UiUtil.showToast(this.getUIContext(), { message: '已停止搜索', duration: 1200 });
   }
 
   async doSearch(kw?: string): Promise<void> {
@@ -659,7 +563,7 @@ struct SearchPage {
     if (!q) return;
     const searchable = this.getActiveSources();
     if (searchable.length === 0) {
-      promptAction.showToast({ message: '当前范围没有可搜索书源', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '当前范围没有可搜索书源', duration: 1500 });
       return;
     }
     const runId = ++this.searchRunId;
@@ -713,7 +617,7 @@ struct SearchPage {
       this.hasMore = merged.length > 0 && !exactShouldStop;
     } catch (_e) {
       if (runId === this.searchRunId) {
-        promptAction.showToast({ message: '搜索失败', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '搜索失败', duration: 1500 });
       }
     }
     if (runId === this.searchRunId) {
@@ -752,7 +656,7 @@ struct SearchPage {
       const mergedCount = this.allResults.length;
       if (pageResults.length === 0 || mergedCount <= beforeCount) {
         this.hasMore = false;
-        promptAction.showToast({ message: '没有更多结果', duration: 1200 });
+        UiUtil.showToast(this.getUIContext(), { message: '没有更多结果', duration: 1200 });
       } else {
         this.currentPage = nextPage;
         this.allResults = mergeSearchResults([...baseResults, ...pageResults]);
@@ -761,7 +665,7 @@ struct SearchPage {
         this.fetchMissingCovers();
       }
     } catch (_e) {
-      if (runId === this.searchRunId) promptAction.showToast({ message: '加载更多失败', duration: 1500 });
+      if (runId === this.searchRunId) UiUtil.showToast(this.getUIContext(), { message: '加载更多失败', duration: 1500 });
     }
     if (runId === this.searchRunId) {
       this.isLoadingMore = false;
@@ -939,7 +843,7 @@ struct SearchPage {
    }
 
  goToBookInfo(item: SearchResult): void {
-    router.pushUrl({ url: 'pages/BookInfoPage', params: {
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookInfoPage', params: {
       name: item.name, author: item.author, coverUrl: item.coverUrl,
       noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
       introduce: item.introduce || '', kind: item.kind || '',
@@ -951,7 +855,7 @@ struct SearchPage {
   }
 
   goToShelfBook(book: Book): void {
-    router.pushUrl({ url: 'pages/BookInfoPage', params: {
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookInfoPage', params: {
       id: book.id,
       name: book.name,
       author: book.author,
@@ -1031,9 +935,9 @@ struct SearchPage {
       this.showPreviewSheet = false;
       this.refreshShelfStates();
       AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
-      promptAction.showToast({ message: '已加入书架', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已加入书架', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '加入书架失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '加入书架失败', duration: 1500 });
     }
   }
 
@@ -1134,7 +1038,7 @@ struct SearchPage {
           .width(40)
           .height(40)
           .backgroundColor('transparent')
-          .onClick(() => { router.back(); })
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('搜索')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
@@ -1468,7 +1372,9 @@ struct SearchPage {
         ListItem() {
           this.buildBookListItem(item)
         }
-      }, (item: SearchResult): string => item.key + item.sourceCount.toString())
+      }, (item: SearchResult, index: number): string => {
+        return item.key + '|' + item.sourceCount.toString() + '|' + (item.noteUrl || '') + '|' + index.toString()
+      })
       ListItem() {
         this.buildFooter()
       }

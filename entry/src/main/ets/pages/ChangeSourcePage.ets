@@ -20,6 +20,7 @@ import { BookSource } from '../model/BookSource';
 import { SearchResult, createSearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SourceSwitchStore } from '../util/SourceSwitchStore';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -43,7 +44,7 @@ export struct ChangeSourcePage {
   private searching: boolean = false;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     this.bookName = params['bookName'] || '';
     this.bookAuthor = params['bookAuthor'] || '';
     this.sourceOriginUrl = params['sourceOriginUrl'] || '';
@@ -170,7 +171,7 @@ export struct ChangeSourcePage {
         }
       }
       if (enabled.length === 0) {
-        promptAction.showToast({ message: '没有启用的书源', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '没有启用的书源', duration: 2000 });
         this.isSearching = false;
         return;
       }
@@ -296,7 +297,7 @@ export struct ChangeSourcePage {
   /** 选择源并返回 */
   onSourceSelect(item: SearchResult): void {
     SourceSwitchStore.selectedSource = item;
-    router.back();
+    UiUtil.back(this.getUIContext());
   }
 
   build() {
@@ -307,7 +308,7 @@ export struct ChangeSourcePage {
           Text('←').fontSize(18).fontColor(this.isDark ? '#FFF' : '#333')
         }
         .width(40).height(40).backgroundColor('transparent')
-        .onClick((): void => { this.searching = false; router.back(); })
+        .onClick((): void => { this.searching = false; UiUtil.back(this.getUIContext()); })
 
         Text('更换书源').fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#FFF' : '#333')

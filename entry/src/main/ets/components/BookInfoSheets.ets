@@ -23,6 +23,7 @@ import { NetUtil } from '../util/NetUtil';
 import { BookTable } from '../data/database/BookTable';
 import { BookGroupTable } from '../data/database/BookGroupTable';
 import { ReadRecordTable } from '../data/database/ReadRecordTable';
+import { UiUtil } from '../util/UiUtil';
 
 /** 每日阅读记录数据结构 */
 interface SessionInfo {
@@ -270,7 +271,7 @@ export struct ChangeSourceSheet {
         }
       }
       if (enabled.length === 0) {
-        promptAction.showToast({ message: '没有启用的书源，请先导入书源', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '没有启用的书源，请先导入书源', duration: 2000 });
         this.isSearching = false;
         return;
       }
@@ -443,7 +444,7 @@ export struct ChangeSourceSheet {
           .onClick(() => {
             if (this.results.length > 0) {
               // 用第一个结果（或其他方式让用户选择）作为新书
-              promptAction.showToast({ message: '长按列表项可作为新书加入', duration: 2000 });
+              UiUtil.showToast(this.getUIContext(), { message: '长按列表项可作为新书加入', duration: 2000 });
             }
           })
       }

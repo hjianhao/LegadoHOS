@@ -8,6 +8,7 @@ import { RSSSource } from '../model/RSSSource';
 import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 interface FieldGroup {
   key: string;
@@ -52,7 +53,7 @@ const TAB_WEBVIEW: FieldGroup[] = [
 
 @Entry
 @Component
-export struct RssSourceEditPage {
+struct RssSourceEditPage {
   @StorageProp('isDark') isDark: boolean = false;
   @State currentTab: number = 0;
   @State editSource: RSSSource = this.createDefault();
@@ -113,7 +114,7 @@ export struct RssSourceEditPage {
   }
 
   aboutToAppear() {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params && params['sourceUrl']) {
       this.sourceUrl = params['sourceUrl'];
       this.isNew = false;
@@ -135,7 +136,7 @@ export struct RssSourceEditPage {
 
   async save() {
     if (!this.editSource.sourceName || !this.editSource.sourceUrl) {
-      promptAction.showToast({ message: '名称和源 URL 不能为空' });
+      UiUtil.showToast(this.getUIContext(), { message: '名称和源 URL 不能为空' });
       return;
     }
     // 去除 URL 中的 # 片段（可能由导入时带入）
@@ -151,10 +152,10 @@ export struct RssSourceEditPage {
       } catch (_e) {
         await this.db.rssSourceTable.update(this.editSource);
       }
-      promptAction.showToast({ message: '保存成功' });
-      router.back();
+      UiUtil.showToast(this.getUIContext(), { message: '保存成功' });
+      UiUtil.back(this.getUIContext());
     } catch (e) {
-      promptAction.showToast({ message: '保存失败' });
+      UiUtil.showToast(this.getUIContext(), { message: '保存失败' });
     } finally {
       this.isSaving = false;
     }
@@ -178,7 +179,7 @@ export struct RssSourceEditPage {
           Text('← 返回').fontSize(16).fontColor('#0078D7')
         }
         .backgroundColor('transparent')
-        .onClick(() => { router.back(); })
+        .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.isNew ? '添加 RSS 源' : '编辑 RSS 源').fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#333').margin({ left: 8 })
         Blank()

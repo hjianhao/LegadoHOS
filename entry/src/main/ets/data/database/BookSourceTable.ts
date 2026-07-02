@@ -3,6 +3,7 @@
  */
 import relationalStore from '@ohos.data.relationalStore';
 import { BookSource, parseBookSource } from '../../model/BookSource';
+import { RdbUtil } from './RdbUtil';
 
 export const BookSourceTableCreate = `
   CREATE TABLE IF NOT EXISTS book_sources (
@@ -71,7 +72,7 @@ export class BookSourceTable {
   async getAllSources(): Promise<BookSource[]> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
@@ -79,46 +80,46 @@ export class BookSourceTable {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('enabled', 1);
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
   async getSourceById(id: number): Promise<BookSource | null> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     const sources = this.toSources(rs);
     return sources.length > 0 ? sources[0] : null;
   }
 
   async insertSource(source: BookSource): Promise<number> {
     const row = this.toRow(source);
-    return await this.rdbStore.insert(BookSourceTable.TABLE_NAME, row);
+    return await RdbUtil.insert(this.rdbStore, BookSourceTable.TABLE_NAME, row);
   }
 
   async updateSource(source: BookSource): Promise<void> {
     const row = this.toRow(source);
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', source.id);
-    await this.rdbStore.update(row, predicates);
+    await RdbUtil.update(this.rdbStore, row, predicates);
   }
 
   async deleteSource(id: number): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   async toggleByUrl(url: string, enabled: boolean): Promise<void> {
     const p = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     p.equalTo('source_url', url);
-    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, p);
+    await RdbUtil.update(this.rdbStore, { 'enabled': enabled ? 1 : 0 }, p);
   }
 
   async deleteByUrl(url: string): Promise<void> {
     const p = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     p.equalTo('source_url', url);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   async batchDeleteByUrl(urls: string[]): Promise<void> {
@@ -128,7 +129,7 @@ export class BookSourceTable {
   async toggleEnabled(id: number, enabled: boolean): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, predicates);
+    await RdbUtil.update(this.rdbStore, { 'enabled': enabled ? 1 : 0 }, predicates);
   }
 
   async importSources(jsonSources: string): Promise<number> {
@@ -228,7 +229,7 @@ export class BookSourceTable {
     predicates.or();
     predicates.contains('source_url', keyword);
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
@@ -236,7 +237,7 @@ export class BookSourceTable {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.contains('source_group', group);
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
@@ -244,7 +245,7 @@ export class BookSourceTable {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('enabled', 0);
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
@@ -254,17 +255,17 @@ export class BookSourceTable {
     predicates.or();
     predicates.isNull('source_group');
     predicates.orderByDesc('weight');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toSources(rs);
   }
 
   async getAllGroups(): Promise<string[]> {
     const sql = 'SELECT DISTINCT source_group FROM ' + BookSourceTable.TABLE_NAME +
       ' WHERE source_group IS NOT NULL AND source_group != \'\' ORDER BY source_group ASC';
-    const rs = await this.rdbStore.querySql(sql);
+    const rs = await RdbUtil.querySql(this.rdbStore, sql);
     const groups: string[] = [];
-    while (rs.goToNextRow()) {
-      const g = rs.getString(0);
+    while (RdbUtil.next(rs)) {
+      const g = RdbUtil.stringAt(rs, 0);
       if (g) {
         // 单个书源可能有多个逗号分隔的分组
         const parts = g.split(',').map((s: string) => s.trim()).filter((s: string) => s);
@@ -273,87 +274,87 @@ export class BookSourceTable {
         }
       }
     }
-    rs.close();
+    RdbUtil.close(rs);
     return groups;
   }
 
   async batchSetEnabled(ids: number[], enabled: boolean): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.update({ 'enabled': enabled ? 1 : 0 }, predicates);
+    await RdbUtil.update(this.rdbStore, { 'enabled': enabled ? 1 : 0 }, predicates);
   }
 
   async batchDelete(ids: number[]): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   async updateSourceGroup(id: number, group: string): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.update({ 'source_group': group }, predicates);
+    await RdbUtil.update(this.rdbStore, { 'source_group': group }, predicates);
   }
 
   async batchUpdateGroup(ids: number[], group: string): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.update({ 'source_group': group }, predicates);
+    await RdbUtil.update(this.rdbStore, { 'source_group': group }, predicates);
   }
 
   async getSourceByUrl(url: string): Promise<BookSource | null> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('source_url', url);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     const sources = this.toSources(rs);
     return sources.length > 0 ? sources[0] : null;
   }
 
   private toSources(rs: relationalStore.ResultSet): BookSource[] {
     const sources: BookSource[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       let source: BookSource = {
-        id: rs.getLong(rs.getColumnIndex('id')),
-        sourceName: rs.getString(rs.getColumnIndex('source_name')) || '',
-        sourceUrl: rs.getString(rs.getColumnIndex('source_url')) || '',
-        sourceType: rs.getLong(rs.getColumnIndex('source_type')),
-        group: rs.getString(rs.getColumnIndex('source_group')) || '',
-        enabled: rs.getLong(rs.getColumnIndex('enabled')) === 1,
-        weight: rs.getLong(rs.getColumnIndex('weight')),
-        customOrder: rs.getLong(rs.getColumnIndex('custom_order')),
-        ruleSearchUrl: rs.getString(rs.getColumnIndex('rule_search_url')) || '',
-        ruleSearchList: rs.getString(rs.getColumnIndex('rule_search_list')) || '',
-        ruleSearchName: rs.getString(rs.getColumnIndex('rule_search_name')) || '',
-        ruleSearchAuthor: rs.getString(rs.getColumnIndex('rule_search_author')) || '',
-        ruleSearchCover: rs.getString(rs.getColumnIndex('rule_search_cover')) || '',
-        ruleSearchNoteUrl: rs.getString(rs.getColumnIndex('rule_search_note_url')) || '',
-        ruleSearchKind: rs.getString(rs.getColumnIndex('rule_search_kind')) || '',
-        ruleSearchWordCount: rs.getString(rs.getColumnIndex('rule_search_word_count')) || '',
-        ruleSearchLastUpdateTime: rs.getString(rs.getColumnIndex('rule_search_last_update_time')) || '',
-        ruleSearchIntroduce: rs.getString(rs.getColumnIndex('rule_search_introduce')) || '',
-        ruleBookInfoInit: rs.getString(rs.getColumnIndex('rule_book_info_init')) || '',
-        ruleBookInfoName: rs.getString(rs.getColumnIndex('rule_book_info_name')) || '',
-        ruleBookInfoAuthor: rs.getString(rs.getColumnIndex('rule_book_info_author')) || '',
-        ruleBookInfoCover: rs.getString(rs.getColumnIndex('rule_book_info_cover')) || '',
-        ruleBookInfoIntroduce: rs.getString(rs.getColumnIndex('rule_book_info_introduce')) || '',
-        ruleBookInfoKind: rs.getString(rs.getColumnIndex('rule_book_info_kind')) || '',
-        ruleBookInfoWordCount: rs.getString(rs.getColumnIndex('rule_book_info_word_count')) || '',
-        ruleBookInfoLastUpdateTime: rs.getString(rs.getColumnIndex('rule_book_info_last_update_time')) || '',
-        ruleBookInfoFrom: rs.getString(rs.getColumnIndex('rule_book_info_from')) || '',
-        ruleTocUrl: rs.getString(rs.getColumnIndex('rule_toc_url')) || '',
-        ruleToc: rs.getString(rs.getColumnIndex('rule_toc')) || '',
-        ruleTocTitle: rs.getString(rs.getColumnIndex('rule_toc_title')) || '',
-        ruleTocUrlItem: rs.getString(rs.getColumnIndex('rule_toc_url_item')) || '',
-        ruleBookContentUrl: rs.getString(rs.getColumnIndex('rule_book_content_url')) || '',
-        ruleBookContent: rs.getString(rs.getColumnIndex('rule_book_content')) || '',
-        ruleBookContentNext: rs.getString(rs.getColumnIndex('rule_book_content_next')) || '',
-        ruleExplores: rs.getString(rs.getColumnIndex('rule_explores')) || '',
-        ruleReview: rs.getString(rs.getColumnIndex('rule_review')) || '',
-        script: rs.getString(rs.getColumnIndex('script')) || '',
-        header: rs.getString(rs.getColumnIndex('header')) || '',
-        ruleBookInfoTocUrl: rs.getString(rs.getColumnIndex('rule_book_info_toc_url')) || '',
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
+        id: RdbUtil.long(rs, 'id'),
+        sourceName: RdbUtil.string(rs, 'source_name') || '',
+        sourceUrl: RdbUtil.string(rs, 'source_url') || '',
+        sourceType: RdbUtil.long(rs, 'source_type'),
+        group: RdbUtil.string(rs, 'source_group') || '',
+        enabled: RdbUtil.long(rs, 'enabled') === 1,
+        weight: RdbUtil.long(rs, 'weight'),
+        customOrder: RdbUtil.long(rs, 'custom_order'),
+        ruleSearchUrl: RdbUtil.string(rs, 'rule_search_url') || '',
+        ruleSearchList: RdbUtil.string(rs, 'rule_search_list') || '',
+        ruleSearchName: RdbUtil.string(rs, 'rule_search_name') || '',
+        ruleSearchAuthor: RdbUtil.string(rs, 'rule_search_author') || '',
+        ruleSearchCover: RdbUtil.string(rs, 'rule_search_cover') || '',
+        ruleSearchNoteUrl: RdbUtil.string(rs, 'rule_search_note_url') || '',
+        ruleSearchKind: RdbUtil.string(rs, 'rule_search_kind') || '',
+        ruleSearchWordCount: RdbUtil.string(rs, 'rule_search_word_count') || '',
+        ruleSearchLastUpdateTime: RdbUtil.string(rs, 'rule_search_last_update_time') || '',
+        ruleSearchIntroduce: RdbUtil.string(rs, 'rule_search_introduce') || '',
+        ruleBookInfoInit: RdbUtil.string(rs, 'rule_book_info_init') || '',
+        ruleBookInfoName: RdbUtil.string(rs, 'rule_book_info_name') || '',
+        ruleBookInfoAuthor: RdbUtil.string(rs, 'rule_book_info_author') || '',
+        ruleBookInfoCover: RdbUtil.string(rs, 'rule_book_info_cover') || '',
+        ruleBookInfoIntroduce: RdbUtil.string(rs, 'rule_book_info_introduce') || '',
+        ruleBookInfoKind: RdbUtil.string(rs, 'rule_book_info_kind') || '',
+        ruleBookInfoWordCount: RdbUtil.string(rs, 'rule_book_info_word_count') || '',
+        ruleBookInfoLastUpdateTime: RdbUtil.string(rs, 'rule_book_info_last_update_time') || '',
+        ruleBookInfoFrom: RdbUtil.string(rs, 'rule_book_info_from') || '',
+        ruleTocUrl: RdbUtil.string(rs, 'rule_toc_url') || '',
+        ruleToc: RdbUtil.string(rs, 'rule_toc') || '',
+        ruleTocTitle: RdbUtil.string(rs, 'rule_toc_title') || '',
+        ruleTocUrlItem: RdbUtil.string(rs, 'rule_toc_url_item') || '',
+        ruleBookContentUrl: RdbUtil.string(rs, 'rule_book_content_url') || '',
+        ruleBookContent: RdbUtil.string(rs, 'rule_book_content') || '',
+        ruleBookContentNext: RdbUtil.string(rs, 'rule_book_content_next') || '',
+        ruleExplores: RdbUtil.string(rs, 'rule_explores') || '',
+        ruleReview: RdbUtil.string(rs, 'rule_review') || '',
+        script: RdbUtil.string(rs, 'script') || '',
+        header: RdbUtil.string(rs, 'header') || '',
+        ruleBookInfoTocUrl: RdbUtil.string(rs, 'rule_book_info_toc_url') || '',
+        createTime: RdbUtil.long(rs, 'create_time'),
+        updateTime: RdbUtil.long(rs, 'update_time'),
         ruleSearchCheckKeyWord: '',
         ruleSearchLastChapter: '',
         ruleBookInfoLastChapter: '',
@@ -420,7 +421,7 @@ export class BookSourceTable {
       };
 
       // 从 raw_json 恢复完整数据
-      const rawJson = rs.getString(rs.getColumnIndex('raw_json')) || '';
+      const rawJson = RdbUtil.string(rs, 'raw_json') || '';
       if (rawJson) {
         source.rawJson = rawJson;
         try {
@@ -474,7 +475,7 @@ export class BookSourceTable {
 
       sources.push(source);
     }
-    rs.close();
+    RdbUtil.close(rs);
     return sources;
   }
 

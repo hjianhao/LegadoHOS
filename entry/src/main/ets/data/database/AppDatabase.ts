@@ -18,6 +18,7 @@ import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } 
 
 import { SearchResultTable, SearchResultTableCreate } from './SearchResultTable';
 import { SearchKeywordTable, SearchKeywordTableCreate } from './SearchKeywordTable';
+import { RdbUtil } from './RdbUtil';
 
 const DATABASE_NAME = 'legado_hos.db';
 const DATABASE_VERSION = 1;
@@ -83,59 +84,59 @@ export class AppDatabase {
       securityLevel: relationalStore.SecurityLevel.S1,
     };
 
-    this.rdbStore_ = await relationalStore.getRdbStore(context, config);
+    this.rdbStore_ = await RdbUtil.getRdbStore(context, config);
 
     // 建表（仅在首次创建时执行）
-    await this.rdbStore_.executeSql(BookTableCreate);
-    await this.rdbStore_.executeSql(ChapterTableCreate);
-    await this.rdbStore_.executeSql(BookSourceTableCreate);
-    await this.rdbStore_.executeSql(BookmarkTableCreate);
-    await this.rdbStore_.executeSql(ReadRecordTableCreate);
-    await this.rdbStore_.executeSql(ReadRecordDetailTableCreate);
-    await this.rdbStore_.executeSql(ReplaceRuleTableCreate);
-    await this.rdbStore_.executeSql(RSSSourceTableCreate);
-    await this.rdbStore_.executeSql(RSSArticleTableCreate);
-    await this.rdbStore_.executeSql(CacheTableCreate);
-    await this.rdbStore_.executeSql(TxtTocRuleTableCreate);
-    await this.rdbStore_.executeSql(SearchResultTableCreate);
-    await this.rdbStore_.executeSql(SearchKeywordTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, BookTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, ChapterTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, BookSourceTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, BookmarkTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, ReadRecordTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, ReadRecordDetailTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, ReplaceRuleTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, RSSSourceTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, RSSArticleTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, CacheTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, TxtTocRuleTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, SearchResultTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, SearchKeywordTableCreate);
 
     // 数据库迁移：为已有表添加新列
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN raw_json TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_list TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_author TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_cover TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_note_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_kind TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_word_count TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_last_update_time TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_search_introduce TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_init TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_author TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_cover TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_introduce TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_kind TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_word_count TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_last_update_time TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_from TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_toc TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_toc_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_toc_url_item TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_content_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_content TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_content_next TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_explores TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_review TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN script TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE book_sources ADD COLUMN rule_book_info_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE search_results ADD COLUMN source_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
-    try { await this.rdbStore_.executeSql("ALTER TABLE books ADD COLUMN remark TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN raw_json TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_list TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_author TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_cover TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_note_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_kind TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_word_count TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_last_update_time TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_introduce TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_init TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_author TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_cover TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_introduce TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_kind TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_word_count TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_last_update_time TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_from TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_toc TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_toc_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_toc_url_item TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_next TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_explores TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_review TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN script TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_toc_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE search_results ADD COLUMN source_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN remark TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
@@ -145,14 +146,14 @@ export class AppDatabase {
 
   /** 从 raw_json 重新解析规则字段，修复旧导入缺少规则列的问题 */
   private async reparseSourceRules(): Promise<void> {
-    const rs = await this.rdbStore_.querySql(
+    const rs = await RdbUtil.querySql(this.rdbStore_,
       "SELECT id, raw_json FROM book_sources WHERE raw_json IS NOT NULL AND raw_json != ''"
     );
-    if (rs.rowCount === 0) { rs.close(); return; }
+    if (rs.rowCount === 0) { RdbUtil.close(rs); return; }
     let fixedCount = 0;
-    while (rs.goToNextRow()) {
-      const id = rs.getLong(rs.getColumnIndex('id'));
-      const rawJson = rs.getString(rs.getColumnIndex('raw_json'));
+    while (RdbUtil.next(rs)) {
+      const id = RdbUtil.long(rs, 'id');
+      const rawJson = RdbUtil.string(rs, 'raw_json');
       if (!rawJson) continue;
       try {
         const obj: Record<string, Object> = JSON.parse(rawJson) as Record<string, Object>;
@@ -202,11 +203,11 @@ export class AppDatabase {
         };
         const pred = new relationalStore.RdbPredicates('book_sources');
         pred.equalTo('id', id);
-        await this.rdbStore_.update(row, pred);
+        await RdbUtil.update(this.rdbStore_, row, pred);
         fixedCount++;
       } catch (_e) { /* 跳过解析失败的行 */ }
     }
-    rs.close();
+    RdbUtil.close(rs);
     if (fixedCount > 0) {
       console.info('[AppDatabase] Reparsed ' + fixedCount + ' source rules from raw_json');
     }

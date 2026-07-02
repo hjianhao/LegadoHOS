@@ -1,5 +1,6 @@
 import relationalStore from '@ohos.data.relationalStore';
 import { BookChapter, createDefaultChapter } from '../../model/BookChapter';
+import { RdbUtil } from './RdbUtil';
 
 export const ChapterTableCreate = `
   CREATE TABLE IF NOT EXISTS chapters (
@@ -34,14 +35,14 @@ export class ChapterTable {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
     predicates.orderByAsc('chapter_index');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toChapters(rs);
   }
 
   async getChapterById(id: number): Promise<BookChapter | null> {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     const chapters = this.toChapters(rs);
     return chapters.length > 0 ? chapters[0] : null;
   }
@@ -50,7 +51,7 @@ export class ChapterTable {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
     predicates.equalTo('chapter_index', index);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     const chapters = this.toChapters(rs);
     return chapters.length > 0 ? chapters[0] : null;
   }
@@ -58,7 +59,7 @@ export class ChapterTable {
   async insertChapters(chapters: BookChapter[]): Promise<void> {
     for (const ch of chapters) {
       const row = this.toRow(ch);
-      await this.rdbStore.insert(ChapterTable.TABLE_NAME, row);
+      await RdbUtil.insert(this.rdbStore, ChapterTable.TABLE_NAME, row);
     }
   }
 
@@ -66,19 +67,19 @@ export class ChapterTable {
     const row = this.toRow(chapter);
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('id', chapter.id);
-    await this.rdbStore.update(row, predicates);
+    await RdbUtil.update(this.rdbStore, row, predicates);
   }
 
   async deleteChaptersByBookId(bookId: number): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   async clearContentByBookId(bookId: number): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'content': '',
       'content_length': 0,
       'is_cached': 0,
@@ -90,35 +91,35 @@ export class ChapterTable {
   async getChapterCount(bookId: number): Promise<number> {
     const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     let count = 0;
-    try { while (rs.goToNextRow()) { count++; } } catch (_catchErr) {}
-    rs.close();
+    try { while (RdbUtil.next(rs)) { count++; } } catch (_catchErr) {}
+    RdbUtil.close(rs);
     return count;
   }
 
   private toChapters(rs: relationalStore.ResultSet): BookChapter[] {
     const chapters: BookChapter[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       chapters.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        bookId: rs.getLong(rs.getColumnIndex('book_id')),
-        index: rs.getLong(rs.getColumnIndex('chapter_index')),
-        volumeIndex: rs.getLong(rs.getColumnIndex('volume_index')),
-        title: rs.getString(rs.getColumnIndex('title')) || '',
-        url: rs.getString(rs.getColumnIndex('url')) || '',
-        content: rs.getString(rs.getColumnIndex('content')) || '',
-        contentLength: rs.getLong(rs.getColumnIndex('content_length')),
-        isRead: rs.getLong(rs.getColumnIndex('is_read')) === 1,
-        isDownloaded: rs.getLong(rs.getColumnIndex('is_downloaded')) === 1,
-        isCached: rs.getLong(rs.getColumnIndex('is_cached')) === 1,
-        duration: rs.getLong(rs.getColumnIndex('duration')),
-        audioUrl: rs.getString(rs.getColumnIndex('audio_url')) || '',
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
+        id: RdbUtil.long(rs, 'id'),
+        bookId: RdbUtil.long(rs, 'book_id'),
+        index: RdbUtil.long(rs, 'chapter_index'),
+        volumeIndex: RdbUtil.long(rs, 'volume_index'),
+        title: RdbUtil.string(rs, 'title') || '',
+        url: RdbUtil.string(rs, 'url') || '',
+        content: RdbUtil.string(rs, 'content') || '',
+        contentLength: RdbUtil.long(rs, 'content_length'),
+        isRead: RdbUtil.long(rs, 'is_read') === 1,
+        isDownloaded: RdbUtil.long(rs, 'is_downloaded') === 1,
+        isCached: RdbUtil.long(rs, 'is_cached') === 1,
+        duration: RdbUtil.long(rs, 'duration'),
+        audioUrl: RdbUtil.string(rs, 'audio_url') || '',
+        createTime: RdbUtil.long(rs, 'create_time'),
+        updateTime: RdbUtil.long(rs, 'update_time'),
       });
     }
-    rs.close();
+    RdbUtil.close(rs);
     return chapters;
   }
 

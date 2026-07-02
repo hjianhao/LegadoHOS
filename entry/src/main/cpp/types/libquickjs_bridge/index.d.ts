@@ -1,5 +1,3 @@
-/// <reference types="napi" />
-
 /**
  * QuickJS NAPI Bridge 类型声明
  *

@@ -4,9 +4,8 @@
  * 提供 ArkTS 侧调用 QuickJS JavaScript 引擎的能力。
  *
  * 加载方式（按优先级）：
- * 1. import('libquickjs_bridge.so') — HarmonyOS NEXT API 12+
- * 2. requireNapi('quickjs_bridge') — 兼容方式
- * 3. 降级为 mock 实现（书源搜索走直接 HTTP 回退）
+ * 1. requireNapi('quickjs_bridge') — 原生模块
+ * 2. 降级为 mock 实现（书源搜索走直接 HTTP 回退）
  */
 export interface QuickJSBridge {
   createEngine(): number;
@@ -50,48 +49,18 @@ let nativeLoaded: boolean = false;
 export async function tryLoadNative(): Promise<boolean> {
   if (nativeLoaded) return true;
 
-  // 方式 1: import('libquickjs_bridge.so') — HarmonyOS NEXT 推荐方式
   try {
-    const mod = await import('libquickjs_bridge.so');
-   console.info('[NAPI] import mod type:', typeof mod, 'keys:', Object.keys(mod));
-   // 尝试通过括号访问 default（ArkTS 中点号访问 default 可能返回 undefined）
-   let native: QuickJSBridge | null = null;
-   for (const key of Object.keys(mod)) {
-     const v = (mod as any)[key];
-     if (v && typeof v.createEngine === 'function') {
-       console.info('[NAPI] Found createEngine at mod["' + key + '"]');
-       native = v as QuickJSBridge;
-       break;
-     }
-   }
-   if (native && typeof native.createEngine === 'function') {
-     currentBridge = native as QuickJSBridge;
-     nativeLoaded = true;
-     console.info('[NAPI] Native module loaded via import(libquickjs_bridge.so)');
-     return true;
-   } else {
-     console.warn('[NAPI] createEngine not found in mod, no createEngine found in mod');
-   }
-  } catch (e) {
-    console.warn('[NAPI] import(libquickjs_bridge.so) failed:', e?.toString()?.substring(0, 120));
-  }
-
-
-  // 方式 2: requireNapi('quickjs_bridge') — 兼容方式
-  if (!nativeLoaded) {
-    try {
-      const native = requireNapi('quickjs_bridge');
-      if (native && typeof (native as QuickJSBridge).createEngine === 'function') {
-        currentBridge = native as QuickJSBridge;
-        nativeLoaded = true;
-        console.info('[NAPI] Native module loaded via requireNapi');
-        return true;
-      } else {
-        console.warn('[NAPI] requireNapi returned null or invalid');
-      }
-    } catch (e) {
-      console.warn('[NAPI] requireNapi threw:', e?.toString()?.substring(0, 100));
+    const native = requireNapi('quickjs_bridge');
+    if (native && typeof (native as QuickJSBridge).createEngine === 'function') {
+      currentBridge = native as QuickJSBridge;
+      nativeLoaded = true;
+      console.info('[NAPI] Native module loaded via requireNapi');
+      return true;
+    } else {
+      console.warn('[NAPI] requireNapi returned null or invalid');
     }
+  } catch (e) {
+    console.warn('[NAPI] requireNapi threw:', e?.toString()?.substring(0, 100));
   }
 
   console.info('[NAPI] Native module not available, using mock');
@@ -121,6 +90,6 @@ try {
     nativeLoaded = true;
     console.info('[NAPI] Native module loaded (sync) via requireNapi');
   }
-} catch (_e) { /* will try async import later */ }
+} catch (_e) { /* native module may be unavailable in preview/test */ }
 
 export default currentBridge;

@@ -307,38 +307,7 @@ export class SourceExecutor {
       return n.trim();
     }
 
-    function isValidBookName(name: string): boolean {
-      if (!name || name.length < 2 || name.length > 80) return false;
-      // 章节标题
-      if (/^第[一二三四五六七八九十\d零○百千]+\s*[章节回卷]/.test(name)) return false;
-      if (/^第[一二三四五六七八九十\d零○百千]+$/.test(name)) return false;
-      // 新闻/标签类
-      if (/^(最新章节|最后更新|今日更新|本站推荐|热门推荐|本页推荐|精品推荐|推荐阅读|最新入库)$/.test(name)) return false;
-      // 纯数字/日期
-      if (/^\d{4}-\d{2}(-\d{2})?$/.test(name)) return false;
-      if (/^[0-9\-\.]+$/.test(name)) return false;
-      // 单个分类词
-      if (/^(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|男频|女频|完本|全本|连载|排行榜|热门|推荐|最新|免费|VIP|完结|全本)$/.test(name)) return false;
-      if (/^(网游|网游竞技|网游小说|竞技|体育竞技|体育小说)$/.test(name)) return false;
-      // 网站导航关键词
-      if (/^(首页|书架|分类|排行|完本|免费|登录|注册|关于|帮助|联系我们|网站地图|设为首页|收藏本站)$/.test(name)) return false;
-      // 短分类词（2字且全汉字，很可能是分类标签）
-      if (name.length === 2 && /^[\u4e00-\u9fff]{2}$/.test(name)) {
-        const commonCategories = ['玄幻','奇幻','仙侠','武侠','都市','言情','历史','军事','科幻',
-          '灵异','游戏','体育','同人','竞技','悬疑','推理','恐怖','冒险','穿越','重生','系统',
-          '网游','末世','废土','修真','修仙','异界','异能','进化','无限','洪荒','西游','水浒',
-          '三国','红楼','聊斋','封神','神话','民间','传奇','传说','下载','完本','全本','免费'];
-        if (commonCategories.includes(name)) return false;
-      }
-      if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新|本站推荐|热门推荐)/.test(name)) return false;
-      // 常见非书籍名（精确匹配）
-      const commonNonBook = new Set([
-        '首页','书架','分类','排行','完本','免费','登录','注册',
-        '关于','帮助','联系我们','网站地图','友情链接','设为首页','收藏本站',
-      ]);
-      if (commonNonBook.has(name)) return false;
-      return true;
-    }
+    const isValidBookName = (name: string): boolean => this.isValidSearchBookName(name);
 
     /** 将新一批结果增量合并到持久 Map 中（参考 legado-with-MD3 SearchResultMerger） */
     function incrementMerge(newResults: SearchResult[]): void {
@@ -578,6 +547,11 @@ export class SourceExecutor {
     }
 
     // Fallback
+    if (source.ruleSearchList) {
+      console.warn('[SrcEx] Skip fallback for configured source', source.sourceName,
+        'ruleSearchList=' + source.ruleSearchList);
+      return [];
+    }
     return this.fallbackExtract(bodyText, source, baseUrl);
   }
 
@@ -588,11 +562,13 @@ export class SourceExecutor {
     const results: SearchResult[] = [];
     const seen = new Set<string>();
     for (const a of links) {
-      const name = a.text.trim();
-      if (!name || name.length < 2 || name.length > 50) continue;
+      const rawName = a.text.trim();
+      const name = this.formatBookNameForFilter(rawName);
+      if (!this.isValidSearchBookName(name) || name.length > 50) continue;
       if (seen.has(name)) continue;
-      seen.add(name);
       let href = a.attributes['href'] || '';
+      if (!href || /^(#|javascript:|mailto:|tel:)/i.test(href)) continue;
+      seen.add(name);
       if (href && !href.startsWith('http')) {
         href = (baseUrl || '') + (href.startsWith('/') ? href : '/' + href);
       }
@@ -612,6 +588,65 @@ export class SourceExecutor {
       console.warn('[SrcEx] No results from', source.sourceName, '- HTML length:', html.length);
     }
     return results;
+  }
+
+  private formatBookNameForFilter(raw: string): string {
+    return (raw || '')
+      .replace(/\s*[|｜]\s*作\s*者[:：\s].*$/g, '')
+      .replace(/\s+作\s*者[:：\s].*$/g, '')
+      .replace(/\s+\S+\s+著\s*$/g, '')
+      .replace(/[-—·・][\s]*作\s*者[:：\s].*$/g, '')
+      .replace(/\s+第[一二三四五六七八九十\d零○百千]+\s*[章节回卷].*$/g, '')
+      .replace(/\s+第[一二三四五六七八九十\d零○百千]+.*$/g, '')
+      .replace(/\s*[（(]?(全本|全文|完结|完本|连载|连载中|已完结|已完本|精校|精校版|无错版|无删减|未删减|珍藏版|修订版|校对版)[）)]?\s*$/g, '')
+      .replace(/\s*[（(]?(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|其他|男频|女频|修真|修真小说|竞技|网游|悬疑|推理|恐怖|冒险|穿越|重生|系统|末世|废土|异界|异能|进化|无限|洪荒|西游|水浒|三国|红楼|聊斋|封神|神话|民间|传奇|传说)[）)]?\s*$/g, '')
+      .replace(/[\s]*[|｜][\s]*$/g, '')
+      .replace(/[\s]*[\[【（(][\]】）)]*$/g, '')
+      .replace(/[\s]*[，,].*$/g, '')
+      .replace(/[\s]*[-—]\s*[^-—]+$/g, '')
+      .replace(/(最新章节|最后更新|今日更新|本站推荐).*$/g, '')
+      .replace(/^[《『""「」''【[（(]+|[》』""「」''】\])）]+$/g, '')
+      .trim();
+  }
+
+  private isValidSearchBookName(name: string): boolean {
+    if (!name || name.length < 2 || name.length > 80) return false;
+    if (/[�]/.test(name) || /^&#x?[0-9a-f]+;?$/i.test(name)) return false;
+    if (/没有找到|未找到|无搜索结果|浏览器没有自动跳转/.test(name)) return false;
+    if (/^序号.*作品.*作者?/.test(name)) return false;
+    if (/^第\s*[一二三四五六七八九十\d零○百千]+\s*[章节回卷长]/.test(name)) return false;
+    if (/^第\s*[一二三四五六七八九十\d零○百千]+$/.test(name)) return false;
+    if (/^\d{2,5}\s*[、.．章节回]/.test(name)) return false;
+    if (/^(番外|新书|发新书|完本感言|出院了|感谢书友|角色结局|这本书成绩不好)/.test(name)) return false;
+    if (/^(最新章节|最后更新|今日更新|本站推荐|热门推荐|本页推荐|精品推荐|推荐阅读|最新入库)$/.test(name)) return false;
+    if (/^\d{4}-\d{2}(-\d{2})?$/.test(name)) return false;
+    if (/^[0-9\-\.]+$/.test(name)) return false;
+    if (/^(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|男频|女频|完本|全本|连载|排行榜|热门|推荐|最新|免费|VIP|完结|其他|女生|男生|筛选|总裁|幻想|耽美)$/.test(name)) return false;
+    if (/^(网游|网游竞技|网游小说|竞技|体育竞技|体育小说)$/.test(name)) return false;
+    if (/^(首页|书架|分类|排行|完本|免费|登录|注册|关于|帮助|联系我们|网站地图|设为首页|收藏本站|会员书架|阅读记录|点击榜|新书榜|推荐榜|收藏榜|口水榜|字数榜|站内搜索|个人中心|小说更新|好评排行|会员帮助|信息反馈|版权声明|广告服务|返回首页|返回上页|错误提交|快速跳转)$/.test(name)) return false;
+    if (name.length === 2 && /^[\u4e00-\u9fff]{2}$/.test(name)) {
+      const commonCategories = ['玄幻','奇幻','仙侠','武侠','都市','言情','历史','军事','科幻',
+        '灵异','游戏','体育','同人','竞技','悬疑','推理','恐怖','冒险','穿越','重生','系统',
+        '网游','末世','废土','修真','修仙','异界','异能','进化','无限','洪荒','西游','水浒',
+        '三国','红楼','聊斋','封神','神话','民间','传奇','传说','下载','完本','全本','免费',
+        '总裁','幻想','耽美','侦探'];
+      if (commonCategories.includes(name)) return false;
+    }
+    if (/最新[：:]\s*第/.test(name) || /^(最新章节|最后更新|今日更新|本站推荐|热门推荐)/.test(name)) return false;
+    const commonNonBook = new Set([
+      '首页','书架','分类','排行','完本','免费','登录','注册',
+      '关于','帮助','联系我们','网站地图','友情链接','设为首页','收藏本站',
+      '书库','小说首页','全本书库','完本小说','手机小说','全本小说',
+    ]);
+    if (commonNonBook.has(name)) return false;
+    return true;
+  }
+
+  private cleanAuthorName(raw: string): string {
+    return (raw || '')
+      .replace(/^[\s　]*(作者|作\s*者|著者|作者名|作者名称|author)\s*[:：=－\-]?\s*/i, '')
+      .replace(/\s*(著|作品)?\s*$/g, '')
+      .trim();
   }
 
   /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body + headers） */
@@ -1017,68 +1052,80 @@ export class SourceExecutor {
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
-      let currentTocUrl = tocUrl;
-      const tocBodies: string[] = [];
+      const tocBodies: string[] = [resp];
       const visitedToc = new Set<string>();
+      visitedToc.add(tocUrl);
 
-      // 预提取所有分页 URL（从第一页 select option 列表）
-      let pageUrls: string[] = [currentTocUrl];
       const nextRule = source.ruleTocNextTocUrl || '';
       if (nextRule) {
         try {
-          const parser = getHtmlParser();
-          const doc = parser.parse(resp);
-          const normRule = this.normalizeCssRule(nextRule);
-          const attrMatch = normRule.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
-          if (attrMatch) {
-            const cssFull = attrMatch[1].trim();
-            const attrName = attrMatch[2];
-            const cssBase = cssFull.replace(/\.\d+$/, '');
-            const opts = parser.querySelectorAll(doc, cssBase);
-            for (let oi = 0; oi < opts.length; oi++) { const opt = opts[oi];
-              const v = opt.attributes[attrName];
-              if (v) {
-                const u = this.resolvePageUrl(v, currentTocUrl);
-                if (u && !visitedToc.has(u)) {
-                  visitedToc.add(u);
-                  pageUrls.push(u);
-                }
+          let currentBody = resp;
+          let currentUrl = tocUrl;
+          while (tocBodies.length < 60) {
+            const nextUrls = this.collectTocPageUrls(currentBody, nextRule, currentUrl);
+            const newUrls: string[] = [];
+            for (const url of nextUrls) {
+              if (url && !visitedToc.has(url)) {
+                newUrls.push(url);
               }
             }
-          }
-        } catch (_e) { /* ignore */ }
-      }
-      console.info('[SrcEx] getToc pageUrls:', pageUrls.length);
-
-      // 并发加载分页（限制并发数=5，保留原始顺序）
-      const maxConcurrency = 5;
-      const totalPages = Math.min(pageUrls.length, 60);
-      const pageResults: (string | null)[] = new Array(totalPages);
-      pageResults[0] = resp; // 第0页已有
-
-      let nextIdx = 1;
-      const workers: Promise<void>[] = [];
-      const fetchPage = async (): Promise<void> => {
-        while (nextIdx < totalPages) {
-          const i = nextIdx++;
-          const url = pageUrls[i];
-          try {
-            const b = await this.fetchWithOpts(url, headers);
-            if (b && b.length > 100) {
-              pageResults[i] = b;
+            if (newUrls.length === 0) {
+              break;
             }
-          } catch (_pf) { /* skip */ }
-        }
-      };
-      const workerCount = Math.min(maxConcurrency, totalPages - 1);
-      for (let w = 0; w < workerCount; w++) {
-        workers.push(fetchPage());
-      }
-      await Promise.all(workers);
 
-      for (let i = 0; i < totalPages; i++) {
-        if (pageResults[i]) tocBodies.push(pageResults[i]!);
+            if (newUrls.length > 1) {
+              const pageUrls: string[] = [];
+              for (const url of newUrls) {
+                if (tocBodies.length + pageUrls.length >= 60) {
+                  break;
+                }
+                visitedToc.add(url);
+                pageUrls.push(url);
+              }
+
+              const maxConcurrency = 5;
+              const pageResults: (string | null)[] = new Array(pageUrls.length);
+              let nextIdx = 0;
+              const workers: Promise<void>[] = [];
+              const fetchPage = async (): Promise<void> => {
+                while (nextIdx < pageUrls.length) {
+                  const i = nextIdx++;
+                  try {
+                    const b = await this.fetchWithOpts(pageUrls[i], headers);
+                    if (b && b.length > 100) {
+                      pageResults[i] = b;
+                    }
+                  } catch (_pf) { /* skip */ }
+                }
+              };
+              const workerCount = Math.min(maxConcurrency, pageUrls.length);
+              for (let w = 0; w < workerCount; w++) {
+                workers.push(fetchPage());
+              }
+              await Promise.all(workers);
+              for (let i = 0; i < pageResults.length; i++) {
+                if (pageResults[i]) {
+                  tocBodies.push(pageResults[i]!);
+                }
+              }
+              break;
+            }
+
+            const nextUrl = newUrls[0];
+            visitedToc.add(nextUrl);
+            const nextBody = await this.fetchWithOpts(nextUrl, headers);
+            if (!nextBody || nextBody.length < 100) {
+              break;
+            }
+            tocBodies.push(nextBody);
+            currentBody = nextBody;
+            currentUrl = nextUrl;
+          }
+        } catch (_e) {
+          /* ignore */
+        }
       }
+      console.info('[SrcEx] getToc pages fetched:', tocBodies.length);
 
       const bodyText = tocBodies.join('\n');
 
@@ -1228,6 +1275,129 @@ export class SourceExecutor {
 
   // ============ HtmlParser + CSS 选择器提取 ============
 
+  private extractTocPageUrls(body: string, rule: string, currentUrl: string): string[] {
+    if (!body || !rule) return [];
+
+    const parser = getHtmlParser();
+    const doc = parser.parse(body);
+    const urls: string[] = [];
+    const seen = new Set<string>();
+
+    const addUrl = (raw: string): void => {
+      const url = this.resolvePageUrl(raw, currentUrl);
+      if (url && !seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    };
+
+    const rawParts = splitConnectorRules(rule).rules;
+    for (const rawPart of rawParts) {
+      const normalized = this.normalizeCssRule(rawPart.trim());
+      if (!normalized || normalized.startsWith('<js>')) {
+        continue;
+      }
+
+      const normalizedParts = splitConnectorRules(normalized).rules;
+      for (const part of normalizedParts) {
+        const trimmed = part.trim();
+        if (!trimmed) {
+          continue;
+        }
+
+        const attrMatch = trimmed.match(/^(.*?)@([\w-]+)$/i);
+        if (!attrMatch) {
+          addUrl(parser.extractAttr(doc, trimmed));
+          continue;
+        }
+
+        const cssRule = attrMatch[1].trim();
+        const attrName = attrMatch[2].toLowerCase();
+        if (!cssRule) {
+          continue;
+        }
+
+        const elements = parser.querySelectorAll(doc, cssRule);
+        for (const el of elements) {
+          switch (attrName) {
+            case 'text':
+              addUrl(el.text || '');
+              break;
+            case 'owntext':
+            case 'textnodes':
+              addUrl(el.ownText || '');
+              break;
+            case 'html':
+              addUrl(el.innerHtml || '');
+              break;
+            case 'value':
+              addUrl(el.attributes['value'] || '');
+              break;
+            default:
+              addUrl(el.attributes[attrName] || '');
+              break;
+          }
+        }
+      }
+    }
+
+    return urls;
+  }
+
+  private collectTocPageUrls(body: string, rule: string, currentUrl: string): string[] {
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    const add = (url: string): void => {
+      if (url && !seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    };
+
+    for (const url of this.extractTocPageUrls(body, rule, currentUrl)) {
+      add(url);
+    }
+
+    const optionUrls = this.extractTocOptionPageUrls(body, currentUrl);
+    if (optionUrls.length > 1) {
+      for (const url of optionUrls) {
+        add(url);
+      }
+    }
+
+    return urls;
+  }
+
+  private extractTocOptionPageUrls(body: string, currentUrl: string): string[] {
+    if (!body) return [];
+
+    const parser = getHtmlParser();
+    const doc = parser.parse(body);
+    const options = parser.querySelectorAll(doc, 'option@value');
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    for (const option of options) {
+      const raw = option.attributes['value'] || '';
+      if (!this.isLikelyUrlValue(raw)) {
+        continue;
+      }
+      const url = this.resolvePageUrl(raw, currentUrl);
+      if (url && !seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    }
+    return urls;
+  }
+
+  private isLikelyUrlValue(value: string): boolean {
+    const raw = (value || '').trim();
+    if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) return false;
+    return /^(https?:)?\/\//i.test(raw) || raw.startsWith('/') || raw.startsWith('./') ||
+      raw.startsWith('../') || raw.startsWith('?') || /\.(html?|php|aspx?)([?#].*)?$/i.test(raw) ||
+      raw.includes('/');
+  }
+
   /**
    * 将 Legado Default 规则语法转换为标准 CSS
    * - id.xxx → #xxx
@@ -1244,27 +1414,20 @@ export class SourceExecutor {
       'header','footer','article','aside','main','figure','figcaption','video','audio','source','iframe']);
     // 1. id.xxx → #xxx
     let normalized = rule.replace(/\bid\.([\w-]+)/g, '#$1');
-  // 2. @@class →  .class (Legado 简写)
-  normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
-  // 2.4. Legado 范围选择器: tag.N:M → tag.N||tag.M, tag.N:M:O → tag.N||tag.M||tag.O
-  normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)((?::\d+)+)/g,
-    (_m: string, sel: string, firstIdx: string, rest: string) => {
-      const indices = [parseInt(firstIdx, 10)];
-      for (const part of rest.split(':').filter(x => x)) {
-        indices.push(parseInt(part, 10));
-      }
-      // 展开为 || 多选: p.1||p.2||p.4，后面 2.5 会转成 :nth-of-type
-      return indices.map(i => sel + '.' + i).join('||');
-    });
-  // 2.5. Legado 索引选择器: tag.N → tag:nth-of-type(N+1), .class.N → .class:nth-of-type(N+1)
-   //      N 在 Legado 中是 0-indexed，CSS nth-of-type 是 1-indexed
-   normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)/g, (_m: string, sel: string, num: string) => {
-     const n = parseInt(num, 10) + 1;
-     return sel + ':nth-of-type(' + n + ')';
-   });
-   // 2.6. 去掉 Legado !N 指令（flatten/first/last 操作，非 CSS 标准）
-   normalized = normalized.replace(/!\d+/g, '');
-   // 3. @后跟标签名 → 空格 + 标签名（后代）
+    // 2. @@class →  .class (Legado 简写)
+    normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
+    // 2.4. Legado 范围选择器: tag.N:M → tag.N||tag.M, tag.N:M:O → tag.N||tag.M||tag.O
+    normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)((?::\d+)+)/g,
+      (_m: string, sel: string, firstIdx: string, rest: string) => {
+        const indices = [parseInt(firstIdx, 10)];
+        for (const part of rest.split(':').filter(x => x)) {
+          indices.push(parseInt(part, 10));
+        }
+        // 展开为 || 多选: p.1||p.2||p.4，.N 由 HtmlParser 按 Legado 位置索引处理。
+        return indices.map(i => sel + '.' + i).join('||');
+      });
+    // 2.5. 保留 Legado .N / !N 位置索引，HtmlParser 会在选择阶段处理。
+    // 3. @后跟标签名 → 空格 + 标签名（后代）
     normalized = normalized.replace(/@(\w[\w-]*)/g, (match: string, afterAt: string) => {
       if (htmlTags.has(afterAt.toLowerCase())) return ' ' + afterAt;
       if (afterAt.startsWith('.')) return ' ' + afterAt;
@@ -1272,6 +1435,26 @@ export class SourceExecutor {
       return match;
     });
     return normalized;
+  }
+
+  private buildCssRuleCandidates(rule: string): string[] {
+    const normalized = this.normalizeCssRule(rule);
+    const candidates: string[] = [];
+    const add = (candidate: string): void => {
+      const cleaned = candidate.replace(/\s+/g, ' ').trim();
+      if (cleaned && !candidates.includes(cleaned)) {
+        candidates.push(cleaned);
+      }
+    };
+    add(normalized);
+
+    // 浏览器 DOM 会给 table 自动补 tbody，但原始 HTML 常常没有显式 tbody。
+    // 对 tbody 路径多试一次去 tbody 的选择器，兼容 tbody@tr!0 / id.xxx@tbody@tr。
+    if (/\btbody\b/i.test(normalized)) {
+      add(normalized.replace(/(^|[\s>])tbody(?=($|[\s>]))/gi, '$1'));
+    }
+
+    return candidates;
   }
 
   /**
@@ -1288,11 +1471,16 @@ export class SourceExecutor {
     const listParts = splitConnectorRules(source.ruleSearchList || '');
     let items: HtmlElement[] = [];
     for (const part of listParts.rules) {
-      const partNorm = this.normalizeCssRule(part);
-      const found = parser.querySelectorAll(doc, partNorm);
-      if (found && found.length > 0) {
-        items = found;
-        console.info('[SrcEx] CSS list rule matched by "' + part + '" → norm="' + partNorm + '" for', source.sourceName);
+      const candidates = this.buildCssRuleCandidates(part);
+      for (const partNorm of candidates) {
+        const found = parser.querySelectorAll(doc, partNorm);
+        if (found && found.length > 0) {
+          items = found;
+          console.info('[SrcEx] CSS list rule matched by "' + part + '" → norm="' + partNorm + '" for', source.sourceName);
+          break;
+        }
+      }
+      if (items.length > 0) {
         break;
       }
     }
@@ -1368,13 +1556,13 @@ export class SourceExecutor {
       }
       if (!name || name.length < 1) continue;
 
-     // 作者
-     let author = getAuthor(item);
-     // DEBUG: 显示归一化后的规则 + 匹配到的元素数
-     const _normAuthor = this.normalizeCssRule(authorRule);
-     if (idx < 3 || !author) {
-       const _htmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
-       console.info('[SrcEx] Author debug', source.sourceName,
+      // 作者
+      let author = this.cleanAuthorName(getAuthor(item));
+      // DEBUG: 显示归一化后的规则 + 匹配到的元素数
+      const _normAuthor = this.normalizeCssRule(authorRule);
+      if (idx < 3 || !author) {
+        const _htmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
+        console.info('[SrcEx] Author debug', source.sourceName,
          'rule=' + authorRule, 'norm=' + _normAuthor, 'got="' + author + '"',
          'html="' + _htmlSnippet + '"');
      }
@@ -1466,20 +1654,19 @@ export class SourceExecutor {
     return list.map((item: unknown) => {
       const itemObj = item as Record<string, unknown>;
       const name = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
-     const author = this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author');
-     if (!author) {
-       console.info('[SrcEx] Author debug JSON', source.sourceName,
-         'rule=' + (source.ruleSearchAuthor || ''), 'name="' + name.substring(0, 20) + '"');
-     }
-     let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
+      const author = this.cleanAuthorName(this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author'));
+      if (!author) {
+        console.info('[SrcEx] Author debug JSON', source.sourceName,
+          'rule=' + (source.ruleSearchAuthor || ''), 'name="' + name.substring(0, 20) + '"');
+      }
+      let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
       // 过滤非 URL 的封面值（数字 ID 等）
       const coverUrl = (rawCover && /^(https?:\/\/|\/\/|data:)/.test(rawCover)) ? rawCover : '';
       if (!coverUrl && rawCover) {
         console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
       }
-      let noteUrl = source.ruleSearchNoteUrl && source.ruleSearchNoteUrl.includes('{{')
-        ? this.resolveRuleTemplate(source.ruleSearchNoteUrl, itemObj, baseUrl)
-        : this.firstStr(itemObj, source.ruleSearchNoteUrl, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
+      let noteUrl = this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl) ||
+        this.firstStr(itemObj, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
@@ -1586,11 +1773,10 @@ export class SourceExecutor {
     // 2. <js>...</js> 代码
     const jsm = rule.match(/<js>([\s\S]*?)<\/js>/);
     if (jsm) {
-      const code = 'var result=' + JSON.stringify(result) + ';\n' + jsm[1];
-      try {
-        const r = globalScriptEngine.evaluateJsSync(code);
-        if (r && r !== 'null' && r !== 'undefined') result = r.trim().replace(/^['"]|['"]$/g, '') || result;
-      } catch(_e){}
+      const r = this.evaluateSimpleRuleJs(jsm[1], result);
+      if (r) {
+        result = r;
+      }
     }
     // 3. {{result}} 模板
     const tm = rule.match(/https?:\/\/[^\s\n]+\{\{result\}\}[^\s\n]*/);
@@ -1599,6 +1785,35 @@ export class SourceExecutor {
       console.info('[SrcEx] PostRule tmpl: ' + result.substring(0, 100));
     }
     return result;
+  }
+
+  private evaluateSimpleRuleJs(jsCode: string, currentResult: string): string {
+    const code = (jsCode || '').trim();
+    if (!code) return '';
+    try {
+      const script = 'var result=' + JSON.stringify(currentResult) + ';\n' + code;
+      const r = globalScriptEngine.evaluateJsSync(script);
+      if (r && r !== 'null' && r !== 'undefined') {
+        return r.trim().replace(/^['"]|['"]$/g, '');
+      }
+    } catch (_e) {
+      /* fallback below */
+    }
+
+    const numericValue = parseInt(currentResult, 10);
+    if (isNaN(numericValue)) return '';
+    let match = code.match(/^(\d+)\s*([+-])\s*parseInt\s*\(\s*result\s*\)\s*;?$/);
+    if (match) {
+      const base = parseInt(match[1], 10);
+      return String(match[2] === '+' ? base + numericValue : base - numericValue);
+    }
+    match = code.match(/^parseInt\s*\(\s*result\s*\)\s*([+-])\s*(\d+)\s*;?$/);
+    if (match) {
+      const delta = parseInt(match[2], 10);
+      return String(match[1] === '+' ? numericValue + delta : numericValue - delta);
+    }
+    console.warn('[SrcEx] JS postprocess returned empty, rule=' + code.substring(0, 120));
+    return '';
   }
 
   private async postProcessRuleAsync(rule: string, value: string): Promise<string> {
@@ -1623,6 +1838,19 @@ export class SourceExecutor {
       if (processed) return processed;
     }
     return '';
+  }
+
+  private resolveSearchNoteUrl(item: Record<string, unknown>, rule: string, baseUrl: string): string {
+    if (!rule) return '';
+    const usesResultTemplate = /\{\{\s*result\s*\}\}/.test(rule);
+    const hasPostProcessor = rule.includes('<js>') || rule.includes('@js:') || rule.includes('##');
+    if (usesResultTemplate || hasPostProcessor) {
+      return this.firstStr(item, rule);
+    }
+    if (rule.includes('{{')) {
+      return this.resolveRuleTemplate(rule, item, baseUrl);
+    }
+    return this.firstStr(item, rule);
   }
 
   // ============ HTML 搜索结果提取（绕过损坏的 RuleParser） ============

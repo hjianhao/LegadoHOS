@@ -9,6 +9,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
+import { UiUtil } from '../util/UiUtil';
 
 interface DecodeStreamOptions {
   stream: boolean;
@@ -37,7 +38,7 @@ export struct RssImportDialog {
       this.items = await dao.importSourcesPreview(json);
       this.statusText = this.items.length + ' 条RSS源';
     } catch (e) {
-      promptAction.showToast({ message: 'JSON格式错误', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: 'JSON格式错误', duration: 1500 });
     }
     this.isLoading = false;
   }
@@ -50,7 +51,7 @@ export struct RssImportDialog {
       }
     }
     if (selCount === 0) {
-      promptAction.showToast({ message: '未选中任何源', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '未选中任何源', duration: 1500 });
       return;
     }
     this.isLoading = true;
@@ -58,13 +59,13 @@ export struct RssImportDialog {
     try {
       const dao = new RSSSourceTable(AppDatabase.getInstance().rdbStore);
       const count = await dao.importSelected(this.items, this.keepName, this.keepGroup, this.customGroup);
-      promptAction.showToast({ message: '成功导入 ' + count + ' 个RSS源', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '成功导入 ' + count + ' 个RSS源', duration: 2000 });
       this.controller.close();
       if (this.onImportSuccess) {
         this.onImportSuccess();
       }
     } catch (e) {
-      promptAction.showToast({ message: '导入失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '导入失败', duration: 1500 });
     }
     this.isLoading = false;
   }
@@ -83,10 +84,10 @@ export struct RssImportDialog {
       fileIo.closeSync(f);
       const td = util.TextDecoder.create('utf-8');
       const decodeOpts: DecodeStreamOptions = { stream: false };
-      const json: string = td.decodeWithStream(new Uint8Array(b));
+      const json: string = td.decodeToString(new Uint8Array(b));
       await this.loadPreview(json);
     } catch (e) {
-      promptAction.showToast({ message: '读取失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '读取失败', duration: 1500 });
     }
   }
 
@@ -96,13 +97,13 @@ export struct RssImportDialog {
       const json = await NetUtil.httpGet('');
       await this.loadPreview(json);
     } catch (e) {
-      promptAction.showToast({ message: '下载失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '下载失败', duration: 1500 });
     }
   }
 
   private async doPasteImport(): Promise<void> {
     if (!this.pasteJson.trim()) {
-      promptAction.showToast({ message: '请粘贴 JSON 内容', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请粘贴 JSON 内容', duration: 1500 });
       return;
     }
     this.showPasteInput = false;

@@ -13,6 +13,7 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookChapter } from '../model/BookChapter';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ChapterCache } from '../util/ChapterCache';
+import { UiUtil } from '../util/UiUtil';
 
 interface ContentSearchResult {
   chapterIndex: number;
@@ -61,7 +62,7 @@ struct SearchContentPage {
   }
 
   private async initPage(): Promise<void> {
-    const p = router.getParams() as Record<string, Object>;
+    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(p['bookId'] ?? -1);
     this.bookName = String(p['bookName'] || p['name'] || '');
     this.bookUrl = String(p['bookUrl'] || '');
@@ -136,7 +137,7 @@ struct SearchContentPage {
   private async loadHistory(): Promise<void> {
     try {
       const store = SettingsStore.getInstance();
-      await store.init(getContext());
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
       this.history = await store.get<string[]>(this.historyKey(), []);
     } catch (_e) {
       this.history = [];
@@ -146,7 +147,7 @@ struct SearchContentPage {
   private async saveHistory(): Promise<void> {
     try {
       const store = SettingsStore.getInstance();
-      await store.init(getContext());
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
       await store.put(this.historyKey(), this.history);
     } catch (_e) {
       /* ignore */
@@ -263,7 +264,7 @@ struct SearchContentPage {
   private stopSearch(): void {
     this.searchRunId_++;
     this.isSearching = false;
-    promptAction.showToast({ message: '已停止搜索', duration: 1200 });
+    UiUtil.showToast(this.getUIContext(), { message: '已停止搜索', duration: 1200 });
   }
 
   private matchCount(text: string, key: string, regex: RegExp | null): number {
@@ -323,7 +324,7 @@ struct SearchContentPage {
     if (ChapterCache.bookUrl !== this.bookUrl) {
       ChapterCache.bookUrl = this.bookUrl;
     }
-    router.back({ url: 'pages/ReadPage', params: { durChapterIndex: index } });
+    UiUtil.back(this.getUIContext(), { url: 'pages/ReadPage', params: { durChapterIndex: index } });
   }
 
   private jumpToCurrentResult(): void {
@@ -385,7 +386,7 @@ struct SearchContentPage {
             .width(40)
             .height(40)
             .textAlign(TextAlign.Center)
-            .onClick(() => { router.back(); })
+            .onClick(() => { UiUtil.back(this.getUIContext()); })
           Column() {
             Text(this.bookName || '书内搜索')
               .fontSize(16)

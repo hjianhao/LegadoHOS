@@ -33,6 +33,7 @@ interface BookUpsertFields {
   author: string;
   coverUrl: string;
   bookUrl: string;
+  tocUrl?: string;
   origin: string;
   originUrl: string;
   kind: string;
@@ -142,13 +143,15 @@ export class BookshelfTransferService {
           continue;
         }
         const info = await globalSourceExecutor.getBookInfo(source, url);
-        const chapters = await globalSourceExecutor.getToc(source, url);
+        const tocUrl = info.tocUrl || url;
+        const chapters = await globalSourceExecutor.getToc(source, tocUrl);
         const name = info.name || BookshelfTransferService.nameFromUrl(url);
         await BookshelfTransferService.upsertBook({
           name: name,
           author: info.author || '',
           coverUrl: info.coverUrl || '',
           bookUrl: url,
+          tocUrl: tocUrl,
           origin: source.sourceName || '',
           originUrl: source.sourceUrl || '',
           kind: info.kind || '',
@@ -178,7 +181,7 @@ export class BookshelfTransferService {
         info = await globalSourceExecutor.getBookInfo(source, item.noteUrl);
       } catch (_e) { /* keep search result data */ }
       try {
-        chapters = await globalSourceExecutor.getToc(source, item.noteUrl);
+        chapters = await globalSourceExecutor.getToc(source, info.tocUrl || item.noteUrl);
       } catch (_e) { /* toc is optional for import */ }
     }
     return BookshelfTransferService.upsertBook({
@@ -186,6 +189,7 @@ export class BookshelfTransferService {
       author: info.author || item.author,
       coverUrl: info.coverUrl || item.coverUrl,
       bookUrl: item.noteUrl,
+      tocUrl: info.tocUrl || '',
       origin: item.origin,
       originUrl: item.originUrl,
       kind: info.kind || item.kind,
@@ -213,6 +217,7 @@ export class BookshelfTransferService {
     book.author = fields.author || book.author;
     book.coverUrl = fields.coverUrl || book.coverUrl;
     book.bookUrl = bookUrl || book.bookUrl;
+    book.tocUrl = fields.tocUrl || book.tocUrl;
     book.origin = fields.origin || book.origin;
     book.originUrl = fields.originUrl || book.originUrl;
     book.kind = fields.kind || book.kind;

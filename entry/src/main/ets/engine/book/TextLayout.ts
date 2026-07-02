@@ -26,6 +26,7 @@ export interface LayoutConfig {
   chineseMode: string;
   measuredCharWidth: number;
   measuredLineHeight: number;
+  pxToVp?: (px: number) => number;
 }
 
 export interface LayoutPage {
@@ -127,9 +128,8 @@ export class TextLayout {
         letterSpacing: config.letterSpacing,
         lineHeight: config.fontSize * config.lineHeightMultiplier,
       });
-      // measureTextSize 返回高度单位 px，需要转换为 vp 再比较
-      const measuredH = typeof px2vp === 'function' ?
-        px2vp(Number(size.height || 0)) : Number(size.height || 0);
+      const sizeObj = size as Record<string, Object>;
+      const measuredH = config.pxToVp ? config.pxToVp(Number(sizeObj['height'] || 0)) : Number(sizeObj['height'] || 0);
       if (measuredH <= innerH) {
         lo = mid;
       } else {

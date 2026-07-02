@@ -30,8 +30,12 @@ export class SettingsStore {
   }
 
   async init(context: Context): Promise<void> {
-    this.prefStore_ = await preferences.getPreferences(context, SETTINGS_STORE_NAME);
-    await this.initCipher_();
+    try {
+      this.prefStore_ = await preferences.getPreferences(context, SETTINGS_STORE_NAME);
+      await this.initCipher_();
+    } catch (err) {
+      throw err;
+    }
   }
 
   private async initCipher_(): Promise<void> {
@@ -75,11 +79,17 @@ export class SettingsStore {
       return bytes;
     } catch (_e) {
       // 极端回退：32 字节随机数据
-      const randomGen = cryptoFramework.createRandom();
-      const randomData = await randomGen.generateRandom(32);
       const bytes = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) {
-        bytes[i] = randomData.data[i];
+      try {
+        const randomGen = cryptoFramework.createRandom();
+        const randomData = await randomGen.generateRandom(32);
+        for (let i = 0; i < 32; i++) {
+          bytes[i] = randomData.data[i];
+        }
+      } catch (_ignored) {
+        for (let i = 0; i < 32; i++) {
+          bytes[i] = (Date.now() + i) & 0xFF;
+        }
       }
       return bytes;
     }
@@ -216,13 +226,21 @@ export class SettingsStore {
 
   // ---- 通用 ----
   async get<T>(key: string, defaultValue: T): Promise<T> {
-    const val = await this.store.get(key, JSON.stringify(defaultValue));
-    return JSON.parse(val as string) as T;
+    try {
+      const val = await this.store.get(key, JSON.stringify(defaultValue));
+      return JSON.parse(val as string) as T;
+    } catch (_e) {
+      return defaultValue;
+    }
   }
 
   async put(key: string, value: Object): Promise<void> {
-    await this.store.put(key, JSON.stringify(value));
-    await this.store.flush();
+    try {
+      await this.store.put(key, JSON.stringify(value));
+      await this.store.flush();
+    } catch (err) {
+      throw err;
+    }
   }
 
   // ---- AI 配置（API Key 使用 HUKS 加密存储） ----

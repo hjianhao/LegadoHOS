@@ -61,18 +61,22 @@ export class NetUtil {
   private static session_: rcp.Session | null = null;
 
   private static getSession(timeout: number): rcp.Session {
-    if (!NetUtil.session_) {
-      const cfg: rcp.SessionConfiguration = {
-        requestConfiguration: {
-          transfer: {
-            timeout: { connectMs: timeout, transferMs: timeout }
+    try {
+      if (!NetUtil.session_) {
+        const cfg: rcp.SessionConfiguration = {
+          requestConfiguration: {
+            transfer: {
+              timeout: { connectMs: timeout, transferMs: timeout }
+            }
           }
-        }
-      };
-      NetUtil.session_ = rcp.createSession(cfg);
-      console.info('[NetUtil] Session created');
+        };
+        NetUtil.session_ = rcp.createSession(cfg);
+        console.info('[NetUtil] Session created');
+      }
+      return NetUtil.session_;
+    } catch (err) {
+      throw err;
     }
-    return NetUtil.session_;
   }
 
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
@@ -136,34 +140,38 @@ export class NetUtil {
   }
 
   private static async inflateBytes(bytes: Uint8Array): Promise<Uint8Array> {
-    let outputSize: number = Math.max(bytes.length * 8, 64 * 1024);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const zip = await zlib.createZip();
-      const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      const output = new ArrayBuffer(outputSize);
-      const strm: zlib.ZStream = {
-        nextIn: input,
-        availableIn: bytes.byteLength,
-        nextOut: output,
-        availableOut: outputSize
-      };
-      const initStatus = await zip.inflateInit2(strm, 47);
-      if (initStatus !== zlib.ReturnStatus.OK) {
-        throw new Error('inflateInit2 status ' + initStatus);
-      }
+    try {
+      let outputSize: number = Math.max(bytes.length * 8, 64 * 1024);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const zip = await zlib.createZip();
+        const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const output = new ArrayBuffer(outputSize);
+        const strm: zlib.ZStream = {
+          nextIn: input,
+          availableIn: bytes.byteLength,
+          nextOut: output,
+          availableOut: outputSize
+        };
+        const initStatus = await zip.inflateInit2(strm, 47);
+        if (initStatus !== zlib.ReturnStatus.OK) {
+          throw new Error('inflateInit2 status ' + initStatus);
+        }
 
-      const status = await zip.inflate(strm, zlib.CompressFlushMode.FINISH);
-      await zip.inflateEnd(strm);
-      if (status === zlib.ReturnStatus.STREAM_END || status === zlib.ReturnStatus.OK) {
-        const totalOut = strm.totalOut || 0;
-        return new Uint8Array(output.slice(0, totalOut));
+        const status = await zip.inflate(strm, zlib.CompressFlushMode.FINISH);
+        await zip.inflateEnd(strm);
+        if (status === zlib.ReturnStatus.STREAM_END || status === zlib.ReturnStatus.OK) {
+          const totalOut = strm.totalOut || 0;
+          return new Uint8Array(output.slice(0, totalOut));
+        }
+        if (status === zlib.ReturnStatus.BUF_ERROR) {
+          outputSize *= 2;
+          continue;
+        }
+        throw new Error('inflate status ' + status);
       }
-      if (status === zlib.ReturnStatus.BUF_ERROR) {
-        outputSize *= 2;
-        continue;
-      }
-      throw new Error('inflate status ' + status);
+      throw new Error('inflate output buffer too small');
+    } catch (err) {
+      throw err;
     }
-    throw new Error('inflate output buffer too small');
   }
 }

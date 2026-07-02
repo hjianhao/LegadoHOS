@@ -1,5 +1,6 @@
 import { BookshelfTransferResult, BookshelfTransferService } from '../service/BookshelfTransferService';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @CustomDialog
 export struct AddBookUrlDialog {
@@ -12,7 +13,7 @@ export struct AddBookUrlDialog {
 
   private async doAdd(): Promise<void> {
     if (!this.inputText.trim()) {
-      promptAction.showToast({ message: '请输入书籍 URL', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请输入书籍 URL', duration: 1500 });
       return;
     }
     this.isRunning = true;
@@ -25,7 +26,7 @@ export struct AddBookUrlDialog {
       this.showResult(result);
       if (result.success > 0 && this.onSuccess) this.onSuccess();
     } catch (e) {
-      promptAction.showToast({ message: '添加失败: ' + ((e as Error).message || ''), duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '添加失败: ' + ((e as Error).message || ''), duration: 2000 });
     }
     this.isRunning = false;
   }
@@ -33,7 +34,7 @@ export struct AddBookUrlDialog {
   private showResult(result: BookshelfTransferResult): void {
     const message = '成功 ' + result.success + ' 本，跳过 ' + result.skipped + ' 本，失败 ' + result.failed + ' 本';
     this.statusText = message + (result.messages.length > 0 ? '\n' + result.messages.slice(0, 3).join('\n') : '');
-    promptAction.showToast({ message: message, duration: 2000 });
+    UiUtil.showToast(this.getUIContext(), { message: message, duration: 2000 });
   }
 
   build() {

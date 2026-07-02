@@ -15,6 +15,7 @@ import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 /** PERF-001: LazyForEach IDataSource — 章节数据源 */
 class ChapterDataSource implements IDataSource {
@@ -57,7 +58,7 @@ class ChapterDataSource implements IDataSource {
 
 @Entry
 @Component
-export struct ChapterListPage {
+struct ChapterListPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State from: string = '';               // 'BookInfoPage' | 'ReadPage'
   @State bookName: string = '';
@@ -80,7 +81,7 @@ export struct ChapterListPage {
   @State showVolumes: boolean = false;      // 是否检测到卷分组
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.from = params['from'] || '';
       this.bookName = params['bookName'] || '';
@@ -266,7 +267,7 @@ export struct ChapterListPage {
     ChapterCache.targetIndex = ch.index;
     if (this.from === 'ReadPage') {
       // 从阅读页进来的 → router.back 回到阅读页并传参
-      router.back({
+      UiUtil.back(this.getUIContext(), {
         url: 'pages/ReadPage',
         params: {
           durChapterIndex: ch.index,
@@ -275,7 +276,7 @@ export struct ChapterListPage {
       });
     } else {
       // 从其他页（如 BookInfoPage）进来的 → router.pushUrl 跳转到阅读页
-      router.pushUrl({
+      UiUtil.pushUrl(this.getUIContext(), {
         url: 'pages/ReadPage',
         params: {
           bookName: this.bookName,
@@ -297,7 +298,7 @@ export struct ChapterListPage {
       Row() {
         Button() { Text('←').fontSize(18) }
           .width(40).height(40).backgroundColor('transparent')
-          .onClick(() => { router.back(); })
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('目录').fontSize(16).fontWeight(FontWeight.Bold)
           .margin({ left: 8 })
         Text('- ' + this.bookName).fontSize(14).fontColor(this.isDark ? '#AAA' : '#888')

@@ -8,10 +8,11 @@ import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
-export struct ExploreBookPage {
+struct ExploreBookPage {
   @State sourceName: string = '';
   @State sourceUrl: string = '';
   @State categoryName: string = '';
@@ -34,7 +35,7 @@ export struct ExploreBookPage {
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
-    const params = router.getParams() as Record<string, Object>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
       this.sourceName = String(params['sourceName'] || '');
       this.sourceUrl = String(params['sourceUrl'] || '');
@@ -135,7 +136,7 @@ export struct ExploreBookPage {
   }
 
   openBookDetail(book: SearchResult): void {
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/BookInfoPage',
       params: {
         name: book.name, author: book.author, coverUrl: book.coverUrl,
@@ -149,7 +150,7 @@ export struct ExploreBookPage {
     Column() {
       Row() {
         Text('\u2190').fontSize(20).fontColor(this.isDark ? '#FFF' : '#333')
-          .onClick((): void => { router.back(); })
+          .onClick((): void => { UiUtil.back(this.getUIContext()); })
         Text(this.categoryName || this.sourceName)
           .fontSize(18).fontWeight(FontWeight.Medium)
           .fontColor(this.isDark ? '#FFF' : '#111')

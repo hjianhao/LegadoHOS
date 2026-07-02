@@ -12,6 +12,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable, setSourceRawJson } from '../data/database/BookSourceTable';
 import promptAction from '@ohos.promptAction';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 interface FieldGroup {
   key: string;
@@ -128,7 +129,7 @@ const TAB_LABELS: string[] = ['基本信息', '搜索', '详情/目录', '正文
 
 @Entry
 @Component
-export struct BookSourceEditPage {
+struct BookSourceEditPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State editSource: BookSource | null = null;
   @State currentTab: number = 0;
@@ -138,7 +139,7 @@ export struct BookSourceEditPage {
   @State loadVersion: number = 0;   // 递增强制 TextInput 重建
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     const url: string = params ? (params['url'] || params['sourceUrl'] || '') : '';
     this.sourceUrl = url;
     console.info('[SrcEdit] opening, url param:', url);
@@ -329,7 +330,7 @@ export struct BookSourceEditPage {
   async saveSource(): Promise<void> {
     if (!this.editSource) return;
     if (!this.editSource.sourceName || !this.editSource.sourceUrl) {
-      promptAction.showToast({ message: '书源名称和 URL 不能为空', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '书源名称和 URL 不能为空', duration: 1500 });
       return;
     }
     try {
@@ -341,14 +342,14 @@ export struct BookSourceEditPage {
       setSourceRawJson(source, '');
       if (this.isNew || source.id === 0) {
         await dao.insertSource(source);
-        promptAction.showToast({ message: '已创建新书源', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '已创建新书源', duration: 1500 });
       } else {
         await dao.updateSource(source);
-        promptAction.showToast({ message: '已保存', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
       }
-      router.back();
+      UiUtil.back(this.getUIContext());
     } catch (_e) {
-      promptAction.showToast({ message: '保存失败', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '保存失败', duration: 2000 });
     }
   }
 
@@ -388,7 +389,7 @@ export struct BookSourceEditPage {
       Row() {
         Text(this.isNew ? '新建书源' : '编辑书源').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('取消').fontSize(14).height(32).backgroundColor('transparent').fontColor('#888')
-          .onClick(() => { router.back(); })
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
         Button('保存').fontSize(14).height(32).backgroundColor('#0078D7').fontColor('#FFF')
           .borderRadius(4).padding({ left: 10, right: 10 }).margin({ left: 6 })
           .onClick(() => { this.saveSource(); })

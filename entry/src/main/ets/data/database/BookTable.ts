@@ -4,6 +4,7 @@
  */
 import relationalStore from '@ohos.data.relationalStore';
 import { Book, BookType, BookGroup, createDefaultBook } from '../../model/Book';
+import { RdbUtil } from './RdbUtil';
 
 export const BookTableCreate = `
   CREATE TABLE IF NOT EXISTS books (
@@ -55,7 +56,7 @@ export class BookTable {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('is_shelf', 1);
     predicates.orderByDesc('last_open_time');
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toBooks(resultSet);
   }
 
@@ -66,7 +67,7 @@ export class BookTable {
       predicates.equalTo('group_id', groupId);
     }
     predicates.orderByDesc('last_open_time');
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toBooks(resultSet);
   }
 
@@ -74,7 +75,7 @@ export class BookTable {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('name', name);
     predicates.equalTo('author', author);
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     const books = this.toBooks(resultSet);
     return books.length > 0 ? books[0] : null;
   }
@@ -82,7 +83,7 @@ export class BookTable {
   async getBookById(id: number): Promise<Book | null> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     const books = this.toBooks(resultSet);
     return books.length > 0 ? books[0] : null;
   }
@@ -90,7 +91,7 @@ export class BookTable {
   async getBookByUrl(bookUrl: string): Promise<Book | null> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('book_url', bookUrl);
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     const books = this.toBooks(resultSet);
     return books.length > 0 ? books[0] : null;
   }
@@ -100,41 +101,41 @@ export class BookTable {
     predicates.like('name', `%${keyword}%`);
     predicates.or();
     predicates.like('author', `%${keyword}%`);
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toBooks(resultSet);
   }
 
   // ---- CRUD ----
   async insertBook(book: Book): Promise<number> {
     const row = this.toRow(book);
-    return await this.rdbStore.insert(BookTable.TABLE_NAME, row);
+    return await RdbUtil.insert(this.rdbStore, BookTable.TABLE_NAME, row);
   }
 
   async updateBook(book: Book): Promise<void> {
     const row = this.toRow(book);
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', book.id);
-    await this.rdbStore.update(row, predicates);
+    await RdbUtil.update(this.rdbStore, row, predicates);
   }
 
   async deleteBook(id: number): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   async deleteBooks(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   async setShelfByIds(ids: number[], isShelf: boolean): Promise<void> {
     if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'is_shelf': isShelf ? 1 : 0,
       'update_time': Date.now(),
     }, predicates);
@@ -144,7 +145,7 @@ export class BookTable {
     if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.in('id', ids);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'group_id': groupId,
       'update_time': Date.now(),
     }, predicates);
@@ -153,7 +154,7 @@ export class BookTable {
   async batchUpdateGroupForDelete(groupId: number): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('group_id', groupId);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'group_id': BookGroup.ALL,
       'update_time': Date.now(),
     }, predicates);
@@ -162,7 +163,7 @@ export class BookTable {
   async updateTocInfo(bookId: number, totalChapterNum: number, latestChapterTitle: string): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', bookId);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'chapter_count': totalChapterNum,
       'total_chapter_num': totalChapterNum,
       'latest_chapter_title': latestChapterTitle,
@@ -171,19 +172,19 @@ export class BookTable {
   }
 
   async getMinOrder(): Promise<number> {
-    const rs = await this.rdbStore.querySql(`SELECT MIN(book_order) FROM ${BookTable.TABLE_NAME}`, []);
+    const rs = await RdbUtil.querySql(this.rdbStore, `SELECT MIN(book_order) FROM ${BookTable.TABLE_NAME}`, []);
     let minOrder = 0;
-    if (rs.goToFirstRow()) {
-      minOrder = rs.getLong(0) || 0;
+    if (RdbUtil.first(rs)) {
+      minOrder = RdbUtil.longAt(rs, 0) || 0;
     }
-    rs.close();
+    RdbUtil.close(rs);
     return minOrder;
   }
 
   async updateRemark(bookId: number, remark: string): Promise<void> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', bookId);
-    await this.rdbStore.update({
+    await RdbUtil.update(this.rdbStore, {
       'remark': remark,
       'update_time': Date.now(),
     }, predicates);
@@ -192,42 +193,42 @@ export class BookTable {
   // ---- 工具 ----
   private toBooks(rs: relationalStore.ResultSet): Book[] {
     const books: Book[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       books.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        name: rs.getString(rs.getColumnIndex('name')) || '',
-        author: rs.getString(rs.getColumnIndex('author')) || '',
-        coverUrl: rs.getString(rs.getColumnIndex('cover_url')) || '',
-        customCoverPath: rs.getString(rs.getColumnIndex('custom_cover_path')) || '',
-        bookUrl: rs.getString(rs.getColumnIndex('book_url')) || '',
-        origin: rs.getString(rs.getColumnIndex('origin')) || '',
-        originUrl: rs.getString(rs.getColumnIndex('origin_url')) || '',
-        type: rs.getLong(rs.getColumnIndex('type')) as BookType,
-        groupId: rs.getLong(rs.getColumnIndex('group_id')),
-        tocUrl: rs.getString(rs.getColumnIndex('toc_url')) || '',
-        chapterCount: rs.getLong(rs.getColumnIndex('chapter_count')),
-        totalChapterNum: rs.getLong(rs.getColumnIndex('total_chapter_num')),
-        latestChapterTitle: rs.getString(rs.getColumnIndex('latest_chapter_title')) || '',
-        durChapterTitle: rs.getString(rs.getColumnIndex('dur_chapter_title')) || '',
-        durChapterIndex: rs.getLong(rs.getColumnIndex('dur_chapter_index')),
-        durChapterPos: rs.getLong(rs.getColumnIndex('dur_chapter_pos')),
-        durChapterProgress: rs.getDouble(rs.getColumnIndex('dur_chapter_progress')),
-        isRead: rs.getLong(rs.getColumnIndex('is_read')) === 1,
-        isAudio: rs.getLong(rs.getColumnIndex('is_audio')) === 1,
-        isManga: rs.getLong(rs.getColumnIndex('is_manga')) === 1,
-        isShelf: rs.getLong(rs.getColumnIndex('is_shelf')) === 1,
-        order: rs.getLong(rs.getColumnIndex('book_order')),
-        kind: rs.getString(rs.getColumnIndex('kind')) || '',
-        wordCount: rs.getString(rs.getColumnIndex('word_count')) || '',
-        introduce: rs.getString(rs.getColumnIndex('introduce')) || '',
-        remark: rs.getString(rs.getColumnIndex('remark')) || '',
-        lastUpdateTime: rs.getString(rs.getColumnIndex('last_update_time')) || '',
-        lastOpenTime: rs.getLong(rs.getColumnIndex('last_open_time')),
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
+        id: RdbUtil.long(rs, 'id'),
+        name: RdbUtil.string(rs, 'name') || '',
+        author: RdbUtil.string(rs, 'author') || '',
+        coverUrl: RdbUtil.string(rs, 'cover_url') || '',
+        customCoverPath: RdbUtil.string(rs, 'custom_cover_path') || '',
+        bookUrl: RdbUtil.string(rs, 'book_url') || '',
+        origin: RdbUtil.string(rs, 'origin') || '',
+        originUrl: RdbUtil.string(rs, 'origin_url') || '',
+        type: RdbUtil.long(rs, 'type') as BookType,
+        groupId: RdbUtil.long(rs, 'group_id'),
+        tocUrl: RdbUtil.string(rs, 'toc_url') || '',
+        chapterCount: RdbUtil.long(rs, 'chapter_count'),
+        totalChapterNum: RdbUtil.long(rs, 'total_chapter_num'),
+        latestChapterTitle: RdbUtil.string(rs, 'latest_chapter_title') || '',
+        durChapterTitle: RdbUtil.string(rs, 'dur_chapter_title') || '',
+        durChapterIndex: RdbUtil.long(rs, 'dur_chapter_index'),
+        durChapterPos: RdbUtil.long(rs, 'dur_chapter_pos'),
+        durChapterProgress: RdbUtil.double(rs, 'dur_chapter_progress'),
+        isRead: RdbUtil.long(rs, 'is_read') === 1,
+        isAudio: RdbUtil.long(rs, 'is_audio') === 1,
+        isManga: RdbUtil.long(rs, 'is_manga') === 1,
+        isShelf: RdbUtil.long(rs, 'is_shelf') === 1,
+        order: RdbUtil.long(rs, 'book_order'),
+        kind: RdbUtil.string(rs, 'kind') || '',
+        wordCount: RdbUtil.string(rs, 'word_count') || '',
+        introduce: RdbUtil.string(rs, 'introduce') || '',
+        remark: RdbUtil.string(rs, 'remark') || '',
+        lastUpdateTime: RdbUtil.string(rs, 'last_update_time') || '',
+        lastOpenTime: RdbUtil.long(rs, 'last_open_time'),
+        createTime: RdbUtil.long(rs, 'create_time'),
+        updateTime: RdbUtil.long(rs, 'update_time'),
       });
     }
-    rs.close();
+    RdbUtil.close(rs);
     return books;
   }
 
@@ -281,6 +282,6 @@ export class BookTable {
     }
     const pred = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     pred.equalTo('book_url', bookUrl);
-    await this.rdbStore.update(row, pred);
+    await RdbUtil.update(this.rdbStore, row, pred);
   }
 }

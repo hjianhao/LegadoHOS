@@ -6,6 +6,7 @@
  * ChangeSourcePage 打开时优先从该表加载，点击刷新才重新搜索。
  */
 import relationalStore from '@ohos.data.relationalStore';
+import { RdbUtil } from './RdbUtil';
 
 export const BookSourcesCacheTableCreate = `
   CREATE TABLE IF NOT EXISTS book_sources_cache (
@@ -54,7 +55,7 @@ export class BookSourcesCacheTable {
         'introduce': s.introduce || '',
         'create_time': now,
       };
-      await this.rdbStore.insert(BookSourcesCacheTable.TABLE_NAME, row);
+      await RdbUtil.insert(this.rdbStore, BookSourcesCacheTable.TABLE_NAME, row);
     }
   }
 
@@ -65,21 +66,21 @@ export class BookSourcesCacheTable {
     const predicates = new relationalStore.RdbPredicates(BookSourcesCacheTable.TABLE_NAME);
     predicates.equalTo('book_name', bookName);
     predicates.equalTo('book_author', bookAuthor || '');
-    const resultSet = await this.rdbStore.query(predicates, []);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
     const entries: SourceCacheEntry[] = [];
-    while (resultSet.goToNextRow()) {
+    while (RdbUtil.next(resultSet)) {
       entries.push({
-        sourceName: resultSet.getString(resultSet.getColumnIndex('source_name')) || '',
-        sourceUrl: resultSet.getString(resultSet.getColumnIndex('source_url')) || '',
-        noteUrl: resultSet.getString(resultSet.getColumnIndex('note_url')) || '',
-        coverUrl: resultSet.getString(resultSet.getColumnIndex('cover_url')) || '',
-        kind: resultSet.getString(resultSet.getColumnIndex('kind')) || '',
-        wordCount: resultSet.getString(resultSet.getColumnIndex('word_count')) || '',
-        lastUpdateTime: resultSet.getString(resultSet.getColumnIndex('last_update_time')) || '',
-        introduce: resultSet.getString(resultSet.getColumnIndex('introduce')) || '',
+        sourceName: RdbUtil.string(resultSet, 'source_name') || '',
+        sourceUrl: RdbUtil.string(resultSet, 'source_url') || '',
+        noteUrl: RdbUtil.string(resultSet, 'note_url') || '',
+        coverUrl: RdbUtil.string(resultSet, 'cover_url') || '',
+        kind: RdbUtil.string(resultSet, 'kind') || '',
+        wordCount: RdbUtil.string(resultSet, 'word_count') || '',
+        lastUpdateTime: RdbUtil.string(resultSet, 'last_update_time') || '',
+        introduce: RdbUtil.string(resultSet, 'introduce') || '',
       });
     }
-    resultSet.close();
+    RdbUtil.close(resultSet);
     return entries;
   }
 
@@ -90,7 +91,7 @@ export class BookSourcesCacheTable {
     const predicates = new relationalStore.RdbPredicates(BookSourcesCacheTable.TABLE_NAME);
     predicates.equalTo('book_name', bookName);
     predicates.equalTo('book_author', bookAuthor || '');
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 }
 

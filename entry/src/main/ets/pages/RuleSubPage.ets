@@ -5,6 +5,7 @@
 import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 interface RuleSub {
   id: number;
@@ -129,7 +130,7 @@ export struct RuleSubPage {
 
   doEditSave(name: string, url: string, type: number) {
     if (!name || !url) {
-      promptAction.showToast({ message: '名称和 URL 不能为空' });
+      UiUtil.showToast(this.getUIContext(), { message: '名称和 URL 不能为空' });
       return;
     }
     if (this.editItem) {
@@ -160,7 +161,7 @@ export struct RuleSubPage {
       });
     }
     this.saveToStorage();
-    promptAction.showToast({ message: '已保存' });
+    UiUtil.showToast(this.getUIContext(), { message: '已保存' });
   }
 
   deleteItem(item: RuleSub) {
@@ -170,7 +171,7 @@ export struct RuleSubPage {
     }
     this.items = arr;
     this.saveToStorage();
-    promptAction.showToast({ message: '已删除' });
+    UiUtil.showToast(this.getUIContext(), { message: '已删除' });
   }
 
   deleteSelected() {
@@ -181,7 +182,7 @@ export struct RuleSubPage {
     this.items = arr;
     this.selectedIds = new Set();
     this.saveToStorage();
-    promptAction.showToast({ message: '已删除选中项' });
+    UiUtil.showToast(this.getUIContext(), { message: '已删除选中项' });
   }
 
   resetOrder() {
@@ -195,7 +196,7 @@ export struct RuleSubPage {
     }
     this.items = arr;
     this.saveToStorage();
-    promptAction.showToast({ message: '已重置排序' });
+    UiUtil.showToast(this.getUIContext(), { message: '已重置排序' });
   }
 
   getTypeLabel(type: number): string {
@@ -208,7 +209,7 @@ export struct RuleSubPage {
       // ===== 顶部栏 =====
       Row() {
         Text('←').fontSize(22).fontColor('#0078D7')
-          .onClick(() => router.back())
+          .onClick(() => UiUtil.back(this.getUIContext()))
         Text('规则订阅').fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
           .margin({ left: 8 })

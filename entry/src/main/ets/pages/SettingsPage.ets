@@ -3,12 +3,13 @@ import { AppTheme } from '../theme/AppTheme';
 import { NetUtil } from '../util/NetUtil';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
+import { UiUtil } from '../util/UiUtil';
 
 interface SettingItem { icon: string; title: string; key: string; }
 
 @Entry
 @Component
-export struct SettingsPage {
+struct SettingsPage {
   @State currentSection: string = 'main';
   @State isDark: boolean = false;
   @State searchConcurrency: number = 16;
@@ -37,7 +38,7 @@ export struct SettingsPage {
   private async loadReadSettings(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
-      await s.init(getContext());
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.pageMode = (await s.getPageMode()) !== 0;
       this.autoCacheSize = await s.getAutoCacheSize();
     } catch (_e) { /* ignore */ }
@@ -149,7 +150,7 @@ export struct SettingsPage {
           this.pageMode = v;
           try {
             const s = SettingsStore.getInstance();
-            await s.init(getContext());
+            await s.init(UiUtil.getHostContext(this.getUIContext()));
             s.setPageMode(v ? 1 : 0).catch(() => {});
           } catch (_e) { /* ignore */ }
         })
@@ -167,7 +168,7 @@ export struct SettingsPage {
             this.autoCacheSize = v;
             try {
               const s = SettingsStore.getInstance();
-              await s.init(getContext());
+              await s.init(UiUtil.getHostContext(this.getUIContext()));
               s.setAutoCacheSize(v).catch(() => {});
             } catch (_e) { /* ignore */ }
           })
@@ -221,7 +222,7 @@ export struct SettingsPage {
         AppStorage.set<string>('dnsServers', this.dnsServers);
         NetUtil.setDns(this.dnsServers, this.dnsEnabled);
         this.syncWebViewNetwork();
-        promptAction.showToast({ message: 'DNS 已保存', duration: 1500 });
+        UiUtil.showToast(this.getUIContext(), { message: 'DNS 已保存', duration: 1500 });
       })
 
       // 代理
@@ -245,7 +246,7 @@ export struct SettingsPage {
           if (this.proxyHost && port > 0) NetUtil.setProxy(this.proxyHost, port);
           else NetUtil.clearProxy();
           this.syncWebViewNetwork();
-          promptAction.showToast({ message: '代理已保存', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '代理已保存', duration: 1500 });
         })
         Button('清除').fontSize(12).height(28).margin({ left: 8 }).backgroundColor('#FF5722').fontColor('#FFF').onClick(() => {
           this.proxyHost = ''; this.proxyPort = '';
@@ -253,7 +254,7 @@ export struct SettingsPage {
           AppStorage.set<string>('proxyPort', '');
           NetUtil.clearProxy();
           this.syncWebViewNetwork();
-          promptAction.showToast({ message: '代理已清除', duration: 1500 });
+          UiUtil.showToast(this.getUIContext(), { message: '代理已清除', duration: 1500 });
         })
       }.margin({ top: 4 })
 

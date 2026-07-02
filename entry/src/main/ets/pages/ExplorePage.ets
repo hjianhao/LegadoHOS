@@ -14,6 +14,7 @@ import router from '@ohos.router';
 import { promptAction } from '@kit.ArkUI';
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
+import { UiUtil } from '../util/UiUtil';
 
 interface ExploreCategory {
   name: string;
@@ -312,7 +313,7 @@ export struct ExplorePage {
           console.error('[Explore] HTTP error: ' + JSON.stringify(err));
           resolve('');
         } else {
-          if (typeof data.result === 'string') { resolve(data.result); } else { const buf = data.result as ArrayBuffer; const u8 = new Uint8Array(buf); resolve(util.TextDecoder.create('utf-8').decodeWithStream(u8)); }
+          if (typeof data.result === 'string') { resolve(data.result); } else { const buf = data.result as ArrayBuffer; const u8 = new Uint8Array(buf); resolve(util.TextDecoder.create('utf-8').decodeToString(u8)); }
         }
       });
     });
@@ -362,7 +363,7 @@ export struct ExplorePage {
       console.warn('[Explore] Category ' + category.name + ' has no URL, skip');
       return;
     }
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ExploreBookPage',
       params: {
         sourceName: source.sourceName,

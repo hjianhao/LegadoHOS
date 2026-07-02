@@ -6,6 +6,7 @@
  */
 import { ClickAction, ACTION_LABELS, DEFAULT_ZONE_ACTIONS } from './ClickAction';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
+import { UiUtil } from '../../util/UiUtil';
 
 @Component
 export struct ClickActionConfig {
@@ -22,7 +23,7 @@ export struct ClickActionConfig {
 
   private async loadActions(): Promise<void> {
     const store = SettingsStore.getInstance();
-    const ctx = getContext();
+    const ctx = UiUtil.getHostContext(this.getUIContext());
     await store.init(ctx);
     const actions: number[] = [];
     for (let z = 0; z < 9; z++) {

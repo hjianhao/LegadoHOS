@@ -45,7 +45,11 @@ export default class MainAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: Window.WindowStage): void {
     console.info('[MainAbility] onWindowStageCreate');
-    windowStage.loadContent('pages/MainPage');
+    try {
+      windowStage.loadContent('pages/MainPage');
+    } catch (err) {
+      console.error('[MainAbility] loadContent failed:', err);
+    }
   }
 
   onWindowStageDestroy(): void {

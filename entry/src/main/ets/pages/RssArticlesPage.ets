@@ -7,10 +7,11 @@ import { RSSArticle } from '../model/RSSSource';
 import { fetchArticles } from '../engine/rss/RssService';
 import { NetUtil } from '../util/NetUtil';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
-export struct RssArticlesPage {
+struct RssArticlesPage {
   @StorageProp('isDark') isDark: boolean = false;
   @State articles: RSSArticle[] = [];
   @State isLoading: boolean = true;
@@ -21,7 +22,7 @@ export struct RssArticlesPage {
   private db: AppDatabase = AppDatabase.getInstance();
 
   aboutToAppear() {
-    const params = router.getParams() as Record<string, Object>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
       this.sourceUrl = (params['sourceUrl'] as string) || '';
       this.sourceName = (params['sourceName'] as string) || 'RSS 文章';
@@ -90,7 +91,7 @@ export struct RssArticlesPage {
           Text('← 返回').fontSize(16).fontColor('#0078D7')
         }
         .backgroundColor('transparent')
-        .onClick(() => { router.back(); })
+        .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(this.isDark ? '#E0E0E0' : '#333')
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })

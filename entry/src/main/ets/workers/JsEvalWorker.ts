@@ -2,7 +2,7 @@
  * JS 求值 Worker —— 在独立线程中执行 QuickJS 脚本
  *
  * 职责：
- *   1. 加载 libquickjs_bridge.so 原生模块
+ *   1. 加载 quickjs_bridge 原生模块
  *   2. 注册 java.ajax() HTTP 处理器（使用 RCP 发起请求）
  *   3. 通过 postMessage 接收求值请求
  *   4. 执行 JS 并返回结果
@@ -10,6 +10,8 @@
 import worker from '@ohos.worker';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
+
+declare function requireNapi(name: string): object;
 
 // ============ RCP HTTP 工具 ============
 
@@ -43,14 +45,13 @@ async function initEngine(): Promise<boolean> {
   if (initialized) return true;
 
   try {
-    const mod = await import('libquickjs_bridge.so');
-    quickjsBridge = (mod as any).default || mod;
+    quickjsBridge = requireNapi('quickjs_bridge');
     if (!quickjsBridge || typeof quickjsBridge.createEngine !== 'function') {
-      console.warn('[JsWorker] import returned invalid module');
+      console.warn('[JsWorker] requireNapi returned invalid module');
       return false;
     }
   } catch (_e) {
-    console.warn('[JsWorker] import(libquickjs_bridge.so) failed');
+    console.warn('[JsWorker] requireNapi(quickjs_bridge) failed');
     return false;
   }
 

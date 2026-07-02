@@ -10,6 +10,7 @@ import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import web_webview from '@ohos.web.webview';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -33,7 +34,7 @@ export struct RssReadPage {
   private webviewController: web_webview.WebviewController = new web_webview.WebviewController();
 
   aboutToAppear() {
-    const params = router.getParams() as Record<string, string>;
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.title = params['title'] || '';
       this.origin = params['origin'] || '';
@@ -144,7 +145,7 @@ export struct RssReadPage {
       if (this.isStarred) {
         await this.db.rssStarTable.delete(this.origin, this.link);
         this.isStarred = false;
-        promptAction.showToast({ message: '已取消收藏' });
+        UiUtil.showToast(this.getUIContext(), { message: '已取消收藏' });
       } else {
         const star: RssStar = {
           origin: this.origin,
@@ -165,10 +166,10 @@ export struct RssReadPage {
         this.isStarred = true;
         this.starTitle = this.article.title;
         this.starGroup = '默认分组';
-        promptAction.showToast({ message: '已收藏' });
+        UiUtil.showToast(this.getUIContext(), { message: '已收藏' });
       }
     } catch (e) {
-      promptAction.showToast({ message: `操作失败: ${e}` });
+      UiUtil.showToast(this.getUIContext(), { message: `操作失败: ${e}` });
     }
   }
 
@@ -180,10 +181,10 @@ export struct RssReadPage {
         star.title = this.starTitle || star.title;
         star.group = this.starGroup || star.group;
         await this.db.rssStarTable.update(star);
-        promptAction.showToast({ message: '已更新收藏信息' });
+        UiUtil.showToast(this.getUIContext(), { message: '已更新收藏信息' });
       }
     } catch (e) {
-      promptAction.showToast({ message: `更新失败: ${e}` });
+      UiUtil.showToast(this.getUIContext(), { message: `更新失败: ${e}` });
     }
     this.showStarEdit = false;
   }
@@ -192,14 +193,14 @@ export struct RssReadPage {
     const url = this.link || this.origin;
     if (url) {
       // 复制到剪贴板（简化）
-      promptAction.showToast({ message: `链接: ${url}` });
+      UiUtil.showToast(this.getUIContext(), { message: `链接: ${url}` });
     }
   }
 
   openInBrowser() {
     const url = this.link || this.origin;
     if (url) {
-      promptAction.showToast({ message: `浏览器打开: ${url}` });
+      UiUtil.showToast(this.getUIContext(), { message: `浏览器打开: ${url}` });
     }
   }
 
@@ -214,7 +215,7 @@ export struct RssReadPage {
       // ===== 顶部栏 =====
       Row() {
         Text('←').fontSize(22).fontColor('#0078D7')
-          .onClick(() => router.back())
+          .onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.title || 'RSS 阅读')
           .fontSize(17).fontWeight(FontWeight.Medium)
           .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')

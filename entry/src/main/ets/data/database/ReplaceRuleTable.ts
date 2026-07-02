@@ -1,5 +1,6 @@
 import relationalStore from '@ohos.data.relationalStore';
 import { ReplaceRule, ReplaceScope } from '../../model/ReplaceRule';
+import { RdbUtil } from './RdbUtil';
 
 export const ReplaceRuleTableCreate = `
   CREATE TABLE IF NOT EXISTS replace_rules (
@@ -26,24 +27,24 @@ export class ReplaceRuleTable {
     const p = new relationalStore.RdbPredicates(ReplaceRuleTable.TABLE_NAME);
     p.equalTo('is_enabled', 1);
     p.orderByAsc('sort_order');
-    const rs = await this.rdbStore.query(p, []);
+    const rs = await RdbUtil.query(this.rdbStore, p, []);
     const list: ReplaceRule[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        name: rs.getString(rs.getColumnIndex('rule_name')) || '',
-        pattern: rs.getString(rs.getColumnIndex('pattern')) || '',
-        replacement: rs.getString(rs.getColumnIndex('replacement')) || '',
-        isRegex: rs.getLong(rs.getColumnIndex('is_regex')) === 1,
-        isEnabled: rs.getLong(rs.getColumnIndex('is_enabled')) === 1,
-        scope: rs.getLong(rs.getColumnIndex('scope')),
-        scopeValue: rs.getString(rs.getColumnIndex('scope_value')) || '',
-        sortOrder: rs.getLong(rs.getColumnIndex('sort_order')),
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
+        id: RdbUtil.long(rs, 'id'),
+        name: RdbUtil.string(rs, 'rule_name') || '',
+        pattern: RdbUtil.string(rs, 'pattern') || '',
+        replacement: RdbUtil.string(rs, 'replacement') || '',
+        isRegex: RdbUtil.long(rs, 'is_regex') === 1,
+        isEnabled: RdbUtil.long(rs, 'is_enabled') === 1,
+        scope: RdbUtil.long(rs, 'scope'),
+        scopeValue: RdbUtil.string(rs, 'scope_value') || '',
+        sortOrder: RdbUtil.long(rs, 'sort_order'),
+        createTime: RdbUtil.long(rs, 'create_time'),
+        updateTime: RdbUtil.long(rs, 'update_time'),
       });
     }
-    rs.close();
+    RdbUtil.close(rs);
     return list;
   }
 }

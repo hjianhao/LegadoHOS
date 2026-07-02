@@ -8,6 +8,7 @@
  */
 import relationalStore from '@ohos.data.relationalStore';
 import { BookGroupItem, getSystemGroupDefaults, bookMatchesSystemGroup, BOOK_GROUP_TABLE_NAME, BookGroup } from '../../model/BookGroup';
+import { RdbUtil } from './RdbUtil';
 
 export const BookGroupTableCreate = `
   CREATE TABLE IF NOT EXISTS ${BOOK_GROUP_TABLE_NAME} (
@@ -49,7 +50,7 @@ export class BookGroupTable {
   async getCustomGroups(): Promise<BookGroupItem[]> {
     const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
     predicates.orderByAsc('"order"');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toItems(rs);
   }
 
@@ -62,7 +63,7 @@ export class BookGroupTable {
     }
     const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     const items = this.toItems(rs);
     return items.length > 0 ? items[0] : null;
   }
@@ -84,9 +85,9 @@ export class BookGroupTable {
     const predicates = new relationalStore.RdbPredicates('books');
     predicates.equalTo('is_shelf', 1);
     predicates.equalTo('group_id', groupId);
-    const rs = await this.rdbStore.query(predicates, ['id']);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, ['id']);
     const count = rs.rowCount;
-    rs.close();
+    RdbUtil.close(rs);
     return count;
   }
 
@@ -119,7 +120,7 @@ export class BookGroupTable {
       'create_time': now,
       'update_time': now,
     };
-    return await this.rdbStore.insert(BookGroupTable.TABLE_NAME, row);
+    return await RdbUtil.insert(this.rdbStore, BookGroupTable.TABLE_NAME, row);
   }
 
   /** 更新自定义分组 */
@@ -139,7 +140,7 @@ export class BookGroupTable {
     };
     const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
     predicates.equalTo('id', item.id);
-    await this.rdbStore.update(row, predicates);
+    await RdbUtil.update(this.rdbStore, row, predicates);
   }
 
   /** 删除自定义分组，并将该分组下所有书籍移回「全部」分组 */
@@ -153,7 +154,7 @@ export class BookGroupTable {
     }
     const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.delete(predicates);
+    await RdbUtil.delete(this.rdbStore, predicates);
   }
 
   /** 批量更新分组排序 */
@@ -163,7 +164,7 @@ export class BookGroupTable {
         const row: relationalStore.ValuesBucket = { '"order"': i, 'update_time': Date.now() };
         const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
         predicates.equalTo('id', ids[i]);
-        await this.rdbStore.update(row, predicates);
+        await RdbUtil.update(this.rdbStore, row, predicates);
       }
     }
   }
@@ -176,27 +177,27 @@ export class BookGroupTable {
     const row: relationalStore.ValuesBucket = { 'name': newName.trim(), 'update_time': Date.now() };
     const predicates = new relationalStore.RdbPredicates(BookGroupTable.TABLE_NAME);
     predicates.equalTo('id', id);
-    await this.rdbStore.update(row, predicates);
+    await RdbUtil.update(this.rdbStore, row, predicates);
   }
 
   // ============ 工具 ============
 
   private toItems(rs: relationalStore.ResultSet): BookGroupItem[] {
     const items: BookGroupItem[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       items.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        name: rs.getString(rs.getColumnIndex('name')) || '',
-        order: rs.getLong(rs.getColumnIndex('"order"')),
-        cover: rs.getString(rs.getColumnIndex('cover')) || '',
+        id: RdbUtil.long(rs, 'id'),
+        name: RdbUtil.string(rs, 'name') || '',
+        order: RdbUtil.long(rs, '"order"'),
+        cover: RdbUtil.string(rs, 'cover') || '',
         isSystem: false,
-        enableRefresh: rs.getLong(rs.getColumnIndex('enable_refresh')) === 1,
-        show: rs.getLong(rs.getColumnIndex('is_show')) === 1,
-        isPrivate: rs.getLong(rs.getColumnIndex('is_private')) === 1,
-        bookSort: rs.getLong(rs.getColumnIndex('book_sort')),
+        enableRefresh: RdbUtil.long(rs, 'enable_refresh') === 1,
+        show: RdbUtil.long(rs, 'is_show') === 1,
+        isPrivate: RdbUtil.long(rs, 'is_private') === 1,
+        bookSort: RdbUtil.long(rs, 'book_sort'),
       });
     }
-    rs.close();
+    RdbUtil.close(rs);
     return items;
   }
 }

@@ -5,6 +5,7 @@ import { AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent'
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
@@ -58,13 +59,13 @@ struct AiSourceGeneratePage {
 
   async startAnalyze(): Promise<void> {
     if (!this.homepageUrl.startsWith('http')) {
-      promptAction.showToast({ message: '请输入有效的网址', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请输入有效的网址', duration: 1500 });
       return;
     }
 
-    await this.agent_!.init(getContext());
+    await this.agent_!.init(UiUtil.getHostContext(this.getUIContext()));
     if (!this.agent_!.isConfigured()) {
-      promptAction.showToast({ message: '请先配置 AI API', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '请先配置 AI API', duration: 1500 });
       return;
     }
 
@@ -86,7 +87,7 @@ struct AiSourceGeneratePage {
     this.isAnalyzing = false;
 
     if (results[results.length - 1].status === 'done') {
-      promptAction.showToast({ message: '分析完成', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '分析完成', duration: 1500 });
     }
   }
 
@@ -99,7 +100,7 @@ struct AiSourceGeneratePage {
     for (const k of Object.keys(data)) {
       params[k] = data[k];
     }
-    router.pushUrl({ url: 'pages/BookSourceEditPage', params: params });
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage', params: params });
   }
 
   stepLabel(step: AiStep): string {
@@ -121,11 +122,11 @@ struct AiSourceGeneratePage {
       // 顶栏
       Row() {
         Button('←').fontSize(18).fontColor(this.isDark ? '#CCC' : '#666').width(36).height(36)
-          .backgroundColor('transparent').onClick(() => { router.back(); })
+          .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('AI 生成书源').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('⚙️').fontSize(20)
           .backgroundColor('transparent').width(36).height(36)
-          .onClick(() => { router.pushUrl({ url: 'pages/AiConfigPage' }); })
+          .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
       }.padding({ left: 12, right: 12, top: 44 }).width('100%')
 
       if (!this.isAnalyzing && this.steps.length === 0) {

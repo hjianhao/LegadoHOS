@@ -3,6 +3,7 @@
  */
 import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
+import { UiUtil } from '../util/UiUtil';
 
 interface MenuEntry { icon: string; title: string; desc: string; page: string; }
 
@@ -13,7 +14,7 @@ export struct MyPage {
 
   goTo(page: string): void {
     if (page) {
-      router.pushUrl({ url: page }, router.RouterMode.Single);
+      UiUtil.pushUrl(this.getUIContext(), { url: page }, router.RouterMode.Single);
     }
   }
 

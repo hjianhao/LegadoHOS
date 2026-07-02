@@ -31,6 +31,7 @@ import { BookshelfImportDialog } from './BookshelfImportDialog';
 import { BookshelfExportDialog } from './BookshelfExportDialog';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../util/UiUtil';
 
 @Component
 export struct BookshelfPage {
@@ -148,7 +149,7 @@ export struct BookshelfPage {
       return true;
     } catch (_e) {
       try {
-        await AppDatabase.getInstance().init(getContext());
+        await AppDatabase.getInstance().init(UiUtil.getHostContext(this.getUIContext()));
         return true;
       } catch (err) {
         console.error('[Bookshelf] database not ready:', err);
@@ -335,17 +336,17 @@ export struct BookshelfPage {
       await bookDao.setShelfByIds(this.selectedBookIds, false);
       this.selectedBookIds = [];
       this.isSelectMode = false;
-      promptAction.showToast({ message: '已移除 ' + count + ' 本', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已移除 ' + count + ' 本', duration: 1500 });
       this.loadBooks();
     } catch (_e) {
-      promptAction.showToast({ message: '移除失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '移除失败', duration: 1500 });
     }
   }
 
   private async updateTocForVisible(): Promise<void> {
     const targets = this.currentTargetBooks().filter((book: Book): boolean => !!book.bookUrl && !!book.originUrl);
     if (targets.length === 0) {
-      promptAction.showToast({ message: '没有可更新目录的书籍', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '没有可更新目录的书籍', duration: 1500 });
       return;
     }
     this.isRefreshing = true;
@@ -363,7 +364,7 @@ export struct BookshelfPage {
           failed++;
           continue;
         }
-        const chapters = await globalSourceExecutor.getToc(source, book.bookUrl);
+        const chapters = await globalSourceExecutor.getToc(source, book.tocUrl || book.bookUrl);
         if (chapters.length === 0) {
           failed++;
           continue;
@@ -373,10 +374,10 @@ export struct BookshelfPage {
         await bookDao.updateTocInfo(book.id, chapters.length, chapters[chapters.length - 1].title);
         success++;
       }
-      promptAction.showToast({ message: '目录更新完成：成功 ' + success + '，失败 ' + failed, duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '目录更新完成：成功 ' + success + '，失败 ' + failed, duration: 2000 });
       this.loadBooks();
     } catch (_e) {
-      promptAction.showToast({ message: '更新目录失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '更新目录失败', duration: 1500 });
     }
     this.isRefreshing = false;
   }
@@ -429,7 +430,7 @@ export struct BookshelfPage {
   }
 
   continueRead(book: Book): void {
-    router.pushUrl({
+    UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ReadPage',
       params: {
         name: book.name, author: book.author, coverUrl: book.coverUrl,
@@ -450,7 +451,7 @@ export struct BookshelfPage {
       const bookDao = new BookTable(db);
       book.isShelf = false;
       await bookDao.updateBook(book);
-      promptAction.showToast({ message: '已从书架移除', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已从书架移除', duration: 1500 });
       this.loadBooks();
     } catch (e) {
       console.error('[Bookshelf] remove error:', e);
@@ -458,7 +459,7 @@ export struct BookshelfPage {
   }
 
   private confirmClearBookCache(book: Book): void {
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '清除缓存',
       message: `清除《${book.name}》已缓存的章节内容？目录和阅读进度会保留。`,
       buttons: [
@@ -475,14 +476,14 @@ export struct BookshelfPage {
       await AppDatabase.getInstance().waitForInit();
       const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
       await chapterDao.clearContentByBookId(book.id);
-      promptAction.showToast({ message: '已清除《' + book.name + '》缓存', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已清除《' + book.name + '》缓存', duration: 1500 });
     } catch (_e) {
-      promptAction.showToast({ message: '清除缓存失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '清除缓存失败', duration: 1500 });
     }
   }
 
   showContextMenu(book: Book): void {
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: book.name,
       message: '作者: ' + (book.author || '未知'),
       buttons: [
@@ -494,7 +495,7 @@ export struct BookshelfPage {
     }).then((res: Object) => {
       const idx = (res as Record<string, Object>)['index'] as number;
       if (idx === 0) {
-        router.pushUrl({ url: 'pages/BookInfoPage', params: {
+        UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookInfoPage', params: {
           name: book.name, author: book.author, coverUrl: book.coverUrl,
           noteUrl: book.bookUrl, origin: book.origin, originUrl: book.originUrl,
           introduce: book.introduce || '', kind: book.kind || ''
@@ -508,7 +509,7 @@ export struct BookshelfPage {
   }
 
   confirmRemove(book: Book): void {
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '移除书籍',
       message: `确定将《${book.name}》从书架移除吗？`,
       buttons: [
@@ -548,7 +549,7 @@ export struct BookshelfPage {
         Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor('#FFF')
           .height(32).padding({ left: 10, right: 10 })
         .backgroundColor('#0078D7').borderRadius(16).margin({ right: 6 })
-        .onClick(() => { router.pushUrl({ url: 'pages/SearchPage' }); })
+        .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
         Button() {
           Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor('#666')
         }.width(36).height(36).backgroundColor('transparent')
@@ -661,17 +662,17 @@ export struct BookshelfPage {
     if (this.showMenu) {
       Column().width('100%').height('100%').position({ top: 0, left: 0 }).onClick(() => { this.showMenu = false; })
       Column() {
-        this.mi('添加远程书籍', () => { this.showMenu = false; router.pushUrl({ url: 'pages/SearchPage' }); })
-        this.mi('添加本地书籍', () => { this.showMenu = false; promptAction.showToast({ message: '本地书籍导入待接入文件解析', duration: 1500 }); })
+        this.mi('添加远程书籍', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
+        this.mi('添加本地书籍', () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), { message: '本地书籍导入待接入文件解析', duration: 1500 }); })
         this.mi('更新目录', () => { this.showMenu = false; this.updateTocForVisible(); })
         this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
         this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
         this.mi('添加URL', () => { this.showMenu = false; this.addUrlDlg?.open(); })
         this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
-        this.mi('书架管理', () => { this.showMenu = false; router.pushUrl({ url: 'pages/BookshelfManagePage' }); })
+        this.mi('书架管理', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookshelfManagePage' }); })
         this.mi('导出书架', () => { this.showMenu = false; this.openExportDialog(this.currentTargetBooks()); })
         this.mi('导入书架', () => { this.showMenu = false; this.importDlg?.open(); })
-        this.mi('日志', () => { this.showMenu = false; promptAction.showToast({ message: '日志面板待接入', duration: 1500 }); })
+        this.mi('日志', () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), { message: '日志面板待接入', duration: 1500 }); })
       }
       .position({ top: 8, right: 8 }).backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')
       .borderRadius(12).shadow({ radius: 8, color: '#20000000' }).width(180)

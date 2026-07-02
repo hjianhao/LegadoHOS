@@ -1,5 +1,6 @@
 import relationalStore from '@ohos.data.relationalStore';
 import { Bookmark } from '../../model/Bookmark';
+import { RdbUtil } from './RdbUtil';
 
 export const BookmarkTableCreate = `
   CREATE TABLE IF NOT EXISTS bookmarks (
@@ -29,12 +30,12 @@ export class BookmarkTable {
     const predicates = new relationalStore.RdbPredicates(BookmarkTable.TABLE_NAME);
     predicates.equalTo('book_id', bookId);
     predicates.orderByAsc('chapter_index');
-    const rs = await this.rdbStore.query(predicates, []);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
     return this.toBookmarks(rs);
   }
 
   async insert(bookmark: Bookmark): Promise<number> {
-    return await this.rdbStore.insert(BookmarkTable.TABLE_NAME, {
+    return await RdbUtil.insert(this.rdbStore, BookmarkTable.TABLE_NAME, {
       'book_id': bookmark.bookId,
       'book_name': bookmark.bookName,
       'book_author': bookmark.bookAuthor,
@@ -51,27 +52,27 @@ export class BookmarkTable {
   async delete(id: number): Promise<void> {
     const p = new relationalStore.RdbPredicates(BookmarkTable.TABLE_NAME);
     p.equalTo('id', id);
-    await this.rdbStore.delete(p);
+    await RdbUtil.delete(this.rdbStore, p);
   }
 
   private toBookmarks(rs: relationalStore.ResultSet): Bookmark[] {
     const list: Bookmark[] = [];
-    while (rs.goToNextRow()) {
+    while (RdbUtil.next(rs)) {
       list.push({
-        id: rs.getLong(rs.getColumnIndex('id')),
-        bookId: rs.getLong(rs.getColumnIndex('book_id')),
-        bookName: rs.getString(rs.getColumnIndex('book_name')) || '',
-        bookAuthor: rs.getString(rs.getColumnIndex('book_author')) || '',
-        chapterIndex: rs.getLong(rs.getColumnIndex('chapter_index')),
-        chapterName: rs.getString(rs.getColumnIndex('chapter_name')) || '',
-        chapterPos: rs.getLong(rs.getColumnIndex('chapter_pos')),
-        text: rs.getString(rs.getColumnIndex('text')) || '',
-        note: rs.getString(rs.getColumnIndex('note')) || '',
-        createTime: rs.getLong(rs.getColumnIndex('create_time')),
-        updateTime: rs.getLong(rs.getColumnIndex('update_time')),
+        id: RdbUtil.long(rs, 'id'),
+        bookId: RdbUtil.long(rs, 'book_id'),
+        bookName: RdbUtil.string(rs, 'book_name') || '',
+        bookAuthor: RdbUtil.string(rs, 'book_author') || '',
+        chapterIndex: RdbUtil.long(rs, 'chapter_index'),
+        chapterName: RdbUtil.string(rs, 'chapter_name') || '',
+        chapterPos: RdbUtil.long(rs, 'chapter_pos'),
+        text: RdbUtil.string(rs, 'text') || '',
+        note: RdbUtil.string(rs, 'note') || '',
+        createTime: RdbUtil.long(rs, 'create_time'),
+        updateTime: RdbUtil.long(rs, 'update_time'),
       });
     }
-    rs.close();
+    RdbUtil.close(rs);
     return list;
   }
 }
