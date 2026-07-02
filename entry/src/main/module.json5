@@ -43,10 +43,5 @@
         ]
       }
     ],
-    "buildOption": {
-      "nativeOption": {
-        "path": "./src/main/cpp/CMakeLists.txt"
-      }
-    },
   }
 }
