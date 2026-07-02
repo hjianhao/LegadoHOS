@@ -671,6 +671,7 @@ static napi_value RegisterHttpHandler(napi_env env, napi_callback_info info) {
 // NAPI 模块注册
 // ============================================================
 
+extern "C" {
 static napi_value Init(napi_env env, napi_value exports) {
   napi_property_descriptor desc[] = {
     { "createEngine", nullptr, CreateEngine, nullptr, nullptr, nullptr, napi_default, nullptr },
@@ -684,5 +685,17 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
   return exports;
 }
+}
 
-NAPI_MODULE(quickjs_bridge, Init)
+static napi_module quickjsModule = {
+  .nm_version = 1,
+  .nm_flags = 0,
+  .nm_filename = nullptr,
+  .nm_register_func = Init,
+  .nm_modname = "quickjs_bridge",
+  .nm_priv = nullptr,
+  .reserved = { 0 },
+};
+extern "C" __attribute__((constructor)) void RegisterQuickJSModule(void) {
+  napi_module_register(&quickjsModule);
+}
