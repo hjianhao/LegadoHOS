@@ -12,6 +12,7 @@ import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import { WebViewEngine } from '../components/WebViewEngine';
+import { WebViewFetcher } from '../../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
 import promptAction from '@ohos.promptAction';
@@ -111,7 +112,8 @@ struct SearchPage {
   }
 
   aboutToDisappear(): void {
-    if (this.queryHintTimer >= 0) {
+   WebViewFetcher.cancelPending();
+   if (this.queryHintTimer >= 0) {
       clearTimeout(this.queryHintTimer);
       this.queryHintTimer = -1;
     }
