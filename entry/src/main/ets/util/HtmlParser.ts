@@ -219,13 +219,20 @@ export class HtmlParser {
       postProcessors = parts.slice(1);
     }
 
-    let attrSuffix = 'text';
-    let cssSel = cleanSelector;
-    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
-    if (attrMatch) {
-      cssSel = attrMatch[1].trim();
-      attrSuffix = attrMatch[2].toLowerCase();
-    }
+   let attrSuffix = 'text';
+   let cssSel = cleanSelector;
+   const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
+   if (attrMatch) {
+     cssSel = attrMatch[1].trim();
+     attrSuffix = attrMatch[2].toLowerCase();
+   } else {
+     // 通用 @attrName 兜底：匹配任意 HTML 属性名（title, data-src, data-original, onclick 等）
+     const genericMatch = cleanSelector.match(/^(.*?)@([\w-]+)$/i);
+     if (genericMatch) {
+       cssSel = genericMatch[1].trim();
+       attrSuffix = genericMatch[2].toLowerCase();
+     }
+   }
 
     // 处理 Legado 扩展 @@
     if (cssSel.includes('@@')) {
