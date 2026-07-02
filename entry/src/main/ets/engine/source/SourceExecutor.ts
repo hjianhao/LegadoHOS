@@ -1244,9 +1244,17 @@ export class SourceExecutor {
       'header','footer','article','aside','main','figure','figcaption','video','audio','source','iframe']);
     // 1. id.xxx → #xxx
     let normalized = rule.replace(/\bid\.([\w-]+)/g, '#$1');
-    // 2. @@class →  .class (Legado 简写)
-    normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
-    // 3. @后跟标签名 → 空格 + 标签名（后代）
+   // 2. @@class →  .class (Legado 简写)
+   normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
+   // 2.5. Legado 索引选择器: tag.N → tag:nth-of-type(N+1), .class.N → .class:nth-of-type(N+1)
+   //      N 在 Legado 中是 0-indexed，CSS nth-of-type 是 1-indexed
+   normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)/g, (_m: string, sel: string, num: string) => {
+     const n = parseInt(num, 10) + 1;
+     return sel + ':nth-of-type(' + n + ')';
+   });
+   // 2.6. 去掉 Legado !N 指令（flatten/first/last 操作，非 CSS 标准）
+   normalized = normalized.replace(/!\d+/g, '');
+   // 3. @后跟标签名 → 空格 + 标签名（后代）
     normalized = normalized.replace(/@(\w[\w-]*)/g, (match: string, afterAt: string) => {
       if (htmlTags.has(afterAt.toLowerCase())) return ' ' + afterAt;
       if (afterAt.startsWith('.')) return ' ' + afterAt;
@@ -1266,9 +1274,18 @@ export class SourceExecutor {
     const parser = getHtmlParser();
     const doc = parser.parse(body);
 
-    // 用 ruleSearchList 查找结果列表（规则标准化）
-    const listRule = this.normalizeCssRule(source.ruleSearchList);
-    const items = parser.querySelectorAll(doc, listRule);
+    // 用 ruleSearchList 查找结果列表（规则标准化，支持 || 连接器拆分）
+    const listParts = splitConnectorRules(source.ruleSearchList || '');
+    let items: HtmlElement[] = [];
+    for (const part of listParts.rules) {
+      const partNorm = this.normalizeCssRule(part);
+      const found = parser.querySelectorAll(doc, partNorm);
+      if (found && found.length > 0) {
+        items = found;
+        console.info('[SrcEx] CSS list rule matched by "' + part + '" → norm="' + partNorm + '" for', source.sourceName);
+        break;
+      }
+    }
     if (!items || items.length === 0) {
       console.info('[SrcEx] CSS list rule found 0 items for', source.sourceName,
         'rule:', source.ruleSearchList);
@@ -1343,9 +1360,13 @@ export class SourceExecutor {
 
      // 作者
      let author = getAuthor(item);
+     // DEBUG: 显示归一化后的规则 + 匹配到的元素数
+     const _normAuthor = this.normalizeCssRule(authorRule);
      if (idx < 3 || !author) {
+       const _htmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
        console.info('[SrcEx] Author debug', source.sourceName,
-         'rule=' + authorRule, 'got="' + author + '"', 'name="' + name.substring(0, 20) + '"');
+         'rule=' + authorRule, 'norm=' + _normAuthor, 'got="' + author + '"',
+         'html="' + _htmlSnippet + '"');
      }
 
       // 封面
