@@ -70,25 +70,12 @@ export async function tryLoadNative(): Promise<boolean> {
      console.info('[NAPI] Native module loaded via import(libquickjs_bridge.so)');
      return true;
    } else {
-     console.warn('[NAPI] createEngine not found in mod, try @ohos.napi...');
+     console.warn('[NAPI] createEngine not found in mod, no createEngine found in mod');
    }
   } catch (e) {
     console.warn('[NAPI] import(libquickjs_bridge.so) failed:', e?.toString()?.substring(0, 120));
   }
 
-  // 方式 1.5: 尝试通过 @ohos.napi 加载
-  if (!nativeLoaded) {
-    try {
-      const napi = await import('@ohos.napi');
-      const native = (napi as any).load?.('libquickjs_bridge');
-      if (native && typeof native.createEngine === 'function') {
-        currentBridge = native as QuickJSBridge;
-        nativeLoaded = true;
-        console.info('[NAPI] Native module loaded via @ohos.napi.load');
-        return true;
-      }
-    } catch (_e2) { /* @ohos.napi not available */ }
-  }
 
   // 方式 2: requireNapi('quickjs_bridge') — 兼容方式
   if (!nativeLoaded) {
