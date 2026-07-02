@@ -328,22 +328,28 @@ export class WebViewFetcher {
         WebViewFetcher.stopPolling();
         return;
       }
+      try {
       WebViewFetcher.controller.runJavaScript(
         'JSON.stringify({readyState: document.readyState, title: document.title})'
       ).then((json: string) => {
         try {
-          const state = JSON.parse(json) as { readyState: string; title: string };
-          if (state.readyState === 'complete') {
-            console.info('[WebViewFetcher] readyState=complete, extracting');
-            WebViewFetcher.clearTimers();
-            WebViewFetcher.extractAndResolve();
-          }
-        } catch (_e) {
-          // ignore parse errors
+        const state = JSON.parse(json) as { readyState: string; title: string };
+        if (state.readyState === 'complete') {
+          console.info('[WebViewFetcher] readyState=complete, extracting');
+          WebViewFetcher.clearTimers();
+          WebViewFetcher.extractAndResolve();
         }
-      }).catch(() => {
-        // 页面可能还在加载，继续等待
+        } catch (_e) {
+        // ignore parse errors
+        }
+      }).catch((_e: Error) => {
+        console.warn('[WebViewFetcher] poll JS error (page probably closed)', _e.message);
+        WebViewFetcher.stopPolling();
       });
+      } catch (_e) {
+        console.warn('[WebViewFetcher] poll runJS error (page closed)', (_e as Error).message);
+        WebViewFetcher.stopPolling();
+      }
     }, 500);
   }
 
