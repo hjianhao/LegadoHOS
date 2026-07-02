@@ -1441,17 +1441,19 @@ export class SourceExecutor {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
       }
-      const kind = this.firstStr(itemObj, source.ruleSearchKind || '', 'kind', 'type', 'category');
-      const wordCount = this.firstStr(itemObj, source.ruleSearchWordCount || '', 'wordCount', 'wordNum', 'words');
-      const introduce = this.firstStr(itemObj, source.ruleSearchIntroduce || '', 'introduce', 'intro', 'summary');
-      return {
-        key: (source.sourceUrl || '') + '|' + noteUrl,
-        name: name || '未知书名', author: author || '', coverUrl: coverUrl || '',
-        noteUrl: noteUrl || '', origin: source.sourceName || '未知',
-        originUrl: source.sourceUrl || '',
-        kind: kind, wordCount: wordCount,
-        lastUpdateTime: '', latestChapterTitle: '', introduce: introduce, helperMsg: '',
-        duration: duration, searchTime: Date.now(),
+     const kind = this.firstStr(itemObj, source.ruleSearchKind || '', 'kind', 'type', 'category');
+     const wordCount = this.firstStr(itemObj, source.ruleSearchWordCount || '', 'wordCount', 'wordNum', 'words');
+     const introduce = this.firstStr(itemObj, source.ruleSearchIntroduce || '', 'introduce', 'intro', 'summary');
+     const lastUpdateTime = this.firstStr(itemObj, source.ruleSearchLastUpdateTime || '', 'lastUpdateTime', 'updateTime', 'last_update_time');
+     const latestChapterTitle = this.firstStr(itemObj, source.ruleSearchLastChapter || '', 'lastChapter', 'latestChapter', 'latestChapterTitle', 'last_update_chapter');
+     return {
+       key: (source.sourceUrl || '') + '|' + noteUrl,
+       name: name || '未知书名', author: author || '', coverUrl: coverUrl || '',
+       noteUrl: noteUrl || '', origin: source.sourceName || '未知',
+       originUrl: source.sourceUrl || '',
+       kind: kind, wordCount: wordCount,
+       lastUpdateTime: lastUpdateTime, latestChapterTitle: latestChapterTitle, introduce: introduce, helperMsg: '',
+       duration: duration, searchTime: Date.now(),
         sourceCount: 1,
         sourceOrigins: source.sourceName ? [source.sourceName] : []
       };

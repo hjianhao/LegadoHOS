@@ -921,11 +921,22 @@ struct SearchPage {
     return items.slice(0, 6);
   }
 
-  splitKind(kind: string): string[] {
-    return (kind || '').split(/[,，;；|｜\s]+/).map((item: string): string => item.trim()).filter((item: string): boolean => item.length > 0).slice(0, 4);
-  }
+ splitKind(kind: string): string[] {
+   return (kind || '').split(/[,，;；|｜\s]+/).map((item: string): string => item.trim()).filter((item: string): boolean => item.length > 0).slice(0, 4);
+ }
+ 
+   formatWordCount(wordCount: string): string {
+     if (!wordCount) return '';
+     // 已经带文字（如 "12万字"）直接返回
+     if (/[^\d]/.test(wordCount)) return wordCount;
+     const num = parseInt(wordCount, 10);
+     if (isNaN(num)) return '';
+     if (num >= 10000) return Math.floor(num / 10000) + '万字';
+     if (num >= 1000) return Math.floor(num / 1000) + '千字';
+     return num + '字';
+   }
 
-  goToBookInfo(item: SearchResult): void {
+ goToBookInfo(item: SearchResult): void {
     router.pushUrl({ url: 'pages/BookInfoPage', params: {
       name: item.name, author: item.author, coverUrl: item.coverUrl,
       noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
@@ -1557,9 +1568,9 @@ struct SearchPage {
 
       Column() {
         Row() {
-          Text(item.name)
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
+         Text(item.name)
+           .fontSize(14)
+           .fontWeight(FontWeight.Bold)
             .fontColor(this.textColor())
             .layoutWeight(1)
             .maxLines(1)
@@ -1602,10 +1613,19 @@ struct SearchPage {
             .margin({ top: 6 })
         }
 
-        Row() {
-          ForEach(this.splitKind(item.kind), (kind: string) => {
-            Text(kind)
-              .fontSize(10)
+       Row() {
+         if (item.wordCount) {
+           Text(this.formatWordCount(item.wordCount))
+             .fontSize(10)
+             .fontColor(this.subTextColor())
+             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+             .backgroundColor(this.surfaceAltColor())
+             .borderRadius(4)
+             .margin({ right: 5 })
+         }
+         ForEach(this.splitKind(item.kind), (kind: string) => {
+           Text(kind)
+             .fontSize(10)
               .fontColor(this.subTextColor())
               .padding({ left: 5, right: 5, top: 2, bottom: 2 })
               .backgroundColor(this.surfaceAltColor())
