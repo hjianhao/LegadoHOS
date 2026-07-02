@@ -1244,9 +1244,19 @@ export class SourceExecutor {
       'header','footer','article','aside','main','figure','figcaption','video','audio','source','iframe']);
     // 1. id.xxx → #xxx
     let normalized = rule.replace(/\bid\.([\w-]+)/g, '#$1');
-   // 2. @@class →  .class (Legado 简写)
-   normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
-   // 2.5. Legado 索引选择器: tag.N → tag:nth-of-type(N+1), .class.N → .class:nth-of-type(N+1)
+  // 2. @@class →  .class (Legado 简写)
+  normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
+  // 2.4. Legado 范围选择器: tag.N:M → tag.N||tag.M, tag.N:M:O → tag.N||tag.M||tag.O
+  normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)((?::\d+)+)/g,
+    (_m: string, sel: string, firstIdx: string, rest: string) => {
+      const indices = [parseInt(firstIdx, 10)];
+      for (const part of rest.split(':').filter(x => x)) {
+        indices.push(parseInt(part, 10));
+      }
+      // 展开为 || 多选: p.1||p.2||p.4，后面 2.5 会转成 :nth-of-type
+      return indices.map(i => sel + '.' + i).join('||');
+    });
+  // 2.5. Legado 索引选择器: tag.N → tag:nth-of-type(N+1), .class.N → .class:nth-of-type(N+1)
    //      N 在 Legado 中是 0-indexed，CSS nth-of-type 是 1-indexed
    normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)/g, (_m: string, sel: string, num: string) => {
      const n = parseInt(num, 10) + 1;
