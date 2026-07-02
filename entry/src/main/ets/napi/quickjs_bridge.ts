@@ -51,19 +51,27 @@ export async function tryLoadNative(): Promise<boolean> {
   if (nativeLoaded) return true;
 
   // 方式 1: import('libquickjs_bridge.so') — HarmonyOS NEXT 推荐方式
-  try {
-    const mod = await import('libquickjs_bridge.so');
-    // NAPI 模块可能直接返回 exports 对象，也可能返回 { default: exports }
-    const native = (mod as any).default || mod;
-    if (native && typeof native.createEngine === 'function') {
-      currentBridge = native as QuickJSBridge;
-      nativeLoaded = true;
-      console.info('[NAPI] Native module loaded via import(libquickjs_bridge.so)');
-      console.info('[NAPI] createEngine type:', typeof native.createEngine);
-      return true;
-    } else {
-      console.warn('[NAPI] import returned but createEngine not found, keys:', Object.keys(native).join(','));
-    }
+ try {
+   const mod = await import('libquickjs_bridge.so');
+   console.info('[NAPI] mod type:', typeof mod, 'keys:', Object.keys(mod));
+   // 尝试所有可能的路径
+   const defaultExport = (mod as any).default;
+   console.info('[NAPI] defaultExport type:', typeof defaultExport, 'keys:', defaultExport ? Object.keys(defaultExport) : 'N/A');
+   let native = defaultExport;
+   if (!native || typeof (native as any).createEngine !== 'function') {
+     native = mod;
+   }
+   if (!native || typeof (native as any).createEngine !== 'function') {
+     native = defaultExport?.default;
+   }
+   if (native && typeof native.createEngine === 'function') {
+     currentBridge = native as QuickJSBridge;
+     nativeLoaded = true;
+     console.info('[NAPI] Native module loaded via import(libquickjs_bridge.so)');
+     return true;
+   } else {
+     console.warn('[NAPI] createEngine not found, final native keys:', native ? Object.keys(native) : 'N/A');
+   }
   } catch (e) {
     console.warn('[NAPI] import(libquickjs_bridge.so) failed:', e?.toString()?.substring(0, 120));
   }
