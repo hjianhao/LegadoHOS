@@ -1,6 +1,11 @@
 {
   "apiType": "stageMode",
-  "buildOption": {},
+  "buildOption": {
+    "abiFilters": ["arm64-v8a"],
+    "arkOptions": {
+      "intelligenceInit": true
+    }
+  },
   "targets": [
     {
       "name": "default",
