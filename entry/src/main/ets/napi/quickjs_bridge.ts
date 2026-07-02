@@ -51,18 +51,18 @@ export async function tryLoadNative(): Promise<boolean> {
   if (nativeLoaded) return true;
 
   // 方式 1: import('libquickjs_bridge.so') — HarmonyOS NEXT 推荐方式
- try {
-   const mod = await import('libquickjs_bridge.so');
-   console.info('[NAPI] mod type:', typeof mod, 'keys:', Object.keys(mod));
-   // 尝试所有可能的路径
-   const defaultExport = (mod as any).default;
-   console.info('[NAPI] defaultExport type:', typeof defaultExport, 'keys:', defaultExport ? Object.keys(defaultExport) : 'N/A');
-   let native = defaultExport;
-   if (!native || typeof (native as any).createEngine !== 'function') {
-     native = mod;
-   }
-   if (!native || typeof (native as any).createEngine !== 'function') {
-     native = defaultExport?.default;
+  try {
+    const mod = await import('libquickjs_bridge.so');
+   console.info('[NAPI] import mod type:', typeof mod, 'keys:', Object.keys(mod));
+   // 尝试通过括号访问 default（ArkTS 中点号访问 default 可能返回 undefined）
+   let native: QuickJSBridge | null = null;
+   for (const key of Object.keys(mod)) {
+     const v = (mod as any)[key];
+     if (v && typeof v.createEngine === 'function') {
+       console.info('[NAPI] Found createEngine at mod["' + key + '"]');
+       native = v as QuickJSBridge;
+       break;
+     }
    }
    if (native && typeof native.createEngine === 'function') {
      currentBridge = native as QuickJSBridge;
@@ -70,10 +70,24 @@ export async function tryLoadNative(): Promise<boolean> {
      console.info('[NAPI] Native module loaded via import(libquickjs_bridge.so)');
      return true;
    } else {
-     console.warn('[NAPI] createEngine not found, final native keys:', native ? Object.keys(native) : 'N/A');
+     console.warn('[NAPI] createEngine not found in mod, try @ohos.napi...');
    }
   } catch (e) {
     console.warn('[NAPI] import(libquickjs_bridge.so) failed:', e?.toString()?.substring(0, 120));
+  }
+
+  // 方式 1.5: 尝试通过 @ohos.napi 加载
+  if (!nativeLoaded) {
+    try {
+      const napi = await import('@ohos.napi');
+      const native = (napi as any).load?.('libquickjs_bridge');
+      if (native && typeof native.createEngine === 'function') {
+        currentBridge = native as QuickJSBridge;
+        nativeLoaded = true;
+        console.info('[NAPI] Native module loaded via @ohos.napi.load');
+        return true;
+      }
+    } catch (_e2) { /* @ohos.napi not available */ }
   }
 
   // 方式 2: requireNapi('quickjs_bridge') — 兼容方式
