@@ -16,6 +16,9 @@
  */
 import { NetUtil } from '../util/NetUtil';
 import { ZipWriter } from '../util/ZipWriter';
+import { BookProgress } from '../model/BookProgress';
+import { AppDatabase } from '../data/database/AppDatabase';
+import { BookTable } from '../data/database/BookTable';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
@@ -234,39 +237,132 @@ export class WebDavService {
     } catch { /* ignore */ }
   }
 
-  async uploadBookProgress(bookName: string, bookAuthor: string, progress: string): Promise<void> {
+  // ---- 阅读进度同步 ----
+
+  /** 进度文件存储子目录（对齐 Android Legado） */
+  private static readonly PROGRESS_DIR = 'bookProgress';
+
+  /**
+   * 生成进度文件名（对齐 Android 的 getProgressFileName）
+   */
+  private progressFileName(name: string, author: string): string {
+    const raw = `${name}_${author}`.replace(/[<>:"/\\|?*]/g, '_');
+    return raw + '.json';
+  }
+
+  /** 进度文件在 WebDAV 上的路径 */
+  private progressUrl(name: string, author: string): string {
+    return this.normalizeUrl(`${WebDavService.PROGRESS_DIR}/${this.progressFileName(name, author)}`);
+  }
+
+  /**
+   * 上传单本书的阅读进度
+   */
+  async uploadBookProgress(book: { name: string; author: string; durChapterIndex: number;
+    durChapterPos: number; durChapterTitle: string }): Promise<void> {
     if (!this.config) return;
-    const fileName = `progress_${bookName}_${bookAuthor}.json`.replace(/[<>:"/\\|?*]/g, '_');
-    await NetUtil.httpPut(this.normalizeUrl(fileName), progress, {
-      ...this.getAuthHeader(), 'Content-Type': 'application/json',
+    await this.ensureDirectory(WebDavService.PROGRESS_DIR);
+
+    const progress = {
+      name: book.name,
+      author: book.author,
+      durChapterIndex: book.durChapterIndex,
+      durChapterPos: book.durChapterPos,
+      durChapterTime: Date.now(),
+      durChapterTitle: book.durChapterTitle || '',
+    };
+
+    const url = this.progressUrl(book.name, book.author);
+    const json = JSON.stringify(progress);
+    await NetUtil.httpPut(url, json, {
+      ...this.getAuthHeader(),
+      'Content-Type': 'application/json',
+      'Overwrite': 'T',
     });
+    console.info('[WebDav] Progress uploaded:', book.name);
   }
 
-  async downloadBookProgress(bookName: string, bookAuthor: string): Promise<string | null> {
+  /**
+   * 下载单本书的阅读进度
+   */
+  async downloadBookProgress(name: string, author: string): Promise<BookProgress | null> {
     if (!this.config) return null;
-    const fileName = `progress_${bookName}_${bookAuthor}.json`.replace(/[<>:"/\\|?*]/g, '_');
     try {
-      return await NetUtil.httpGet(this.normalizeUrl(fileName), this.getAuthHeader());
-    } catch {
-      return null;
-    }
+      const url = this.progressUrl(name, author);
+      const json = await NetUtil.httpGet(url, this.getAuthHeader());
+      if (json) {
+        const p = JSON.parse(json) as BookProgress;
+        if (typeof p.durChapterIndex === 'number') return p;
+      }
+    } catch { /* not found or parse error */ }
+    return null;
   }
 
-  async syncAllProgress(localProgress: Record<string, string>): Promise<Record<string, string>> {
-    const merged: Record<string, string> = {};
-    for (const [bookKey, localJson] of Object.entries(localProgress)) {
-      const remote = await this.downloadBookProgress(bookKey, '');
-      if (remote) {
-        try {
-          const localP = JSON.parse(localJson)['durChapterIndex'] || 0;
-          const remoteP = JSON.parse(remote)['durChapterIndex'] || 0;
-          merged[bookKey] = remoteP > localP ? remote : localJson;
-        } catch { merged[bookKey] = localJson; }
-      } else {
-        merged[bookKey] = localJson;
+  /**
+   * 启动时批量下载所有在架书籍的云端进度
+   * 对齐 Android downloadAllBookProgress 逻辑
+   */
+  async downloadAllBookProgress(): Promise<void> {
+    if (!this.config) return;
+
+    try {
+      // 列出 bookProgress/ 目录中的文件
+      const files = await this.listFiles(WebDavService.PROGRESS_DIR);
+      if (files.length === 0) return;
+
+      // 构建文件名 → 上次修改时间的映射
+      const fileMap = new Map<string, string>();
+      for (const f of files) {
+        if (!f.isDirectory && f.name.endsWith('.json')) {
+          fileMap.set(f.name, f.lastModified);
+        }
       }
+
+      if (fileMap.size === 0) return;
+
+      // 获取所有在架书籍
+      const db = AppDatabase.getInstance();
+      if (!db.rdbStore) return;
+      const bookTable = new BookTable(db.rdbStore);
+      const allBooks = await bookTable.getAllShelfBooksSimple();
+
+      for (const book of allBooks) {
+        const fileName = this.progressFileName(book.name, book.author);
+        const fileLastMod = fileMap.get(fileName);
+        if (!fileLastMod) continue;
+
+        // 检查时间戳 — 云端文件不比本地 syncTime 新就跳过
+        // （简单起见：首次 syncTime=0 时总是下载）
+        if (book.syncTime > 0) {
+          // lastModified 字段是字符串，简单比较
+          if (fileLastMod <= String(book.syncTime)) continue;
+        }
+
+        const cloud = await this.downloadBookProgress(book.name, book.author);
+        if (!cloud) continue;
+
+        // 冲突解决：云端进度更远才覆盖
+        if (cloud.durChapterIndex > book.durChapterIndex ||
+          (cloud.durChapterIndex === book.durChapterIndex &&
+           cloud.durChapterPos > book.durChapterPos)) {
+          // 更新本地进度
+          await bookTable.updateReadingProgress(
+            book.bookUrl,
+            cloud.durChapterIndex,
+            cloud.durChapterTitle || '',
+            0, // totalChapters unknown
+            cloud.durChapterPos
+          );
+          console.info('[WebDav] Progress restored from cloud:', book.name,
+            '→ chapter', cloud.durChapterIndex);
+        }
+
+        // 更新 syncTime
+        await bookTable.updateSyncTime(book.bookUrl, Date.now());
+      }
+    } catch (e) {
+      console.warn('[WebDav] downloadAllBookProgress error:', (e as Error).message);
     }
-    return merged;
   }
 
   private normalizeUrl(path: string): string {

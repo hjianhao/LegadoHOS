@@ -218,7 +218,7 @@ struct BookInfoPage {
         durChapterTitle: '', durChapterIndex: 0, durChapterPos: 0, durChapterProgress: 0,
         isRead: false, isAudio: false, isManga: false, isShelf: false, order: 0,
         kind: '', wordCount: '', introduce: '', remark: '', lastUpdateTime: '', lastOpenTime: 0,
-        createTime: 0, updateTime: Date.now()
+        createTime: 0, updateTime: Date.now(), syncTime: 0
       });
       this.isInShelf = false;
       this.bookId = 0;
@@ -371,7 +371,8 @@ struct BookInfoPage {
         lastUpdateTime: '',
         lastOpenTime: 0,
         createTime: insertTime,
-        updateTime: insertTime
+        updateTime: insertTime,
+        syncTime: 0,
       };
 
       const id = await bookTable.insertBook(book);
@@ -495,6 +496,7 @@ struct BookInfoPage {
         lastOpenTime: insertTime,
         createTime: insertTime,
         updateTime: insertTime,
+        syncTime: 0,
       };
 
       const id = await bookTable.insertBook(book);

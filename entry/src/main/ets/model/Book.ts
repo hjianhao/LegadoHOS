@@ -62,6 +62,7 @@ export interface Book {
   lastOpenTime: number;
   createTime: number;
   updateTime: number;
+  syncTime: number;        // WebDAV 上次同步时间
 }
 
 /**
@@ -100,5 +101,6 @@ export function createDefaultBook(): Book {
     lastOpenTime: 0,
     createTime: 0,
     updateTime: 0,
+    syncTime: 0,
   };
 }

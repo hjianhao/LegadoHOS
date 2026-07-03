@@ -20,6 +20,8 @@ PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
 PersistentStorage.persistProp('webdav_user', '');
 PersistentStorage.persistProp('webdav_path', 'legadohos');
 PersistentStorage.persistProp('webdav_auto_sync', false);
+PersistentStorage.persistProp('webdav_sync_progress', true);
+PersistentStorage.persistProp('webdav_sync_progress_plus', false);
 
 @Entry
 @Component
@@ -29,6 +31,8 @@ struct BackupSettingsPage {
   @State webDavPwd: string = '';
   @StorageLink('webdav_path') webDavPath: string = 'legadohos';
   @StorageLink('webdav_auto_sync') webDavAutoSync: boolean = false;
+  @StorageLink('webdav_sync_progress') syncProgress: boolean = true;
+  @StorageLink('webdav_sync_progress_plus') syncProgressPlus: boolean = false;
 
   @State isDark: boolean = false;
   @State isBusy: boolean = false;
@@ -222,6 +226,16 @@ struct BackupSettingsPage {
             Toggle({ type: ToggleType.Switch, isOn: this.webDavAutoSync })
               .onChange((v: boolean) => { this.webDavAutoSync = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 6 })
+          Row() {
+            Text('同步阅读进度').fontSize(14)
+            Toggle({ type: ToggleType.Switch, isOn: this.syncProgress })
+              .onChange((v: boolean) => { this.syncProgress = v; })
+          }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 2 })
+          Row() {
+            Text('增强同步').fontSize(12).fontColor('#888')
+            Toggle({ type: ToggleType.Switch, isOn: this.syncProgressPlus })
+              .onChange((v: boolean) => { this.syncProgressPlus = v; })
+          }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 6 })
 
           Button('测试 WebDAV 连接').fontSize(14).height(40).width('100%')
             .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(8)

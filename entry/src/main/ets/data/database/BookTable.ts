@@ -36,10 +36,11 @@ export const BookTableCreate = `
     introduce TEXT DEFAULT '',
     remark TEXT DEFAULT '',
     last_update_time TEXT DEFAULT '',
-    last_open_time INTEGER DEFAULT 0,
-    create_time INTEGER DEFAULT 0,
-    update_time INTEGER DEFAULT 0
-  );
+	    last_open_time INTEGER DEFAULT 0,
+	    create_time INTEGER DEFAULT 0,
+	    update_time INTEGER DEFAULT 0,
+	    sync_time INTEGER DEFAULT 0
+	  );
 `;
 
 export class BookTable {
@@ -226,6 +227,7 @@ export class BookTable {
         lastOpenTime: RdbUtil.long(rs, 'last_open_time'),
         createTime: RdbUtil.long(rs, 'create_time'),
         updateTime: RdbUtil.long(rs, 'update_time'),
+        syncTime: RdbUtil.long(rs, 'sync_time'),
       });
     }
     RdbUtil.close(rs);
@@ -264,15 +266,18 @@ export class BookTable {
       'last_open_time': book.lastOpenTime,
       'create_time': book.createTime,
       'update_time': book.lastOpenTime, // 用最后阅读时间同时作为 update_time
+      'sync_time': book.syncTime,
     };
   }
 
   /** 快速更新阅读进度（无需构造完整 Book 对象） */
-  async updateReadingProgress(bookUrl: string, chapterIndex: number, chapterTitle: string, totalChapters: number): Promise<void> {
+  async updateReadingProgress(bookUrl: string, chapterIndex: number, chapterTitle: string,
+    totalChapters: number, chapterPos: number = 0): Promise<void> {
     const now = Date.now();
     const row: relationalStore.ValuesBucket = {
       'dur_chapter_index': chapterIndex,
       'dur_chapter_title': chapterTitle,
+      'dur_chapter_pos': chapterPos,
       'last_open_time': now,
       'update_time': now,
     };
@@ -283,5 +288,34 @@ export class BookTable {
     const pred = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     pred.equalTo('book_url', bookUrl);
     await RdbUtil.update(this.rdbStore, row, pred);
+  }
+
+  /** 更新上次同步时间 */
+  async updateSyncTime(bookUrl: string, syncTime: number): Promise<void> {
+    const pred = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    pred.equalTo('book_url', bookUrl);
+    await RdbUtil.update(this.rdbStore, { 'sync_time': syncTime }, pred);
+  }
+
+  /** 获取所有在架书籍（用于批量同步） */
+  async getAllShelfBooksSimple(): Promise<Array<{ name: string; author: string; bookUrl: string;
+    durChapterIndex: number; durChapterPos: number; syncTime: number }>> {
+    const rs = await RdbUtil.querySql(this.rdbStore,
+      `SELECT name, author, book_url, dur_chapter_index, dur_chapter_pos, sync_time
+       FROM ${BookTable.TABLE_NAME} WHERE is_shelf = 1`, []);
+    const result: Array<{ name: string; author: string; bookUrl: string;
+      durChapterIndex: number; durChapterPos: number; syncTime: number }> = [];
+    while (RdbUtil.next(rs)) {
+      result.push({
+        name: RdbUtil.string(rs, 'name') || '',
+        author: RdbUtil.string(rs, 'author') || '',
+        bookUrl: RdbUtil.string(rs, 'book_url') || '',
+        durChapterIndex: RdbUtil.long(rs, 'dur_chapter_index'),
+        durChapterPos: RdbUtil.long(rs, 'dur_chapter_pos'),
+        syncTime: RdbUtil.long(rs, 'sync_time'),
+      });
+    }
+    RdbUtil.close(rs);
+    return result;
   }
 }

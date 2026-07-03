@@ -928,7 +928,8 @@ struct SearchPage {
           lastUpdateTime: item.lastUpdateTime,
           lastOpenTime: 0,
           createTime: now,
-          updateTime: now
+          updateTime: now,
+          syncTime: 0,
         };
         await bookTable.insertBook(book);
       }

@@ -26,6 +26,7 @@ import { CacheDialog } from '../components/reader/CacheDialog';
 import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState } from '../service/ReadAloudEngine';
+import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 
@@ -99,6 +100,30 @@ struct ReadPage {
     this.loadSettings();
     // 初始化测量工具
     try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
+    // 尝试从云端同步进度
+    this.syncFromCloud();
+  }
+
+  /** 从云端下载进度并更新当前目标章节 */
+  private async syncFromCloud(): Promise<void> {
+    try {
+      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
+      if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
+      if (!this.bookName || !this.bookAuthor) return;
+
+      const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor);
+      if (!cloud) return;
+
+      // 冲突解决：云端进度更远才覆盖本地目标
+      if (cloud.durChapterIndex > this.targetIdx_ ||
+        (cloud.durChapterIndex === this.targetIdx_ && cloud.durChapterPos > this.pageIndex)) {
+        this.targetIdx_ = cloud.durChapterIndex;
+        this.pageIndex = cloud.durChapterPos;
+        console.info('[ReadPage] Cloud progress restored:', cloud.durChapterIndex, cloud.durChapterPos);
+      }
+    } catch (e) {
+      console.warn('[ReadPage] Sync from cloud failed:', (e as Error).message);
+    }
   }
 
   onPageShow(): void {
@@ -428,8 +453,39 @@ struct ReadPage {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_)
-      .catch(() => { /* ignore */ });
+    bookTable.updateReadingProgress(
+      this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_,
+      this.pageMode ? this.pageIndex : 0 // 分页模式保存页内位置
+    ).catch(() => { /* ignore */ });
+  }
+
+  /** 离开页面时保存进度并尝试上传到云端 */
+  private async saveAndUploadProgress(): Promise<void> {
+    this.saveProgress();
+    try {
+      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
+      if (syncOn === true && WebDavService.getInstance().isConfigured()) {
+        const ch = this.allChapters_[this.currentIndex];
+        if (ch) {
+          await WebDavService.getInstance().uploadBookProgress({
+            name: this.bookName,
+            author: this.bookAuthor,
+            durChapterIndex: this.currentIndex,
+            durChapterPos: this.pageIndex,
+            durChapterTitle: ch.title || '',
+          });
+          // 更新本地 syncTime
+          const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+          await bookTable.updateSyncTime(this.bookUrl, Date.now());
+        }
+      }
+    } catch (e) {
+      console.warn('[ReadPage] Upload progress failed:', (e as Error).message);
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.saveAndUploadProgress();
   }
 
   private getProgressPercent(): number {
