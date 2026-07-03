@@ -20,6 +20,7 @@
  * └──────────────────┘
  */
 import fileFs from '@ohos.file.fs';
+import util from '@ohos.util';
 
 export interface ZipEntry {
   fileName: string;
@@ -77,7 +78,8 @@ export class ZipReader {
     if (!data) return '';
     const bytes = new Uint8Array(data);
     // 尝试 UTF-8 解码
-    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    const decoder = new util.TextDecoder('utf-8', { fatal: false });
+    return decoder.decodeToString(bytes);
   }
 
   /**
@@ -177,7 +179,8 @@ export class ZipReader {
       const localHeaderOffset = this.readU32(bytes, offset + 42);
 
       const fileNameBytes = bytes.slice(offset + 46, offset + 46 + fileNameLen);
-      const fileName = new TextDecoder('utf-8').decode(fileNameBytes);
+      const decoder = new util.TextDecoder('utf-8', { fatal: false });
+      const fileName = decoder.decodeToString(fileNameBytes);
 
       entries.push({
         fileName,
@@ -197,21 +200,13 @@ export class ZipReader {
 
   /**
    * DEFLATE 解压
-   * 使用 @ohos.security.zlib 或自定义解压
+   * 使用内置简化 inflate 或直接复制 STORED 数据
    */
   private async deflateDecompress(
     compressed: Uint8Array,
     uncompressedSize: number
   ): Promise<ArrayBuffer> {
-    try {
-      // 优先使用系统 zlib
-      const zlib = await import('@ohos.security.zlib');
-      const result = zlib.inflate(compressed.buffer);
-      return result;
-    } catch {
-      // 备选：内置简化 inflate（支持存储模式和无压缩deflate块）
-      return this.simpleInflate(compressed, uncompressedSize);
-    }
+    return this.simpleInflate(compressed, uncompressedSize);
   }
 
   /**

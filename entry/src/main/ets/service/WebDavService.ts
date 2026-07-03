@@ -9,8 +9,12 @@
  * - GET（下载）
  * - PUT（上传）
  * - MKCOL（创建目录）
+ * - DELETE（删除）
  */
 import { NetUtil } from '../util/NetUtil';
+import { ZipWriter } from '../util/ZipWriter';
+import fileFs from '@ohos.file.fs';
+import util from '@ohos.util';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -21,9 +25,20 @@ export interface WebDavConfig {
   syncInterval: number;    // 分钟
 }
 
+export interface WebDavFileInfo {
+  name: string;
+  path: string;
+  lastModified: string;
+  contentLength: number;
+  isDirectory: boolean;
+}
+
+const BACKUP_DIR = 'legado';
+
 export class WebDavService {
   private static instance: WebDavService;
   private config: WebDavConfig | null = null;
+  private encoder: util.TextEncoder = new util.TextEncoder();
 
   private constructor() {}
 
@@ -34,123 +49,182 @@ export class WebDavService {
     return WebDavService.instance;
   }
 
-  /**
-   * 配置 WebDAV
-   */
   configure(config: WebDavConfig): void {
     this.config = config;
   }
 
-  /**
-   * 上传阅读进度
-   */
-  async uploadProgress(bookId: number, progress: string): Promise<void> {
+  getConfig(): WebDavConfig | null {
+    return this.config;
+  }
+
+  isConfigured(): boolean {
+    return !!this.config && !!this.config.serverUrl && !!this.config.username;
+  }
+
+  async testConnection(): Promise<boolean> {
+    if (!this.config) return false;
+    try {
+      await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(''), undefined, {
+        ...this.getAuthHeader(), 'Depth': '0',
+      }, 15000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async listFiles(path: string = ''): Promise<WebDavFileInfo[]> {
+    if (!this.config) return [];
+    try {
+      const resp = await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(path), undefined, {
+        ...this.getAuthHeader(), 'Depth': '1',
+      }, 15000);
+      return this.parsePropfindResponse(resp || '');
+    } catch {
+      return [];
+    }
+  }
+
+  async ensureDirectory(path: string): Promise<void> {
+    if (!this.config) return;
+    try {
+      await NetUtil.httpCustomMethod('MKCOL', this.normalizeUrl(path), undefined, this.getAuthHeader(), 10000);
+    } catch {
+      // 可能已存在，忽略
+    }
+  }
+
+  async uploadBackupZip(zip: ZipWriter): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
+    const fileName = this.getBackupFileName();
+    await this.ensureDirectory(BACKUP_DIR);
+    const zipBytes = zip.build();
+    const body = String.fromCharCode(...zipBytes);
+    await NetUtil.httpPut(this.normalizeUrl(`${BACKUP_DIR}/${fileName}`), body, {
+      ...this.getAuthHeader(), 'Content-Type': 'application/zip',
+    });
+    return fileName;
+  }
 
-    const url = `${this.config.serverUrl}${this.config.path}/progress_${bookId}.json`;
-    const auth = this.getAuthHeader();
+  async listBackups(): Promise<WebDavFileInfo[]> {
+    try {
+      return (await this.listFiles(BACKUP_DIR)).filter(f => !f.isDirectory && f.name.endsWith('.zip'));
+    } catch {
+      return [];
+    }
+  }
 
-    await NetUtil.httpPut(url, progress, {
-      ...auth,
-      'Content-Type': 'application/json',
+  async downloadBackup(name: string): Promise<string> {
+    if (!this.config) throw new Error('WebDAV not configured');
+    const url = this.normalizeUrl(`${BACKUP_DIR}/${name}`);
+    const respText = await NetUtil.httpGet(url, this.getAuthHeader());
+    if (!respText) throw new Error('下载失败');
+    const tempPath = `/data/storage/el2/base/haps/entry/files/restore_${name}`;
+    try { fileFs.unlinkSync(tempPath); } catch (_) { }
+    const bytes = this.encoder.encodeInto(respText);
+    const file = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+    try { fileFs.writeSync(file.fd, bytes.buffer as ArrayBuffer); } finally { fileFs.closeSync(file); }
+    return tempPath;
+  }
+
+  async deleteBackup(name: string): Promise<void> {
+    if (!this.config) return;
+    try {
+      await NetUtil.httpCustomMethod('DELETE', this.normalizeUrl(`${BACKUP_DIR}/${name}`), undefined, this.getAuthHeader(), 10000);
+    } catch { /* ignore */ }
+  }
+
+  async uploadBookProgress(bookName: string, bookAuthor: string, progress: string): Promise<void> {
+    if (!this.config) return;
+    const fileName = `progress_${bookName}_${bookAuthor}.json`.replace(/[<>:"/\\|?*]/g, '_');
+    await NetUtil.httpPut(this.normalizeUrl(fileName), progress, {
+      ...this.getAuthHeader(), 'Content-Type': 'application/json',
     });
   }
 
-  /**
-   * 下载阅读进度
-   */
-  async downloadProgress(bookId: number): Promise<string | null> {
+  async downloadBookProgress(bookName: string, bookAuthor: string): Promise<string | null> {
     if (!this.config) return null;
-
-    const url = `${this.config.serverUrl}${this.config.path}/progress_${bookId}.json`;
-    const auth = this.getAuthHeader();
-
+    const fileName = `progress_${bookName}_${bookAuthor}.json`.replace(/[<>:"/\\|?*]/g, '_');
     try {
-      return await NetUtil.httpGet(url, auth);
+      return await NetUtil.httpGet(this.normalizeUrl(fileName), this.getAuthHeader());
     } catch {
       return null;
     }
   }
 
-  /**
-   * 上传备份（全量）
-   */
-  async uploadBackup(data: string): Promise<void> {
-    if (!this.config) throw new Error('WebDAV not configured');
-
-    const url = `${this.config.serverUrl}${this.config.path}/backup.json`;
-    const auth = this.getAuthHeader();
-
-    await NetUtil.httpPut(url, data, {
-      ...auth,
-      'Content-Type': 'application/json',
-    });
-  }
-
-  /**
-   * 下载备份
-   */
-  async downloadBackup(): Promise<string | null> {
-    if (!this.config) return null;
-
-    const url = `${this.config.serverUrl}${this.config.path}/backup.json`;
-    const auth = this.getAuthHeader();
-
-    try {
-      return await NetUtil.httpGet(url, auth);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 同步所有进度（双向）
-   */
-  async syncAll(localProgress: Record<number, string>): Promise<Record<number, string>> {
-    const merged: Record<number, string> = { ...localProgress };
-
-    for (const bookIdStr of Object.keys(localProgress)) {
-      const bookId = parseInt(bookIdStr);
-      const remote = await this.downloadProgress(bookId);
+  async syncAllProgress(localProgress: Record<string, string>): Promise<Record<string, string>> {
+    const merged: Record<string, string> = {};
+    for (const [bookKey, localJson] of Object.entries(localProgress)) {
+      const remote = await this.downloadBookProgress(bookKey, '');
       if (remote) {
-        // 取最新的（简单策略：取进度更大的）
-        const local = localProgress[bookId];
         try {
-          const localP = JSON.parse(local).progress || 0;
-          const remoteP = JSON.parse(remote).progress || 0;
-          if (remoteP > localP) {
-            merged[bookId] = remote;
-          } else if (localP > remoteP) {
-            await this.uploadProgress(bookId, local);
-          }
-        } catch {
-          merged[bookId] = local;
-        }
+          const localP = JSON.parse(localJson)['durChapterIndex'] || 0;
+          const remoteP = JSON.parse(remote)['durChapterIndex'] || 0;
+          merged[bookKey] = remoteP > localP ? remote : localJson;
+        } catch { merged[bookKey] = localJson; }
+      } else {
+        merged[bookKey] = localJson;
       }
     }
-
     return merged;
+  }
+
+  private normalizeUrl(path: string): string {
+    if (!this.config) return '';
+    let base = this.config.serverUrl.replace(/\/+$/, '');
+    if (this.config.path) {
+      base += '/' + this.config.path.replace(/^\/+|\/+$/g, '');
+    }
+    if (path) {
+      base += '/' + path.replace(/^\/+/, '');
+    }
+    return base;
+  }
+
+  private getBackupFileName(): string {
+    return `backup_${new Date().toISOString().slice(0, 10)}.zip`;
   }
 
   private getAuthHeader(): Record<string, string> {
     if (!this.config) return {};
     const credentials = `${this.config.username}:${this.config.password}`;
     const encoded = this.base64Encode(credentials);
-    return {
-      'Authorization': `Basic ${encoded}`,
-    };
+    return { 'Authorization': `Basic ${encoded}` };
+  }
+
+  private parsePropfindResponse(xml: string): WebDavFileInfo[] {
+    const files: WebDavFileInfo[] = [];
+    if (!xml) return files;
+    const responseRegex = /<response[^>]*>([\s\S]*?)<\/response>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = responseRegex.exec(xml)) !== null) {
+      const block = match[1];
+      const hrefMatch = block.match(/<href[^>]*>([\s\S]*?)<\/href>/i);
+      if (!hrefMatch) continue;
+      const href = hrefMatch[1].trim();
+      const isDir = /<collection\s*\/>/i.test(block) || /<resourcetype[^>]*>[\s\S]*?<collection[\s\S]*?<\/resourcetype>/i.test(block);
+      const modMatch = block.match(/<getlastmodified[^>]*>([\s\S]*?)<\/getlastmodified>/i);
+      const sizeMatch = block.match(/<getcontentlength[^>]*>([\s\S]*?)<\/getcontentlength>/i);
+      const name = href.split('/').filter(s => s).pop() || href;
+      files.push({
+        name, path: href,
+        lastModified: modMatch ? modMatch[1].trim() : '',
+        contentLength: sizeMatch ? parseInt(sizeMatch[1].trim()) || 0 : 0,
+        isDirectory: isDir,
+      });
+    }
+    return files;
   }
 
   private base64Encode(str: string): string {
     const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     let result = '';
-    const bytes = new Uint8Array(str.split('').map(c => c.charCodeAt(0)));
-    for (let i = 0; i < bytes.length; i += 3) {
-      const b0 = bytes[i], b1 = bytes[i + 1] || 0, b2 = bytes[i + 2] || 0;
+    for (let i = 0; i < str.length; i += 3) {
+      const b0 = str.charCodeAt(i), b1 = str.charCodeAt(i + 1) || 0, b2 = str.charCodeAt(i + 2) || 0;
       result += b64[b0 >> 2];
       result += b64[((b0 & 3) << 4) | (b1 >> 4)];
-      result += (i + 1 < bytes.length) ? b64[((b1 & 0xF) << 2) | (b2 >> 6)] : '=';
-      result += (i + 2 < bytes.length) ? b64[b2 & 0x3F] : '=';
+      result += (i + 1 < str.length) ? b64[((b1 & 0xF) << 2) | (b2 >> 6)] : '=';
+      result += (i + 2 < str.length) ? b64[b2 & 0x3F] : '=';
     }
     return result;
   }

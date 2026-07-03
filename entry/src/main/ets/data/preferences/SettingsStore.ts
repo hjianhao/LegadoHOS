@@ -342,4 +342,44 @@ export class SettingsStore {
   async setClickAction(zone: number, action: number): Promise<void> {
     await this.put(this.ZONE_KEYS_[zone], action);
   }
+
+  // ---- 备份/恢复设置 ----
+
+  /** 导出所有设置键值 */
+  async exportAll(): Promise<Record<string, any>> {
+    const all: Record<string, any> = {};
+    try {
+      const keys = await this.getAllKeys();
+      for (const key of keys) {
+        try {
+          const val = await this.store.get(key, '');
+          if (val) {
+            try { all[key] = JSON.parse(val as string); } catch { all[key] = val; }
+          }
+        } catch (_) { /* skip unreadable */ }
+      }
+    } catch (_) { /* ignore */ }
+    return all;
+  }
+
+  /** 批量导入设置键值 */
+  async importAll(map: Record<string, any>): Promise<void> {
+    for (const [key, value] of Object.entries(map)) {
+      try {
+        await this.store.put(key, JSON.stringify(value));
+      } catch (_) { /* skip unwritable */ }
+    }
+    try { await this.store.flush(); } catch (_) { /* ignore */ }
+  }
+
+  /** 获取所有设置键 */
+  async getAllKeys(): Promise<string[]> {
+    try {
+      // Preferences API 使用 getAll 返回所有键值对
+      const all = await this.store.getAll();
+      return Object.keys(all);
+    } catch {
+      return [];
+    }
+  }
 }

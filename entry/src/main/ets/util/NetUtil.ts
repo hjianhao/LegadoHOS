@@ -56,6 +56,13 @@ export class NetUtil {
     return NetUtil.httpRequest('PUT', url, body, NetUtil.buildHeaders(headers), timeout);
   }
 
+  /**
+   * 发送自定义 HTTP 请求方法（PROPFIND / MKCOL / DELETE 等）
+   */
+  static async httpCustomMethod(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+    return NetUtil.httpRequest(method, url, body || '', NetUtil.buildHeaders(headers), timeout);
+  }
+
   // ========== 内部实现 ==========
 
   private static session_: rcp.Session | null = null;

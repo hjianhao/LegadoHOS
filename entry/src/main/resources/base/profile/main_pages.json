@@ -18,6 +18,7 @@
     "pages/RssSourceEditPage",
     "pages/RssArticlesPage",
     "pages/ExploreBookPage",
-    "pages/BookshelfManagePage"
+    "pages/BookshelfManagePage",
+    "pages/BackupSettingsPage"
   ]
 }

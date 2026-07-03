@@ -4,6 +4,7 @@ import { NetUtil } from '../util/NetUtil';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
+import router from '@ohos.router';
 
 interface SettingItem { icon: string; title: string; key: string; }
 
@@ -68,6 +69,9 @@ struct SettingsPage {
         this.buildReadSettings();
       } else if (this.currentSection === 'theme') {
         this.buildThemeSettings();
+      } else if (this.currentSection === 'backup') {
+        // backup 入口通过 click handler 直接导航，这里留空
+        Column() {}.width('100%').height('100%')
       } else if (this.currentSection === 'network') {
         this.buildNetSettings();
       } else if (this.currentSection === 'about') {
@@ -85,6 +89,7 @@ struct SettingsPage {
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
         { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
+        { icon: '\uD83D\uDD04', title: '备份与恢复', key: 'backup' },
         { icon: '\u2139\uFE0F', title: '关于', key: 'about' },
       ] as SettingItem[], (item: SettingItem) => {
         ListItem() {
@@ -96,7 +101,13 @@ struct SettingsPage {
           }.padding(16).width('100%')
         }
         .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
-        .onClick(() => { this.currentSection = item.key; })
+        .onClick(() => {
+          if (item.key === 'backup') {
+            router.pushUrl({ url: 'pages/BackupSettingsPage' });
+          } else {
+            this.currentSection = item.key;
+          }
+        })
       })
     }.width('100%')
   }
