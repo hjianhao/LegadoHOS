@@ -833,47 +833,51 @@ export class SourceExecutor {
    * 解析 TOC 章节 URL 中的 {{baseUrl.match(...)}} 模板
    */
   private resolveTocUrlTemplate(url: string, tocUrl: string): string {
-    if (!url || !url.includes('{{')) return url;
+    if (!url) return '';
 
-    // 解析 {{baseUrl.match(/pattern/)[N]}} 模板（支持嵌套括号）
-    url = url.replace(/\{\{baseUrl\.match\(/g, '\x00');
-    while (url.includes('\x00')) {
-      const start = url.indexOf('\x00');
-      const afterMatch = start + 1; // past \x00
-      // 找匹配的 ) 支持嵌套括号
-      let depth = 1;
-      let endParen = -1;
-      for (let i = afterMatch; i < url.length; i++) {
-        if (url[i] === '(') depth++;
-        else if (url[i] === ')') {
-          depth--;
-          if (depth === 0) { endParen = i; break; }
+    // 已经是绝对 URL，不处理
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+    // 处理 {{baseUrl.match(...)}} 模板
+    if (url.includes('{{')) {
+      url = url.replace(/\{\{baseUrl\.match\(/g, '\x00');
+      while (url.includes('\x00')) {
+        const start = url.indexOf('\x00');
+        const afterMatch = start + 1;
+        let depth = 1;
+        let endParen = -1;
+        for (let i = afterMatch; i < url.length; i++) {
+          if (url[i] === '(') depth++;
+          else if (url[i] === ')') {
+            depth--;
+            if (depth === 0) { endParen = i; break; }
+          }
         }
+        if (endParen < 0) { url = url.replace('\x00', '{{baseUrl.match('); break; }
+        let regexStr = url.substring(afterMatch, endParen);
+        if (regexStr.startsWith('/') && regexStr.endsWith('/')) {
+          regexStr = regexStr.slice(1, -1);
+        }
+        const idxMatch = url.substring(endParen + 1).match(/^\[(\d+)\]\}\}/);
+        const idx = idxMatch ? idxMatch[1] : '0';
+        let replacement = '';
+        try {
+          const m = tocUrl.match(new RegExp(regexStr, 'i'));
+          if (m) replacement = m[parseInt(idx)] || '';
+        } catch (_e) { /* ignore regex errors */ }
+        url = url.substring(0, start) + replacement + url.substring(endParen + 1 + (idxMatch ? idxMatch[0].length : 3));
       }
-      if (endParen < 0) { url = url.replace('\x00', '{{baseUrl.match('); break; }
-      let regexStr = url.substring(afterMatch, endParen);
-      // 去掉首尾 /（Legado 正则写法 /pattern/ → pattern）
-      if (regexStr.startsWith('/') && regexStr.endsWith('/')) {
-        regexStr = regexStr.slice(1, -1);
+      // 模板处理后仍然是相对路径 → 转绝对
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        const baseUrl_ = tocUrl.replace(/\/[^/]*$/, '/');
+        url = baseUrl_ + (url.startsWith('/') ? url.substring(1) : url);
       }
-      // 找后面的 [N]}
-      const idxMatch = url.substring(endParen + 1).match(/^\[(\d+)\]\}\}/);
-      const idx = idxMatch ? idxMatch[1] : '0';
-      let replacement = '';
-      try {
-        const m = tocUrl.match(new RegExp(regexStr, 'i'));
-        if (m) replacement = m[parseInt(idx)] || '';
-      } catch (_e) { /* ignore regex errors */ }
-      url = url.substring(0, start) + replacement + url.substring(endParen + 1 + (idxMatch ? idxMatch[0].length : 3));
+      return url;
     }
 
-    // 相对路径转绝对路径
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      const baseUrl_ = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
-      url = baseUrl_ + (url.startsWith('/') ? url : '/' + url);
-    }
-
-    return url;
+    // 纯相对路径 → 相对于 tocUrl 目录解析
+    const baseUrl_ = tocUrl.replace(/\/[^/]*$/, '/');
+    return baseUrl_ + (url.startsWith('/') ? url.substring(1) : url);
   }
 
   private extractBookIdFromUrl(url: string): string {
