@@ -31,7 +31,6 @@ export interface BackupData {
   readRecordDetails?: Record<string, Object>[];
   searchHistory?: Record<string, Object>[];
   txtTocRules?: Record<string, Object>[];
-  bookSourcesCache?: Record<string, Object>[];
   settings?: Record<string, Object>;
 }
 
@@ -54,7 +53,7 @@ export class BackupService {
     const tables = [
       'books', 'bookmarks', 'book_groups', 'book_sources', 'replace_rules',
       'rss_sources', 'rss_stars', 'rss_read_records', 'read_records',
-      'read_record_details', 'search_history', 'txt_toc_rules', 'book_sources_cache',
+      'read_record_details', 'search_history', 'txt_toc_rules',
     ];
     const fieldMap: Record<string, string> = {
       books: 'books', bookmarks: 'bookmarks', bookGroups: 'book_groups',
@@ -62,7 +61,7 @@ export class BackupService {
       rssSources: 'rss_sources', rssStars: 'rss_stars',
       rssReadRecords: 'rss_read_records', readRecords: 'read_records',
       readRecordDetails: 'read_record_details', searchHistory: 'search_history',
-      txtTocRules: 'txt_toc_rules', bookSourcesCache: 'book_sources_cache',
+      txtTocRules: 'txt_toc_rules',
     };
 
     for (const [key, table] of Object.entries(fieldMap)) {
@@ -102,7 +101,6 @@ export class BackupService {
       { key: 'readRecordDetails', table: 'read_record_details', countKey: 'books' },
       { key: 'searchHistory', table: 'search_history', countKey: 'books' },
       { key: 'txtTocRules', table: 'txt_toc_rules', countKey: 'books' },
-      { key: 'bookSourcesCache', table: 'book_sources_cache', countKey: 'books' },
     ];
 
     for (const { key, table, countKey } of restoreMap) {
