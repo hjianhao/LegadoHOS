@@ -118,7 +118,13 @@ export class WebDavService {
     const fileName = this.getBackupFileName();
     await this.ensureDirectory(BACKUP_DIR);
     const zipBytes = zip.build();
-    const body = String.fromCharCode(...zipBytes);
+    // 分批转字符串避免 String.fromCharCode(...largeArray) 栈溢出
+    const chunkSize = 16384;
+    let body = '';
+    for (let i = 0; i < zipBytes.length; i += chunkSize) {
+      const chunk = zipBytes.slice(i, Math.min(i + chunkSize, zipBytes.length));
+      body += String.fromCharCode(...chunk);
+    }
     await NetUtil.httpPut(this.normalizeUrl(`${BACKUP_DIR}/${fileName}`), body, {
       ...this.getAuthHeader(), 'Content-Type': 'application/zip',
     });
