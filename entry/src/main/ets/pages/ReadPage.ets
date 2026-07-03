@@ -227,18 +227,18 @@ struct ReadPage {
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
-    if (!forceFetch) {
-      const cachedContent = await this.readChapterCache_(idx);
-      if (cachedContent && cachedContent.length > 50) {
-        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
-        this.applyChapterContent_(idx, cachedContent);
-        this.isLoading = false;
-        this.saveProgress();
-        this.preloadNextChapter_(idx);
-        this.cacheSurrounding_(idx);
-        return;
-      }
-    }
+	    if (!forceFetch) {
+	      const cachedContent = await this.readChapterCache_(idx);
+	      if (cachedContent && cachedContent.length > 50) {
+	        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
+	        this.applyChapterContent_(idx, cachedContent);
+	        this.isLoading = false;
+	        this.saveProgress();
+	        this.preloadNextChapter_(idx);
+	        this.cacheSurrounding_(idx);
+	        return;
+	      }
+	    }
 
     try {
       const content = await this.fetchChapterContent_(idx);
@@ -828,7 +828,7 @@ struct ReadPage {
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
             onSource: () => { this.showMenu = false; this.openSourceSheet(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
-            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex); UiUtil.showToast(this.getUIContext(), {message:'已刷新',duration:1500}); },
+	            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex, true); UiUtil.showToast(this.getUIContext(), {message:'已刷新',duration:1500}); },
           })
         }.width('100%').height('100%')
       }

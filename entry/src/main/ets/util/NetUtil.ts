@@ -63,11 +63,19 @@ export class NetUtil {
   private static getSession(timeout: number): rcp.Session {
     try {
       if (!NetUtil.session_) {
+        const secCfg: rcp.SecurityConfiguration = {
+          remoteValidation: 'system',
+          tlsRange: {
+            min: 'TlsV1.0' as rcp.TlsVersion,
+            max: 'TlsV1.3' as rcp.TlsVersion
+          }
+        };
         const cfg: rcp.SessionConfiguration = {
           requestConfiguration: {
             transfer: {
               timeout: { connectMs: timeout, transferMs: timeout }
-            }
+            },
+            security: secCfg
           }
         };
         NetUtil.session_ = rcp.createSession(cfg);

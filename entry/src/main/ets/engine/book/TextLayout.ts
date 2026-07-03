@@ -150,7 +150,7 @@ export class TextLayout {
           text: parts[i],
           offset: off,
           height: lh,
-          isParagraphStart: i === 0,
+          isParagraphStart: true,
           isParagraphEnd: false,
         });
       }

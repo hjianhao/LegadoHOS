@@ -21,8 +21,17 @@ export struct ImportSourceDialog {
   @State keepEnabled: boolean = true;
   @State customGroup: string = '';
   @State groupMode: number = 0; // 0=append, 1=overwrite
+  @State importMode: string = 'menu'; // 'menu' | 'url' | 'json'
+  @State importUrl: string = '';
+  @State jsonText: string = '';
 
   onImportSuccess?: () => void;
+
+  private resetMode(): void {
+    this.importMode = 'menu';
+    this.importUrl = '';
+    this.jsonText = '';
+  }
 
   private async loadPreview(json: string): Promise<void> {
     this.isLoading = true; this.statusText = '解析中...';
@@ -65,12 +74,44 @@ export struct ImportSourceDialog {
     } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'读取失败',duration:1500}); }
   }
 
-  private async doUrlImport(): Promise<void> {
+  private async doUrlImport(url: string): Promise<void> {
+    if (!url) { UiUtil.showToast(this.getUIContext(), {message:'请输入URL',duration:1500}); return; }
     this.statusText = '下载中...';
     try {
-      const json = await NetUtil.httpGet('');
+      const json = await NetUtil.httpGet(url);
       await this.loadPreview(json);
-    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'下载失败',duration:1500}); }
+      this.resetMode();
+    } catch (e) {
+      const msg = (e as Error).message || String(e);
+      console.error('[ImportSource] URL import failed:', url, msg);
+      // HTTPS 失败时自动回退到 HTTP
+      if ((msg.includes('SSL') || msg.includes('ssl') || msg.includes('TLS') || msg.includes('certificate'))
+          && url.startsWith('https://')) {
+        const httpUrl = 'http://' + url.substring(8);
+        console.info('[ImportSource] retrying with HTTP:', httpUrl);
+        this.statusText = 'HTTPS失败，尝试HTTP...';
+        try {
+          const json = await NetUtil.httpGet(httpUrl);
+          await this.loadPreview(json);
+          this.resetMode();
+          return;
+        } catch (e2) {
+          const msg2 = (e2 as Error).message || String(e2);
+          console.error('[ImportSource] HTTP fallback also failed:', httpUrl, msg2);
+          UiUtil.showToast(this.getUIContext(), {message:'链接不可用（HTTPS和HTTP均失败）',duration:2000});
+        }
+      } else if (msg.includes('timeout') || msg.includes('Timeout')) {
+        UiUtil.showToast(this.getUIContext(), {message:'连接超时，请检查网络或重试',duration:2000});
+      } else {
+        UiUtil.showToast(this.getUIContext(), {message:'下载失败: '+msg.substring(0,50),duration:2000});
+      }
+    }
+  }
+
+  private async doJsonImport(json: string): Promise<void> {
+    if (!json || json.trim().length === 0) { UiUtil.showToast(this.getUIContext(), {message:'请粘贴 JSON 内容',duration:1500}); return; }
+    await this.loadPreview(json);
+    this.resetMode();
   }
 
   private selectAll(select: boolean): void { for (const i of this.items) i.checked = select; this.items = [...this.items]; }
@@ -84,8 +125,16 @@ export struct ImportSourceDialog {
     Column() {
       // 标题
       Row() {
-        Text('导入书源' + (this.items.length>0?` (${this.items.length}条)`:'')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor('#888').backgroundColor('transparent').width(36).height(36).onClick(()=>{this.controller.close()})
+        Text(this.importMode === 'url' ? '从URL导入' :
+          this.importMode === 'json' ? '粘贴 JSON 内容' :
+          '导入书源' + (this.items.length>0?` (${this.items.length}条)`:'')
+        ).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Row() {
+          if (this.importMode !== 'menu' && this.items.length === 0) {
+            Button('← 返回').fontSize(14).fontColor('#0078D7').backgroundColor('transparent').margin({right:8}).onClick(()=>{this.resetMode()})
+          }
+          Button('✕').fontSize(16).fontColor('#888').backgroundColor('transparent').width(36).height(36).onClick(()=>{this.controller.close()})
+        }
       }.padding({left:16,right:8,top:16,bottom:8}).width('100%')
 
       if (this.isLoading) {
@@ -117,12 +166,36 @@ export struct ImportSourceDialog {
           Text('已选 ' + this.items.filter(i=>i.checked).length + '/' + this.items.length).fontSize(14).fontColor('#666').layoutWeight(1)
           Button('导入选中').fontSize(14).height(40).padding({left:24,right:24}).backgroundColor('#0078D7').fontColor('#FFF').borderRadius(20).onClick(()=>{this.doImport()})
         }.padding({left:16,right:16,top:8,bottom:16}).width('100%')
+      } else if (this.importMode === 'url') {
+        // URL 输入模式
+        Column() {
+          Text('请输入书源 JSON 文件的下载链接').fontSize(14).fontColor('#666').margin({bottom:8})
+          TextInput({placeholder:'https://example.com/sources.json',text:this.importUrl})
+            .height(44).backgroundColor('#F5F5F5').borderRadius(8).padding({left:12}).fontSize(14).width('100%')
+            .margin({bottom:8}).onChange((v:string)=>{this.importUrl=v})
+          Row() {
+            Button('取消').fontSize(14).height(40).layoutWeight(1).backgroundColor('#EEE').fontColor('#666').borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
+            Button('下载并导入').fontSize(14).height(40).layoutWeight(1).backgroundColor('#0078D7').fontColor('#FFF').borderRadius(8).margin({left:6}).onClick(()=>{this.doUrlImport(this.importUrl)})
+          }.width('100%')
+        }.padding(16).width('100%')
+      } else if (this.importMode === 'json') {
+        // JSON 粘贴模式
+        Column() {
+          Text('请粘贴书源的 JSON 内容').fontSize(14).fontColor('#666').margin({bottom:8})
+          TextArea({placeholder:'[{"bookSourceName":"...","bookSourceUrl":"...", ...}]',text:this.jsonText})
+            .height(160).backgroundColor('#F5F5F5').borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
+            .margin({bottom:8}).onChange((v:string)=>{this.jsonText=v})
+          Row() {
+            Button('取消').fontSize(14).height(40).layoutWeight(1).backgroundColor('#EEE').fontColor('#666').borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
+            Button('解析并导入').fontSize(14).height(40).layoutWeight(1).backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8).margin({left:6}).onClick(()=>{this.doJsonImport(this.jsonText)})
+          }.width('100%')
+        }.padding(16).width('100%')
       } else {
         // 初始状态：选择导入方式
         Column() {
           Button('📁 选择本地文件').fontSize(15).height(44).width('100%').backgroundColor('#4CAF50').fontColor('#FFF').borderRadius(8).margin({bottom:10}).onClick(()=>{this.doFileImport()})
-          Button('📋 粘贴 JSON 内容').fontSize(15).height(44).width('100%').backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8).margin({bottom:10}).onClick(()=>{})
-          Button('🌐 从URL导入').fontSize(15).height(44).width('100%').backgroundColor('#0078D7').fontColor('#FFF').borderRadius(8).onClick(()=>{this.doUrlImport()})
+          Button('📋 粘贴 JSON 内容').fontSize(15).height(44).width('100%').backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8).margin({bottom:10}).onClick(()=>{this.importMode = 'json'})
+          Button('🌐 从URL导入').fontSize(15).height(44).width('100%').backgroundColor('#0078D7').fontColor('#FFF').borderRadius(8).onClick(()=>{this.importMode = 'url'})
         }.padding(16).width('100%')
       }
     }.width('100%').backgroundColor('#FFF').borderRadius({topLeft:16,topRight:16})

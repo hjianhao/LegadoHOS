@@ -103,7 +103,13 @@ struct BookInfoPage {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       const sources = await dao.getAllSources();
       const matched = sources.find(s => s.sourceUrl === this.originUrl || s.sourceName === this.origin);
-      if (!matched) return;
+      if (!matched) {
+        console.warn('[BookInfo] No matching source found for',
+          'originUrl=' + this.originUrl,
+          'origin=' + this.origin,
+          'available=' + sources.map(s => s.sourceUrl).join(', '));
+        return;
+      }
       // 获取书籍详情
       if (!this.introduce || !this.kind || !this.wordCount || (matched.ruleBookInfoTocUrl && !this.sourceTocUrl)) {
         const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);

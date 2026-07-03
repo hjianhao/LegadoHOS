@@ -736,6 +736,7 @@ export class SourceExecutor {
         kind: extractField(source.ruleBookInfoKind) || '',
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
+        tocUrl: extractField(source.ruleBookInfoTocUrl) || '',
         chapters: [],
       };
     } catch (_e) {
@@ -1048,10 +1049,34 @@ export class SourceExecutor {
         ...parseHeader(source.header)
       };
       let resp = await this.fetchWithOpts(tocUrl, headers);
-      if (!resp || resp.length < 100) return [];
+      // 短响应检测：可能是 JSON 错误（如 {"code":4005,"msg":"认证失败"}）
+      if (!resp || resp.length < 100) {
+        const body = resp || '';
+        console.warn('[SrcEx] getToc short response len=' + (resp ? resp.length : 0) +
+          ' body=' + body.substring(0, 200));
+        // 尝试解析 JSON 错误码，避免后续用无效数据继续请求
+        if (body) {
+          try {
+            const json = JSON.parse(body) as Record<string, Object>;
+            const code = json['code'] as number | undefined;
+            const msg = json['msg'] as string | undefined;
+            if (code !== undefined && code !== 0 && code !== 200) {
+              console.warn('[SrcEx] getToc API error: code=' + code + ' msg=' + (msg || ''));
+              console.warn('[SrcEx] getToc giving up - API returned auth/error code, source may need updated token');
+              return [];
+            }
+          } catch (_fe) { /* fallthrough */ }
+        }
+        if (!resp) return [];
+      }
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
+	      const parsed = this.parseJsonBookInfo(resp, source, tocUrl);
+      if (parsed) {
+        console.info('[SrcEx] getToc BookInfo JSON OK tocUrl=', (parsed.tocUrl || '').substring(0, 100));
+      }
+
       const tocBodies: string[] = [resp];
       const visitedToc = new Set<string>();
       visitedToc.add(tocUrl);

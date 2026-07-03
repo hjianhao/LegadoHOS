@@ -333,9 +333,9 @@ export class HtmlParser {
         el.text += child.ownText;
       }
     }
-    // 叶子元素的 ownText 也要赋给 text（extractAttr 读的是 el.text）
-    if (el.ownText && !el.text) {
-      el.text = el.ownText;
+    // ownText 也要赋给 text（即使已有子元素文本，也要追加直接文本节点内容）
+    if (el.ownText) {
+      el.text += el.ownText;
     }
   }
 
