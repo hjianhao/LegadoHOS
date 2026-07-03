@@ -30,12 +30,16 @@ export class SettingsStore {
   }
 
   async init(context: Context): Promise<void> {
+    // 如果已经初始化过，直接返回（避免重复创建 Preferences 实例）
+    if (this.prefStore_) return;
     try {
       this.prefStore_ = await preferences.getPreferences(context, SETTINGS_STORE_NAME);
-      await this.initCipher_();
     } catch (err) {
+      console.error('[SettingsStore] init failed:', (err as Error).message);
       throw err;
     }
+    // cipher 初始化失败不影响设置读写
+    await this.initCipher_();
   }
 
   private async initCipher_(): Promise<void> {
