@@ -98,10 +98,18 @@ export class WebDavService {
 
   async ensureDirectory(path: string): Promise<void> {
     if (!this.config) return;
+    // 先尝试 MKCOL
     try {
       await NetUtil.httpCustomMethod('MKCOL', this.normalizeUrl(path), undefined, this.getAuthHeader(), 10000);
+      return;
     } catch {
-      // 可能已存在，忽略
+      // MKCOL 失败（可能 RCP 不支持或目录已存在），尝试 PUT 一个占位文件
+      try {
+        await NetUtil.httpPut(this.normalizeUrl(path + '/.keep'), '', this.getAuthHeader());
+      } catch {
+        // 两种方法都失败，忽略（上传主文件时可能会再次失败）
+        console.warn('[WebDav] ensureDirectory failed for:', path);
+      }
     }
   }
 
