@@ -10,6 +10,9 @@
  * - PUT（上传）
  * - MKCOL（创建目录）
  * - DELETE（删除）
+ *
+ * 目录结构：
+ *   {serverUrl}/{path}/    ← 配置的路径，备份文件直接放在这里
  */
 import { NetUtil } from '../util/NetUtil';
 import { ZipWriter } from '../util/ZipWriter';
@@ -33,7 +36,12 @@ export interface WebDavFileInfo {
   isDirectory: boolean;
 }
 
-const BACKUP_DIR = 'legado';
+/**
+ * 获取 getBackupFileName 返回的名称
+ */
+function getBackupFileName(): string {
+  return `backup_${new Date().toISOString().slice(0, 10)}.zip`;
+}
 
 export class WebDavService {
   private static instance: WebDavService;
@@ -120,8 +128,7 @@ export class WebDavService {
 
   async uploadBackupZip(zip: ZipWriter): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
-    const fileName = this.getBackupFileName();
-    await this.ensureDirectory(BACKUP_DIR);
+    const fileName = getBackupFileName();
     const zipBytes = zip.build();
     // 分批转字符串避免 String.fromCharCode(...largeArray) 栈溢出
     const chunkSize = 16384;
@@ -130,7 +137,7 @@ export class WebDavService {
       const chunk = zipBytes.slice(i, Math.min(i + chunkSize, zipBytes.length));
       body += String.fromCharCode(...chunk);
     }
-    await NetUtil.httpPut(this.normalizeUrl(`${BACKUP_DIR}/${fileName}`), body, {
+    await NetUtil.httpPut(this.normalizeUrl(fileName), body, {
       ...this.getAuthHeader(), 'Content-Type': 'application/zip', 'Overwrite': 'T',
     });
     return fileName;
@@ -138,7 +145,7 @@ export class WebDavService {
 
   async listBackups(): Promise<WebDavFileInfo[]> {
     try {
-      return (await this.listFiles(BACKUP_DIR)).filter(f => !f.isDirectory && f.name.endsWith('.zip'));
+      return (await this.listFiles('')).filter(f => !f.isDirectory && f.name.endsWith('.zip'));
     } catch {
       return [];
     }
@@ -146,7 +153,7 @@ export class WebDavService {
 
   async downloadBackup(name: string): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
-    const url = this.normalizeUrl(`${BACKUP_DIR}/${name}`);
+    const url = this.normalizeUrl(name);
     const respText = await NetUtil.httpGet(url, this.getAuthHeader());
     if (!respText) throw new Error('下载失败');
     const tempPath = `/data/storage/el2/base/haps/entry/files/restore_${name}`;
@@ -160,7 +167,7 @@ export class WebDavService {
   async deleteBackup(name: string): Promise<void> {
     if (!this.config) return;
     try {
-      await NetUtil.httpCustomMethod('DELETE', this.normalizeUrl(`${BACKUP_DIR}/${name}`), undefined, this.getAuthHeader(), 10000);
+      await NetUtil.httpCustomMethod('DELETE', this.normalizeUrl(name), undefined, this.getAuthHeader(), 10000);
     } catch { /* ignore */ }
   }
 
@@ -209,10 +216,6 @@ export class WebDavService {
       base += '/' + path.replace(/^\/+/, '');
     }
     return base;
-  }
-
-  private getBackupFileName(): string {
-    return `backup_${new Date().toISOString().slice(0, 10)}.zip`;
   }
 
   private getAuthHeader(): Record<string, string> {
