@@ -182,7 +182,12 @@ export class BackupService {
     const reader = new ZipReader(zipPath);
     await reader.open();
     const entry = reader.findEntry('backup.json');
-    if (!entry) { reader.close(); throw new Error('backup.json not found'); }
+    if (!entry) {
+      const entries = reader.entries.map(e => e.fileName);
+      console.warn('[Backup] backup.json not found, entries:', JSON.stringify(entries));
+      reader.close();
+      throw new Error('backup.json not found in backup');
+    }
     const jsonStr = await reader.extractText(entry);
     reader.close();
     return await BackupService.importBackup(JSON.parse(jsonStr));

@@ -34,6 +34,7 @@ struct BackupSettingsPage {
   @State isBusy: boolean = false;
   @State statusText: string = '';
   @State backupNames: string[] = [];
+  @State manualBackupName: string = '';
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
@@ -58,12 +59,17 @@ struct BackupSettingsPage {
   }
 
   private applyWebDavConfig(): void {
+    // 直接从 AppStorage 读取（避免 @StorageLink 同步延迟问题）
+    const user = AppStorage.get<string>('webdav_user') || this.webDavUser || '';
+    const url = AppStorage.get<string>('webdav_url') || this.webDavUrl || 'https://dav.jianguoyun.com/dav/';
+    const path = AppStorage.get<string>('webdav_path') || this.webDavPath || 'legadohos';
+    const autoSync = AppStorage.get<boolean>('webdav_auto_sync') ?? this.webDavAutoSync;
     WebDavService.getInstance().configure({
-      serverUrl: this.webDavUrl,
-      username: this.webDavUser,
+      serverUrl: url,
+      username: user,
       password: this.webDavPwd,
-      path: this.webDavPath,
-      autoSync: this.webDavAutoSync,
+      path: path,
+      autoSync: autoSync,
       syncInterval: 60,
     });
   }
@@ -135,6 +141,9 @@ struct BackupSettingsPage {
     this.isBusy = false;
   }
 
+  /**
+   * 通过 WebDAV PROPFIND 获取云端备份文件列表
+   */
   private async listCloudBackups(): Promise<void> {
     this.isBusy = true;
     this.statusText = '加载云端备份列表...';
@@ -142,8 +151,8 @@ struct BackupSettingsPage {
     try {
       const files = await WebDavService.getInstance().listBackups();
       this.backupNames = files.map(f => f.name);
-      this.statusText = `找到 ${files.length} 个云端备份`;
-      if (files.length === 0) this.showToast('云端无备份文件');
+      this.statusText = files.length > 0 ? `找到 ${files.length} 个云端备份` : '未找到备份文件';
+      if (files.length === 0) this.showToast('云端暂无备份文件（可手动输入文件名恢复）');
     } catch (err) {
       this.statusText = '加载失败: ' + (err as Error).message;
     }
@@ -159,6 +168,7 @@ struct BackupSettingsPage {
       this.statusText = `恢复完成: ${result.books} 本书, ${result.sources} 个书源`;
       this.showToast('云端恢复成功');
     } catch (err) {
+      console.error('[BackupSettings] restoreFromCloud failed:', (err as Error).message);
       this.statusText = '恢复失败: ' + (err as Error).message;
       this.showToast('恢复失败');
     }
@@ -225,12 +235,30 @@ struct BackupSettingsPage {
           // ===== 云端备份 =====
           this.buildSection('☁ 云端备份')
           this.buildButton('备份到云端', '#0078D7', () => { this.backupToCloud(); })
-          this.buildButton('从云端恢复', '#FF9800', async () => {
-            await this.listCloudBackups();
-            if (this.backupNames.length > 0) {
-              await this.restoreFromCloud(this.backupNames[this.backupNames.length - 1]);
-            }
-          })
+          Button('从云端恢复').fontSize(14).height(44).width('100%')
+            .backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8)
+            .margin({ bottom: 6 }).onClick(async () => {
+              await this.listCloudBackups();
+              // 备份列表已显示在下方，用户点击具体条目恢复
+            })
+
+          Text('手动输入备份文件名（跨设备恢复时使用）').fontSize(12).fontColor('#888')
+            .width('100%').margin({ top: 8, bottom: 4 })
+          Row() {
+            TextInput({ placeholder: '如 backup_2026-07-03.zip', text: this.manualBackupName })
+              .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+              .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+              .layoutWeight(1)
+              .onChange((v: string) => { this.manualBackupName = v; })
+            Blank().width(8)
+            Button('恢复').fontSize(13).height(40).fontColor('#0078D7')
+              .backgroundColor(this.isDark ? '#444' : '#E0E0E0').borderRadius(8)
+              .onClick(() => {
+                const name = this.manualBackupName.trim();
+                if (name) this.restoreFromCloud(name);
+                else this.showToast('请输入备份文件名');
+              })
+          }.width('100%')
 
           if (this.backupNames.length > 0) {
             this.buildSection('📋 可用备份')

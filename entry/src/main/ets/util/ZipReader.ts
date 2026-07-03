@@ -36,6 +36,7 @@ export class ZipReader {
   private filePath: string;
   private entries_: ZipEntry[] | null = null;
   private fd_: number = -1;
+  private fileBytes_: Uint8Array | null = null;  // 缓存整个文件，避免重复读取
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -49,8 +50,8 @@ export class ZipReader {
     const fileSize = fileFs.statSync(this.filePath).size;
     const buffer = new ArrayBuffer(fileSize);
     fileFs.readSync(this.fd_, buffer);
-
-    this.entries_ = this.parseCentralDirectory(new Uint8Array(buffer));
+    this.fileBytes_ = new Uint8Array(buffer);
+    this.entries_ = this.parseCentralDirectory(this.fileBytes_);
     console.info(`[ZipReader] Opened: ${this.filePath}, entries: ${this.entries_.length}`);
   }
 
@@ -88,14 +89,9 @@ export class ZipReader {
   async extractData(entry: ZipEntry): Promise<ArrayBuffer | null> {
     if (entry.data) return entry.data;
 
-    if (!this.entries_) throw new Error('ZIP not opened');
-    if (this.fd_ < 0) throw new Error('File not open');
+    if (!this.fileBytes_) throw new Error('ZIP not opened');
 
-    const fileSize = fileFs.statSync(this.filePath).size;
-    const fullBuffer = new ArrayBuffer(fileSize);
-    fileFs.readSync(this.fd_, fullBuffer);
-
-    const bytes = new Uint8Array(fullBuffer);
+    const bytes = this.fileBytes_;
 
     // 读取 Local File Header
     let offset = entry.localHeaderOffset;
@@ -160,9 +156,12 @@ export class ZipReader {
 
     const totalEntries = this.readU16(bytes, eocdOffset + 10);
     const centralDirSize = this.readU32(bytes, eocdOffset + 12);
-    const centralDirOffset = this.readU32(bytes, eocdOffset + 16);
-
-    // 遍历中央目录
+    // 容错：若 EOCD 中的 centralDirOffset 损坏，从 EOCD 位置反推
+    let centralDirOffset = this.readU32(bytes, eocdOffset + 16);
+    const calculatedOffset = eocdOffset - centralDirSize;
+    if (centralDirOffset < 0 || centralDirOffset > fileLen || centralDirOffset + centralDirSize !== eocdOffset) {
+      centralDirOffset = calculatedOffset;
+    }
     const entries: ZipEntry[] = [];
     let offset = centralDirOffset;
 

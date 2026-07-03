@@ -19,7 +19,6 @@ import { ZipWriter } from '../util/ZipWriter';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
-import http from '@ohos.net.http';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -84,61 +83,82 @@ export class WebDavService {
     }
   }
 
+  /**
+   * 通过 RCP PROPFIND 获取文件列表
+   *
+   * 坚果云对 PROPFIND 有严格的客户端限制。
+   * 使用 NetUtil session（与 OPTIONS/PUT 同一 session，已验证可用）发起。
+   */
+  /**
+   * 通过 NetUtil.session 发 PROPFIND 获取文件列表
+   */
   async listFiles(path: string = ''): Promise<WebDavFileInfo[]> {
     if (!this.config) return [];
     const url = this.normalizeUrl(path);
     const auth = this.getAuthHeader();
-    const authVal = auth['Authorization'] || '';
 
-    // 方法1：@ohos.net.http GET
+    const requestBody =
+      '<?xml version="1.0" encoding="utf-8"?>\n' +
+      '<D:propfind xmlns:D="DAV:">\n' +
+      '  <D:allprop/>\n' +
+      '</D:propfind>';
+
     try {
-      const result = await this.httpRequestString(http.RequestMethod.GET, url, { 'Authorization': authVal });
-      if (result) {
-        const p = this.parsePropfindResponse(result);
-        if (p.length > 0) return p;
-        const h = this.parseHtmlListing(result);
-        if (h.length > 0) return h;
+      console.info('[WebDav] PROPFIND:', url);
+      const respBody = await NetUtil.httpCustomMethod('PROPFIND', url, requestBody, {
+        ...auth,
+        'Depth': '1',
+      }, 30000);
+      if (respBody) {
+        const parsed = this.parsePropfindResponse(respBody);
+        console.info('[WebDav] PROPFIND parsed:', parsed.length, 'files');
+        return parsed;
       }
     } catch (e) {
-      console.warn('[WebDav] GET failed:', (e as Error).message);
+      console.warn('[WebDav] PROPFIND failed:', (e as Error).message);
     }
-
-    // 方法2：RCP PUT + Overwrite:T 试写一个测试文件，看目录是否可用
-    // 但不适用于列表
 
     return [];
   }
 
-  /** 使用 @ohos.net.http 发送请求并返回响应文本 */
-  private httpRequestString(method: http.RequestMethod, url: string, header: Record<string, string>): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const req = http.createHttp();
-      req.request(url, { method, header, connectTimeout: 15000, readTimeout: 20000 },
-        (err: Error, data: http.HttpResponse) => {
-          req.destroy();
-          if (err) { reject(err); return; }
-          if (data && data.result) resolve(String(data.result));
-          else reject(new Error('empty response'));
-        });
-    });
+  async listBackups(): Promise<WebDavFileInfo[]> {
+    return this.listFiles('');
   }
 
   async uploadBackupZip(zip: ZipWriter): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
     const fileName = getBackupFileName();
-    // 确保目录存在（坚果云不会自动创建目录）
     await this.ensureDirectory('');
     const zipBytes = zip.build();
-    // 分批转字符串避免 String.fromCharCode(...largeArray) 栈溢出
-    const chunkSize = 16384;
-    let body = '';
-    for (let i = 0; i < zipBytes.length; i += chunkSize) {
-      const chunk = zipBytes.slice(i, Math.min(i + chunkSize, zipBytes.length));
-      body += String.fromCharCode(...chunk);
-    }
-    await NetUtil.httpPut(this.normalizeUrl(fileName), body, {
-      ...this.getAuthHeader(), 'Content-Type': 'application/zip', 'Overwrite': 'T',
+
+    // 直接上传二进制（ArrayBuffer），不做 String.fromCharCode 转换
+    // String 会被 RCP 按 UTF-8 编码，导致二进制数据损坏
+    const url = this.normalizeUrl(fileName);
+    const authVal = this.getAuthHeader()['Authorization'] || '';
+
+    console.info('[WebDav] Uploading binary:', fileName, zipBytes.length, 'bytes');
+    const session = rcp.createSession({
+      requestConfiguration: {
+        transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
+      }
     });
+    const request = new rcp.Request(
+      url,
+      'PUT' as rcp.HttpMethod,
+      {
+        'Authorization': authVal,
+        'Content-Type': 'application/zip',
+        'Overwrite': 'T',
+      } as rcp.RequestHeaders,
+      zipBytes.buffer as ArrayBuffer
+    );
+    const response = await session.fetch(request);
+    session.close();
+    console.info('[WebDav] Binary upload status:', response.statusCode);
+
+    if (response.statusCode < 200 || response.statusCode >= 400) {
+      throw new Error(`上传失败: HTTP ${response.statusCode}`);
+    }
     return fileName;
   }
 
@@ -158,24 +178,52 @@ export class WebDavService {
     }
   }
 
-  async listBackups(): Promise<WebDavFileInfo[]> {
-    try {
-      return (await this.listFiles('')).filter(f => !f.isDirectory && f.name.endsWith('.zip'));
-    } catch {
-      return [];
-    }
-  }
-
   async downloadBackup(name: string): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
     const url = this.normalizeUrl(name);
-    const respText = await NetUtil.httpGet(url, this.getAuthHeader());
-    if (!respText) throw new Error('下载失败');
+    const auth = this.getAuthHeader();
+    const authVal = auth['Authorization'] || '';
+
+    // 直接下载二进制数据（不能用文本方式，ZIP 文件会被损坏）
+    console.info('[WebDav] Downloading backup:', url);
+    const session = rcp.createSession({
+      requestConfiguration: {
+        transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
+      }
+    });
+
+    const request = new rcp.Request(
+      url,
+      'GET' as rcp.HttpMethod,
+      { 'Authorization': authVal } as rcp.RequestHeaders,
+      ''
+    );
+
+    const response = await session.fetch(request);
+    console.info('[WebDav] Download status:', response.statusCode);
+
+    if (response.statusCode < 200 || response.statusCode >= 400) {
+      session.close();
+      throw new Error(`下载失败: HTTP ${response.statusCode}`);
+    }
+
+    if (!response.body) {
+      session.close();
+      throw new Error('下载失败: 空响应');
+    }
+
+    // 直接写二进制数据到文件
     const tempPath = `/data/storage/el2/base/haps/entry/files/restore_${name}`;
     try { fileFs.unlinkSync(tempPath); } catch (_) { }
-    const bytes = this.encoder.encodeInto(respText);
+    const bodyBytes = new Uint8Array(response.body);
     const file = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
-    try { fileFs.writeSync(file.fd, bytes.buffer as ArrayBuffer); } finally { fileFs.closeSync(file); }
+    try {
+      fileFs.writeSync(file.fd, bodyBytes.buffer);
+      console.info('[WebDav] Downloaded:', bodyBytes.length, 'bytes to', tempPath);
+    } finally {
+      fileFs.closeSync(file);
+    }
+    session.close();
     return tempPath;
   }
 
@@ -269,8 +317,8 @@ export class WebDavService {
         isDirectory: isDir,
       });
     }
-    // 过滤掉当前目录自身（href == path 的条目）
-    return files.filter(f => f.name !== '');
+    // 过滤掉目录、空名、以及目录自身的条目
+    return files.filter(f => f.name !== '' && !f.isDirectory);
   }
 
   /**
@@ -301,15 +349,9 @@ export class WebDavService {
   }
 
   private base64Encode(str: string): string {
-    const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let result = '';
-    for (let i = 0; i < str.length; i += 3) {
-      const b0 = str.charCodeAt(i), b1 = str.charCodeAt(i + 1) || 0, b2 = str.charCodeAt(i + 2) || 0;
-      result += b64[b0 >> 2];
-      result += b64[((b0 & 3) << 4) | (b1 >> 4)];
-      result += (i + 1 < str.length) ? b64[((b1 & 0xF) << 2) | (b2 >> 6)] : '=';
-      result += (i + 2 < str.length) ? b64[b2 & 0x3F] : '=';
-    }
-    return result;
+    // Use proper byte-level encoding (like OkHttp's Credentials.basic)
+    const bytes = this.encoder.encodeInto(str);
+    const b64 = new util.Base64Helper();
+    return b64.encodeToStringSync(bytes);
   }
 }
