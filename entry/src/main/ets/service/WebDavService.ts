@@ -224,16 +224,22 @@ export class WebDavService {
   private parsePropfindResponse(xml: string): WebDavFileInfo[] {
     const files: WebDavFileInfo[] = [];
     if (!xml) return files;
-    const responseRegex = /<response[^>]*>([\s\S]*?)<\/response>/gi;
+    // 支持有/无命名空间前缀的 XML（如 <d:response> 或 <response>）
+    const responseRegex = /<(?:[a-zA-Z]+:)?response[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?response>/gi;
     let match: RegExpExecArray | null;
     while ((match = responseRegex.exec(xml)) !== null) {
       const block = match[1];
-      const hrefMatch = block.match(/<href[^>]*>([\s\S]*?)<\/href>/i);
+      const hrefMatch = block.match(/<(?:[a-zA-Z]+:)?href[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?href>/i);
       if (!hrefMatch) continue;
-      const href = hrefMatch[1].trim();
-      const isDir = /<collection\s*\/>/i.test(block) || /<resourcetype[^>]*>[\s\S]*?<collection[\s\S]*?<\/resourcetype>/i.test(block);
-      const modMatch = block.match(/<getlastmodified[^>]*>([\s\S]*?)<\/getlastmodified>/i);
-      const sizeMatch = block.match(/<getcontentlength[^>]*>([\s\S]*?)<\/getcontentlength>/i);
+      let href = hrefMatch[1].trim();
+      // 某些服务器返回的 href 包含完整 URL，只取路径部分
+      if (href.startsWith('http://') || href.startsWith('https://')) {
+        try { href = new URL(href).pathname; } catch { /* keep as-is */ }
+      }
+      const isDir = /<(?:[a-zA-Z]+:)?collection\s*\/>/i.test(block) ||
+                    /<(?:[a-zA-Z]+:)?resourcetype[^>]*>[\s\S]*?<(?:[a-zA-Z]+:)?collection[\s\S]*?<\/(?:[a-zA-Z]+:)?resourcetype>/i.test(block);
+      const modMatch = block.match(/<(?:[a-zA-Z]+:)?getlastmodified[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?getlastmodified>/i);
+      const sizeMatch = block.match(/<(?:[a-zA-Z]+:)?getcontentlength[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?getcontentlength>/i);
       const name = href.split('/').filter(s => s).pop() || href;
       files.push({
         name, path: href,
@@ -242,7 +248,8 @@ export class WebDavService {
         isDirectory: isDir,
       });
     }
-    return files;
+    // 过滤掉当前目录自身（href == path 的条目）
+    return files.filter(f => f.name !== '');
   }
 
   /**
