@@ -1240,9 +1240,16 @@ export class SourceExecutor {
 
       // 兜底：从 HTML 中提取章节链接
       const tocChapters = this.extractTocFromHtml(bodyText, source);
-      if (tocChapters.length > 0) return tocChapters;
+      if (tocChapters.length > 0) {
+        // 如果书源有 ruleBookInfoTocUrl（CSS 选择器），说明可能存在完整的目录页
+        // 仅当提取到的章节足够多时才视为完整，否则继续尝试从 CSS 选择器获取完整目录
+        if (tocChapters.length >= 30 || !source.ruleBookInfoTocUrl) {
+          return tocChapters;
+        }
+        console.info('[SrcEx] getToc fallbackHtml got only', tocChapters.length, 'chapters, will try CSS ruleBookInfoTocUrl');
+      }
 
-      // 无结果（或结果太少）？尝试从当前页面提取 ruleBookInfoTocUrl 作为真实目录页 URL
+      // 尝试从当前页面提取 ruleBookInfoTocUrl 作为真实目录页 URL
       if (source.ruleBookInfoTocUrl) {
         // 当作 CSS 选择器解析，从当前 HTML 中提取真实的目录页 URL
         const parser = getHtmlParser();
