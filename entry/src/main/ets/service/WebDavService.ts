@@ -90,38 +90,37 @@ export class WebDavService {
     const auth = this.getAuthHeader();
     const authVal = auth['Authorization'] || '';
 
-    // 使用 @ohos.net.http GET 获取目录列表（这个库可能正确处理认证）
+    // 方法1：@ohos.net.http GET
     try {
-      const httpReq = http.createHttp();
-      const resp = await new Promise<http.HttpResponse>((resolve, reject) => {
-        httpReq.request(url, {
-          method: http.RequestMethod.GET,
-          header: { 'Authorization': authVal },
-          connectTimeout: 15000,
-          readTimeout: 20000,
-        }, (err: Error, data: http.HttpResponse) => {
-          httpReq.destroy();
-          if (err) reject(err);
-          else resolve(data);
-        });
-      });
-      if (resp && resp.result) {
-        // 尝试验证是否获得了实际内容
-        const resultStr = String(resp.result);
-        // 先尝试解析为 PROPFIND XML（某些服务器可能返回 XML 列表）
-        const propParsed = this.parsePropfindResponse(resultStr);
-        if (propParsed.length > 0) return propParsed;
-        // 再尝试 HTML 列表
-        const htmlParsed = this.parseHtmlListing(resultStr);
-        if (htmlParsed.length > 0) return htmlParsed;
-        // 如果有响应内容但没解析出文件，记录日志
-        console.info('[WebDav] GET response length:', resultStr.length);
+      const result = await this.httpRequestString(http.RequestMethod.GET, url, { 'Authorization': authVal });
+      if (result) {
+        const p = this.parsePropfindResponse(result);
+        if (p.length > 0) return p;
+        const h = this.parseHtmlListing(result);
+        if (h.length > 0) return h;
       }
     } catch (e) {
-      console.warn('[WebDav] http GET error:', (e as Error).message);
+      console.warn('[WebDav] GET failed:', (e as Error).message);
     }
 
+    // 方法2：RCP PUT + Overwrite:T 试写一个测试文件，看目录是否可用
+    // 但不适用于列表
+
     return [];
+  }
+
+  /** 使用 @ohos.net.http 发送请求并返回响应文本 */
+  private httpRequestString(method: http.RequestMethod, url: string, header: Record<string, string>): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const req = http.createHttp();
+      req.request(url, { method, header, connectTimeout: 15000, readTimeout: 20000 },
+        (err: Error, data: http.HttpResponse) => {
+          req.destroy();
+          if (err) { reject(err); return; }
+          if (data && data.result) resolve(String(data.result));
+          else reject(new Error('empty response'));
+        });
+    });
   }
 
   async uploadBackupZip(zip: ZipWriter): Promise<string> {
