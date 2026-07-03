@@ -41,10 +41,11 @@ struct BackupSettingsPage {
   private async loadWebDavConfig(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.webDavUrl = await s.get('webdav_url', 'https://dav.jianguoyun.com/dav/');
       this.webDavUser = await s.get('webdav_user', '');
       this.webDavPwd = await s.getWebDavPassword();
-      this.webDavPath = await s.get('webdav_path', 'legado');
+      this.webDavPath = await s.get('webdav_path', 'legadohos');
       this.webDavAutoSync = await s.get('webdav_auto_sync', false);
     } catch (_) { /* ignore */ }
   }
