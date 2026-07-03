@@ -129,6 +129,8 @@ export class WebDavService {
   async uploadBackupZip(zip: ZipWriter): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
     const fileName = getBackupFileName();
+    // 确保目录存在（坚果云不会自动创建目录）
+    await this.ensureDirectory('');
     const zipBytes = zip.build();
     // 分批转字符串避免 String.fromCharCode(...largeArray) 栈溢出
     const chunkSize = 16384;
@@ -141,6 +143,32 @@ export class WebDavService {
       ...this.getAuthHeader(), 'Content-Type': 'application/zip', 'Overwrite': 'T',
     });
     return fileName;
+  }
+
+  /**
+   * 确保 WebDAV 目录存在
+   * @param path 相对于配置根路径的目录，空字符串表示根路径本身
+   */
+  async ensureDirectory(path: string): Promise<void> {
+    if (!this.config) return;
+    const url = this.normalizeUrl(path);
+    const auth = this.getAuthHeader();
+
+    // 用 OPTIONS 检查目录是否已存在
+    try {
+      await NetUtil.httpCustomMethod('OPTIONS', url, undefined, auth, 10000);
+      return; // 已存在
+    } catch {
+      // 不存在，尝试创建
+    }
+
+    // 用 MKCOL 创建目录（坚果云等 WebDAV 服务器支持）
+    try {
+      await NetUtil.httpCustomMethod('MKCOL', url, undefined, auth, 10000);
+    } catch (err) {
+      // MKCOL 可能失败（如中间目录不存在），但后续 PUT 也会报错
+      console.warn('[WebDav] ensureDirectory MKCOL failed:', (err as Error).message);
+    }
   }
 
   async listBackups(): Promise<WebDavFileInfo[]> {
