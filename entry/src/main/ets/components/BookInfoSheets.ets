@@ -276,17 +276,35 @@ export struct ChangeSourceSheet {
         return;
       }
 
-      // 对齐 Legado ChangeSourceSearchUseCase: flatMapMerge(concurrency)
-      // ArkTS 没有 Flow，但我们用全局单例 SourceExecutor 自带的并发池
-      // 进度回调对齐 Legado ChangeSourceSearchEvent.Progress
-      const rawResults = await globalSourceExecutor.search(
-        this.keyword.trim(), enabled,
-        (merged: SearchResult[], processed: number, total: number) => {
-          // 检查是否已取消
-          if (!this.searching) return;
-          this.searchProgress = '已搜 ' + processed + '/' + total + ' 个源，找到 ' + merged.length + ' 条';
-        }
-      );
+	      // 对齐 Legado ChangeSourceSearchUseCase: flatMapMerge(concurrency)
+	      // ArkTS 没有 Flow，但我们用全局单例 SourceExecutor 自带的并发池
+	      // 进度回调对齐 Legado ChangeSourceSearchEvent.Progress
+	      const rawResults = await globalSourceExecutor.search(
+	        this.keyword.trim(), enabled,
+	        (merged: SearchResult[], processed: number, total: number) => {
+	          // 检查是否已取消
+	          if (!this.searching) return;
+	          this.searchProgress = '已搜 ' + processed + '/' + total + ' 个源，找到 ' + merged.length + ' 条';
+	          // 增量更新结果列表：筛选 + 展开逐源展示
+	          const filtered = this.filterResults(merged);
+	          if (filtered.length > 0) {
+	            this.results = this.expandCachedSources(filtered).sort((a: SearchResult, b: SearchResult) => {
+	              let sa = 0;
+	              let sb = 0;
+	              if (a.originUrl === this.currentOriginUrl) sa -= 1000;
+	              if (b.originUrl === this.currentOriginUrl) sb -= 1000;
+	              const na = (a.name || '').replace(/\s/g, '');
+	              const nb = (b.name || '').replace(/\s/g, '');
+	              const bn = this.bookName.replace(/\s/g, '');
+	              if (na === bn) sa += 50;
+	              if (nb === bn) sb += 50;
+	              sa += (a.sourceCount || 1);
+	              sb += (b.sourceCount || 1);
+	              return sb - sa;
+	            });
+	          }
+	        }
+	      );
 
       // 对齐 Legado：搜索结果中只保留同书名/同作者的
       const filtered = this.filterResults(rawResults);
@@ -380,13 +398,13 @@ export struct ChangeSourceSheet {
           .width('100%').padding({ left: 16, right: 16, bottom: 4 })
       }
 
-      // 结果列表（点击行直接替换源）
-      if (this.isSearching) {
-        Column() {
-          LoadingProgress().width(40).height(40).margin({ top: 30 })
-          Text('搜索中...').fontSize(13).fontColor('#999').margin({ top: 8 })
-        }.width('100%').layoutWeight(1)
-      } else if (this.results.length === 0) {
+	      // 结果列表（点击行直接替换源）
+	      if (this.isSearching && this.results.length === 0) {
+	        Column() {
+	          LoadingProgress().width(40).height(40).margin({ top: 30 })
+	          Text('搜索中...').fontSize(13).fontColor('#999').margin({ top: 8 })
+	        }.width('100%').layoutWeight(1)
+	      } else if (this.results.length === 0) {
         Column() {
           Text('没有找到其他书源').fontSize(14).fontColor('#999').margin({ top: 30 })
           Text('试试修改搜索词或点击刷新').fontSize(12).fontColor('#CCC').margin({ top: 4 })
