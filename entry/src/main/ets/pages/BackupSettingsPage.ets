@@ -53,6 +53,7 @@ struct BackupSettingsPage {
   private async saveWebDavConfig(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
       await s.put('webdav_url', this.webDavUrl);
       await s.put('webdav_user', this.webDavUser);
       await s.setWebDavPassword(this.webDavPwd);
