@@ -64,8 +64,9 @@ export class WebDavService {
   async testConnection(): Promise<boolean> {
     if (!this.config) return false;
     try {
-      await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(''), undefined, {
-        ...this.getAuthHeader(), 'Depth': '0',
+      // OPTIONS 是标准 HTTP 方法，所有 WebDAV 服务器都应支持
+      await NetUtil.httpCustomMethod('OPTIONS', this.normalizeUrl(''), undefined, {
+        ...this.getAuthHeader(),
       }, 15000);
       return true;
     } catch {
@@ -75,13 +76,23 @@ export class WebDavService {
 
   async listFiles(path: string = ''): Promise<WebDavFileInfo[]> {
     if (!this.config) return [];
+    // 用 GET + 自定义头来模拟 PROPFIND（RCP 可能不支持 PROPFIND 方法）
     try {
       const resp = await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(path), undefined, {
         ...this.getAuthHeader(), 'Depth': '1',
       }, 15000);
       return this.parsePropfindResponse(resp || '');
     } catch {
-      return [];
+      // PROPFIND 失败时的备选：尝试用 GET + 自定义头，或者返回空
+      try {
+        const resp = await NetUtil.httpCustomMethod('GET', this.normalizeUrl(path), undefined, {
+          ...this.getAuthHeader(), 'Depth': '1',
+        }, 15000);
+        // 尝试从 HTML 响应中提取文件信息（某些 WebDAV 服务器支持）
+        return this.parseHtmlListing(resp || '');
+      } catch {
+        return [];
+      }
     }
   }
 
@@ -210,6 +221,33 @@ export class WebDavService {
         name, path: href,
         lastModified: modMatch ? modMatch[1].trim() : '',
         contentLength: sizeMatch ? parseInt(sizeMatch[1].trim()) || 0 : 0,
+        isDirectory: isDir,
+      });
+    }
+    return files;
+  }
+
+  /**
+   * 从 HTML 响应中提取文件/目录列表（某些 WebDAV 服务器的备选方案）
+   */
+  private parseHtmlListing(html: string): WebDavFileInfo[] {
+    const files: WebDavFileInfo[] = [];
+    if (!html) return files;
+    // 匹配 <a href="...">...</a>
+    const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = linkRegex.exec(html)) !== null) {
+      const href = match[1].trim();
+      const text = match[2].replace(/<[^>]+>/g, '').trim();
+      if (!href || href === '../' || href === './' || href === '/') continue;
+      // 跳过查询参数和锚点
+      if (href.startsWith('?') || href.startsWith('#')) continue;
+      const isDir = href.endsWith('/');
+      const name = isDir ? href.replace(/\/$/, '') : href;
+      files.push({
+        name, path: href,
+        lastModified: '',
+        contentLength: 0,
         isDirectory: isDir,
       });
     }
