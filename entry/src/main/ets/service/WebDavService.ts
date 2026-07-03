@@ -90,36 +90,7 @@ export class WebDavService {
     const auth = this.getAuthHeader();
     const authVal = auth['Authorization'] || '';
 
-    // 使用 @ohos.net.http 发送 PROPFIND（这个库可能正确处理自定义方法）
-    try {
-      const httpReq = http.createHttp();
-      const propfindXml = '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><getlastmodified/><resourcetype/></prop></propfind>';
-      const resp = await new Promise<http.HttpResponse>((resolve, reject) => {
-        httpReq.request(url, {
-          method: http.RequestMethod.GET,
-          header: {
-            'Authorization': authVal,
-            'Depth': '1',
-            'Content-Type': 'application/xml; charset="utf-8"',
-          },
-          extraData: propfindXml,
-          connectTimeout: 15000,
-          readTimeout: 15000,
-        }, (err: Error, data: http.HttpResponse) => {
-          httpReq.destroy();
-          if (err) reject(err);
-          else resolve(data);
-        });
-      });
-      if (resp && resp.result) {
-        const parsed = this.parsePropfindResponse(String(resp.result));
-        if (parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.warn('[WebDav] http PROPFIND error:', (e as Error).message);
-    }
-
-    // 备选：用 @ohos.net.http GET
+    // 使用 @ohos.net.http GET 获取目录列表（这个库可能正确处理认证）
     try {
       const httpReq = http.createHttp();
       const resp = await new Promise<http.HttpResponse>((resolve, reject) => {
@@ -127,7 +98,7 @@ export class WebDavService {
           method: http.RequestMethod.GET,
           header: { 'Authorization': authVal },
           connectTimeout: 15000,
-          readTimeout: 15000,
+          readTimeout: 20000,
         }, (err: Error, data: http.HttpResponse) => {
           httpReq.destroy();
           if (err) reject(err);
@@ -135,10 +106,21 @@ export class WebDavService {
         });
       });
       if (resp && resp.result) {
-        const parsed = this.parseHtmlListing(String(resp.result));
-        if (parsed.length > 0) return parsed;
+        // 尝试验证是否获得了实际内容
+        const resultStr = String(resp.result);
+        // 先尝试解析为 PROPFIND XML（某些服务器可能返回 XML 列表）
+        const propParsed = this.parsePropfindResponse(resultStr);
+        if (propParsed.length > 0) return propParsed;
+        // 再尝试 HTML 列表
+        const htmlParsed = this.parseHtmlListing(resultStr);
+        if (htmlParsed.length > 0) return htmlParsed;
+        // 如果有响应内容但没解析出文件，记录日志
+        console.info('[WebDav] GET response length:', resultStr.length);
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.warn('[WebDav] http GET error:', (e as Error).message);
+    }
+
     return [];
   }
 
