@@ -35,10 +35,10 @@ struct BackupSettingsPage {
 
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
-    this.loadWebDavConfig();
+    this.initSettings_();
   }
 
-  private async loadWebDavConfig(): Promise<void> {
+  private async initSettings_(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
@@ -50,15 +50,19 @@ struct BackupSettingsPage {
     } catch (_) { /* ignore */ }
   }
 
-  private async saveWebDavConfig(): Promise<void> {
+  private async saveSetting_(key: string, value: Object): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
-      await s.put('webdav_url', this.webDavUrl);
-      await s.put('webdav_user', this.webDavUser);
-      await s.setWebDavPassword(this.webDavPwd);
-      await s.put('webdav_path', this.webDavPath);
-      await s.put('webdav_auto_sync', this.webDavAutoSync);
+      await s.put(key, value);
+    } catch (_) { /* ignore */ }
+  }
+
+  private async savePassword_(pwd: string): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      await s.setWebDavPassword(pwd);
     } catch (_) { /* ignore */ }
   }
 
@@ -197,19 +201,23 @@ struct BackupSettingsPage {
 
           // ===== WebDAV 配置 =====
           this.buildSection('🌩 WebDAV 云端配置')
-          this.buildInput('服务器地址', this.webDavUrl, (v) => { this.webDavUrl = v; this.saveWebDavConfig(); })
-          this.buildInput('用户名', this.webDavUser, (v: string) => { this.webDavUser = v; this.saveWebDavConfig(); })
+          this.buildInput('服务器地址', this.webDavUrl, (v) => { this.webDavUrl = v; this.saveSetting_('webdav_url', v); })
+          this.buildInput('用户名', this.webDavUser, (v: string) => { this.webDavUser = v; this.saveSetting_('webdav_user', v); })
           TextInput({ placeholder: '密码', text: this.webDavPwd })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
             .width('100%').margin({ bottom: 6 })
             .type(InputType.Password)
-            .onChange((v: string) => { this.webDavPwd = v; this.saveWebDavConfig(); })
-          this.buildInput('路径前缀', this.webDavPath, (v) => { this.webDavPath = v; this.saveWebDavConfig(); })
+            .onChange((v: string) => { this.webDavPwd = v; this.savePassword_(v); })
+          TextInput({ placeholder: '路径前缀', text: this.webDavPath })
+            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .width('100%').margin({ bottom: 6 })
+            .onChange((v: string) => { this.webDavPath = v; this.saveSetting_('webdav_path', v); })
           Row() {
             Text('自动同步').fontSize(14)
             Toggle({ type: ToggleType.Switch, isOn: this.webDavAutoSync })
-              .onChange((v) => { this.webDavAutoSync = v; this.saveWebDavConfig(); })
+              .onChange((v) => { this.webDavAutoSync = v; this.saveSetting_('webdav_auto_sync', v); })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 6 })
 
           Button('测试 WebDAV 连接').fontSize(14).height(40).width('100%')
