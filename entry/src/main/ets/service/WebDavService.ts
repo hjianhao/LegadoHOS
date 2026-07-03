@@ -84,24 +84,23 @@ export class WebDavService {
 
   async listFiles(path: string = ''): Promise<WebDavFileInfo[]> {
     if (!this.config) return [];
-    // 用 GET + 自定义头来模拟 PROPFIND（RCP 可能不支持 PROPFIND 方法）
+    // 先尝试 PROPFIND（标准 WebDAV 列表方法）
     try {
       const resp = await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(path), undefined, {
         ...this.getAuthHeader(), 'Depth': '1',
       }, 15000);
-      return this.parsePropfindResponse(resp || '');
+      const parsed = this.parsePropfindResponse(resp || '');
+      if (parsed.length > 0) return parsed;
     } catch {
-      // PROPFIND 失败时的备选：尝试用 GET + 自定义头，或者返回空
-      try {
-        const resp = await NetUtil.httpCustomMethod('GET', this.normalizeUrl(path), undefined, {
-          ...this.getAuthHeader(), 'Depth': '1',
-        }, 15000);
-        // 尝试从 HTML 响应中提取文件信息（某些 WebDAV 服务器支持）
-        return this.parseHtmlListing(resp || '');
-      } catch {
-        return [];
-      }
+      // PROPFIND 失败，回退
     }
+    // 备选：用 GET 获取 HTML 目录列表（不带 Depth 头，可能通过不同认证路径）
+    try {
+      const resp = await NetUtil.httpGet(this.normalizeUrl(path), this.getAuthHeader());
+      const parsed = this.parseHtmlListing(resp || '');
+      if (parsed.length > 0) return parsed;
+    } catch { /* ignore */ }
+    return [];
   }
 
   async uploadBackupZip(zip: ZipWriter): Promise<string> {

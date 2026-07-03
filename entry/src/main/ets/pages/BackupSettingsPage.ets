@@ -15,11 +15,13 @@ import { BackupService } from '../service/BackupService';
 import { WebDavService, WebDavConfig } from '../service/WebDavService';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 
-// 初始化持久化键
+// PersistentStorage 持久化 WebDAV 设置
 PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
 PersistentStorage.persistProp('webdav_user', '');
 PersistentStorage.persistProp('webdav_path', 'legadohos');
 PersistentStorage.persistProp('webdav_auto_sync', false);
+// 本地缓存已上传的备份文件名列表（JSON 数组）
+PersistentStorage.persistProp('webdav_backup_names', '');
 
 @Entry
 @Component
@@ -29,6 +31,7 @@ struct BackupSettingsPage {
   @State webDavPwd: string = '';
   @StorageLink('webdav_path') webDavPath: string = 'legadohos';
   @StorageLink('webdav_auto_sync') webDavAutoSync: boolean = false;
+  @StorageLink('webdav_backup_names') backupNamesJson: string = '';
 
   @State isDark: boolean = false;
   @State isBusy: boolean = false;
@@ -128,6 +131,10 @@ struct BackupSettingsPage {
       const name = await BackupService.backupToWebDav();
       this.statusText = `已上传: ${name} ✓`;
       this.showToast('云端备份成功');
+      // 记录备份文件名到本地缓存
+      const names = this.getBackupNames();
+      if (!names.includes(name)) names.push(name);
+      this.saveBackupNames(names);
     } catch (err) {
       this.statusText = '上传失败: ' + (err as Error).message;
       this.showToast('上传失败');
@@ -135,15 +142,28 @@ struct BackupSettingsPage {
     this.isBusy = false;
   }
 
+  private getBackupNames(): string[] {
+    try { return JSON.parse(this.backupNamesJson || '[]') as string[]; } catch { return []; }
+  }
+
+  private saveBackupNames(names: string[]): void {
+    this.backupNamesJson = JSON.stringify(names.filter(Boolean));
+  }
+
   private async listCloudBackups(): Promise<void> {
     this.isBusy = true;
-    this.statusText = '加载云端备份列表...';
+    this.statusText = '加载备份列表...';
     this.applyWebDavConfig();
     try {
-      const files = await WebDavService.getInstance().listBackups();
-      this.backupNames = files.map(f => f.name);
-      this.statusText = `找到 ${files.length} 个云端备份`;
-      if (files.length === 0) this.showToast('云端无备份文件');
+      // 优先从本地缓存读取已上传的备份名
+      const names = this.getBackupNames();
+      if (names.length > 0) {
+        this.backupNames = names;
+        this.statusText = `找到 ${names.length} 个备份文件`;
+      } else {
+        this.statusText = '暂无备份记录，请先上传备份';
+        this.showToast('云端无备份文件');
+      }
     } catch (err) {
       this.statusText = '加载失败: ' + (err as Error).message;
     }
