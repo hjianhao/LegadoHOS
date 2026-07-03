@@ -18,6 +18,7 @@ import { NetUtil } from '../util/NetUtil';
 import { ZipWriter } from '../util/ZipWriter';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
+import rcp from '@hms.collaboration.rcp';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -84,21 +85,39 @@ export class WebDavService {
 
   async listFiles(path: string = ''): Promise<WebDavFileInfo[]> {
     if (!this.config) return [];
-    // 先尝试 PROPFIND（标准 WebDAV 列表方法）
+    const url = this.normalizeUrl(path);
+    const auth = this.getAuthHeader();
+
+    // 直接使用 RCP 发送 PROPFIND（绕过 NetUtil 的默认头，避免冲突）
+    const propfindXml = '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><getlastmodified/><resourcetype/></prop></propfind>';
     try {
-      const resp = await NetUtil.httpCustomMethod('PROPFIND', this.normalizeUrl(path), undefined, {
-        ...this.getAuthHeader(), 'Depth': '1',
-      }, 15000);
-      const parsed = this.parsePropfindResponse(resp || '');
-      if (parsed.length > 0) return parsed;
-    } catch {
-      // PROPFIND 失败，回退
+      const session = rcp.createSession();
+      const headers: Record<string, string> = {
+        ...auth,
+        'Depth': '1',
+        'Content-Type': 'application/xml; charset="utf-8"',
+      };
+      const req = new rcp.Request(url, 'PROPFIND', headers as rcp.RequestHeaders, propfindXml);
+      const resp = await session.fetch(req);
+      if (resp.statusCode >= 200 && resp.statusCode < 400) {
+        if (resp.body) {
+          const bytes = new Uint8Array(resp.body);
+          const decoder = new util.TextDecoder('utf-8', { fatal: false });
+          const xml = decoder.decodeToString(bytes);
+          const parsed = this.parsePropfindResponse(xml);
+          if (parsed.length > 0) return parsed;
+        }
+      } else {
+        console.warn('[WebDav] PROPFIND status:', resp.statusCode);
+      }
+    } catch (e) {
+      console.warn('[WebDav] PROPFIND error:', (e as Error).message);
     }
-    // 备选：用 GET 获取 HTML 目录列表（不带 Depth 头，可能通过不同认证路径）
+
+    // 备选：用 GET
     try {
-      const resp = await NetUtil.httpGet(this.normalizeUrl(path), this.getAuthHeader());
-      const parsed = this.parseHtmlListing(resp || '');
-      if (parsed.length > 0) return parsed;
+      const resp = await NetUtil.httpGet(url, auth);
+      return this.parseHtmlListing(resp || '');
     } catch { /* ignore */ }
     return [];
   }
