@@ -201,8 +201,16 @@ struct BackupSettingsPage {
 
           // ===== WebDAV 配置 =====
           this.buildSection('🌩 WebDAV 云端配置')
-          this.buildInput('服务器地址', this.webDavUrl, (v) => { this.webDavUrl = v; this.saveSetting_('webdav_url', v); })
-          this.buildInput('用户名', this.webDavUser, (v: string) => { this.webDavUser = v; this.saveSetting_('webdav_user', v); })
+          TextInput({ placeholder: '服务器地址', text: this.webDavUrl })
+            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .width('100%').margin({ bottom: 6 })
+            .onChange((v: string) => { this.webDavUrl = v; this.saveSetting_('webdav_url', v); })
+          TextInput({ placeholder: '用户名', text: this.webDavUser })
+            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .width('100%').margin({ bottom: 6 })
+            .onChange((v: string) => { this.webDavUser = v; this.saveSetting_('webdav_user', v); })
           TextInput({ placeholder: '密码', text: this.webDavPwd })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
