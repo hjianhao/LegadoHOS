@@ -1242,17 +1242,17 @@ export class SourceExecutor {
       const tocChapters = this.extractTocFromHtml(bodyText, source);
       if (tocChapters.length > 0) return tocChapters;
 
-      // 无结果？尝试 ruleBookInfoTocUrl
+      // 无结果（或结果太少）？尝试从当前页面提取 ruleBookInfoTocUrl 作为真实目录页 URL
       if (source.ruleBookInfoTocUrl) {
-        const bookId = this.extractBookIdFromUrl(tocUrl);
-        const altUrl = source.ruleBookInfoTocUrl
-          .replace(/\{\{bookUrl\}\}/g, tocUrl)
-          .replace(/\{\{id\}\}/g, bookId)
-          .replace(/\{\{\$\.resourceID\}\}/g, bookId)
-          .replace(/\{\{[^}]*\}\}/g, '');
-        if (altUrl && altUrl !== tocUrl && bookId) {
-          const altResp = await this.fetchWithOpts(altUrl, {
-            'Accept': 'application/json,*/*',
+        // 当作 CSS 选择器解析，从当前 HTML 中提取真实的目录页 URL
+        const parser = getHtmlParser();
+        const doc = parser.parse(bodyText);
+        const cssRule = this.normalizeCssRule(source.ruleBookInfoTocUrl);
+        const tocPageUrl = parser.extractAttr(doc, cssRule);
+        if (tocPageUrl && tocPageUrl.startsWith('http') && tocPageUrl !== tocUrl) {
+          console.info('[SrcEx] getToc resolve ruleBookInfoTocUrl CSS:', tocPageUrl.substring(0, 80));
+          const altResp = await this.fetchWithOpts(tocPageUrl, {
+            'Accept': 'text/html,application/json,*/*',
             'Referer': source.sourceUrl || '',
             ...parseHeader(source.header)
           });
@@ -1261,17 +1261,17 @@ export class SourceExecutor {
             if (tocRules.toc.startsWith('$.')) {
               try {
                 const jsonObj = JSON.parse(altResp) as Record<string, unknown>;
-                altChapters = await this.parseJsonToc(jsonObj, tocRules, altUrl || tocUrl);
+                altChapters = await this.parseJsonToc(jsonObj, tocRules, tocPageUrl);
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
               altChapters = this.parseTocFromRules(altResp, tocRules);
             }
             if (altChapters.length > 0) {
-              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters, first=', altChapters[0].title || 'EMPTY', 'second=', altChapters.length > 1 ? altChapters[1].title : 'N/A', 'fifth=', altChapters.length > 4 ? altChapters[4].title : 'N/A');
+              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', tocPageUrl.substring(0, 60));
               return altChapters.map(ch => ({
                 ...ch,
-                url: this.resolveTocUrlTemplate(ch.url, altUrl) || ch.url,
+                url: this.resolveTocUrlTemplate(ch.url, tocPageUrl) || ch.url,
               }));
             }
           }
