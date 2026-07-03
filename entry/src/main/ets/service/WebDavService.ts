@@ -104,28 +104,6 @@ export class WebDavService {
     }
   }
 
-  async ensureDirectory(path: string): Promise<void> {
-    if (!this.config) return;
-    const url = this.normalizeUrl(path);
-    const auth = this.getAuthHeader();
-
-    // 1. 先检查目录是否已存在（OPTIONS 或 PROPFIND）
-    try {
-      await NetUtil.httpCustomMethod('OPTIONS', url, undefined, auth, 10000);
-      return; // 已存在
-    } catch {
-      // 目录不存在，尝试创建
-    }
-
-    // 2. PUT 一个占位文件来创建目录（部分 WebDAV 服务器支持）
-    try {
-      await NetUtil.httpPut(url + '/.keep', '', { ...auth, 'Overwrite': 'T' });
-      return;
-    } catch {
-      console.warn('[WebDav] ensureDirectory failed for:', path);
-    }
-  }
-
   async uploadBackupZip(zip: ZipWriter): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
     const fileName = getBackupFileName();
