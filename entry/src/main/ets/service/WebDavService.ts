@@ -234,7 +234,9 @@ export class WebDavService {
       let href = hrefMatch[1].trim();
       // 某些服务器返回的 href 包含完整 URL，只取路径部分
       if (href.startsWith('http://') || href.startsWith('https://')) {
-        try { href = new URL(href).pathname; } catch { /* keep as-is */ }
+        // 去掉协议和主机部分：https://host:port/path → /path
+        const m = href.match(/^https?:\/\/[^\/]+(\/.*)/);
+        if (m) href = m[1];
       }
       const isDir = /<(?:[a-zA-Z]+:)?collection\s*\/>/i.test(block) ||
                     /<(?:[a-zA-Z]+:)?resourcetype[^>]*>[\s\S]*?<(?:[a-zA-Z]+:)?collection[\s\S]*?<\/(?:[a-zA-Z]+:)?resourcetype>/i.test(block);
