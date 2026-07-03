@@ -40,16 +40,22 @@ export class SettingsStore {
 
   private async initCipher_(): Promise<void> {
     try {
-      const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
-      const keyData = await this.getEncKeyMaterial_();
-      const symKey = await symKeyGenerator.convertKey({ data: keyData });
-      this.cipher_ = cryptoFramework.createCipher('AES256|GCM|PKCS7');
-      await this.cipher_.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, null);
+      this.cipher_ = await this.createCipher_(cryptoFramework.CryptoMode.ENCRYPT_MODE);
     } catch (_e) {
       /* 降级：明文存储（加密组件不可用时自动回退） */
       console.warn('[SettingsStore] HUKS init failed, falling back to plaintext');
       this.cipher_ = null;
     }
+  }
+
+  /** 创建指定模式的 Cipher 实例 */
+  private async createCipher_(mode: cryptoFramework.CryptoMode): Promise<cryptoFramework.Cipher> {
+    const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
+    const keyData = await this.getEncKeyMaterial_();
+    const symKey = await symKeyGenerator.convertKey({ data: keyData });
+    const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS7');
+    await cipher.init(mode, symKey, null);
+    return cipher;
   }
 
   /** 从 preferences 获取或生成固定密钥材料 */
@@ -115,10 +121,12 @@ export class SettingsStore {
 
   /** 解密 base64 → 明文 */
   private async decrypt_(encoded: string): Promise<string> {
-    if (!this.cipher_ || !encoded) return encoded;
+    if (!encoded) return encoded;
     try {
+      // 创建解密专用的 Cipher 实例
+      const cipher = await this.createCipher_(cryptoFramework.CryptoMode.DECRYPT_MODE);
       const bytes = this.base64ToBytes_(encoded);
-      const decrypted = await this.cipher_.doFinal({ data: new Uint8Array(bytes) });
+      const decrypted = await cipher.doFinal({ data: new Uint8Array(bytes) });
       let result = '';
       for (let i = 0; i < decrypted.data.length; i++) {
         result += String.fromCharCode(decrypted.data[i]);
@@ -259,6 +267,17 @@ export class SettingsStore {
 
   async getAiModel(): Promise<string> { return await this.get('ai_model', 'gpt-3.5-turbo'); }
   async setAiModel(v: string): Promise<void> { await this.put('ai_model', v); }
+
+  // ---- WebDAV 配置（密码使用 HUKS 加密存储） ----
+  async getWebDavPassword(): Promise<string> {
+    const encoded = await this.get('webdav_pwd', '') as string;
+    if (!encoded) return '';
+    return await this.decrypt_(encoded);
+  }
+  async setWebDavPassword(v: string): Promise<void> {
+    const encoded = await this.encrypt_(v);
+    await this.put('webdav_pwd', encoded);
+  }
 
   // ---- 书架设置 ----
   async getBookGroupStyle(): Promise<number> { return await this.get('book_group_style', 0); }
