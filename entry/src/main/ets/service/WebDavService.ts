@@ -19,6 +19,7 @@ import { ZipWriter } from '../util/ZipWriter';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
+import http from '@ohos.net.http';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -87,37 +88,56 @@ export class WebDavService {
     if (!this.config) return [];
     const url = this.normalizeUrl(path);
     const auth = this.getAuthHeader();
+    const authVal = auth['Authorization'] || '';
 
-    // 直接使用 RCP 发送 PROPFIND（绕过 NetUtil 的默认头，避免冲突）
-    const propfindXml = '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><getlastmodified/><resourcetype/></prop></propfind>';
+    // 使用 @ohos.net.http 发送 PROPFIND（这个库可能正确处理自定义方法）
     try {
-      const session = rcp.createSession();
-      const headers: Record<string, string> = {
-        ...auth,
-        'Depth': '1',
-        'Content-Type': 'application/xml; charset="utf-8"',
-      };
-      const req = new rcp.Request(url, 'PROPFIND', headers as rcp.RequestHeaders, propfindXml);
-      const resp = await session.fetch(req);
-      if (resp.statusCode >= 200 && resp.statusCode < 400) {
-        if (resp.body) {
-          const bytes = new Uint8Array(resp.body);
-          const decoder = new util.TextDecoder('utf-8', { fatal: false });
-          const xml = decoder.decodeToString(bytes);
-          const parsed = this.parsePropfindResponse(xml);
-          if (parsed.length > 0) return parsed;
-        }
-      } else {
-        console.warn('[WebDav] PROPFIND status:', resp.statusCode);
+      const httpReq = http.createHttp();
+      const propfindXml = '<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><getlastmodified/><resourcetype/></prop></propfind>';
+      const resp = await new Promise<http.HttpResponse>((resolve, reject) => {
+        httpReq.request(url, {
+          method: http.RequestMethod.GET,
+          header: {
+            'Authorization': authVal,
+            'Depth': '1',
+            'Content-Type': 'application/xml; charset="utf-8"',
+          },
+          extraData: propfindXml,
+          connectTimeout: 15000,
+          readTimeout: 15000,
+        }, (err: Error, data: http.HttpResponse) => {
+          httpReq.destroy();
+          if (err) reject(err);
+          else resolve(data);
+        });
+      });
+      if (resp && resp.result) {
+        const parsed = this.parsePropfindResponse(String(resp.result));
+        if (parsed.length > 0) return parsed;
       }
     } catch (e) {
-      console.warn('[WebDav] PROPFIND error:', (e as Error).message);
+      console.warn('[WebDav] http PROPFIND error:', (e as Error).message);
     }
 
-    // 备选：用 GET
+    // 备选：用 @ohos.net.http GET
     try {
-      const resp = await NetUtil.httpGet(url, auth);
-      return this.parseHtmlListing(resp || '');
+      const httpReq = http.createHttp();
+      const resp = await new Promise<http.HttpResponse>((resolve, reject) => {
+        httpReq.request(url, {
+          method: http.RequestMethod.GET,
+          header: { 'Authorization': authVal },
+          connectTimeout: 15000,
+          readTimeout: 15000,
+        }, (err: Error, data: http.HttpResponse) => {
+          httpReq.destroy();
+          if (err) reject(err);
+          else resolve(data);
+        });
+      });
+      if (resp && resp.result) {
+        const parsed = this.parseHtmlListing(String(resp.result));
+        if (parsed.length > 0) return parsed;
+      }
     } catch { /* ignore */ }
     return [];
   }
