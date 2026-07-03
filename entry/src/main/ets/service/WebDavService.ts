@@ -131,21 +131,11 @@ export class WebDavService {
     if (!this.config) return;
     const url = this.normalizeUrl(path);
     const auth = this.getAuthHeader();
-
-    // 用 OPTIONS 检查目录是否已存在
-    try {
-      await NetUtil.httpCustomMethod('OPTIONS', url, undefined, auth, 10000);
-      return; // 已存在
-    } catch {
-      // 不存在，尝试创建
-    }
-
-    // 用 MKCOL 创建目录（坚果云等 WebDAV 服务器支持）
+    // 直接 MKCOL 创建目录（如果已存在，服务器会返回 405 或 409，不影响后续 PUT）
     try {
       await NetUtil.httpCustomMethod('MKCOL', url, undefined, auth, 10000);
-    } catch (err) {
-      // MKCOL 可能失败（如中间目录不存在），但后续 PUT 也会报错
-      console.warn('[WebDav] ensureDirectory MKCOL failed:', (err as Error).message);
+    } catch {
+      // MKCOL 失败（目录已存在、方法不支持等情况），忽略
     }
   }
 
