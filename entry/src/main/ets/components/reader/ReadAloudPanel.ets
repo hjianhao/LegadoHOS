@@ -1,7 +1,7 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudEngine, setAloudGlobalListener } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
@@ -30,23 +30,45 @@ export struct ReadAloudPanel {
 
   text: string = '';
   textOffset: number = 0;  // 从第几个字开始读
+  @Prop currentChapterIndex: number = 0;  // 当前章节索引
   chapterTitle: string = '';
   externalEngine: ReadAloudEngine | null = null;
   onDismiss?: () => void;
   onNextChapter?: () => void;
+  onGoToPosition?: (charIndex: number, chapterIndex?: number) => void;
   onPrevChapter?: () => void;
   engine_: ReadAloudEngine | null = null;
+  curCharIdx_: number = 0;
+  private curAloudChapter_: number = -1;  // 引擎当前朗读的章节(-1表示从startPlay设置)
   private bgTaskActive_: boolean = false;
+
+  /** 直接查询引擎状态，不自己维护 */
+  isPlaying_(): boolean { const s = getGlobalEngineRef()?.state; return s === AloudState.PLAYING; }
+  isPaused_(): boolean { const s = getGlobalEngineRef()?.state; return s === AloudState.PAUSED; }
   private avSession_: avSession.AVSession | null = null;
   private wantAgent_: object | null = null;
 
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
+    const ref = getGlobalEngineRef();
+    if (ref) {
+      this.isPlaying = ref.state === AloudState.PLAYING;
+      this.isPaused = ref.state === AloudState.PAUSED;
+      if (ref.startChapter > 0) this.curAloudChapter_ = ref.startChapter;
+    }
+    // 注册全局监听，追踪朗读进度
+    setAloudGlobalListener({
+      onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; },
+      onProgress: (ci: number, t: number) => { this.curCharIdx_ = ci; this.progress = t > 0 ? Math.round((ci / t) * 100) : 0; this.progressText = ci + '/' + t; },
+      onChapterChange: (chapterIdx: number) => { this.curAloudChapter_ = chapterIdx; this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; },
+      onChapterEnd: () => { this.progress = 100; this.onNextChapter?.(); },
+      onError: (msg: string) => { this.errorText = msg; },
+    });
   }
 
   aboutToDisappear(): void {
-    // 不停止引擎，不释放 session——后台继续播
+    setAloudGlobalListener(null);
   }
 
   private async loadVoicePreference_(): Promise<void> {
@@ -175,7 +197,7 @@ export struct ReadAloudPanel {
     this.selectedVoiceName = this.voiceDisplayName_(voice);
     this.showVoiceSelect = false;
     await this.saveVoicePreference_(voice);
-    if (restartIfNeeded && (this.isPlaying || this.isPaused)) {
+    if (restartIfNeeded && (this.isPlaying_() || this.isPaused)) {
       await this.startPlay();
     }
   }
@@ -200,8 +222,8 @@ export struct ReadAloudPanel {
       this.avSession_.setAVMetadata(meta);
       // 监听播控命令
       this.avSession_.on('play', () => { if (!this.isPlaying) this.togglePlay(); });
-      this.avSession_.on('pause', () => { if (this.isPlaying) this.togglePlay(); });
-      this.avSession_.on('stop', () => { if (this.isPlaying || this.isPaused) this.stopPlay(); });
+      this.avSession_.on('pause', () => { if (this.isPlaying_()) this.togglePlay(); });
+      this.avSession_.on('stop', () => { if (this.isPlaying_() || this.isPaused) this.stopPlay(); });
       this.avSession_.on('playNext', () => { this.stopPlay(); this.onNextChapter?.(); });
       this.avSession_.on('playPrevious', () => { this.stopPlay(); this.onPrevChapter?.(); });
       console.info('[Aloud] AVSession created');
@@ -260,35 +282,33 @@ export struct ReadAloudPanel {
     console.info('[Aloud] startPlay text.length=' + (this.text ? this.text.length : 0));
     const voiceReady = await this.ensureSelectedVoiceReady_();
     if (!voiceReady) return;
-    if (this.engine_) {
-      await this.engine_.release();
-    }
     this.errorText = '';
-    this.engine_ = new ReadAloudEngine({
-      onStateChange: (state: AloudState) => {
-        this.isPlaying = state === AloudState.PLAYING;
-        this.isPaused = state === AloudState.PAUSED;
-      },
-      onProgress: (charIdx: number, total: number) => {
-        this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
-        this.progressText = charIdx + '/' + total;
-      },
-      onChapterEnd: () => {
-        this.onNextChapter?.();
-      },
-      onError: (msg: string) => {
-        this.errorText = msg;
-      },
-    }, this.currentVoiceConfig_());
+    this.curAloudChapter_ = this.currentChapterIndex;
+
+    // 使用全局引擎，不覆盖回调（由 aboutToAppear 的 setAloudGlobalListener 管理）
+    let eng = getGlobalEngineRef();
+    if (!eng) {
+      eng = getGlobalAloudEngine({
+        onStateChange: () => {},
+        onProgress: () => {},
+        onChapterEnd: () => {},
+        onError: () => {},
+      });
+    }
+    eng.setVoice(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);
+    this.engine_ = eng;
 
     try {
-      console.info('[Aloud] calling init...');
-      await this.engine_.init();
+      if (eng.state === AloudState.IDLE) {
+        console.info('[Aloud] calling init...');
+        await eng.init();
+      }
+      this.curCharIdx_ = this.textOffset;
       this.startBgTask_();
-      await this.createAvSession_();  // 提早申请，不等 speak 返回
+      await this.createAvSession_();
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
-      await this.engine_.speak(startText, this.speed, this.textOffset);
+      await eng.speak(startText, this.speed, this.textOffset, this.currentChapterIndex);
       console.info('[Aloud] speak done');
     } catch (e) {
       const msg = (e as Error).message || String(e);
@@ -323,7 +343,7 @@ export struct ReadAloudPanel {
 
   async changeSpeed(v: number): Promise<void> {
     this.speed = v;
-    if (this.engine_ && (this.isPlaying || this.isPaused)) {
+    if (this.engine_ && (this.isPlaying_() || this.isPaused)) {
       // 重新开始以应用新语速
       await this.engine_.stop();
       await this.engine_.speak(this.text, this.speed);
@@ -428,7 +448,7 @@ export struct ReadAloudPanel {
       }.width('100%').padding({ left: 12, right: 8, top: 8 })
 
       // 进度条
-      if (this.isPlaying || this.isPaused) {
+      if (this.isPlaying_() || this.isPaused) {
         Row() {
           Progress({ value: this.progress, total: 100, type: ProgressType.Linear })
             .width('100%').height(3).color('#0078D7')
@@ -507,6 +527,16 @@ export struct ReadAloudPanel {
             this.onDismiss?.();
           })
       }.width('100%').padding({ top: 8, bottom: 12 })
+
+      // 辅助操作
+      Row() {
+        Button('从本页朗读').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(this.isDark ? '#1A3A2A' : '#E8F5E9').fontColor('#4CAF50')
+          .onClick(() => { this.stopPlay(); this.startPlay(); })
+        Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
+          .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (eng && eng.state === AloudState.PLAYING) this.onGoToPosition?.(ci, ch); })
+      }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
     .width('100%').backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')

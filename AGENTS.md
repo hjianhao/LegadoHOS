@@ -148,3 +148,26 @@ cd <repo-root>
 **禁止使用 `git checkout` 回退文件！** 工作区中可能含有尚未 commit 的重要代码。
 如需查看历史版本，使用 `git show <commit>:<path>` 输出到临时文件。
 如需重置某个文件，仅当确认工作区改动全部不需要时才可执行 checkout。
+
+## Git 工作流规范
+
+### 做任何较大改动前
+```bash
+# 1. 先提交当前稳定状态
+git add -A && git commit -m "描述当前状态"
+
+# 2. 创建功能分支
+git checkout -b feat/功能名
+
+# 3. 在分支上开发，通过验证后再合回 main
+```
+
+### 基本原则
+- **不要直接回退代码**——用 `git checkout` 前必须先征求确认。已提交的代码可通过 `git revert` 回退。
+- **优先用 Edit 工具**——`sed` 易产生语法错误，应优先用 Edit 做精确替换。
+- **每次改动后立刻编译验证**——`./scripts/build.sh` 通过才算完成。
+
+### 提交时机
+- 一个完整的功能点调通后立即 commit
+- 不要在大量未验证改动上继续堆叠
+- commit message 用中文描述改了什么
