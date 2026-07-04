@@ -256,7 +256,7 @@ export class HtmlParser {
         result = this.cleanText(el.ownText);
         break;
       case 'textNodes':
-        result = this.cleanText(el.ownText);
+        result = this.collectTextNodes(el);
         break;
       case 'href':
       case 'src':
@@ -791,6 +791,25 @@ export class HtmlParser {
 
   private cleanText(text: string): string {
     return text.replace(/\s+/g, ' ').trim();
+  }
+
+  /** 收集元素的所有文本节点（递归），用换行分隔块级元素 */
+  private collectTextNodes(el: HtmlElement): string {
+    const parts: string[] = [];
+    this.collectTextNodesRecursive(el, parts);
+    return parts.join('\n');
+  }
+
+  private collectTextNodesRecursive(el: HtmlElement, parts: string[]): void {
+    // 直接文本节点
+    if (el.ownText) {
+      const t = el.ownText.replace(/\s+/g, ' ').trim();
+      if (t) parts.push(t);
+    }
+    // 递归处理子元素
+    for (const child of el.children) {
+      this.collectTextNodesRecursive(child, parts);
+    }
   }
 }
 
