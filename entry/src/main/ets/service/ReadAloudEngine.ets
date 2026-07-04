@@ -310,7 +310,7 @@ export class ReadAloudEngine {
       } else { this.chapterEnded_ = true; }
       return;
     }
-    const text = this.textQueue_[this.currentTextIdx_]; this.currentTextIdx_++; if (this.currentTextIdx_ === 1) console.info("[Engine] FIRST CHUNK(40): " + text.substring(0, 40));
+    const text = this.textQueue_[this.currentTextIdx_]; this.currentTextIdx_++;
     this.playedChars_ += text.length;
     this.callback_.onProgress?.(this.playedChars_, this.totalChars_);
     this.synthPending_ = true;
