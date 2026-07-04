@@ -390,6 +390,7 @@ export interface AloudGlobalListener {
   onProgress?: (charIndex: number, total: number) => void;
   onChapterEnd?: () => void;
   onError?: (msg: string) => void;
+  onChapterChange?: (chapterIndex: number) => void;
 }
 
 let globalListener_: AloudGlobalListener | null = null;
@@ -406,6 +407,7 @@ function makeCallbackForGlobal_(): AloudCallback {
     onStateChange: (s: AloudState) => { if (globalListener_) globalListener_.onState?.(s); },
     onProgress: (ci: number, t: number) => { if (globalListener_) globalListener_.onProgress?.(ci, t); },
     onChapterEnd: () => { if (globalListener_) globalListener_.onChapterEnd?.(); },
+    onChapterChange: (chapterIndex: number) => { if (globalListener_) globalListener_.onChapterChange?.(chapterIndex); },
     onError: (msg: string) => { if (globalListener_) globalListener_.onError?.(msg); },
     onNeedNextChapter: async (): Promise<AloudChapterText | null> => {
       if (globalChapterProvider_) return await globalChapterProvider_();

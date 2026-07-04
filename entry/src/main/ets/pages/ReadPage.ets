@@ -837,7 +837,15 @@ struct ReadPage {
     })();
   }
 
-  private goToReadingPosition_(charIndex: number): void {
+  private goToReadingPosition_(charIndex: number, chapterIdx?: number): void {
+    // 如果引擎在朗读另一章，先跳章节
+    if (chapterIdx !== undefined && chapterIdx >= 0 && chapterIdx !== this.currentIndex) {
+      this.showAloud = false;
+      if (chapterIdx < this.allChapters_.length) {
+        this.loadChapter(chapterIdx);
+      }
+      return;
+    }
     if (this.pages.length === 0) return;
     for (let i = 0; i < this.pages.length; i++) {
       if (charIndex >= this.pages[i].startOffset && charIndex < this.pages[i].endOffset) {
@@ -1010,7 +1018,7 @@ struct ReadPage {
             chapterTitle: this.chapters[this.currentIndex]?.title || '',
             externalEngine: this.aloudEngine_!,
             onDismiss: () => { this.showAloud = false; },
-            onGoToPosition: (charIdx: number) => { this.goToReadingPosition_(charIdx); },
+            onGoToPosition: (charIdx: number, chapterIdx?: number) => { this.goToReadingPosition_(charIdx, chapterIdx); },
             onNextChapter: () => { this.showAloud = false; this.onNextChapter(); },
             onPrevChapter: () => { this.showAloud = false; this.onPrevChapter(); },
           })

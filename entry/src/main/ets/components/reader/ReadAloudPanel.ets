@@ -38,6 +38,7 @@ export struct ReadAloudPanel {
   onPrevChapter?: () => void;
   engine_: ReadAloudEngine | null = null;
   curCharIdx_: number = 0;
+  private curAloudChapter_: number = 0;  // 引擎当前朗读的章节
   private bgTaskActive_: boolean = false;
 
   /** 直接查询引擎状态，不自己维护 */
@@ -58,6 +59,7 @@ export struct ReadAloudPanel {
     setAloudGlobalListener({
       onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; },
       onProgress: (ci: number, t: number) => { this.curCharIdx_ = ci; this.progress = t > 0 ? Math.round((ci / t) * 100) : 0; this.progressText = ci + '/' + t; },
+      onChapterChange: (chapterIdx: number) => { this.curAloudChapter_ = chapterIdx; this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; },
       onChapterEnd: () => { this.progress = 100; this.onNextChapter?.(); },
       onError: (msg: string) => { this.errorText = msg; },
     });
@@ -530,7 +532,7 @@ export struct ReadAloudPanel {
           .onClick(() => { this.stopPlay(); this.startPlay(); })
         Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
-          .onClick(() => { if (this.curCharIdx_ > 0) this.onGoToPosition?.(this.curCharIdx_); })
+          .onClick(() => { const ci = this.curCharIdx_; const ch = this.curAloudChapter_; if (ci > 0 || ch > 0) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
