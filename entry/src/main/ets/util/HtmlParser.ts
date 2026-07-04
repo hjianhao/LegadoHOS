@@ -793,7 +793,7 @@ export class HtmlParser {
     return text.replace(/\s+/g, ' ').trim();
   }
 
-  /** 收集元素的所有文本节点（递归），用换行分隔块级元素 */
+  /** 收集元素的所有文本节点（递归），用换行分隔块级元素和 <br> */
   private collectTextNodes(el: HtmlElement): string {
     const parts: string[] = [];
     this.collectTextNodesRecursive(el, parts);
@@ -801,6 +801,11 @@ export class HtmlParser {
   }
 
   private collectTextNodesRecursive(el: HtmlElement, parts: string[]): void {
+    // <br> 标签产生换行
+    if (el.tagName === 'br' || el.tagName === 'BR') {
+      parts.push('\n');
+      return;
+    }
     // 直接文本节点
     if (el.ownText) {
       const t = el.ownText.replace(/\s+/g, ' ').trim();

@@ -140,15 +140,6 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN sync_time INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
-    // 为使用 @textNodes 规则的源补充默认清洗规则
-    try {
-      await RdbUtil.executeSql(this.rdbStore_,
-        "UPDATE book_sources SET rule_book_content_replace_regex =" +
-        " '##read_di();|最新网址|txt下载|手机阅读|www.qiushu.info|m.qiushu.info|记住本站网址'" +
-        " WHERE rule_book_content = 'id.content@textNodes'" +
-        " AND (rule_book_content_replace_regex IS NULL OR rule_book_content_replace_regex = '')");
-    } catch (_e) { /* ignore */ }
-
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
 
@@ -205,8 +196,13 @@ export class AppDatabase {
           'rule_toc_url_item': toStr(obj['ruleTocUrlItem'] || rtc['chapterUrl'] || ''),
           'rule_book_content_url': toStr(obj['ruleBookContentUrl'] || rc['contentUrl'] || ''),
           'rule_book_content': (() => {
-            const rbc = obj['ruleBookContent'] || rc['content'] || '';
-            return typeof rbc === 'string' ? rbc : JSON.stringify(rbc);
+            let rbc = obj['ruleBookContent'] || rc['content'] || '';
+            if (typeof rbc !== 'string') rbc = JSON.stringify(rbc);
+            // 修复狗狗书籍：textNodes 无法提取 <br/> 分段内容，改用 html
+            if (rbc === 'id.content@textNodes' && toStr(obj['bookSourceUrl']) === 'http://www.qiushu.info') {
+              rbc = 'id.content@html';
+            }
+            return rbc;
           })(),
           'rule_book_content_next': toStr(obj['ruleBookContentNext'] || rc['nextContentUrl'] || ''),
           'rule_book_content_replace_regex': toStr(obj['ruleBookContentReplaceRegex'] || rc['replaceRegex'] || ''),
