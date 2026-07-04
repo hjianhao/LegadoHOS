@@ -872,6 +872,9 @@ export class SourceExecutor {
       return url;
     }
 
+    // 已经是绝对 URL，不处理
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
     // 纯相对路径 → 相对于 tocUrl 目录解析
     const baseUrl_ = tocUrl.replace(/\/[^/]*$/, '/');
     return baseUrl_ + (url.startsWith('/') ? url.substring(1) : url);
