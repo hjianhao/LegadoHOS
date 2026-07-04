@@ -30,6 +30,7 @@ export struct ReadAloudPanel {
 
   text: string = '';
   textOffset: number = 0;  // 从第几个字开始读
+  @Prop currentChapterIndex: number = 0;  // 当前章节索引
   chapterTitle: string = '';
   externalEngine: ReadAloudEngine | null = null;
   onDismiss?: () => void;
@@ -38,7 +39,7 @@ export struct ReadAloudPanel {
   onPrevChapter?: () => void;
   engine_: ReadAloudEngine | null = null;
   curCharIdx_: number = 0;
-  private curAloudChapter_: number = 0;  // 引擎当前朗读的章节
+  private curAloudChapter_: number = -1;  // 引擎当前朗读的章节(-1表示从startPlay设置)
   private bgTaskActive_: boolean = false;
 
   /** 直接查询引擎状态，不自己维护 */
@@ -50,6 +51,7 @@ export struct ReadAloudPanel {
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
+    if (this.curAloudChapter_ < 0) this.curAloudChapter_ = this.currentChapterIndex;
     const ref = getGlobalEngineRef();
     if (ref) {
       this.isPlaying = ref.state === AloudState.PLAYING;
@@ -281,6 +283,7 @@ export struct ReadAloudPanel {
     const voiceReady = await this.ensureSelectedVoiceReady_();
     if (!voiceReady) return;
     this.errorText = '';
+    this.curAloudChapter_ = this.currentChapterIndex;
 
     // 使用全局引擎，不覆盖回调（由 aboutToAppear 的 setAloudGlobalListener 管理）
     let eng = getGlobalEngineRef();

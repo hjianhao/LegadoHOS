@@ -1018,6 +1018,7 @@ struct ReadPage {
           ReadAloudPanel({
             text: this.text,
             textOffset: this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0,
+            currentChapterIndex: this.currentIndex,
             chapterTitle: this.chapters[this.currentIndex]?.title || '',
             externalEngine: this.aloudEngine_!,
             onDismiss: () => { this.showAloud = false; },
