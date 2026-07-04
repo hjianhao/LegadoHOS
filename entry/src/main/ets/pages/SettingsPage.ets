@@ -1,5 +1,6 @@
 import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeMode } from '../theme/ThemeMode';
 import { NetUtil } from '../util/NetUtil';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -201,14 +202,20 @@ struct SettingsPage {
       Text('\uD83C\uDFA8 主题设置').fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start)
 
-      Row() {
-        Text('深色模式').fontSize(16).layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.isDark })
-          .onChange((v: boolean) => {
-            this.isDark = v;
-            AppTheme.getInstance().setDarkMode(v);
-          })
-      }.padding(16).width('100%')
+      Row() { Text('浅色模式').fontSize(15).layoutWeight(1)
+        Radio({ value: 'light', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.LIGHT)
+      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.LIGHT); })
+
+      Row() { Text('深色模式').fontSize(15).layoutWeight(1)
+        Radio({ value: 'dark', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.DARK)
+      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.DARK); })
+
+      Row() { Text('跟随系统').fontSize(15).layoutWeight(1)
+        Radio({ value: 'system', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.SYSTEM)
+      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.SYSTEM); })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
   }

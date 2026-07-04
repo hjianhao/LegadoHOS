@@ -6,6 +6,8 @@
  * - onWindowStageCreate: 加载首页
  */
 import UIAbility from '@ohos.app.ability.UIAbility';
+import { Want } from '@kit.AbilityKit';
+import { AbilityConstant } from '@kit.AbilityKit';
 import Window from '@ohos.window';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
@@ -13,7 +15,7 @@ import { GlobalConfig } from '../data/preferences/GlobalConfig';
 import { WebDavService } from '../service/WebDavService';
 
 export default class MainAbility extends UIAbility {
-  onCreate(want, launchParam): void {
+  onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[MainAbility] onCreate');
     // 提前启动异步初始化
     this.initServices();
@@ -27,10 +29,10 @@ export default class MainAbility extends UIAbility {
       console.error('[MainAbility] Database init failed:', err);
     }
     try {
-      await AppTheme.getInstance().loadSaved();
-      console.info('[MainAbility] Theme loaded');
+      await AppTheme.getInstance().init(this.context);
+      console.info('[MainAbility] Theme initialized');
     } catch (err) {
-      console.warn('[MainAbility] Theme load failed:', err);
+      console.warn('[MainAbility] Theme init failed:', err);
     }
     try {
       await GlobalConfig.getInstance().load();
