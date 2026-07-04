@@ -162,6 +162,7 @@ export class ReadAloudEngine {
   get playedChars(): number { return this.playedChars_; }
 
   updateCallback(callback: AloudCallback): void { this.callback_ = callback; }
+  setVoice(language: string, person: number, style: string): void { this.voice_ = { language, person, style }; }
 
   private setState_(s: AloudState): void {
     this.state_ = s;
