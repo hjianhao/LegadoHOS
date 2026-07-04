@@ -2387,7 +2387,9 @@ export class SourceExecutor {
 
         // 相对路径转绝对
         if (!linkUrl.startsWith('http://') && !linkUrl.startsWith('https://')) {
+          const before = linkUrl;
           linkUrl = (baseUrl || '') + (linkUrl.startsWith('/') ? linkUrl : '/' + linkUrl);
+          console.info('[SrcEx] extractTocFromHtml URL resolved:', before, '→', linkUrl);
         }
 
         chapters.push({ title: title, url: linkUrl, index: chapters.length });
