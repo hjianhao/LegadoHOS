@@ -131,6 +131,9 @@ struct BookInfoPage {
         const last = chapters[chapters.length - 1];
         this.latestChapter = last.title || '';
         this.recentChapters = chapters.slice(0, 5);
+        // 缓存目录以便 ReadPage 复用（避免二次拉取）
+        ChapterCache.bookUrl = this.noteUrl;
+        ChapterCache.chapters = chapters;
       }
     } catch (_e) { /* ignore */ }
     this.isRefreshing = false;
