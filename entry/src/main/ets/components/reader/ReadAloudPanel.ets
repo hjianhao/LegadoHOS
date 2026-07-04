@@ -1,7 +1,7 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudState } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
@@ -45,6 +45,10 @@ export struct ReadAloudPanel {
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
+    // 面板重开时同步引擎状态
+    const s = getGlobalAloudState();
+    this.isPlaying = s === AloudState.PLAYING;
+    this.isPaused = s === AloudState.PAUSED;
   }
 
   aboutToDisappear(): void {
