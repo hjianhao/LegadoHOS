@@ -154,20 +154,20 @@ struct ChapterListPage {
     this.isLoading = false;
   }
 
-  /** 检测卷标题：标题不含数字或含"卷"字的视为卷标题 */
+  /** 检测卷标题：仅包含明确卷关键词的视为卷标题（不再基于长度/数字推断） */
   private detectVolumes(): void {
     let volumeCount = 0;
     for (const ch of this.chapters_) {
       const t = ch.title.trim();
       if (t.length < 1) continue;
-      const hasDigits = /\d/.test(t);
-      const hasCnChapter = /第[零一二三四五六七八九十百千万]+章/.test(t);
-      const hasVol = /卷|部分|篇\s*$|部\s*$/.test(t);
-      if ((!hasDigits && !hasCnChapter && t.length <= 10) || hasVol) {
+      // 仅包含明确的卷/篇/部关键词才视为卷标题
+      const hasVol = /^第[零一二三四五六七八九十百千万\d]+卷/.test(t) ||
+                     /^第[零一二三四五六七八九十百千万\d]+[篇部]/.test(t) ||
+                     /^[卷篇部]\s*\d+/.test(t) ||
+                     /^\s*第[零一二三四五六七八九十百千万\d]+\s*卷/.test(t);
+      if (hasVol) {
         ch.isVolume = true;
         volumeCount++;
-      } else {
-        ch.isVolume = false;
       }
     }
     this.showVolumes = volumeCount > 0;
@@ -365,7 +365,7 @@ struct ChapterListPage {
                   : 'transparent')
               }
             }
-            .onClick(() => { this.onChapterClick(ch); })
+            .onClick(() => { if (!ch.isVolume) this.onChapterClick(ch); })
           }, (ch: BookSourceChapter) => ch.index.toString())
         }
         .layoutWeight(1).width('100%')
