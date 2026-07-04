@@ -213,6 +213,12 @@ export class AppDatabase {
             }
             return regex;
           })(),
+          'book_source_url': (() => {
+            let url = toStr(obj['bookSourceUrl'] || '');
+            // 唐三中文域名迁移 .com → .info
+            if (url === 'http://www.xtangsanshu.com') url = 'http://www.xtangsanshu.info';
+            return url;
+          })(),
           'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
           'header': toStr(obj['header'] || ''),
         };
