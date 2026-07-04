@@ -34,7 +34,7 @@ export struct ReadAloudPanel {
   externalEngine: ReadAloudEngine | null = null;
   onDismiss?: () => void;
   onNextChapter?: () => void;
-  onGoToPosition?: (charIndex: number) => void;
+  onGoToPosition?: (charIndex: number, chapterIndex?: number) => void;
   onPrevChapter?: () => void;
   engine_: ReadAloudEngine | null = null;
   curCharIdx_: number = 0;
