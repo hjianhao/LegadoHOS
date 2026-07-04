@@ -365,7 +365,7 @@ struct ChapterListPage {
                   : 'transparent')
               }
             }
-            .onClick(() => { if (!ch.isVolume) this.onChapterClick(ch); })
+            .onClick(() => { this.onChapterClick(ch); })
           }, (ch: BookSourceChapter) => ch.index.toString())
         }
         .layoutWeight(1).width('100%')
