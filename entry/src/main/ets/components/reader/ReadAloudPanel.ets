@@ -1,7 +1,7 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudEngine } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudEngine, setAloudGlobalListener } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
@@ -54,10 +54,17 @@ export struct ReadAloudPanel {
       this.isPlaying = ref.state === AloudState.PLAYING;
       this.isPaused = ref.state === AloudState.PAUSED;
     }
+    // 注册全局监听，追踪朗读进度
+    setAloudGlobalListener({
+      onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; },
+      onProgress: (ci: number, t: number) => { this.curCharIdx_ = ci; this.progress = t > 0 ? Math.round((ci / t) * 100) : 0; this.progressText = ci + '/' + t; },
+      onChapterEnd: () => { this.progress = 100; this.onNextChapter?.(); },
+      onError: (msg: string) => { this.errorText = msg; },
+    });
   }
 
   aboutToDisappear(): void {
-    // 不停止引擎，不释放 session——后台继续播
+    setAloudGlobalListener(null);
   }
 
   private async loadVoicePreference_(): Promise<void> {
@@ -273,17 +280,16 @@ export struct ReadAloudPanel {
     if (!voiceReady) return;
     this.errorText = '';
 
-    const eng = getGlobalAloudEngine({
-      onStateChange: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; },
-      onProgress: (charIdx: number, total: number) => {
-        this.curCharIdx_ = charIdx;
-        this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
-        this.progressText = charIdx + '/' + total;
-      },
-      onChapterEnd: () => { this.onNextChapter?.(); },
-      onChapterChange: () => { this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; },
-      onError: (msg: string) => { this.errorText = msg; },
-    });
+    // 使用全局引擎，不覆盖回调（由 aboutToAppear 的 setAloudGlobalListener 管理）
+    let eng = getGlobalEngineRef();
+    if (!eng) {
+      eng = getGlobalAloudEngine({
+        onStateChange: () => {},
+        onProgress: () => {},
+        onChapterEnd: () => {},
+        onError: () => {},
+      });
+    }
     eng.setVoice(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);
     this.engine_ = eng;
 
