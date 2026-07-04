@@ -1116,6 +1116,7 @@ export class SourceExecutor {
               const maxConcurrency = 5;
               const pageResults: (string | null)[] = new Array(pageUrls.length);
               let nextIdx = 0;
+              let completed = 0;
               const workers: Promise<void>[] = [];
               const fetchPage = async (): Promise<void> => {
                 while (nextIdx < pageUrls.length) {
@@ -1126,6 +1127,8 @@ export class SourceExecutor {
                       pageResults[i] = b;
                     }
                   } catch (_pf) { /* skip */ }
+                  completed++;
+                  if (onProgress) { onProgress(tocBodies.length + completed); }
                 }
               };
               const workerCount = Math.min(maxConcurrency, pageUrls.length);
@@ -1138,7 +1141,6 @@ export class SourceExecutor {
                   tocBodies.push(pageResults[i]!);
                 }
               }
-              if (onProgress) { onProgress(tocBodies.length); }
               break;
             }
 
