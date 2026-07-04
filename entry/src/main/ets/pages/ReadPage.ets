@@ -84,6 +84,7 @@ struct ReadPage {
   private targetIdx_: number = -1;
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
+  private lastProviderIdx_: number = -1;
   private aloudEngine_: ReadAloudEngine | null = null;
   private sourceDlg?: CustomDialogController;
 
@@ -816,12 +817,14 @@ struct ReadPage {
 
   private getNextChapterForAloud_(): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> {
     return (async (): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> => {
-      const n = this.currentIndex + 1;
-      console.info('[ReadPage] getNextChapterAloud: cur=' + this.currentIndex + ' next=' + n);
+      const startIdx = this.lastProviderIdx_ >= 0 ? this.lastProviderIdx_ : this.currentIndex;
+      const n = startIdx + 1;
+      console.info('[ReadPage] getNextChapterAloud: lastProvider=' + startIdx + ' next=' + n);
       if (n >= this.totalChapters_) return null;
+      this.lastProviderIdx_ = n;
       if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
         const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
-      console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
+        console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
         return { text: text, offset: 0, chapterIndex: n };
       }
       if (!this.preloadingChapterPromises_.has(n)) {
