@@ -205,7 +205,14 @@ export class AppDatabase {
             return rbc;
           })(),
           'rule_book_content_next': toStr(obj['ruleBookContentNext'] || rc['nextContentUrl'] || ''),
-          'rule_book_content_replace_regex': toStr(obj['ruleBookContentReplaceRegex'] || rc['replaceRegex'] || ''),
+          'rule_book_content_replace_regex': (() => {
+            let regex = toStr(obj['ruleBookContentReplaceRegex'] || rc['replaceRegex'] || '');
+            // 狗狗书籍默认清洗规则（<br> → 换行 + 垃圾过滤）
+            if (!regex && toStr(obj['bookSourceUrl']) === 'http://www.qiushu.info') {
+              regex = '##<br\\s*\\/?>|\\n\\s*\\n##\\n|###<[^>]+>|&nbsp;|read_di\\(\\);|最新网址|txt下载|手机阅读|www\\.qiushu\\.info|m\\.qiushu\\.info|记住本站网址##';
+            }
+            return regex;
+          })(),
           'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
           'header': toStr(obj['header'] || ''),
         };
