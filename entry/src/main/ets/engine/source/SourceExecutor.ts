@@ -1091,7 +1091,21 @@ export class SourceExecutor {
         try {
           let currentBody = resp;
           let currentUrl = tocUrl;
-          while (tocBodies.length < 60) {
+      let runningChapters = 0;  // 增量章节计数
+      // 统计首页章节数
+      if (onProgress) {
+        const links = resp.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
+        if (links) {
+          for (const link of links) {
+            if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
+                /href=["'][^"']*\d+\.html?["']/.test(link)) {
+              runningChapters++;
+            }
+          }
+        }
+        onProgress(runningChapters);
+      }
+      while (tocBodies.length < 60) {
             const nextUrls = this.collectTocPageUrls(currentBody, nextRule, currentUrl);
             const newUrls: string[] = [];
             for (const url of nextUrls) {
@@ -1125,10 +1139,20 @@ export class SourceExecutor {
                     const b = await this.fetchWithOpts(pageUrls[i], headers);
                     if (b && b.length > 100) {
                       pageResults[i] = b;
+                      // 统计本章节的链接数
+                      const links = b.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
+                      if (links) {
+                        for (const link of links) {
+                          if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
+                              /href=["'][^"']*\d+\.html?["']/.test(link)) {
+                            runningChapters++;
+                          }
+                        }
+                      }
                     }
                   } catch (_pf) { /* skip */ }
                   completed++;
-                  if (onProgress) { onProgress(tocBodies.length + completed); }
+                  if (onProgress) { onProgress(runningChapters); }
                 }
               };
               const workerCount = Math.min(maxConcurrency, pageUrls.length);
@@ -1153,8 +1177,19 @@ export class SourceExecutor {
             tocBodies.push(nextBody);
             currentBody = nextBody;
             currentUrl = nextUrl;
-            // 增量报告进度
-            if (onProgress) { onProgress(tocBodies.length); }
+            // 增量统计章节数
+            if (onProgress) {
+              const links = nextBody.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
+              if (links) {
+                for (const link of links) {
+                  if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
+                      /href=["'][^"']*\d+\.html?["']/.test(link)) {
+                    runningChapters++;
+                  }
+                }
+              }
+              onProgress(runningChapters);
+            }
           }
         } catch (_e) {
           /* ignore */
