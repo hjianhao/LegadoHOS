@@ -49,7 +49,11 @@ export struct ReadAloudPanel {
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
-    // 面板重开时同步引擎状态
+    const ref = getGlobalEngineRef();
+    if (ref) {
+      this.isPlaying = ref.state === AloudState.PLAYING;
+      this.isPaused = ref.state === AloudState.PAUSED;
+    }
   }
 
   aboutToDisappear(): void {
