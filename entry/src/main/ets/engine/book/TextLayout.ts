@@ -100,7 +100,7 @@ export class TextLayout {
       }
       const pageText = text.substring(offset, end);
       // 拆成显示用行（用于 PageView 渲染）
-      const lines = this.splitToLines_(pageText, config.fontSize * config.lineHeightMultiplier);
+      const lines = this.splitToLines_(pageText, config.fontSize * config.lineHeightMultiplier, config);
       pages.push({ lines: lines, startOffset: offset, endOffset: end });
       offset = end;
     }
@@ -140,14 +140,23 @@ export class TextLayout {
   }
 
   /** 将页面文本按换行符拆成 LayoutLine 数组（供 PageView 渲染） */
-  private static splitToLines_(text: string, lh: number): LayoutLine[] {
+  private static splitToLines_(text: string, lh: number, config?: LayoutConfig): LayoutLine[] {
     const lines: LayoutLine[] = [];
     const parts = text.split('\n');
     let off = 0;
+    let isFirstParagraph = true;
     for (let i = 0; i < parts.length; i++) {
       if (parts[i].length > 0) {
+        let lineText = parts[i];
+        // 首行缩进
+        if (config && config.firstLineIndent && config.indentSize > 0) {
+          const indentChars = config.indentSize * 2;
+          let indent = '';
+          for (let j = 0; j < indentChars; j++) indent += ' ';
+          lineText = indent + lineText;
+        }
         lines.push({
-          text: parts[i],
+          text: lineText,
           offset: off,
           height: lh,
           isParagraphStart: true,
