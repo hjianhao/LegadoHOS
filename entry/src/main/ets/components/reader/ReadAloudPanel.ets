@@ -12,6 +12,8 @@ import { UiUtil } from '../../util/UiUtil';
 @Component
 export struct ReadAloudPanel {
   @StorageLink('isDark') isDark: boolean = false;
+  @State isPlaying: boolean = false;
+  @State isPaused: boolean = false;
   @State speed: number = 1.0;
   @State progress: number = 0;
   @State progressText: string = '';
@@ -180,7 +182,7 @@ export struct ReadAloudPanel {
     this.selectedVoiceName = this.voiceDisplayName_(voice);
     this.showVoiceSelect = false;
     await this.saveVoicePreference_(voice);
-    if (restartIfNeeded && (this.isPlaying_() || this.isPaused_())) {
+    if (restartIfNeeded && (this.isPlaying_() || this.isPaused)) {
       await this.startPlay();
     }
   }
@@ -204,9 +206,9 @@ export struct ReadAloudPanel {
       };
       this.avSession_.setAVMetadata(meta);
       // 监听播控命令
-      this.avSession_.on('play', () => { if (!this.isPlaying_()) this.togglePlay(); });
+      this.avSession_.on('play', () => { if (!this.isPlaying) this.togglePlay(); });
       this.avSession_.on('pause', () => { if (this.isPlaying_()) this.togglePlay(); });
-      this.avSession_.on('stop', () => { if (this.isPlaying_() || this.isPaused_()) this.stopPlay(); });
+      this.avSession_.on('stop', () => { if (this.isPlaying_() || this.isPaused) this.stopPlay(); });
       this.avSession_.on('playNext', () => { this.stopPlay(); this.onNextChapter?.(); });
       this.avSession_.on('playPrevious', () => { this.stopPlay(); this.onPrevChapter?.(); });
       console.info('[Aloud] AVSession created');
@@ -268,7 +270,7 @@ export struct ReadAloudPanel {
     this.errorText = '';
 
     const eng = getGlobalAloudEngine({
-      onStateChange: () => {},
+      onStateChange: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; },
       onProgress: (charIdx: number, total: number) => {
         this.curCharIdx_ = charIdx;
         this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
@@ -300,11 +302,11 @@ export struct ReadAloudPanel {
   }
 
   async togglePlay(): Promise<void> {
-    console.info('[Aloud] togglePlay playing=' + this.isPlaying_() + ' paused=' + this.isPaused_());
-    if (this.isPlaying_()) {
+    console.info('[Aloud] togglePlay playing=' + this.isPlaying + ' paused=' + this.isPaused);
+    if (this.isPlaying) {
       const e = this.engine_ ?? getGlobalEngineRef(); await e?.pause();
       this.stopBgTask_();
-    } else if (this.isPaused_()) {
+    } else if (this.isPaused) {
       await this.startBgTask_();
       const e = this.engine_ ?? getGlobalEngineRef(); await e?.resume();
     } else {
@@ -318,12 +320,14 @@ export struct ReadAloudPanel {
     await this.destroyAvSession_();
     const eng = this.engine_ ?? getGlobalEngineRef();
     if (eng) await eng.stop();
+    this.isPlaying = false;
+    this.isPaused = false;
     this.progress = 0;
   }
 
   async changeSpeed(v: number): Promise<void> {
     this.speed = v;
-    if (this.engine_ && (this.isPlaying_() || this.isPaused_())) {
+    if (this.engine_ && (this.isPlaying_() || this.isPaused)) {
       // 重新开始以应用新语速
       await this.engine_.stop();
       await this.engine_.speak(this.text, this.speed);
@@ -428,7 +432,7 @@ export struct ReadAloudPanel {
       }.width('100%').padding({ left: 12, right: 8, top: 8 })
 
       // 进度条
-      if (this.isPlaying_() || this.isPaused_()) {
+      if (this.isPlaying_() || this.isPaused) {
         Row() {
           Progress({ value: this.progress, total: 100, type: ProgressType.Linear })
             .width('100%').height(3).color('#0078D7')
@@ -491,7 +495,7 @@ export struct ReadAloudPanel {
             this.stopPlay(); this.stopBgTask_();
             this.onPrevChapter?.();
           })
-        Button(this.isPlaying_() ? '⏸' : '▶️').fontSize(28)
+        Button(this.isPlaying ? '⏸' : '▶️').fontSize(28)
           .backgroundColor('transparent').layoutWeight(1)
           .onClick(() => { this.togglePlay(); })
         Button('⏭').fontSize(22)
