@@ -228,7 +228,7 @@ export class ReadAloudEngine {
     this.speed_ = speed;
     this.chunkPcm_ = [];
     this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingChunk_ = null;
-    this.synthPending_ = false; this.firstChunkReady_ = false; this.pendingChapterFetch_ = "";
+    this.synthPending_ = false; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1;
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
     this.currentTextIdx_ = 0; this.totalChars_ = text.length; this.playedChars_ = 0;
@@ -287,6 +287,7 @@ export class ReadAloudEngine {
   }
 
   private pendingChapterFetch_: string = "";
+  private lastChapterIdx_: number = -1;
   private speakNext_(): void {
     if (this.state_ !== AloudState.PLAYING || this.synthPending_) return;
     if (this.currentTextIdx_ >= this.textQueue_.length) {
