@@ -199,6 +199,8 @@ struct ReadPage {
       this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
         sources.find(s => s.sourceName === this.origin) || null;
+      console.info('[ReadPage] loadContent: source_=', this.source_ ? this.source_.sourceName : 'NULL',
+        'originUrl=', this.originUrl, 'origin=', this.origin, 'bookUrl=', this.bookUrl.substring(0, 80), 'tocUrl=', this.tocUrl);
       if (!this.tocUrl) {
         try {
           const bookTable = new BookTable(db);
@@ -310,14 +312,18 @@ struct ReadPage {
     const ch = this.allChapters_[idx];
     if (!ch) return '';
     const url = ch.url || this.bookUrl;
+    console.info('[ReadPage] fetchChapterContent_: idx=', idx, 'title=', ch.title, 'url=', url?.substring(0, 80));
     let content = '';
     if (this.source_) {
       content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
+      console.info('[ReadPage] getContent returned:', content ? content.length : 0, 'bytes');
     }
     if (!content && url && url.startsWith('http')) {
+      console.info('[ReadPage] Trying direct HTTP GET');
       const r = await NetUtil.httpGet(url);
       if (r) content = HtmlUtil.stripHtml(r);
     }
+    console.info('[ReadPage] fetchChapterContent_ final:', content ? content.length : 0, 'bytes');
     if (content && content.length > 50 && this.cfg.chineseMode !== 'original') {
       content = convertChinese(content, this.cfg.chineseMode);
     }

@@ -835,10 +835,7 @@ export class SourceExecutor {
   private resolveTocUrlTemplate(url: string, tocUrl: string): string {
     if (!url) return '';
 
-    // 已经是绝对 URL，不处理
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-
-    // 处理 {{baseUrl.match(...)}} 模板
+    // 处理 {{baseUrl.match(...)}} 模板（即使 URL 已是绝对值，body JSON 内可能含模板）
     if (url.includes('{{')) {
       url = url.replace(/\{\{baseUrl\.match\(/g, '\x00');
       while (url.includes('\x00')) {
