@@ -281,7 +281,7 @@ export struct ReadAloudPanel {
         this.progressText = charIdx + '/' + total;
       },
       onChapterEnd: () => { this.onNextChapter?.(); },
-      onChapterChange: () => { this.onNextChapter?.(); },
+      onChapterChange: () => { this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; this.onNextChapter?.(); },
       onError: (msg: string) => { this.errorText = msg; },
     });
     eng.setVoice(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);
