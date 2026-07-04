@@ -297,7 +297,7 @@ export class ReadAloudEngine {
           this.pendingChapterFetch_ = "";
           if (next && next.text) {
             this.textQueue_ = this.splitText_(next.text); this.currentTextIdx_ = 0;
-            this.totalChars_ += next.text.length; this.startTextOffset_ = next.offset;
+            this.totalChars_ = next.text.length; this.playedChars_ = 0; this.startTextOffset_ = next.offset;
             this.speakNext_();
           } else { this.chapterEnded_ = true; }
         });
