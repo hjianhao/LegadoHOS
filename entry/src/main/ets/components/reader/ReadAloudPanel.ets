@@ -535,7 +535,7 @@ export struct ReadAloudPanel {
           .onClick(() => { this.stopPlay(); this.startPlay(); })
         Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
-          .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (ci > 0) this.onGoToPosition?.(ci, ch); })
+          .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (eng && eng.state === AloudState.PLAYING) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
