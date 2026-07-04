@@ -1,7 +1,7 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudEngine } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
@@ -265,34 +265,32 @@ export struct ReadAloudPanel {
     console.info('[Aloud] startPlay text.length=' + (this.text ? this.text.length : 0));
     const voiceReady = await this.ensureSelectedVoiceReady_();
     if (!voiceReady) return;
-    if (this.engine_) {
-      await this.engine_.release();
-    }
     this.errorText = '';
-    this.engine_ = new ReadAloudEngine({
-      onStateChange: (state: AloudState) => {
-      },
+
+    const eng = getGlobalAloudEngine({
+      onStateChange: () => {},
       onProgress: (charIdx: number, total: number) => {
         this.curCharIdx_ = charIdx;
         this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
         this.progressText = charIdx + '/' + total;
       },
-      onChapterEnd: () => {
-        this.onNextChapter?.();
-      },
-      onError: (msg: string) => {
-        this.errorText = msg;
-      },
-    }, this.currentVoiceConfig_());
+      onChapterEnd: () => { this.onNextChapter?.(); },
+      onError: (msg: string) => { this.errorText = msg; },
+    });
+    eng.setVoice(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);
+    this.engine_ = eng;
 
     try {
-      console.info('[Aloud] calling init...');
-      await this.engine_.init();
+      if (eng.state === AloudState.IDLE) {
+        console.info('[Aloud] calling init...');
+        await eng.init();
+      }
+      this.curCharIdx_ = this.textOffset;
       this.startBgTask_();
-      await this.createAvSession_();  // 提早申请，不等 speak 返回
+      await this.createAvSession_();
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
-      await this.engine_.speak(startText, this.speed, this.textOffset);
+      await eng.speak(startText, this.speed, this.textOffset);
       console.info('[Aloud] speak done');
     } catch (e) {
       const msg = (e as Error).message || String(e);
