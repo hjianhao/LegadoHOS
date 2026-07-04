@@ -382,3 +382,35 @@ export async function releaseGlobalAloudEngine(): Promise<void> {
     globalEngine_ = null;
   }
 }
+
+// ---- 全局监听（面板注册监听器，不管理引擎生命周期） ----
+
+export interface AloudGlobalListener {
+  onState?: (state: AloudState) => void;
+  onProgress?: (charIndex: number, total: number) => void;
+  onChapterEnd?: () => void;
+  onError?: (msg: string) => void;
+}
+
+let globalListener_: AloudGlobalListener | null = null;
+
+export function setAloudGlobalListener(listener: AloudGlobalListener | null): void {
+  globalListener_ = listener;
+  if (globalEngine_ && listener) {
+    globalEngine_.updateCallback(makeCallbackForGlobal_());
+  }
+}
+
+function makeCallbackForGlobal_(): AloudCallback {
+  const cb: AloudCallback = {
+    onStateChange: (s: AloudState) => { if (globalListener_) globalListener_.onState?.(s); },
+    onProgress: (ci: number, t: number) => { if (globalListener_) globalListener_.onProgress?.(ci, t); },
+    onChapterEnd: () => { if (globalListener_) globalListener_.onChapterEnd?.(); },
+    onError: (msg: string) => { if (globalListener_) globalListener_.onError?.(msg); },
+    onNeedNextChapter: async (): Promise<AloudChapterText | null> => {
+      if (globalChapterProvider_) return await globalChapterProvider_();
+      return null;
+    },
+  };
+  return cb;
+}
