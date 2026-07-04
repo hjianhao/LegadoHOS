@@ -111,18 +111,26 @@ struct ReadPage {
       if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
       if (!this.bookName || !this.bookAuthor) return;
 
+      promptAction.showToast({ message: '同步进度中…', duration: 2000 });
       const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor);
-      if (!cloud) return;
+      if (!cloud) {
+        promptAction.showToast({ message: '同步成功：无云端进度', duration: 2000 });
+        return;
+      }
 
       // 冲突解决：云端进度更远才覆盖本地目标
       if (cloud.durChapterIndex > this.targetIdx_ ||
         (cloud.durChapterIndex === this.targetIdx_ && cloud.durChapterPos > this.pageIndex)) {
         this.targetIdx_ = cloud.durChapterIndex;
         this.pageIndex = cloud.durChapterPos;
+        promptAction.showToast({ message: '同步成功：已恢复云端进度', duration: 2000 });
         console.info('[ReadPage] Cloud progress restored:', cloud.durChapterIndex, cloud.durChapterPos);
+      } else {
+        promptAction.showToast({ message: '同步成功：本地进度已是最新', duration: 2000 });
       }
     } catch (e) {
       console.warn('[ReadPage] Sync from cloud failed:', (e as Error).message);
+      promptAction.showToast({ message: '同步失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
@@ -467,6 +475,7 @@ struct ReadPage {
       if (syncOn === true && WebDavService.getInstance().isConfigured()) {
         const ch = this.allChapters_[this.currentIndex];
         if (ch) {
+          promptAction.showToast({ message: '同步进度中…', duration: 2000 });
           await WebDavService.getInstance().uploadBookProgress({
             name: this.bookName,
             author: this.bookAuthor,
@@ -477,10 +486,12 @@ struct ReadPage {
           // 更新本地 syncTime
           const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
           await bookTable.updateSyncTime(this.bookUrl, Date.now());
+          promptAction.showToast({ message: '同步成功：已上传进度', duration: 2000 });
         }
       }
     } catch (e) {
       console.warn('[ReadPage] Upload progress failed:', (e as Error).message);
+      promptAction.showToast({ message: '同步失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
