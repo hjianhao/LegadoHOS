@@ -141,6 +141,7 @@ export class ReadAloudEngine {
   private totalChars_: number = 0;
   private playedChars_: number = 0;
   private startTextOffset_: number = 0;
+  private startChapterIdx_: number = 0;
   private callback_: AloudCallback;
   // 每段 TTS 合成后，onData 小块拼成完整 ArrayBuffer
   private chunkPcm_: ArrayBuffer[] = [];
@@ -161,6 +162,7 @@ export class ReadAloudEngine {
 
   get state(): AloudState { return this.state_; }
   get startOffset(): number { return this.startTextOffset_; }
+  get startChapter(): number { return this.startChapterIdx_; }
   get playedChars(): number { return this.playedChars_; }
 
   updateCallback(callback: AloudCallback): void { this.callback_ = callback; }

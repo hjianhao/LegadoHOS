@@ -55,6 +55,7 @@ export struct ReadAloudPanel {
     if (ref) {
       this.isPlaying = ref.state === AloudState.PLAYING;
       this.isPaused = ref.state === AloudState.PAUSED;
+      if (ref.startChapter > 0) this.curAloudChapter_ = ref.startChapter;
     }
     // 注册全局监听，追踪朗读进度
     setAloudGlobalListener({
@@ -307,7 +308,7 @@ export struct ReadAloudPanel {
       await this.createAvSession_();
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
-      await eng.speak(startText, this.speed, this.textOffset);
+      await eng.speak(startText, this.speed, this.textOffset, this.currentChapterIndex);
       console.info('[Aloud] speak done');
     } catch (e) {
       const msg = (e as Error).message || String(e);
@@ -534,7 +535,7 @@ export struct ReadAloudPanel {
           .onClick(() => { this.stopPlay(); this.startPlay(); })
         Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
-          .onClick(() => { const ci = this.curCharIdx_; const ch = this.curAloudChapter_ || this.currentChapterIndex; if (ci > 0) this.onGoToPosition?.(ci, ch); })
+          .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (ci > 0) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
