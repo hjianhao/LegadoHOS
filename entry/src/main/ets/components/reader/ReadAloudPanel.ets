@@ -34,8 +34,10 @@ export struct ReadAloudPanel {
   externalEngine: ReadAloudEngine | null = null;
   onDismiss?: () => void;
   onNextChapter?: () => void;
+  onGoToPosition?: (charIndex: number) => void;
   onPrevChapter?: () => void;
   engine_: ReadAloudEngine | null = null;
+  curCharIdx_: number = 0;
   private bgTaskActive_: boolean = false;
   private avSession_: avSession.AVSession | null = null;
   private wantAgent_: object | null = null;
@@ -270,6 +272,7 @@ export struct ReadAloudPanel {
         this.isPaused = state === AloudState.PAUSED;
       },
       onProgress: (charIdx: number, total: number) => {
+        this.curCharIdx_ = charIdx;
         this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
         this.progressText = charIdx + '/' + total;
       },
@@ -507,6 +510,16 @@ export struct ReadAloudPanel {
             this.onDismiss?.();
           })
       }.width('100%').padding({ top: 8, bottom: 12 })
+
+      // 辅助操作
+      Row() {
+        Button('从本页朗读').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(this.isDark ? '#1A3A2A' : '#E8F5E9').fontColor('#4CAF50')
+          .onClick(() => { this.stopPlay(); this.startPlay(); })
+        Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
+          .onClick(() => { if (this.curCharIdx_ > 0) this.onGoToPosition?.(this.curCharIdx_); })
+      }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
     .width('100%').backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')

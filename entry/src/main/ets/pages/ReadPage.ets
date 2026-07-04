@@ -25,7 +25,7 @@ import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
 import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
-import { ReadAloudEngine, AloudState } from '../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, setAloudChapterProvider } from '../service/ReadAloudEngine';
 import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
@@ -253,6 +253,7 @@ struct ReadPage {
         ChapterCache.chapters = chapters;
         ChapterCache.bookUrl = this.bookUrl;
       }
+      setAloudChapterProvider(() => this.getNextChapterForAloud_());
       // 获取 bookId 用于缓存，并从 DB 恢复阅读位置
       try {
         const bookTable = new BookTable(db);
@@ -801,6 +802,33 @@ struct ReadPage {
     this.sourceDlg.open();
   }
 
+  private getNextChapterForAloud_(): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> {
+    return (async (): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> => {
+      const n = this.currentIndex + 1;
+      if (n >= this.totalChapters_) return null;
+      if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
+        const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
+        return { text: text, offset: 0 };
+      }
+      if (!this.preloadingChapterPromises_.has(n)) {
+        const ch = this.allChapters_[n]; const src = this.source_;
+        if (ch && src) { const promise = globalSourceExecutor.getContent(src, ch.url || '', this.bookUrl); this.preloadingChapterPromises_.set(n, promise); }
+      }
+      const promise = this.preloadingChapterPromises_.get(n);
+      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: content, offset: 0 } : null; }
+      return null;
+    })();
+  }
+
+  private goToReadingPosition_(charIndex: number): void {
+    if (this.pages.length === 0) return;
+    for (let i = 0; i < this.pages.length; i++) {
+      if (charIndex >= this.pages[i].startOffset && charIndex < this.pages[i].endOffset) {
+        this.pageIndex = i; this.showAloud = false; return;
+      }
+    }
+  }
+
   private formatCurTime(): string {
     const d = new Date();
     const hh = String(d.getHours()).padStart(2, '0');
@@ -961,9 +989,11 @@ struct ReadPage {
           Column().width('100%').layoutWeight(1).onClick(() => { this.showAloud = false; })
           ReadAloudPanel({
             text: this.text,
+            textOffset: this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0,
             chapterTitle: this.chapters[this.currentIndex]?.title || '',
             externalEngine: this.aloudEngine_!,
             onDismiss: () => { this.showAloud = false; },
+            onGoToPosition: (charIdx: number) => { this.goToReadingPosition_(charIdx); },
             onNextChapter: () => { this.showAloud = false; this.onNextChapter(); },
             onPrevChapter: () => { this.showAloud = false; this.onPrevChapter(); },
           })
