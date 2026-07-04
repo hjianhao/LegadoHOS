@@ -40,35 +40,49 @@ export class NetUtil {
 
   // ========== HTTP 请求 ==========
 
-  static async httpGet(url: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
-    return NetUtil.httpRequest('GET', url, undefined, headers, timeout);
+  /** 获取全局超时设置（默认 60s） */
+  static getDefaultTimeout(): number {
+    try {
+      const t = AppStorage.get<number>('network_timeout');
+      if (t && t > 0) return t * 1000;  // 存储单位：秒，返回值：毫秒
+    } catch (_) { /* ignore */ }
+    return 60000;
   }
 
-  static async httpPost(url: string, body: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
+  static async httpGet(url: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
+    return NetUtil.httpRequest('GET', url, undefined, headers, timeout || NetUtil.getDefaultTimeout());
+  }
+
+  static async httpPost(url: string, body: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
     const h = NetUtil.buildHeaders(headers);
     if (!h['Content-Type'] && !h['content-type']) {
       h['Content-Type'] = 'application/x-www-form-urlencoded';
     }
-    return NetUtil.httpRequest('POST', url, body, h, timeout);
+    return NetUtil.httpRequest('POST', url, body, h, timeout || NetUtil.getDefaultTimeout());
   }
 
-  static async httpPut(url: string, body: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
-    return NetUtil.httpRequest('PUT', url, body, NetUtil.buildHeaders(headers), timeout);
+  static async httpPut(url: string, body: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
+    return NetUtil.httpRequest('PUT', url, body, NetUtil.buildHeaders(headers), timeout || NetUtil.getDefaultTimeout());
   }
 
   /**
    * 发送自定义 HTTP 请求方法（PROPFIND / MKCOL / DELETE 等）
    */
-  static async httpCustomMethod(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
-    return NetUtil.httpRequest(method, url, body || '', NetUtil.buildHeaders(headers), timeout);
+  static async httpCustomMethod(method: string, url: string, body?: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
+    return NetUtil.httpRequest(method, url, body || '', NetUtil.buildHeaders(headers), timeout || NetUtil.getDefaultTimeout());
   }
 
   // ========== 内部实现 ==========
 
   private static session_: rcp.Session | null = null;
+  private static sessionTimeout_: number = 0;
 
   private static getSession(timeout: number): rcp.Session {
     try {
+      // 超时时间变了就重建 session
+      if (NetUtil.session_ && NetUtil.sessionTimeout_ !== timeout) {
+        NetUtil.session_ = null;
+      }
       if (!NetUtil.session_) {
         const secCfg: rcp.SecurityConfiguration = {
           remoteValidation: 'system',
@@ -86,7 +100,8 @@ export class NetUtil {
           }
         };
         NetUtil.session_ = rcp.createSession(cfg);
-        console.info('[NetUtil] Session created');
+        NetUtil.sessionTimeout_ = timeout;
+        console.info('[NetUtil] Session created, timeout:', timeout, 'ms');
       }
       return NetUtil.session_;
     } catch (err) {

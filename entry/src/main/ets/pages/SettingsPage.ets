@@ -18,6 +18,7 @@ struct SettingsPage {
   @State dnsEnabled: boolean = true;
   @State proxyHost: string = '';
   @State proxyPort: string = '';
+  @State netTimeout: string = '60';
   @State pageMode: boolean = true;
   @State autoCacheSize: number = 10;
 
@@ -29,6 +30,7 @@ struct SettingsPage {
     this.proxyHost = AppStorage.get<string>('proxyHost') || '';
     this.proxyPort = AppStorage.get<string>('proxyPort') || '';
     NetUtil.setDns(this.dnsServers, this.dnsEnabled);
+    this.netTimeout = String(AppStorage.get<number>('network_timeout') || 60);
     if (this.proxyHost && this.proxyPort) {
       NetUtil.setProxy(this.proxyHost, parseInt(this.proxyPort));
     }
@@ -224,6 +226,23 @@ struct SettingsPage {
           this.syncWebViewNetwork();
         })
       }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
+
+      // 网络超时
+      Row() { Text('网络超时').fontSize(15).layoutWeight(1)
+        TextInput({ text: this.netTimeout, placeholder: '60' })
+          .height(36).fontSize(13).width(60).type(InputType.Number)
+          .onChange((v: string) => { this.netTimeout = v; })
+      }.padding({ left: 16, right: 16 }).width('100%')
+      Row() {
+        Text('秒（默认60秒，影响目录加载、搜索等操作）').fontSize(11).fontColor('#999').padding({ left: 16 })
+      }.width('100%')
+      Button('保存超时').fontSize(12).height(28).margin({ left: 16, top: 4 }).onClick(() => {
+        const val = parseInt(this.netTimeout);
+        if (val && val > 0) {
+          AppStorage.set<number>('network_timeout', val);
+          UiUtil.showToast(this.getUIContext(), { message: '超时已保存为 ' + val + ' 秒', duration: 1500 });
+        }
+      })
 
       // DNS 服务器
       TextInput({ text: this.dnsServers, placeholder: '逗号分隔多个 DNS，如 8.8.8.8,114.114.114.114' })
