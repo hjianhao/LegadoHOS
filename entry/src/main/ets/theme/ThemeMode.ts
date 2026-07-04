@@ -46,6 +46,9 @@ export interface ThemeConfig {
 
   // Amoled 纯黑
   amoledBlack: boolean;
+
+  // 内部状态
+  systemDark: boolean;
 }
 
 export function createDefaultTheme(): ThemeConfig {
@@ -62,5 +65,6 @@ export function createDefaultTheme(): ThemeConfig {
     readTextColor: '#333333',
     readFontFamily: '默认',
     amoledBlack: false,
+    systemDark: false,
   };
 }
