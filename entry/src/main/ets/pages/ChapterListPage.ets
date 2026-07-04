@@ -153,10 +153,7 @@ struct ChapterListPage {
     this.detectVolumes();
     this.applySort(this.isAscending);
     this.isLoading = false;
-    // 滚动到当前章节
-    if (this.durChapterIndex > 0) {
-      setTimeout(() => { this.listScroller_.scrollToIndex(this.durChapterIndex); }, 100);
-    }
+    this.listScroller_.scrollToIndex(this.durChapterIndex);
   }
 
   /** 检测卷标题：仅包含明确卷关键词的视为卷标题（不再基于长度/数字推断） */
