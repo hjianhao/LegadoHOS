@@ -294,7 +294,7 @@ struct ReadPage {
 	        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
 	        this.applyChapterContent_(idx, cachedContent);
 	        this.isLoading = false;
-	        this.saveProgress();
+	        await this.saveProgress();
 	        this.preloadNextChapter_(idx);
 	        this.cacheSurrounding_(idx);
 	        return;
@@ -316,7 +316,7 @@ struct ReadPage {
     // 持久化缓存到数据库
     this.saveToDbCache_(idx, this.text);
     // 保存阅读进度
-    this.saveProgress();
+    await this.saveProgress();
     // 无缝翻页：预加载下一章
     this.preloadNextChapter_(idx);
     // 自动缓存前后 ±n 章
@@ -422,7 +422,7 @@ struct ReadPage {
       this.nextChapterIdx_ = -1;
     }
     this.isLoading = false;
-    this.saveProgress();
+    await this.saveProgress();
     this.saveToDbCache_(idx, content);
     this.preloadNextChapter_(idx);
     this.cacheSurrounding_(idx);
@@ -489,14 +489,11 @@ struct ReadPage {
     this.isCaching_ = false;
   }
 
-  private saveProgress(): void {
+  private async saveProgress(): Promise<void> {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    bookTable.updateReadingProgress(
-      this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_,
-      this.pageMode ? this.pageIndex : 0
-    ).catch(() => { /* ignore */ });
+    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0); } catch (_) { /* ignore */ }
   }
 
   async aboutToDisappear(): Promise<void> {
@@ -733,7 +730,7 @@ struct ReadPage {
     this.showMenu = false;
     const oldBookUrl = this.bookUrl;
     try {
-      this.saveProgress();
+      await this.saveProgress();
     } catch (_e) {
       /* ignore */
     }
