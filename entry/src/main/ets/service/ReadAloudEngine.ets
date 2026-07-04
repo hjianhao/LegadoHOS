@@ -270,17 +270,15 @@ export class ReadAloudEngine {
   // ========================
 
   private splitText_(text: string): string[] {
-    const clean = text.replace(/\s+/g, ' ');
-    const result: string[] = [];
-    let start = 0;
-    while (start < clean.length) {
-      let end = Math.min(start + 300, clean.length);
-      if (end < clean.length) {
+    const result: string[] = []; let start = 0;
+    while (start < text.length) {
+      let end = Math.min(start + 300, text.length);
+      if (end < text.length) {
         for (let i = end; i > start + 150; i--) {
-          if ('。！？\n'.includes(clean[i])) { end = i + 1; break; }
+          if ('。！？\n'.includes(text[i])) { end = i + 1; break; }
         }
       }
-      result.push(clean.substring(start, end).trim());
+      result.push(text.substring(start, end).trim());
       start = end;
     }
     return result.filter(s => s.length > 0);
