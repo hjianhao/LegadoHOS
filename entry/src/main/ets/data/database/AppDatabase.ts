@@ -140,6 +140,11 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN sync_time INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
+    // 更新缺失的替换规则
+    try { await RdbUtil.executeSql(this.rdbStore_,
+      "UPDATE book_sources SET rule_book_content_replace_regex = '##read_di\\\\(\\\\);\\\\s*|最新网址：\\\\S+|txt下载地址：\\\\S+|http://www\\\\.qiushu\\\\.info\\\\S*|http://m\\\\.qiushu\\\\.info\\\\S*|记住本站网址.*' WHERE rule_book_content = 'id.content@textNodes' AND (rule_book_content_replace_regex IS NULL OR rule_book_content_replace_regex = '')");
+    } catch (_e) { /* ignore */ }
+
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
 
