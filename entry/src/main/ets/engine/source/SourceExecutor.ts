@@ -992,9 +992,10 @@ export class SourceExecutor {
 
           const result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
           if (result && result.length > 0) {
+            console.info('[SrcEx] getContent source=', source.sourceName, 'replaceRule=', source.ruleBookContentReplaceRegex?.substring(0, 100));
             const cleaned = this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex);
             contentParts.push(cleaned);
-            console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars, cleaned', cleaned.length, 'chars');
+            console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars → cleaned', cleaned.length, 'chars');
           } else {
             console.info('[SrcEx] getContent page', page + 1, 'empty result, ruleBookContent=[' + source.ruleBookContent + '] htmlLen=' + pageHtml.length);
           }
