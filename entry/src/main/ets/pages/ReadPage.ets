@@ -820,7 +820,8 @@ struct ReadPage {
       console.info('[ReadPage] getNextChapterAloud: cur=' + this.currentIndex + ' next=' + n);
       if (n >= this.totalChapters_) return null;
       if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
-        const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;\n      console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
+        const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
+      console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
         return { text: text, offset: 0, chapterIndex: n };
       }
       if (!this.preloadingChapterPromises_.has(n)) {
