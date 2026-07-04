@@ -921,6 +921,7 @@ struct SearchPage {
           isManga: false,
           isShelf: true,
           order: 0,
+          canUpdate: true,
           kind: item.kind,
           wordCount: item.wordCount,
           introduce: item.introduce,

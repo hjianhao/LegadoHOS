@@ -1,7 +1,7 @@
 /**
  * 朗读控制面板
  */
-import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager } from '../../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager } from '@kit.AbilityKit';
@@ -288,7 +288,7 @@ export struct ReadAloudPanel {
       await this.createAvSession_();  // 提早申请，不等 speak 返回
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
-      await this.engine_.speak(startText, this.speed);
+      await this.engine_.speak(startText, this.speed, this.textOffset);
       console.info('[Aloud] speak done');
     } catch (e) {
       const msg = (e as Error).message || String(e);
@@ -300,11 +300,11 @@ export struct ReadAloudPanel {
   async togglePlay(): Promise<void> {
     console.info('[Aloud] togglePlay playing=' + this.isPlaying + ' paused=' + this.isPaused);
     if (this.isPlaying) {
-      await this.engine_?.pause();
+      const e = this.engine_ ?? getGlobalEngineRef(); await e?.pause();
       this.stopBgTask_();
     } else if (this.isPaused) {
       await this.startBgTask_();
-      await this.engine_?.resume();
+      const e = this.engine_ ?? getGlobalEngineRef(); await e?.resume();
     } else {
       await this.startPlay();
     }
@@ -314,9 +314,8 @@ export struct ReadAloudPanel {
     console.info('[Aloud] stopPlay called');
     this.stopBgTask_();
     await this.destroyAvSession_();
-    if (this.engine_) {
-      await this.engine_.stop();
-    }
+    const eng = this.engine_ ?? getGlobalEngineRef();
+    if (eng) await eng.stop();
     this.isPlaying = false;
     this.isPaused = false;
     this.progress = 0;

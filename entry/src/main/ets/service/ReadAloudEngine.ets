@@ -128,6 +128,7 @@ export class ReadAloudEngine {
   private currentTextIdx_: number = 0;
   private totalChars_: number = 0;
   private playedChars_: number = 0;
+  private startTextOffset_: number = 0;
   private callback_: AloudCallback;
   // 每段 TTS 合成后，onData 小块拼成完整 ArrayBuffer
   private chunkPcm_: ArrayBuffer[] = [];
@@ -143,6 +144,8 @@ export class ReadAloudEngine {
   }
 
   get state(): AloudState { return this.state_; }
+
+  updateCallback(callback: AloudCallback): void { this.callback_ = callback; }
 
   private setState_(s: AloudState): void {
     this.state_ = s;
@@ -200,8 +203,9 @@ export class ReadAloudEngine {
     }
   }
 
-  async speak(text: string, speed: number = 1.0): Promise<void> {
+  async speak(text: string, speed: number = 1.0, startOffset: number = 0): Promise<void> {
     if (!this.ttsEngine_ || !this.audioRenderer_) { this.callback_.onError?.('引擎未初始化'); return; }
+    this.startTextOffset_ = startOffset;
     this.speed_ = speed;
     this.chunkPcm_ = [];
     this.chunkFull_ = null;
@@ -351,5 +355,33 @@ export class ReadAloudEngine {
       return audio.AudioDataCallbackResult.INVALID;
     }
     return audio.AudioDataCallbackResult.VALID;
+  }
+}
+
+// ---- 全局引擎管理 ----
+let globalEngine_: ReadAloudEngine | null = null;
+let globalVoice_: ReadAloudVoiceConfig = TtsVoiceManager.DEFAULT_VOICE;
+
+export function getGlobalAloudEngine(callback: AloudCallback): ReadAloudEngine {
+  if (globalEngine_) {
+    globalEngine_.updateCallback(callback);
+    return globalEngine_;
+  }
+  globalEngine_ = new ReadAloudEngine(callback, globalVoice_);
+  return globalEngine_;
+}
+
+export function getGlobalAloudState(): AloudState {
+  return globalEngine_?.state ?? AloudState.IDLE;
+}
+
+export function getGlobalEngineRef(): ReadAloudEngine | null {
+  return globalEngine_;
+}
+
+export async function releaseGlobalAloudEngine(): Promise<void> {
+  if (globalEngine_) {
+    await globalEngine_.release();
+    globalEngine_ = null;
   }
 }

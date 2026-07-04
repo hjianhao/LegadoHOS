@@ -117,6 +117,8 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_init TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_author TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    // books 表迁移
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN can_update INTEGER DEFAULT 1"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_cover TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_introduce TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_info_kind TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }

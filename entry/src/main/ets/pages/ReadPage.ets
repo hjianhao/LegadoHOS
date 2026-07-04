@@ -193,6 +193,21 @@ struct ReadPage {
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
+
+      // 书架只传 bookUrl，从 DB 补全 origin/tocUrl
+      try {
+        const bookTable = new BookTable(db);
+        const book = await bookTable.getBookByUrl(this.bookUrl);
+        if (book) {
+          this.bookId_ = book.id;
+          if (!this.tocUrl) this.tocUrl = book.tocUrl || '';
+          if (!this.originUrl) this.originUrl = book.originUrl || '';
+          if (!this.origin) this.origin = book.origin || '';
+          if (!this.bookName) this.bookName = book.name || '';
+          if (!this.bookAuthor) this.bookAuthor = book.author || '';
+        }
+      } catch (_) { /* ignore */ }
+
       const srcDao = new BookSourceTable(db);
       const sources = await srcDao.getAllSources();
       const norm = this.originUrl.replace(/\/+$/, '');
@@ -238,16 +253,25 @@ struct ReadPage {
         ChapterCache.chapters = chapters;
         ChapterCache.bookUrl = this.bookUrl;
       }
-      // 获取 bookId 用于缓存
+      // 获取 bookId 用于缓存，并从 DB 恢复阅读位置
       try {
         const bookTable = new BookTable(db);
         const book = await bookTable.getBookByUrl(this.bookUrl);
         if (book) {
           this.bookId_ = book.id;
           if (!this.tocUrl) this.tocUrl = book.tocUrl || '';
+          if (this.targetIdx_ < 0) this.targetIdx_ = book.durChapterIndex || 0;
+          if (this.pageIndex <= 0 && (book.durChapterPos || 0) > 0) this.pageIndex = book.durChapterPos;
         }
       } catch (_) { /* ignore */ }
+      if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
+        this.currentIndex = this.targetIdx_;
+      }
+      const savedPage = this.pageIndex;
       await this.loadChapter(this.currentIndex);
+      if (savedPage > 0 && savedPage < this.pages.length - 1) {
+        this.pageIndex = savedPage;
+      }
     } catch (e) {
       this.text = '加载失败';
       this.isLoading = false;

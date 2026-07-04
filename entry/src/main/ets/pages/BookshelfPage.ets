@@ -448,15 +448,7 @@ export struct BookshelfPage {
   continueRead(book: Book): void {
     UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ReadPage',
-      params: {
-        name: book.name, author: book.author, coverUrl: book.coverUrl,
-        bookUrl: book.bookUrl, origin: book.origin, originUrl: book.originUrl,
-        tocUrl: book.tocUrl,
-        durChapterIndex: book.durChapterIndex,
-        durChapterTitle: book.durChapterTitle,
-        durChapterPos: book.durChapterPos,
-        introduce: book.introduce, kind: book.kind, wordCount: book.wordCount,
-      }
+      params: { bookUrl: book.bookUrl }
     });
   }
 

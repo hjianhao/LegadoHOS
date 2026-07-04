@@ -50,6 +50,7 @@ export interface Book {
   isManga: boolean;
   isShelf: boolean;     // 是否在书架
   order: number;        // 排序权重
+  canUpdate: boolean;   // 是否允许更新（默认 true，本地书为 false）
 
   // 元数据
   kind: string;         // 分类
@@ -93,6 +94,7 @@ export function createDefaultBook(): Book {
     isManga: false,
     isShelf: false,
     order: 0,
+    canUpdate: true,
     kind: '',
     wordCount: '',
     introduce: '',

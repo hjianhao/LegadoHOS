@@ -223,6 +223,7 @@ struct BookInfoPage {
         tocUrl: '', chapterCount: 0, totalChapterNum: 0, latestChapterTitle: '',
         durChapterTitle: '', durChapterIndex: 0, durChapterPos: 0, durChapterProgress: 0,
         isRead: false, isAudio: false, isManga: false, isShelf: false, order: 0,
+        canUpdate: true,
         kind: '', wordCount: '', introduce: '', remark: '', lastUpdateTime: '', lastOpenTime: 0,
         createTime: 0, updateTime: Date.now(), syncTime: 0
       });
@@ -370,6 +371,7 @@ struct BookInfoPage {
         isManga: false,
         isShelf: true,
         order: 0,
+        canUpdate: true,
         kind: this.kind,
         wordCount: this.wordCount,
         introduce: this.introduce,
@@ -498,6 +500,7 @@ struct BookInfoPage {
         isManga: false,
         isShelf: false,  // 关键：不在书架（对齐 Android BookType.notShelf）
         order: 0,
+        canUpdate: true,
         kind: this.kind,
         wordCount: this.wordCount,
         introduce: this.introduce,
