@@ -51,7 +51,6 @@ export struct ReadAloudPanel {
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
-    if (this.curAloudChapter_ < 0) this.curAloudChapter_ = this.currentChapterIndex;
     const ref = getGlobalEngineRef();
     if (ref) {
       this.isPlaying = ref.state === AloudState.PLAYING;
@@ -535,7 +534,7 @@ export struct ReadAloudPanel {
           .onClick(() => { this.stopPlay(); this.startPlay(); })
         Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
-          .onClick(() => { const ci = this.curCharIdx_; const ch = this.curAloudChapter_; if (ci > 0 || ch > 0) this.onGoToPosition?.(ci, ch); })
+          .onClick(() => { const ci = this.curCharIdx_; const ch = this.curAloudChapter_ || this.currentChapterIndex; if (ci > 0) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
