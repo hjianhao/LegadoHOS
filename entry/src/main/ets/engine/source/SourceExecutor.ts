@@ -875,10 +875,9 @@ export class SourceExecutor {
     // 已经是绝对 URL，不处理
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
 
-    // 纯相对路径 → 相对于 site root（避免目录被重复拼接）
-    const origin = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
-    if (url.startsWith('/')) return origin + url;
-    return origin + '/' + url;
+    // 纯相对路径 → 相对于 tocUrl 目录解析
+    const baseUrl_ = tocUrl.replace(/\/[^/]*$/, '/');
+    return baseUrl_ + (url.startsWith('/') ? url.substring(1) : url);
   }
 
   private extractBookIdFromUrl(url: string): string {
@@ -1221,7 +1220,7 @@ export class SourceExecutor {
           } catch (_je) { /* fallback */ }
         }
         if (chapters.length === 0) {
-          chapters = this.parseTocFromRules(bodyText, tocRules);
+          chapters = this.parseTocFromRules(bodyText, tocRules, tocUrl);
         }
         // 去重
         const seen = new Set<string>();
@@ -1317,7 +1316,7 @@ export class SourceExecutor {
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
-              altChapters = this.parseTocFromRules(altResp, tocRules);
+              altChapters = this.parseTocFromRules(altResp, tocRules, tocPageUrl);
             }
             if (altChapters.length > 0) {
               console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', tocPageUrl.substring(0, 60));
@@ -2296,7 +2295,7 @@ export class SourceExecutor {
   /**
    * 从规则解析目录列表
    */
-  private parseTocFromRules(html: string, rules: Record<string, string>): BookSourceChapter[] {
+  private parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string): BookSourceChapter[] {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
 
@@ -2371,8 +2370,12 @@ export class SourceExecutor {
       return {
         title: title || `第${index + 1}章`,
         url: (() => {
-          const u = resolveTocField(urlItemRule) || '';
+          let u = resolveTocField(urlItemRule) || '';
           if (index === 0) console.info('[SrcEx] Chapter0 url len=' + u.length + ':', u.substring(0, 300));
+          // 解析相对 URL（相对于当前页面的 URL）
+          if (u && !u.startsWith('http://') && !u.startsWith('https://')) {
+            u = this.resolvePageUrl(u, tocUrl);
+          }
           return u;
         })(),
         index: index,
