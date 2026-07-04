@@ -817,6 +817,7 @@ struct ReadPage {
   private getNextChapterForAloud_(): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> {
     return (async (): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> => {
       const n = this.currentIndex + 1;
+      console.info('[ReadPage] getNextChapterAloud: cur=' + this.currentIndex + ' next=' + n);
       if (n >= this.totalChapters_) return null;
       if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
         const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
