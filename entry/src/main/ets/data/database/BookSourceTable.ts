@@ -374,7 +374,6 @@ export class BookSourceTable {
         ruleBookContentTitle: '',
         ruleBookContentWebJs: '',
         ruleBookContentSourceRegex: '',
-        ruleBookContentReplaceRegex: '',
         ruleBookContentImageStyle: '',
         ruleBookContentImageDecode: '',
         ruleBookContentPayAction: '',
