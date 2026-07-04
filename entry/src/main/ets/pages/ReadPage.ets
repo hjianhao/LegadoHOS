@@ -100,8 +100,8 @@ struct ReadPage {
     this.loadSettings();
     // 初始化测量工具
     try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
-    // 尝试从云端同步进度
-    this.syncFromCloud();
+    // 延迟执行云端同步，避免阻塞页面加载
+    setTimeout(() => { this.syncFromCloud(); }, 500);
   }
 
   /** 从云端下载进度并更新当前目标章节 */
