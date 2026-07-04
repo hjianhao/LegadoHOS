@@ -280,7 +280,7 @@ export struct ReadAloudPanel {
         this.progress = total > 0 ? Math.round((charIdx / total) * 100) : 0;
         this.progressText = charIdx + '/' + total;
       },
-      onChapterEnd: () => { this.onNextChapter?.(); },
+      onChapterEnd: () => { this.onNextChapter?.(); },\n          onChapterChange: () => { this.onNextChapter?.(); },\n      onChapterChange: () => { this.onNextChapter?.(); },
       onError: (msg: string) => { this.errorText = msg; },
     });
     eng.setVoice(this.selectedVoiceLanguage, this.selectedVoicePerson, this.selectedVoiceStyle);

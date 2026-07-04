@@ -36,6 +36,8 @@ export interface AloudCallback {
   onError?: (msg: string) => void;
   /** 引擎需要下一章文本时回调 */
   onNeedNextChapter?: () => Promise<AloudChapterText | null>;
+  /** 引擎成功加载新章节时回调 */
+  onChapterChange?: (chapterIndex: number) => void;
 }
 
 export class TtsVoiceManager {

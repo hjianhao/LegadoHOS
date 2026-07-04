@@ -821,14 +821,14 @@ struct ReadPage {
       if (n >= this.totalChapters_) return null;
       if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
         const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
-        return { text: text, offset: 0 };
+        return { text: text, offset: 0, chapterIndex: n };
       }
       if (!this.preloadingChapterPromises_.has(n)) {
         const ch = this.allChapters_[n]; const src = this.source_;
         if (ch && src) { const promise = globalSourceExecutor.getContent(src, ch.url || '', this.bookUrl); this.preloadingChapterPromises_.set(n, promise); }
       }
       const promise = this.preloadingChapterPromises_.get(n);
-      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: content, offset: 0 } : null; }
+      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: content, offset: 0, chapterIndex: n } : null; }
       return null;
     })();
   }
