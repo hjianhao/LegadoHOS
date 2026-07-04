@@ -7,7 +7,7 @@ import audio from '@ohos.multimedia.audio';
 
 export enum AloudState { IDLE = 0, PLAYING = 1, PAUSED = 2, STOPPED = 3 }
 
-export interface AloudChapterText { text: string; offset: number; }
+export interface AloudChapterText { text: string; offset: number; chapterIndex: number; }
 
 let globalChapterProvider_: (() => Promise<AloudChapterText | null>) | null = null;
 
