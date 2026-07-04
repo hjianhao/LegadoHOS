@@ -75,6 +75,7 @@ export default class MainAbility extends UIAbility {
 
   onForeground(): void {
     console.info('[MainAbility] onForeground');
+    this.syncProgressFromCloud();
   }
 
   onBackground(): void {

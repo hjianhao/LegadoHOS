@@ -18,6 +18,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookCover } from '../components/BookCover';
 import { GlobalConfig } from '../data/preferences/GlobalConfig';
+import { WebDavService } from '../service/WebDavService';
 import { BookGroupTable } from '../data/database/BookGroupTable';
 import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookGroup';
 import { BookSourceChapter } from '../model/BookSource';
@@ -133,10 +134,25 @@ export struct BookshelfPage {
       customStyle: true
     });
     this.loadShelfData();
+    this.syncProgressFromCloud();
   }
 
   onPageShow(): void {
     this.loadShelfData();
+    this.syncProgressFromCloud();
+  }
+
+  private syncProgressFromCloud(): void {
+    try {
+      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
+      if (syncOn !== true) return;
+      if (!WebDavService.getInstance().isConfigured()) return;
+      WebDavService.getInstance().downloadAllBookProgress()
+        .then(() => console.info('[Bookshelf] Cloud progress sync done'))
+        .catch((e: Error) => console.warn('[Bookshelf] Cloud progress sync failed:', e.message));
+    } catch (e) {
+      console.warn('[Bookshelf] Cloud progress sync error:', (e as Error).message);
+    }
   }
 
   onShelfRefreshCounterChanged(): void {
