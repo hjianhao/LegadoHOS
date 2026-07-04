@@ -837,19 +837,22 @@ struct ReadPage {
     })();
   }
 
-  private goToReadingPosition_(charIndex: number, chapterIdx?: number): void {
-    // 如果引擎在朗读另一章，先跳章节
+  private async goToReadingPosition_(charIndex: number, chapterIdx?: number): Promise<void> {
+    // 如果引擎在朗读另一章，先加载目标章节
     if (chapterIdx !== undefined && chapterIdx >= 0 && chapterIdx !== this.currentIndex) {
       this.showAloud = false;
       if (chapterIdx < this.allChapters_.length) {
-        this.loadChapter(chapterIdx);
+        await this.loadChapter(chapterIdx);
+        // pages 已由 loadChapter → applyChapterContent_ → layoutText 生成
+      } else {
+        return;
       }
-      return;
     }
     if (this.pages.length === 0) return;
     for (let i = 0; i < this.pages.length; i++) {
       if (charIndex >= this.pages[i].startOffset && charIndex < this.pages[i].endOffset) {
-        this.pageIndex = i; this.showAloud = false; return;
+        this.pageIndex = i;
+        return;
       }
     }
   }
