@@ -226,7 +226,7 @@ export class ReadAloudEngine {
     this.speed_ = speed;
     this.chunkPcm_ = [];
     this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingChunk_ = null;
-    this.synthPending_ = false; this.firstChunkReady_ = false;
+    this.synthPending_ = false; this.firstChunkReady_ = false; this.pendingChapterFetch_ = "";
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
     this.currentTextIdx_ = 0; this.totalChars_ = text.length; this.playedChars_ = 0;
@@ -284,12 +284,17 @@ export class ReadAloudEngine {
     return result.filter(s => s.length > 0);
   }
 
+  private pendingChapterFetch_: string = "";
   private speakNext_(): void {
     if (this.state_ !== AloudState.PLAYING || this.synthPending_) return;
     if (this.currentTextIdx_ >= this.textQueue_.length) {
       const provider = this.callback_.onNeedNextChapter || globalChapterProvider_;
       if (provider) {
+        const key = this.currentTextIdx_ + "_" + this.textQueue_.length;
+        if (key === this.pendingChapterFetch_) return;
+        this.pendingChapterFetch_ = key;
         provider().then((next: AloudChapterText | null) => {
+          this.pendingChapterFetch_ = "";
           if (next && next.text) {
             this.textQueue_ = this.splitText_(next.text); this.currentTextIdx_ = 0;
             this.totalChars_ += next.text.length; this.startTextOffset_ = next.offset;
