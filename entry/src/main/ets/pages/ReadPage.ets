@@ -268,9 +268,10 @@ struct ReadPage {
       if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
         this.currentIndex = this.targetIdx_;
       }
+      console.info('[ReadPage] loadContent pos: targetIdx_=' + this.targetIdx_ + ' page=' + this.pageIndex + ' savedPage=' + this.pageIndex);
       const savedPage = this.pageIndex;
       await this.loadChapter(this.currentIndex);
-      if (savedPage > 0 && savedPage < this.pages.length - 1) {
+      if (savedPage > 0 && savedPage < this.pages.length) {
         this.pageIndex = savedPage;
       }
     } catch (e) {
@@ -499,7 +500,7 @@ struct ReadPage {
   }
 
   async aboutToDisappear(): Promise<void> {
-    // 确保进度写入完成后再销毁页面
+    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
     await this.saveProgressAsync_();
     releaseGlobalAloudEngine();
   }
@@ -508,7 +509,8 @@ struct ReadPage {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0); } catch (_) { /* ignore */ }
+    console.info('[ReadPage] saveProgressAsync calling DB...');
+    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0); console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex); } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
   }
 
   /** 离开页面时保存进度并尝试上传到云端 */
