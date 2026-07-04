@@ -350,7 +350,7 @@ export class ReadAloudEngine {
     while (written < bufLen) {
       if (!this.activeChunk_ || this.activeOffset_ >= this.activeChunk_.byteLength) {
         this.activeChunk_ = null; this.activeOffset_ = 0;
-        if (this.pendingQueue_.length > 0) { this.activeChunk_ = this.pendingQueue_[0]; if (this.pendingOffsetQueue_.length > 0) { this.activeChunkOffset_ = this.pendingOffsetQueue_[0]; this.pendingOffsetQueue_.splice(0, 1); } this.pendingQueue_.splice(0, 1); this.firstChunkReady_ = false; if (this.chunkPcm_.length > 0 || this.pendingQueue_.length > 0) { } }
+        if (this.pendingQueue_.length > 0) { this.activeChunk_ = this.pendingQueue_[0]; if (this.pendingOffsetQueue_.length > 0) { const off = this.pendingOffsetQueue_[0]; console.info("[Engine] swap active: offset=" + off); this.activeChunkOffset_ = off; this.pendingOffsetQueue_.splice(0, 1); } this.pendingQueue_.splice(0, 1); this.firstChunkReady_ = false; }
         if (!this.activeChunk_) {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
           if (this.chapterEnded_ && !this.synthPending_ && this.chunkPcm_.length === 0 && !this.chapterEndFired_) { this.chapterEndFired_ = true; this.callback_.onChapterEnd?.(); return audio.AudioDataCallbackResult.INVALID; }
