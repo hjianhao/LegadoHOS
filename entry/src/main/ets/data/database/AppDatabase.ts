@@ -138,6 +138,7 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN remark TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN sync_time INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
@@ -199,6 +200,7 @@ export class AppDatabase {
             return typeof rbc === 'string' ? rbc : JSON.stringify(rbc);
           })(),
           'rule_book_content_next': toStr(obj['ruleBookContentNext'] || rc['nextContentUrl'] || ''),
+          'rule_book_content_replace_regex': toStr(obj['ruleBookContentReplaceRegex'] || rc['replaceRegex'] || ''),
           'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
           'header': toStr(obj['header'] || ''),
         };
