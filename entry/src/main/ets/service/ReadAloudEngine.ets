@@ -224,7 +224,8 @@ export class ReadAloudEngine {
     }
   }
 
-  async speak(text: string, speed: number = 1.0, startOffset: number = 0): Promise<void> {
+  async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0): Promise<void> {
+    this.startChapterIdx_ = startChapter;
     if (!this.ttsEngine_ || !this.audioRenderer_) { this.callback_.onError?.('引擎未初始化'); return; }
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
