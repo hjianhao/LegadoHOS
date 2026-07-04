@@ -495,10 +495,7 @@ struct ReadPage {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    bookTable.updateReadingProgress(
-      this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_,
-      this.pageMode ? this.pageIndex : 0
-    ).catch(() => { /* ignore */ });
+    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0).catch(() => {});
   }
 
   async aboutToDisappear(): Promise<void> {
