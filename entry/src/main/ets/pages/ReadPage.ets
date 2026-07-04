@@ -25,7 +25,7 @@ import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
 import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
-import { ReadAloudEngine, AloudState, setAloudChapterProvider } from '../service/ReadAloudEngine';
+import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
 import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
@@ -494,8 +494,21 @@ struct ReadPage {
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
     bookTable.updateReadingProgress(
       this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_,
-      this.pageMode ? this.pageIndex : 0 // 分页模式保存页内位置
+      this.pageMode ? this.pageIndex : 0
     ).catch(() => { /* ignore */ });
+  }
+
+  async aboutToDisappear(): Promise<void> {
+    // 确保进度写入完成后再销毁页面
+    await this.saveProgressAsync_();
+    releaseGlobalAloudEngine();
+  }
+
+  private async saveProgressAsync_(): Promise<void> {
+    const ch = this.allChapters_[this.currentIndex];
+    if (!ch || !this.bookUrl) return;
+    const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0); } catch (_) { /* ignore */ }
   }
 
   /** 离开页面时保存进度并尝试上传到云端 */
@@ -526,9 +539,7 @@ struct ReadPage {
     }
   }
 
-  aboutToDisappear(): void {
-    this.saveAndUploadProgress();
-  }
+
 
   private getProgressPercent(): number {
     if (this.totalChapters_ <= 0) return 0;
