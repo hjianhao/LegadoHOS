@@ -875,9 +875,10 @@ export class SourceExecutor {
     // 已经是绝对 URL，不处理
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
 
-    // 纯相对路径 → 相对于 tocUrl 目录解析
-    const baseUrl_ = tocUrl.replace(/\/[^/]*$/, '/');
-    return baseUrl_ + (url.startsWith('/') ? url.substring(1) : url);
+    // 纯相对路径 → 相对于 site root（避免目录被重复拼接）
+    const origin = tocUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+    if (url.startsWith('/')) return origin + url;
+    return origin + '/' + url;
   }
 
   private extractBookIdFromUrl(url: string): string {
