@@ -196,8 +196,8 @@ export class AppDatabase {
           'rule_toc_url_item': toStr(obj['ruleTocUrlItem'] || rtc['chapterUrl'] || ''),
           'rule_book_content_url': toStr(obj['ruleBookContentUrl'] || rc['contentUrl'] || ''),
           'rule_book_content': (() => {
-            let rbc = obj['ruleBookContent'] || rc['content'] || '';
-            if (typeof rbc !== 'string') rbc = JSON.stringify(rbc);
+            const rbcRaw = obj['ruleBookContent'] || rc['content'] || '';
+            let rbc = typeof rbcRaw === 'string' ? rbcRaw : JSON.stringify(rbcRaw);
             // 修复狗狗书籍：textNodes 无法提取 <br/> 分段内容，改用 html
             if (rbc === 'id.content@textNodes' && toStr(obj['bookSourceUrl']) === 'http://www.qiushu.info') {
               rbc = 'id.content@html';
