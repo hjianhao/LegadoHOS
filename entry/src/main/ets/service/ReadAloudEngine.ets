@@ -146,10 +146,13 @@ export class ReadAloudEngine {
   private callback_: AloudCallback;
   // 每段 TTS 合成后，onData 小块拼成完整 ArrayBuffer
   private chunkPcm_: ArrayBuffer[] = [];
+  private chunkTextOffset_: number = 0;  // 当前合成中块的文本起始偏移
+  private activeChunkOffset_: number = 0;  // 正在播放块的文本起始偏移
   // 双缓冲：activeChunk_ 正在播放，pendingChunk_ 预合成中
   private activeChunk_: Uint8Array | null = null;
   private activeOffset_: number = 0;
-  private pendingQueue_: Uint8Array[] = []; // 队列替代单个 pending，防止覆盖
+  private pendingQueue_: Uint8Array[] = [];
+  private pendingOffsetQueue_: number[] = []; // 队列替代单个 pending，防止覆盖
   private synthPending_: boolean = false;
   private firstChunkReady_: boolean = false;
   private chapterEnded_: boolean = false;
@@ -165,13 +168,7 @@ export class ReadAloudEngine {
   get startOffset(): number { return this.startTextOffset_; }
   get startChapter(): number { return this.startChapterIdx_; }
   /** 基于实际播出字节数估算的字符位置 */
-  get playbackCharEstimate(): number {
-    if (this.totalChars_ <= 0) return 0;
-    const totalSynth = this.chunkPcm_.reduce((s: number, b: ArrayBuffer) => s + b.byteLength, 0);
-    const total = this.totalPcmWritten_ + totalSynth;
-    if (total <= 0) return 0;
-    return Math.floor((this.totalPcmWritten_ / total) * this.totalChars_);
-  }
+  get playbackPosition(): number { return this.activeChunkOffset_ + this.startTextOffset_; }
   get playedChars(): number { return this.playedChars_; }
 
   updateCallback(callback: AloudCallback): void { this.callback_ = callback; }
@@ -239,7 +236,7 @@ export class ReadAloudEngine {
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
     this.chunkPcm_ = [];
-    this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingQueue_ = [];
+    this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
     this.synthPending_ = false; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1; this.totalPcmWritten_ = 0;
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
@@ -263,7 +260,7 @@ export class ReadAloudEngine {
   }
 
   async stop(): Promise<void> {
-    this.activeChunk_ = null; this.pendingQueue_ = []; this.chunkPcm_ = [];
+    this.activeChunk_ = null; this.pendingQueue_ = []; this.pendingOffsetQueue_ = []; this.chunkPcm_ = [];
     this.firstChunkReady_ = false; this.chapterEndFired_ = false;
     try { await this.ttsEngine_?.stop(); } catch (_) {}
     try { await this.audioRenderer_?.stop(); await this.audioRenderer_?.flush(); } catch (_) {}
@@ -322,7 +319,8 @@ export class ReadAloudEngine {
     }
     const text = this.textQueue_[this.currentTextIdx_]; this.currentTextIdx_++;
     this.playedChars_ += text.length;
-    this.callback_.onProgress?.(this.playedChars_, this.totalChars_);
+    this.callback_.onProgress?.(this.playbackPosition, this.totalChars_);
+    this.chunkTextOffset_ = this.playedChars_ - text.length;
     this.synthPending_ = true;
     console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars');
     const extraParam: Record<string, Object> = {}; extraParam['speed'] = this.speed_; extraParam['volume'] = 1.0; extraParam['playType'] = 0; extraParam['audioType'] = 'pcm';
@@ -339,6 +337,7 @@ export class ReadAloudEngine {
     for (let i = 0; i < this.chunkPcm_.length; i++) { const src = new Uint8Array(this.chunkPcm_[i]); merged.set(src, offset); offset += src.byteLength; }
     this.chunkPcm_ = [];
     this.pendingQueue_.push(merged);
+    this.pendingOffsetQueue_.push(this.chunkTextOffset_);
     console.info('[Aloud] chunk ready: ' + total + ' bytes PCM');
     if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     this.speakNext_();
@@ -351,7 +350,7 @@ export class ReadAloudEngine {
     while (written < bufLen) {
       if (!this.activeChunk_ || this.activeOffset_ >= this.activeChunk_.byteLength) {
         this.activeChunk_ = null; this.activeOffset_ = 0;
-        if (this.pendingQueue_.length > 0) { this.activeChunk_ = this.pendingQueue_[0]; this.pendingQueue_.splice(0, 1); this.firstChunkReady_ = false; }
+        if (this.pendingQueue_.length > 0) { this.activeChunk_ = this.pendingQueue_[0]; if (this.pendingOffsetQueue_.length > 0) { this.activeChunkOffset_ = this.pendingOffsetQueue_[0]; this.pendingOffsetQueue_.splice(0, 1); } this.pendingQueue_.splice(0, 1); this.firstChunkReady_ = false; if (this.chunkPcm_.length > 0 || this.pendingQueue_.length > 0) { } }
         if (!this.activeChunk_) {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
           if (this.chapterEnded_ && !this.synthPending_ && this.chunkPcm_.length === 0 && !this.chapterEndFired_) { this.chapterEndFired_ = true; this.callback_.onChapterEnd?.(); return audio.AudioDataCallbackResult.INVALID; }
