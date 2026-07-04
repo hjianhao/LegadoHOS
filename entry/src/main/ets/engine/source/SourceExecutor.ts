@@ -1040,7 +1040,7 @@ export class SourceExecutor {
    * @param tocUrl 书籍详情页 URL（即 search 返回的 noteUrl）
    * @returns 章节列表
    */
-  async getToc(source: BookSource, tocUrl: string): Promise<BookSourceChapter[]> {
+  async getToc(source: BookSource, tocUrl: string, onProgress?: (loaded: number) => void): Promise<BookSourceChapter[]> {
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
@@ -1138,6 +1138,7 @@ export class SourceExecutor {
                   tocBodies.push(pageResults[i]!);
                 }
               }
+              if (onProgress) { onProgress(tocBodies.length); }
               break;
             }
 
@@ -1150,6 +1151,8 @@ export class SourceExecutor {
             tocBodies.push(nextBody);
             currentBody = nextBody;
             currentUrl = nextUrl;
+            // 增量报告进度
+            if (onProgress) { onProgress(tocBodies.length); }
           }
         } catch (_e) {
           /* ignore */

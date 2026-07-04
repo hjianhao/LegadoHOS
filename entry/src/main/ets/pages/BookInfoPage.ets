@@ -44,6 +44,7 @@ struct BookInfoPage {
   @State sourceTocUrl: string = '';
   @State sourceCount: number = 1;
   @State chapterCount: number = 0;
+  @State tocLoadProgress: number = 0;  // 目录加载进度：已加载的章节数
   @State latestChapter: string = '';
   @State chapters: BookSourceChapter[] = [];
   @State recentChapters: BookSourceChapter[] = [];
@@ -98,6 +99,7 @@ struct BookInfoPage {
   async tryFetchBookInfo(): Promise<void> {
     if (!this.noteUrl || !this.originUrl) return;
     this.isRefreshing = true;
+    this.tocLoadProgress = 0;
     try {
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
@@ -124,8 +126,9 @@ struct BookInfoPage {
           this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
         }
       }
-      // 获取目录统计
-      const chapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl);
+      // 获取目录统计（带进度回调）
+      const chapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
+        (loaded: number) => { this.tocLoadProgress = loaded; });
       if (chapters.length > 0) {
         this.chapterCount = chapters.length;
         const last = chapters[chapters.length - 1];
@@ -397,6 +400,10 @@ struct BookInfoPage {
    * 2. 已在书架 → 更新 lastOpenTime 后打开
    */
   async startRead(): Promise<void> {
+    if (this.isRefreshing) {
+      UiUtil.showToast(this.getUIContext(), { message: '目录加载中，请稍候', duration: 1500 });
+      return;
+    }
     if (!this.isInShelf) {
       // 不在书架：隐式保存书籍（对齐 Android BookType.notShelf 语义）
       const saved = await this.saveBookImplicitly();
@@ -959,7 +966,8 @@ struct BookInfoPage {
 
   @Builder buildSummary() {
     Column() {
-      Text('目录：' + (this.durChapterTitle || (this.isRefreshing ? '加载中' : '未开始阅读')))
+      Text('目录：' + (this.durChapterTitle ||
+        (this.isRefreshing ? (this.tocLoadProgress > 0 ? `加载中(${this.tocLoadProgress}章)` : '加载中') : '未开始阅读')))
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.primaryTextColor())
