@@ -79,6 +79,7 @@ struct ChapterListPage {
   @State isAscending: boolean = true;      // 是否正序（默认正序）
   @State isLoading: boolean = true;
   @State showVolumes: boolean = false;      // 是否检测到卷分组
+  private listScroller_: Scroller = new Scroller();
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -152,6 +153,10 @@ struct ChapterListPage {
     this.detectVolumes();
     this.applySort(this.isAscending);
     this.isLoading = false;
+    // 滚动到当前章节
+    if (this.durChapterIndex > 0) {
+      setTimeout(() => { this.listScroller_.scrollToIndex(this.durChapterIndex); }, 100);
+    }
   }
 
   /** 检测卷标题：仅包含明确卷关键词的视为卷标题（不再基于长度/数字推断） */
@@ -331,7 +336,7 @@ struct ChapterListPage {
         }.width('100%').alignItems(HorizontalAlign.Center)
       } else {
         // ===== 章节列表 — PERF-001 使用 LazyForEach 替代 ForEach =====
-        List({ space: 0 }) {
+        List({ space: 0, scroller: this.listScroller_ }) {
           LazyForEach(this.dataSource_, (ch: BookSourceChapter, idx: number) => {
             ListItem() {
               if (ch.isVolume) {
