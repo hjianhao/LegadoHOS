@@ -299,8 +299,11 @@ export class ReadAloudEngine {
         provider().then((next: AloudChapterText | null) => {
           this.pendingChapterFetch_ = "";
           if (next && next.text) {
+            if (next.chapterIndex === this.lastChapterIdx_) return;
+            this.lastChapterIdx_ = next.chapterIndex;
             this.textQueue_ = this.splitText_(next.text); this.currentTextIdx_ = 0;
             this.totalChars_ = next.text.length; this.playedChars_ = 0; this.startTextOffset_ = next.offset;
+            this.callback_.onChapterChange?.(next.chapterIndex || 0);
             this.speakNext_();
           } else { this.chapterEnded_ = true; }
         });
