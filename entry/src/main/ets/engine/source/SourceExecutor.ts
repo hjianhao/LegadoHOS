@@ -1055,7 +1055,7 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      let resp = await this.fetchWithOpts(tocUrl, headers);
+      let resp = await this.fetchWithOpts(tocUrl, headers, 60000);
       // 短响应检测：可能是 JSON 错误（如 {"code":4005,"msg":"认证失败"}）
       if (!resp || resp.length < 100) {
         const body = resp || '';
