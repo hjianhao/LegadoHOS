@@ -201,20 +201,21 @@ struct SettingsPage {
       Text('\uD83C\uDFA8 主题设置').fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start)
 
-      Row() { Text('浅色模式').fontSize(15).layoutWeight(1)
-        Radio({ value: 'light', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.LIGHT)
-      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
-      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.LIGHT); })
+      Row() {
+        Text('跟随系统').fontSize(16).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: AppTheme.getInstance().isFollowSystem })
+          .onChange((v: boolean) => {
+            if (v) { AppTheme.getInstance().setFollowSystem(); this.isDark = AppTheme.getInstance().isDark; }
+            else { AppTheme.getInstance().setDarkMode(this.isDark); }
+          })
+      }.padding({ left: 16, right: 16, top: 12, bottom: 4 }).width('100%')
 
-      Row() { Text('深色模式').fontSize(15).layoutWeight(1)
-        Radio({ value: 'dark', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.DARK)
-      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
-      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.DARK); })
-
-      Row() { Text('跟随系统').fontSize(15).layoutWeight(1)
-        Radio({ value: 'system', group: 'themeMode' }).checked(AppTheme.getInstance().mode === ThemeMode.SYSTEM)
-      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
-      .onClick(() => { AppTheme.getInstance().setMode(ThemeMode.SYSTEM); })
+      Row() {
+        Text('深色模式').fontSize(16).fontColor(AppTheme.getInstance().isFollowSystem ? '#AAA' : '#333').layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: AppTheme.getInstance().isDark })
+          .enabled(!AppTheme.getInstance().isFollowSystem)
+          .onChange((v: boolean) => { AppTheme.getInstance().setDarkMode(v); this.isDark = v; })
+      }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
     }
     .width('100%').alignItems(HorizontalAlign.Start)
   }
