@@ -23,9 +23,27 @@ export class CryptoUtil {
    * Base64 编码
    */
   static base64Encode(str: string): string {
+    // 先转 UTF-8 字节，再 base64 编码
+    const utf8Bytes: number[] = [];
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      if (c < 0x80) {
+        utf8Bytes.push(c);
+      } else if (c < 0x800) {
+        utf8Bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+      } else if (c < 0xd800 || c >= 0xe000) {
+        utf8Bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+      } else {
+        // surrogate pair
+        i++;
+        const c2 = str.charCodeAt(i);
+        const cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+        utf8Bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+      }
+    }
     const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     let result = '';
-    const bytes = new Uint8Array(str.split('').map(c => c.charCodeAt(0)));
+    const bytes = utf8Bytes;
     for (let i = 0; i < bytes.length; i += 3) {
       const b0 = bytes[i], b1 = bytes[i + 1] || 0, b2 = bytes[i + 2] || 0;
       result += b64[b0 >> 2];

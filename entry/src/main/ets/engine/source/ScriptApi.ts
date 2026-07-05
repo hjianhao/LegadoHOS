@@ -9,6 +9,37 @@
  */
 
 /**
+ * java.ajax 实现（Worker 线程内使用 NAPI http.get/post）
+ * 独立函数，不影响主 polyfill 加载
+ */
+export function getAjaxPolyfill(): string {
+  return `
+(function() {
+  var _j = typeof java !== "undefined" ? java : (globalThis.java || {});
+  if (!_j.ajax || _j.ajax._isMock) {
+    _j.ajax = function(url) {
+      var s = String(url);
+      if (typeof http !== "undefined" && http.get) {
+        var m = s.match(/^(https?:\\/\\/[^,]+),(\\{[\\s\\S]*\\})$/);
+        var u = s, method = "GET", body = "";
+        if (m) {
+          u = m[1];
+          try { var o = JSON.parse(m[2]); if (o.method) method = o.method.toUpperCase(); if (o.body !== undefined) body = String(o.body); } catch(_) {}
+        }
+        try {
+          if (method === "POST") return http.post(u, body);
+          return http.get(u);
+        } catch(_e) {}
+      }
+      return "";
+    };
+    _j.ajax._isMock = false;
+  }
+})();
+`;
+}
+
+/**
  * 获取所有 polyfill 脚本的拼接字符串
  * 在引擎初始化时注入到全局作用域
  */
@@ -241,8 +272,7 @@ export function getPolyfillScript(): string {
     }
     if (!_j.ajax) {
       _j.ajax = function(url) {
-        // 返回空字符串，Worker 中会拦截并真正发请求
-        console.log('[Polyfill] java.ajax called (will be intercepted): ' + String(url).substring(0, 80));
+        console.log('[Polyfill] java.ajax called: ' + String(url).substring(0, 80));
         return '';
       };
     }

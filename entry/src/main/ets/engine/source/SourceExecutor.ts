@@ -8,7 +8,7 @@ import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../../model/B
 import { SearchResult, getBookMergeKey } from '../../model/SearchResult';
 import { globalScriptEngine } from './ScriptEngine';
 import { JsExpressionEvaluator } from './JsExpressionEvaluator';
-import { getPolyfillScript, buildRuleExecutorScriptWithHtml } from './ScriptApi';
+import { getPolyfillScript, getAjaxPolyfill, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
 import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from './RuleAnalyzer';
 import { NetUtil } from '../../util/NetUtil';
@@ -255,6 +255,9 @@ export class SourceExecutor {
     await globalScriptEngine.initialize();
     const polyfill = getPolyfillScript();
     await globalScriptEngine.executeScript(polyfill);
+    // java.ajax 实现（独立加载，不影响主 polyfill）
+    const ajaxPolyfill = getAjaxPolyfill();
+    await globalScriptEngine.executeScript(ajaxPolyfill);
     this.engineInitialized = true;
     console.info('[SourceExecutor] Initialized');
   }
@@ -450,6 +453,47 @@ export class SourceExecutor {
     });
   }
   
+  /** data: URI → HTTP 请求（聚合源通用：search/catalog/content 等 type） */
+  private async convertDataUri_(dataUri: string, baseUrl: string, source: BookSource): Promise<{ url: string; method: string; body: string }> {
+    console.info('[SrcEx] data: URI detected, baseUrl=', baseUrl);
+    let httpBase = baseUrl;
+    if (!httpBase || (!httpBase.startsWith('http://') && !httpBase.startsWith('https://'))) {
+      const rawJson = (source as any).rawJson || '';
+      const jsLibText = source.jsLib || '';
+      const searchText = jsLibText || rawJson;
+      const urls = searchText.match(/'((?:https?:)?\/\/[^']+)'/g);
+      if (urls && urls.length > 0) {
+        httpBase = urls[0].replace(/^'|'$/g, '').replace(/\/+$/, '');
+        console.info('[SrcEx] Parsed HTTP base:', httpBase);
+      }
+    }
+    if (!httpBase || !httpBase.startsWith('http')) {
+      return { url: dataUri, method: 'GET', body: '' };
+    }
+    const dataMatch = dataUri.match(/^data:;base64,([^,]*)/);
+    if (!dataMatch) return { url: dataUri, method: 'GET', body: '' };
+    const decoded = CryptoUtil.base64Decode(dataMatch[1]);
+    console.info('[SrcEx] convertDataUri decoded:', decoded.substring(0, 200));
+    try {
+      const params = JSON.parse(decoded) as Record<string, string>;
+      // 根据参数结构推断 API 路径: key/title → search, book_id → catalog
+      const isSearch = params['key'] || params['title'];
+      const isCatalog = params['book_id'];
+      const path = isCatalog ? '/catalog' : '/search';
+      const query = Object.entries(params)
+        .map(([k, v]) => {
+          const name = k === 'key' ? 'title' : k === 'sourcesKey' ? 'source' : k;
+          return `${name}=${encodeURIComponent(String(v))}`;
+        })
+        .join('&');
+      const apiUrl = `${httpBase}${path}?${query}`;
+      console.info('[SrcEx] data URI →', path, apiUrl.substring(0, 120));
+      return { url: apiUrl, method: 'GET', body: '' };
+    } catch (_) {
+      return { url: httpBase, method: 'POST', body: decoded };
+    }
+  }
+
   private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     let baseUrl = getBaseUrl(source.sourceUrl);
@@ -522,44 +566,10 @@ export class SourceExecutor {
     let finalMethod = method;
     let finalBody = body;
     if (url && url.startsWith('data:;base64,')) {
-      console.info('[SrcEx] data: URI detected, baseUrl=', baseUrl, 'sourceUrl=', source.sourceUrl);
-      // 从 rawJson/jsLib 文本中正则提取第一个 HTTP host
-      let httpBase = baseUrl;
-      if (!httpBase || (!httpBase.startsWith('http://') && !httpBase.startsWith('https://'))) {
-        const rawJson = (source as any).rawJson || '';
-        const jsLibText = source.jsLib || '';
-        const searchText = jsLibText || rawJson;
-        const urls = searchText.match(/'((?:https?:)?\/\/[^']+)'/g);
-        if (urls && urls.length > 0) {
-          httpBase = urls[0].replace(/^'|'$/g, '').replace(/\/+$/, '');
-          console.info('[SrcEx] Parsed HTTP base from source text:', httpBase);
-        }
-      }
-      if (httpBase && httpBase.startsWith('http')) {
-        const dataMatch = url.match(/^data:;base64,([^,]*)/);
-        if (dataMatch) {
-          const decoded = CryptoUtil.base64Decode(dataMatch[1]);
-          // gysearch: 解码 body 为 JSON，构造 /search?title=... GET 请求
-          try {
-            const params = JSON.parse(decoded) as Record<string, string>;
-            const query = Object.entries(params)
-              .map(([k, v]) => `${k === 'key' ? 'title' : k === 'sourcesKey' ? 'source' : k}=${encodeURIComponent(String(v))}`)
-              .join('&');
-            finalUrl = `${httpBase}/search?${query}`;
-            finalMethod = 'GET';
-            finalBody = '';
-            console.info('[SrcEx] Converted data: URI → GET', finalUrl.substring(0, 120));
-          } catch (_) {
-            // 非 JSON body，回退 POST
-            finalUrl = httpBase;
-            finalMethod = 'POST';
-            finalBody = decoded;
-            console.info('[SrcEx] Converted data: URI → POST', httpBase, 'body len=', decoded.length);
-          }
-        }
-      } else {
-        console.warn('[SrcEx] data: URI cannot resolve HTTP host');
-      }
+      const converted = await this.convertDataUri_(url, baseUrl, source);
+      finalUrl = converted.url;
+      finalMethod = converted.method;
+      finalBody = converted.body;
     }
 
     if (!finalUrl || (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://'))) {
@@ -1176,6 +1186,37 @@ export class SourceExecutor {
     }
   }
 
+  /** 解析 catalog API 返回的 JSON 为章节列表 */
+  private parseCatalogResponse_(body: string, source: BookSource, tocUrl: string): BookSourceChapter[] {
+    try {
+      const json = JSON.parse(body) as Record<string, unknown>;
+      // 章节数组可能在 $.data 或 $.data.data
+      let list: unknown[] = [];
+      if (json['data'] && Array.isArray(json['data'])) {
+        list = json['data'] as unknown[];
+      } else if (json['data'] instanceof Object) {
+        const inner = (json['data'] as Record<string, unknown>)['data'];
+        if (Array.isArray(inner)) list = inner as unknown[];
+      }
+      if (list.length === 0) return [];
+      const chapters: BookSourceChapter[] = [];
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i] as Record<string, unknown>;
+        const title = (item['title'] || this.firstStr(item, source.ruleTocTitle || '') || `第${i + 1}章`) as string;
+        let url = (item['item_id'] || item['id'] || item['url'] || '') as string;
+        if (url && !url.startsWith('http') && !url.startsWith('data:')) {
+          url = `${tocUrl.split('?')[0]}?item_id=${url}`;
+        }
+        chapters.push({ title, url, index: i });
+      }
+      console.info('[SrcEx] parseCatalogResponse:', chapters.length, 'chapters');
+      return chapters;
+    } catch (_e) {
+      console.warn('[SrcEx] parseCatalogResponse failed');
+      return [];
+    }
+  }
+
   /**
    * 获取目录（章节列表）
    * @param source 书源
@@ -1189,6 +1230,50 @@ export class SourceExecutor {
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
+
+    // 聚合源（sourceUrl 非 HTTP）：从第三方 URL 提取 book_id，构造 catalog API 请求
+    const isAggSource = source.sourceUrl && !source.sourceUrl.startsWith('http');
+    if (isAggSource && tocUrl.startsWith('http')) {
+      const bookIdMatch = tocUrl.match(/\/(\d+)\.html?/);
+      if (bookIdMatch) {
+        const bookId = bookIdMatch[1];
+        // 构造完整的 catalog 参数（同 JS 规则 request("/catalog?book_id=...&source=...&tab=...&variable=...", "POST", {html})）
+        // source 和 tab 暂时用默认值
+        const catalogParams = JSON.stringify({
+          book_id: bookId,
+          source: tocUrl.includes('69shuba') ? '69书吧' : '番茄',
+          tab: '小说',
+          variable: '{"custom":""}',
+        });
+        const catalogUri = `data:;base64,${CryptoUtil.base64Encode(catalogParams)}`;
+        const converted = await this.convertDataUri_(catalogUri, '', source);
+        if (converted.url.startsWith('http')) {
+          console.info('[SrcEx] getToc aggregation → catalog:', converted.url.substring(0, 120));
+          // 先试 GET
+          let resp: string = '';
+          resp = await this.fetchWithOpts(converted.url, {
+            'Accept': 'text/html,application/json,*/*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          }, 30000);
+          // GET 返回错误时试 POST
+          if (!resp || resp.length < 50 || resp.startsWith('<!DOCTYPE') ||
+              (resp.startsWith('{') && resp.includes('"code":-1'))) {
+            const postUrl = `${converted.url},${JSON.stringify({ method: "POST", body: JSON.stringify({ html: '' }) })}`;
+            console.info('[SrcEx] getToc catalog GET returned error, trying POST');
+            resp = await this.fetchWithOpts(postUrl, {
+              'Accept': 'text/html,application/json,*/*',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }, 30000);
+          }
+          const decoded = this.tryHexDecode_(resp) || resp;
+          console.info('[SrcEx] getToc catalog resp len=', resp.length, 'first200=', decoded.substring(0, 200));
+          if (decoded && decoded.length > 50) {
+            return this.parseCatalogResponse_(decoded, source, tocUrl);
+          }
+        }
+      }
+    }
+
     try {
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',

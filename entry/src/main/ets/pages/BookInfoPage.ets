@@ -3,6 +3,8 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ChapterTable } from '../data/database/ChapterTable';
+import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceChapter } from '../model/BookSource';
@@ -91,6 +93,20 @@ struct BookInfoPage {
     }
     this.loadSourceHeader();
     this.checkShelfStatus();
+    // 注册 Cloudflare 交互验证：当请求被拦截时弹出 WebView 让用户手动验证
+    WebViewFetcher.interactiveFetcher = (url: string): Promise<string> => {
+      return new Promise((resolve) => {
+        WebViewFetcher.interactiveResolve = resolve;
+        let dlg: CustomDialogController | null = null;
+        dlg = new CustomDialogController({
+          builder: CloudflareDialog({ controller: dlg!, url: url }),
+          autoCancel: false,
+          customStyle: true,
+          alignment: DialogAlignment.Center,
+        });
+        dlg.open();
+      });
+    };
     this.tryFetchBookInfo();
     this.tryFetchCover();
     this.isLoading = false;

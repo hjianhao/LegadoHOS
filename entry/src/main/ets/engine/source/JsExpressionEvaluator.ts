@@ -11,15 +11,19 @@
  */
 import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
-import { getPolyfillScript } from './ScriptApi';
+import { getPolyfillScript, getAjaxPolyfill } from './ScriptApi';
 
 // Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
 let cachedPolyfill_: string | null = null;
+let cachedAjaxPolyfill_: string | null = null;
 function getPolyfillForWorker(): string {
   if (!cachedPolyfill_) {
     cachedPolyfill_ = getPolyfillScript();
   }
-  return cachedPolyfill_;
+  if (!cachedAjaxPolyfill_) {
+    cachedAjaxPolyfill_ = getAjaxPolyfill();
+  }
+  return cachedPolyfill_ + '\n' + cachedAjaxPolyfill_;
 }
 
 /**
@@ -208,9 +212,9 @@ export class JsExpressionEvaluator {
     if (!code || !code.trim()) return '';
 
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
-    // code 包在块作用域 { } 内，每次求值创建独立作用域，避免 let/const 重声明
-    // setupCode 留在全局作用域（其中的 jsLib、变量等被复用）
-    const fullScript = `${setupCode}\n{\n${code}\n}`;
+    // let/const → var：引擎复用时 let 重声明会报错，var 不报
+    const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
+    const fullScript = `${setupCode}\n${safeCode}`;
     const hasAjax = /java\.ajax\s*\(/.test(fullScript);
 
     // 有 java.ajax() 时必须用 Worker，否则阻塞 UI
@@ -257,7 +261,8 @@ export class JsExpressionEvaluator {
   static evaluateSync(code: string, ctx: JsEvalContext): string {
     if (!code || !code.trim()) return '';
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
-    const fullScript = `${setupCode}\n{\n${code}\n}`;
+    const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
+    const fullScript = `${setupCode}\n${safeCode}`;
     try {
       const result = globalScriptEngine.evaluateJsSync(fullScript);
       return result;

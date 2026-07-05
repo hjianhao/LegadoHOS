@@ -33,6 +33,29 @@ export class WebViewFetcher {
     reject: (err: Error) => void;
   }> = [];
 
+  /**
+   * 交互式 Cloudflare 验证处理器
+   * 页面启动时注册，当请求被 Cloudflare 拦截时弹出 WebView 让用户手动验证
+   */
+  static interactiveFetcher: ((url: string) => Promise<string>) | null = null;
+
+  /** 交互式验证的 Promise resolve（由 CloudflareDialog 调用） */
+  static interactiveResolve: ((html: string) => void) | null = null;
+
+  /** 请求是否需要交互式验证 */
+  static needsInteractive(url: string, errorMsg: string): boolean {
+    return !!(WebViewFetcher.interactiveFetcher) &&
+      (errorMsg.includes('403') || errorMsg.includes('Cloudflare') || errorMsg.includes('503') || errorMsg.includes('page not found'));
+  }
+
+  /** 弹出交互式 WebView 验证 */
+  static async fetchInteractive(url: string): Promise<string> {
+    if (!WebViewFetcher.interactiveFetcher) {
+      throw new Error('Interactive fetcher not registered');
+    }
+    return await WebViewFetcher.interactiveFetcher(url);
+  }
+
   // ========== DNS（DoH）配置 ==========
 
   /** 当前使用的 DoH URL（DNS-over-HTTPS），空字符串表示不配置 */
