@@ -14,6 +14,7 @@ interface TabCfg {
 @Entry
 @Component
 struct MainPage {
+  @StorageLink('isDark') isDark: boolean = false;
   @State currentTab: number = 0;
 
   private tabs: TabCfg[] = [
@@ -46,8 +47,8 @@ struct MainPage {
         })
       }
       .width('100%').height(56)
-      .backgroundColor('#FFFFFF')
-      .border({ width: { top: 1 }, color: '#E0E0E0' })
+      .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+      .border({ width: { top: 1 }, color: this.isDark ? '#333' : '#E0E0E0' })
     }
     .width('100%').height('100%')
   }
