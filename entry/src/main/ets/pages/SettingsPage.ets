@@ -104,7 +104,7 @@ struct SettingsPage {
             Text('>').fontSize(18).fontColor('#888')
           }.padding(16).width('100%')
         }
-        .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+        .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
         .onClick(() => {
           if (item.key === 'backup') {
             router.pushUrl({ url: 'pages/BackupSettingsPage' });
@@ -144,7 +144,7 @@ struct SettingsPage {
         Text('\uD83D\uDCC2 搜索时启用全部源').fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: true })
       }.padding(16).width('100%')
-      .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+      .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
       Text('关闭后仅使用已启用的书源搜索')
         .fontSize(12).fontColor('#888').padding({ left: 16, right: 16, bottom: 8 })
@@ -170,7 +170,7 @@ struct SettingsPage {
           } catch (_e) { /* ignore */ }
         })
       }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
-        .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+        .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
       Text('关闭后使用滚动模式阅读').fontSize(12).fontColor('#888').padding({ left: 16, right: 16, bottom: 12 })
 
@@ -189,7 +189,7 @@ struct SettingsPage {
           })
         Text(String(this.autoCacheSize) + ' 章').fontSize(14).fontColor('#0078D7').margin({ left: 8 })
       }.width('100%').margin({ top: 4 })
-        .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+        .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
       Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor('#888')
         .padding({ left: 16, right: 16, top: 4, bottom: 12 })
