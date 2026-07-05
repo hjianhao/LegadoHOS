@@ -107,7 +107,7 @@ export struct RssMainPage {
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 }).width('100%')
                 .onClick((): void => {
                   UiUtil.pushUrl(this.getUIContext(), {
-                    url: 'pages/RssArticlesPage',
+                    url: 'pages/RssSortPage',
                     params: { sourceUrl: source.sourceUrl, sourceName: source.sourceName }
                   });
                 })

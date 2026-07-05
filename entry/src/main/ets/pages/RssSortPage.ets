@@ -75,9 +75,9 @@ export struct RssSortPage {
       // 解析分类
       const urls = await resolveSortUrls(source.sourceUrl, source.sortUrl);
       if (urls.length > 0) {
-        this.sortTabs = urls.map((u: Record<string, string>): SortTab => ({
-          name: u['name'] || source.sourceName,
-          url: u['url']
+        this.sortTabs = urls.map((u): SortTab => ({
+          name: u.name || source.sourceName,
+          url: u.url
         }));
       } else {
         this.sortTabs = [{ name: source.sourceName, url: source.sourceUrl }];
@@ -119,9 +119,9 @@ export struct RssSortPage {
         articles[ai].order = this.order - ai;
       }
 
-      // 保存到数据库
+      // 保存到数据库（使用 append 避免 UNIQUE 约束冲突）
       for (let ai = 0; ai < articles.length; ai++) {
-        await this.db.rssArticleTable.insert(articles[ai]);
+        await this.db.rssArticleTable.append(articles[ai]);
       }
 
       // 清理旧数据

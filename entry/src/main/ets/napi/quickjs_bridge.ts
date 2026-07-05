@@ -49,6 +49,20 @@ let nativeLoaded: boolean = false;
 export async function tryLoadNative(): Promise<boolean> {
   if (nativeLoaded) return true;
 
+  // 优先使用 HarmonyOS NEXT 推荐的动态 import
+  try {
+    const native = await import('libquickjs_bridge.so');
+    if (native && typeof (native.default || native).createEngine === 'function') {
+      currentBridge = (native.default || native) as QuickJSBridge;
+      nativeLoaded = true;
+      console.info('[NAPI] Native module loaded via dynamic import');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[NAPI] Dynamic import failed:', e?.toString()?.substring(0, 100));
+  }
+
+  // 回退 requireNapi（兼容旧版本）
   try {
     const native = requireNapi('quickjs_bridge');
     if (native && typeof (native as QuickJSBridge).createEngine === 'function') {

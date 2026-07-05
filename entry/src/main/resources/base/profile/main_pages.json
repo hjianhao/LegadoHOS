@@ -17,6 +17,8 @@
     "pages/RssSourceManagePage",
     "pages/RssSourceEditPage",
     "pages/RssArticlesPage",
+    "pages/RssSortPage",
+    "pages/RssReadPage",
     "pages/ExploreBookPage",
     "pages/BookshelfManagePage",
     "pages/BackupSettingsPage"

@@ -52,6 +52,7 @@ export struct ReadAloudPanel {
   aboutToAppear(): void {
     this.loadVoicePreference_();
     this.loadVoices_();
+    this.loadSpeed_();
     const ref = getGlobalEngineRef();
     if (ref) {
       this.isPlaying = ref.state === AloudState.PLAYING;
@@ -82,6 +83,16 @@ export struct ReadAloudPanel {
       this.selectedVoiceName = await settings.get('tts_voice_name', '系统默认');
     } catch (e) {
       console.warn('[Aloud] load voice preference failed: ' + (e as Error).message);
+    }
+  }
+
+  private async loadSpeed_(): Promise<void> {
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      this.speed = await settings.getTtsSpeed();
+    } catch (e) {
+      console.warn('[Aloud] load speed failed: ' + (e as Error).message);
     }
   }
 
@@ -198,7 +209,14 @@ export struct ReadAloudPanel {
     this.selectedVoiceName = this.voiceDisplayName_(voice);
     this.showVoiceSelect = false;
     await this.saveVoicePreference_(voice);
+
     if (restartIfNeeded && (this.isPlaying_() || this.isPaused)) {
+      // 先停止当前朗读，再以新音色从当前位置重新开始
+      const savedOffset = this.curCharIdx_;
+      const savedChapter = this.currentChapterIndex;
+      await this.stopPlay();
+      this.textOffset = savedOffset;
+      this.currentChapterIndex = savedChapter;
       await this.startPlay();
     }
   }
@@ -300,10 +318,12 @@ export struct ReadAloudPanel {
     this.engine_ = eng;
 
     try {
-      if (eng.state === AloudState.IDLE) {
-        console.info('[Aloud] calling init...');
-        await eng.init();
+      if (eng.state !== AloudState.IDLE) {
+        // 引擎非空闲（STOPPED/PLAYING 等），先释放再以新音色重新初始化
+        await eng.release();
       }
+      console.info('[Aloud] calling init...');
+      await eng.init();
       this.curCharIdx_ = this.textOffset;
       this.startBgTask_();
       await this.createAvSession_();
@@ -344,6 +364,11 @@ export struct ReadAloudPanel {
 
   async changeSpeed(v: number): Promise<void> {
     this.speed = v;
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      s.setTtsSpeed(v).catch(() => {});
+    } catch (_e) { /* ignore */ }
     if (this.engine_ && (this.isPlaying_() || this.isPaused)) {
       // 重新开始以应用新语速
       await this.engine_.stop();

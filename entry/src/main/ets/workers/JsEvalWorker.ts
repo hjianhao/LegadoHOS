@@ -44,15 +44,32 @@ let initialized: boolean = false;
 async function initEngine(): Promise<boolean> {
   if (initialized) return true;
 
+  // 优先使用 HarmonyOS NEXT 推荐的动态 import
   try {
-    quickjsBridge = requireNapi('quickjs_bridge');
-    if (!quickjsBridge || typeof quickjsBridge.createEngine !== 'function') {
-      console.warn('[JsWorker] requireNapi returned invalid module');
+    const native = await import('libquickjs_bridge.so');
+    quickjsBridge = native.default || native;
+    if (quickjsBridge && typeof quickjsBridge.createEngine === 'function') {
+      console.info('[JsWorker] Native module loaded via dynamic import');
+    } else {
+      console.warn('[JsWorker] Dynamic import returned invalid module');
       return false;
     }
-  } catch (_e) {
-    console.warn('[JsWorker] requireNapi(quickjs_bridge) failed');
-    return false;
+  } catch (e) {
+    console.warn('[JsWorker] Dynamic import failed:', e?.toString()?.substring(0, 100));
+  }
+
+  // 回退 requireNapi（兼容旧版本）
+  if (!quickjsBridge) {
+    try {
+      quickjsBridge = requireNapi('quickjs_bridge');
+      if (!quickjsBridge || typeof quickjsBridge.createEngine !== 'function') {
+        console.warn('[JsWorker] requireNapi returned invalid module');
+        return false;
+      }
+    } catch (_e) {
+      console.warn('[JsWorker] requireNapi(quickjs_bridge) failed');
+      return false;
+    }
   }
 
   try {

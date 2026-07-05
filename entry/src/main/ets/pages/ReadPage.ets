@@ -17,6 +17,7 @@ import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
 import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
 import { HtmlUtil } from '../util/HtmlUtil';
+import relationalStore from '@ohos.data.relationalStore';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
@@ -232,17 +233,46 @@ struct ReadPage {
       let chapters: BookSourceChapter[] = [];
       if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
         chapters = ChapterCache.chapters;
-        console.info('[ReadPage] Loaded chapters from cache:', chapters.length, this.bookUrl.substring(0, 80));
+        console.info('[ReadPage] Loaded chapters from memory cache:', chapters.length);
       } else {
-        if (ChapterCache.chapters.length > 0) {
-          console.info('[ReadPage] Ignore stale chapter cache. cacheBookUrl=',
-            ChapterCache.bookUrl.substring(0, 80), 'current=', this.bookUrl.substring(0, 80));
+        // 尝试从数据库加载缓存的目录
+        let dbChapterCount = 0;
+        if (this.bookId_ > 0) {
+          try {
+            const ct = new ChapterTable(db);
+            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
+            if (dbChapters.length > 0) {
+              chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
+                index: ch.index,
+                title: ch.title,
+                url: ch.url,
+              }));
+              dbChapterCount = chapters.length;
+              console.info('[ReadPage] Loaded chapters from DB cache:', chapters.length);
+            }
+          } catch (_e) { /* fall through to network */ }
         }
-        if (this.source_) {
+        // 如果 DB 目录不完整（少于书籍应有章数的 80%），从网络刷新完整目录
+        const expectedCount = await this.getExpectedChapterCount_(db);
+        const needsNetworkRefresh = this.source_ && (
+          chapters.length === 0 ||
+          (expectedCount > 0 && dbChapterCount > 0 && dbChapterCount < expectedCount * 0.8)
+        );
+        if (needsNetworkRefresh) {
+          console.info('[ReadPage] DB chapters incomplete (' + dbChapterCount + '/' + expectedCount + '), fetching from network');
           const primaryTocUrl = this.tocUrl || this.bookUrl;
-          chapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
-          if (chapters.length === 0 && primaryTocUrl !== this.bookUrl) {
-            chapters = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
+          const netChapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
+          if (netChapters.length === 0 && primaryTocUrl !== this.bookUrl) {
+            const fallback = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
+            if (fallback.length > 0) {
+              chapters = fallback;
+            }
+          } else if (netChapters.length > 0) {
+            chapters = netChapters;
+          }
+          // 将完整目录保存到 DB（仅标题和URL，不含内容）
+          if (chapters.length > 0 && this.bookId_ > 0) {
+            await this.saveFullTocToDb_(this.bookId_, chapters);
           }
         }
       }
@@ -457,6 +487,62 @@ struct ReadPage {
         }]);
       }
     } catch (_e) { /* ignore */ }
+  }
+
+  /**
+   * 获取书籍应有的章数（从 books 表的 totalChapterNum 或 chapterCount 字段）
+   */
+  private async getExpectedChapterCount_(db: relationalStore.RdbStore): Promise<number> {
+    try {
+      const bookTable = new BookTable(db);
+      const book = await bookTable.getBookByUrl(this.bookUrl);
+      if (book) {
+        return book.totalChapterNum || book.chapterCount || 0;
+      }
+    } catch (_) { /* ignore */ }
+    return 0;
+  }
+
+  /**
+   * 将完整目录保存到数据库（仅标题和URL，不含内容）
+   * 保留已有章节的内容缓存，避免丢失已下载的内容
+   */
+  private async saveFullTocToDb_(bookId: number, chapters: BookSourceChapter[]): Promise<void> {
+    try {
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      // 备份已有章节的内容
+      const oldChapters = await ct.getChaptersByBookId(bookId);
+      const contentByUrl = new Map<string, string>();
+      for (const old of oldChapters) {
+        if (old.content && old.content.length > 50 && old.url) {
+          contentByUrl.set(old.url, old.content);
+        }
+      }
+      // 删除旧目录，写入新目录
+      await ct.deleteChaptersByBookId(bookId);
+      const now = Date.now();
+      const newChapters: BookChapter[] = chapters.map((ch: BookSourceChapter, idx: number): BookChapter => {
+        const item: BookChapter = {
+          id: 0, bookId: bookId, index: ch.index >= 0 ? ch.index : idx, volumeIndex: 0,
+          title: ch.title || '', url: ch.url || '',
+          content: '', contentLength: 0,
+          isRead: false, isDownloaded: false, isCached: false,
+          duration: 0, audioUrl: '', createTime: now, updateTime: now,
+        };
+        // 还原已缓存的内容
+        const cached = contentByUrl.get(ch.url);
+        if (cached) {
+          item.content = cached;
+          item.contentLength = cached.length;
+          item.isCached = true;
+        }
+        return item;
+      });
+      await ct.insertChapters(newChapters);
+      console.info('[ReadPage] Saved full TOC to DB:', chapters.length, 'chapters for bookId=', bookId);
+    } catch (e) {
+      console.warn('[ReadPage] Failed to save full TOC to DB:', (e as Error).message);
+    }
   }
 
   /** 自动缓存当前章节前后 ±cacheSize_ 章 */

@@ -98,6 +98,7 @@ struct ExploreBookPage {
       review: '', reviewUrl: '', reviewAvatar: '', reviewContent: '',
       reviewPostTime: '', reviewQuoteUrl: '',
       createTime: 0, updateTime: 0, rawJson: '',
+      isAiGenerated: false,
     };
   }
 

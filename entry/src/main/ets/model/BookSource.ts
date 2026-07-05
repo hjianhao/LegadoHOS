@@ -127,6 +127,9 @@ export interface BookSource {
   reviewQuoteUrl: string;
   rawJson: string;
 
+  // AI 生成标记
+  isAiGenerated: boolean;     // 是否为 AI 自动分析生成的临时书源
+
   // 时间
   createTime: number;
   updateTime: number;
@@ -202,6 +205,13 @@ function toRuleString(val: unknown): string {
   }
   // 对象/数组 → JSON 字符串
   return JSON.stringify(val);
+}
+
+/**
+ * 创建空的 BookSource 对象（所有字段为默认值）
+ */
+export function createEmptyBookSource(): BookSource {
+  return parseBookSource({});
 }
 
 /**
@@ -322,5 +332,6 @@ export function parseBookSource(json: any): BookSource {
     rawJson: json.rawJson || '',
     createTime: json.createTime || 0,
     updateTime: json.updateTime || 0,
+    isAiGenerated: json.isAiGenerated || false,
   };
 }

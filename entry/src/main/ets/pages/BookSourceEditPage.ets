@@ -286,6 +286,7 @@ struct BookSourceEditPage {
       createTime: Date.now(),
       updateTime: Date.now(),
       rawJson: '',
+      isAiGenerated: false,
     };
     this.isNew = true;
   }

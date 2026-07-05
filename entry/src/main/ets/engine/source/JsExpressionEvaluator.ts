@@ -11,6 +11,41 @@
  */
 import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
+import { getPolyfillScript } from './ScriptApi';
+
+// Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
+let cachedPolyfill_: string | null = null;
+function getPolyfillForWorker(): string {
+  if (!cachedPolyfill_) {
+    cachedPolyfill_ = getPolyfillScript();
+  }
+  return cachedPolyfill_;
+}
+
+/**
+ * 解开 C++ 桥的 JSON.stringify 包装
+ *
+ * QuickJS NAPI 桥 (napi_bridge.cpp ExecuteScript) 总是对 JS 返回值调用
+ * JS_JSONStringify()，导致字符串被额外加上双引号。此函数逆向解开，
+ * 恢复原始的 JS 值。
+ *
+ * 例如: JS 返回 "hello" → 桥返回 "\"hello\"" → 此函数返回 "hello"
+ *       JS 返回 42     → 桥返回 "42"       → 此函数返回 "42"
+ *       JS 返回 null   → 桥返回 "null"     → 此函数返回 ""
+ */
+function unwrapJsResult(raw: string): string {
+  if (!raw || raw === 'null' || raw === 'undefined') return '';
+  // 仅尝试解开字符串包装（JSON.parse 对对象/数字/布尔值返回原值）
+  try {
+    const parsed = JSON.parse(raw) as Object;
+    if (typeof parsed === 'string') return parsed as string;
+    // 数字、布尔值、对象：保持原样（这些场景不需要解开）
+    return raw;
+  } catch (_e) {
+    // 不是合法 JSON（可能是错误消息），返回原值
+    return raw;
+  }
+}
 import worker from '@ohos.worker';
 
 export interface JsEvalContext {
@@ -22,6 +57,8 @@ export interface JsEvalContext {
   baseUrl?: string;
   /** 当前书源对象 */
   source?: Partial<BookSource>;
+  /** 书源 JS 库（jsLib），在变量注入前加载 */
+  jsLib?: string;
   /** 额外自定义变量 */
   [key: string]: unknown;
 }
@@ -171,7 +208,9 @@ export class JsExpressionEvaluator {
     if (!code || !code.trim()) return '';
 
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
-    const fullScript = `${setupCode}\n${code}`;
+    // code 包在块作用域 { } 内，每次求值创建独立作用域，避免 let/const 重声明
+    // setupCode 留在全局作用域（其中的 jsLib、变量等被复用）
+    const fullScript = `${setupCode}\n{\n${code}\n}`;
     const hasAjax = /java\.ajax\s*\(/.test(fullScript);
 
     // 有 java.ajax() 时必须用 Worker，否则阻塞 UI
@@ -184,11 +223,13 @@ export class JsExpressionEvaluator {
       }
     }
 
-    // 用 Worker 执行
+    // 用 Worker 执行（Worker 的 QuickJS 引擎独立于主线程，需注入 polyfill）
     if (this.workerReady && this.workerInstance) {
       try {
-        const result = await this.sendToWorker('eval', 35000, fullScript);
-        return result && result !== 'null' && result !== 'undefined' ? result : '';
+        const polyfill = getPolyfillForWorker();
+        const workerScript = polyfill + '\n' + fullScript;
+        const result = await this.sendToWorker('eval', 35000, workerScript);
+        return unwrapJsResult(result);
       } catch (e) {
         console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));
         this.workerReady = false;
@@ -199,7 +240,7 @@ export class JsExpressionEvaluator {
     if (!hasAjax) {
       try {
         const result = await globalScriptEngine.executeScript(fullScript);
-        return result;
+        return unwrapJsResult(result);
       } catch (err) {
         console.error('[JsEval] Evaluate error:', (err instanceof Error) ? err.message : String(err));
         return '';
@@ -216,7 +257,7 @@ export class JsExpressionEvaluator {
   static evaluateSync(code: string, ctx: JsEvalContext): string {
     if (!code || !code.trim()) return '';
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
-    const fullScript = `${setupCode}\n${code}`;
+    const fullScript = `${setupCode}\n{\n${code}\n}`;
     try {
       const result = globalScriptEngine.evaluateJsSync(fullScript);
       return result;
@@ -335,6 +376,11 @@ export class JsExpressionEvaluator {
    */
   static buildContextScript(ctx: JsEvalContext): string {
     const parts: string[] = [];
+
+    // 书源 jsLib — 最先加载，定义 hosts、getCloudSettings 等核心函数
+    if (ctx.jsLib && ctx.jsLib.trim()) {
+      parts.push(ctx.jsLib);
+    }
 
     // key / keyword
     if (ctx.key !== undefined) {

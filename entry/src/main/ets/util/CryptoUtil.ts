@@ -41,9 +41,29 @@ export class CryptoUtil {
    */
   static base64Decode(str: string): string {
     const bytes = CryptoUtil.base64ToBytes(str);
+    // UTF-8 解码：Multi-byte sequences → proper JS string
     let result = '';
-    for (let i = 0; i < bytes.length; i++) {
-      result += String.fromCharCode(bytes[i]);
+    let i = 0;
+    while (i < bytes.length) {
+      const b1 = bytes[i++] & 0xff;
+      if (b1 < 0x80) {
+        result += String.fromCharCode(b1);
+      } else if ((b1 & 0xe0) === 0xc0) {
+        const b2 = bytes[i++] & 0xff;
+        result += String.fromCharCode(((b1 & 0x1f) << 6) | (b2 & 0x3f));
+      } else if ((b1 & 0xf0) === 0xe0) {
+        const b2 = bytes[i++] & 0xff;
+        const b3 = bytes[i++] & 0xff;
+        result += String.fromCharCode(((b1 & 0x0f) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f));
+      } else if ((b1 & 0xf8) === 0xf0) {
+        const b2 = bytes[i++] & 0xff;
+        const b3 = bytes[i++] & 0xff;
+        const b4 = bytes[i++] & 0xff;
+        const cp = ((b1 & 0x07) << 18) | ((b2 & 0x3f) << 12) | ((b3 & 0x3f) << 6) | (b4 & 0x3f);
+        const high = 0xd800 + ((cp - 0x10000) >> 10);
+        const low = 0xdc00 + ((cp - 0x10000) & 0x3ff);
+        result += String.fromCharCode(high, low);
+      }
     }
     return result;
   }

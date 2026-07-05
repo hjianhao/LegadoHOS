@@ -12,7 +12,7 @@ import { BookmarkTable, BookmarkTableCreate } from './BookmarkTable';
 import { ReadRecordTable, ReadRecordTableCreate, ReadRecordDetailTableCreate } from './ReadRecordTable';
 
 import { ReplaceRuleTable, ReplaceRuleTableCreate } from './ReplaceRuleTable';
-import { RSSSourceTable, RSSSourceTableCreate, RSSArticleTableCreate, RSSArticleTable } from './RSSSourceTable';
+import { RSSSourceTable, RSSSourceTableCreate, RSSArticleTableCreate, RSSArticleTable, RssStarTable } from './RSSSourceTable';
 
 import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } from './CacheTable';
 
@@ -50,6 +50,10 @@ export class AppDatabase {
 
   get rssArticleTable(): RSSArticleTable {
     return new RSSArticleTable(this.rdbStore);
+  }
+
+  get rssStarTable(): RssStarTable {
+    return new RssStarTable(this.rdbStore);
   }
 
   /**

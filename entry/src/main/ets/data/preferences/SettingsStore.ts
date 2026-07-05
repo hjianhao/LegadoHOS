@@ -351,6 +351,10 @@ export class SettingsStore {
   async getAutoCacheSize(): Promise<number> { return await this.get('auto_cache_size', 10); }
   async setAutoCacheSize(v: number): Promise<void> { await this.put('auto_cache_size', v); }
 
+  // ---- TTS 朗读设置 ----
+  async getTtsSpeed(): Promise<number> { return await this.get('tts_speed', 1.0); }
+  async setTtsSpeed(v: number): Promise<void> { await this.put('tts_speed', v); }
+
   // ---- 触控区域 ----
   private readonly ZONE_KEYS_: string[] = [
     'click_tl', 'click_tc', 'click_tr',

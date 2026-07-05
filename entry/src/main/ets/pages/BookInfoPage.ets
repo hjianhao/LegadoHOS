@@ -11,6 +11,7 @@ import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
 import { SearchResult } from '../model/SearchResult';
+import { BookChapter, createDefaultChapter } from '../model/BookChapter';
 import {
   ChangeCoverSheet,
   ChangeSourceSheet,
@@ -339,6 +340,8 @@ struct BookInfoPage {
           this.groupId = existing.groupId;
           this.durChapterTitle = existing.durChapterTitle || '';
           this.durChapterIndex = existing.durChapterIndex || 0;
+          // 确保目录已保存到数据库（修复重启后目录丢失的问题）
+          await this.ensureChaptersInDb(existing.id);
           AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
           UiUtil.showToast(this.getUIContext(), { message: '已加入书架', duration: 1500 });
           return;
@@ -388,11 +391,68 @@ struct BookInfoPage {
         this.bookId = id;
         this.isInShelf = true;
         this.groupId = book.groupId;
+        // 保存目录到数据库（修复重启后目录丢失的问题）
+        await this.saveChaptersToDb(id);
         AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
         UiUtil.showToast(this.getUIContext(), { message: '已加入书架', duration: 1500 });
       }
     } catch (err) {
       UiUtil.showToast(this.getUIContext(), { message: '加入书架失败', duration: 2000 });
+    }
+  }
+
+  /**
+   * 保存目录到数据库（新增书籍时调用）
+   * 优先使用 ChapterCache 中已缓存的目录，避免重复网络请求
+   */
+  private async saveChaptersToDb(bookId: number): Promise<void> {
+    try {
+      let chapters: BookSourceChapter[] = [];
+      if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.noteUrl) {
+        chapters = ChapterCache.chapters;
+      } else if (this.chapters.length > 0) {
+        chapters = this.chapters;
+      }
+      if (chapters.length === 0) return;
+
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      const now = Date.now();
+      const bookChapters: BookChapter[] = chapters.map((ch: BookSourceChapter, idx: number): BookChapter => {
+        const item = createDefaultChapter();
+        item.bookId = bookId;
+        item.index = ch.index >= 0 ? ch.index : idx;
+        item.title = ch.title || '';
+        item.url = ch.url || '';
+        item.createTime = now;
+        item.updateTime = now;
+        return item;
+      });
+      await ct.deleteChaptersByBookId(bookId);
+      await ct.insertChapters(bookChapters);
+
+      // 更新书籍的章数和最新章节标题
+      const lastCh = chapters[chapters.length - 1];
+      const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+      await bookTable.updateTocInfo(bookId, chapters.length, lastCh.title || '');
+      console.info('[BookInfo] Saved', chapters.length, 'chapters to DB for bookId=', bookId);
+    } catch (e) {
+      console.warn('[BookInfo] Failed to save chapters to DB:', (e as Error).message);
+    }
+  }
+
+  /**
+   * 确保目录已存入数据库（已有书籍重新加入书架时调用）
+   * 仅在 DB 中无目录时才写入，避免覆盖已有内容缓存
+   */
+  private async ensureChaptersInDb(bookId: number): Promise<void> {
+    try {
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      const existingCount = await ct.getChapterCount(bookId);
+      if (existingCount > 0) return; // 目录已存在，跳过
+
+      await this.saveChaptersToDb(bookId);
+    } catch (e) {
+      console.warn('[BookInfo] Failed to ensure chapters in DB:', (e as Error).message);
     }
   }
 

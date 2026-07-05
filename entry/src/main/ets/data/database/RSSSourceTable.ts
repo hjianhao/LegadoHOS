@@ -576,6 +576,29 @@ export class RSSArticleTable {
       'dur_pos': article.durPos || 0,
     };
   }
+
+  /** 插入或替换单篇文章（按 origin + link + sort 主键 upsert） */
+  async append(article: RSSArticle): Promise<void> {
+    const row = this.articleToBucket(article);
+    try {
+      await RdbUtil.insert(this.rdbStore, RSSArticleTable.TABLE_NAME, row);
+    } catch (_e) {
+      const p = new relationalStore.RdbPredicates(RSSArticleTable.TABLE_NAME);
+      p.equalTo('origin', article.origin);
+      p.and().equalTo('link', article.link);
+      p.and().equalTo('sort', article.sort);
+      await RdbUtil.update(this.rdbStore, row, p);
+    }
+  }
+
+  /** 清理旧文章（删除 order_num 小于阈值的记录） */
+  async clearOld(origin: string, sort: string, minOrder: number): Promise<void> {
+    try {
+      await RdbUtil.executeSql(this.rdbStore,
+        `DELETE FROM rss_articles WHERE origin = '${origin.replace(/'/g, "''")}' AND sort = '${sort.replace(/'/g, "''")}' AND order_num < ${minOrder}`
+      );
+    } catch (_e) { /* ignore */ }
+  }
 }
 
 // ====== RssStarTable ======

@@ -154,12 +154,18 @@ function parseSortResult(input: string, baseUrl: string): SortUrlEntry[] {
       const name = t.substring(0, idx).trim();
       let url = t.substring(idx + 2).trim();
       if (url && !url.startsWith('http') && !url.startsWith('{{')) {
-        url = getAbsoluteURL(baseUrl, url);
+        // 判断是否为关键字（简短、无斜杠、无扩展名）而非路径
+        const isKeyword = url.length <= 10 && !url.includes('/') && !url.includes('.');
+        if (!isKeyword) {
+          url = getAbsoluteURL(baseUrl, url);
+        }
+        // 关键字保留原样，由 JS 规则处理
       }
       const entry: SortUrlEntry = { name: name, url: url };
       results.push(entry);
     } else {
-      const entry: SortUrlEntry = { name: t, url: getAbsoluteURL(baseUrl, t) };
+      const isKeyword = t.length <= 10 && !t.includes('/') && !t.includes('.');
+      const entry: SortUrlEntry = { name: t, url: isKeyword ? baseUrl : getAbsoluteURL(baseUrl, t) };
       results.push(entry);
     }
   }

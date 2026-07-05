@@ -75,24 +75,95 @@ export function getPolyfillScript(): string {
   }
 })();
 
-// --- BASE64 兼容（如果底层未注入，兜底实现） ---
-(function() {
-  if (typeof Base64 === 'undefined') {
-    globalThis.Base64 = {
-      encode: function(str) {
-        try {
-          return btoa(unescape(encodeURIComponent(str)));
-        } catch(e) {
-          return btoa(str);
-        }
-      },
-      decode: function(str) {
-        try {
-          return decodeURIComponent(escape(atob(str)));
-        } catch(e) {
-          return atob(str);
-        }
-      }
+// --- BASE64 兼容（纯 JS 实现，不依赖 btoa/atob） ---
+	(function() {
+	  if (typeof Base64 === 'undefined') {
+	    var _base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+	    globalThis.Base64 = {
+	      encode: function(str) {
+	        // 先转 UTF-8 字节（encodeURIComponent + 还原），避免 charCodeAt & 0xff 截断中文
+	        str = String(str);
+	        var utf8 = '';
+	        for (var i = 0; i < str.length; i++) {
+	          var c = str.charCodeAt(i);
+	          if (c < 0x80) {
+	            utf8 += String.fromCharCode(c);
+	          } else if (c < 0x800) {
+	            utf8 += String.fromCharCode(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+	          } else if (c < 0xd800 || c >= 0xe000) {
+	            utf8 += String.fromCharCode(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+	          } else {
+	            // surrogate pair (code point > 0xffff)
+	            i++;
+	            var c2 = str.charCodeAt(i);
+	            var cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+	            utf8 += String.fromCharCode(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+	          }
+	        }
+	        var out = '';
+	        var j = 0;
+	        var len = utf8.length;
+	        while (j < len) {
+	          var b1 = utf8.charCodeAt(j++) & 0xff;
+	          out += _base64Chars.charAt(b1 >> 2);
+	          if (j === len) {
+	            out += _base64Chars.charAt((b1 & 0x3) << 4);
+	            out += '==';
+	            break;
+	          }
+	          var b2 = utf8.charCodeAt(j++) & 0xff;
+	          out += _base64Chars.charAt(((b1 & 0x3) << 4) | ((b2 & 0xf0) >> 4));
+	          if (j === len) {
+	            out += _base64Chars.charAt((b2 & 0xf) << 2);
+	            out += '=';
+	            break;
+	          }
+	          var b3 = utf8.charCodeAt(j++) & 0xff;
+	          out += _base64Chars.charAt(((b2 & 0xf) << 2) | ((b3 & 0xc0) >> 6));
+	          out += _base64Chars.charAt(b3 & 0x3f);
+	        }
+	        return out;
+	      },
+	      decode: function(str) {
+	        str = String(str).replace(/[^A-Za-z0-9\+\/]/g, '');
+	        // 先解码为 UTF-8 字节，再还原为 JS 字符串
+	        var bytes = '';
+	        var i = 0;
+	        var len = str.length;
+	        while (i < len) {
+	          var idx1 = _base64Chars.indexOf(str.charAt(i++));
+	          var idx2 = _base64Chars.indexOf(str.charAt(i++));
+	          var idx3 = _base64Chars.indexOf(str.charAt(i++));
+	          var idx4 = _base64Chars.indexOf(str.charAt(i++));
+	          bytes += String.fromCharCode((idx1 << 2) | (idx2 >> 4));
+	          if (idx3 !== 64) bytes += String.fromCharCode(((idx2 & 15) << 4) | (idx3 >> 2));
+	          if (idx4 !== 64) bytes += String.fromCharCode(((idx3 & 3) << 6) | idx4);
+	        }
+	        // UTF-8 解码
+	        var out = '';
+	        var j = 0;
+	        while (j < bytes.length) {
+	          var b1 = bytes.charCodeAt(j++) & 0xff;
+	          if (b1 < 0x80) {
+	            out += String.fromCharCode(b1);
+	          } else if ((b1 & 0xe0) === 0xc0) {
+	            var b2 = bytes.charCodeAt(j++) & 0xff;
+	            out += String.fromCharCode(((b1 & 0x1f) << 6) | (b2 & 0x3f));
+	          } else if ((b1 & 0xf0) === 0xe0) {
+	            var b2 = bytes.charCodeAt(j++) & 0xff;
+	            var b3 = bytes.charCodeAt(j++) & 0xff;
+	            out += String.fromCharCode(((b1 & 0x0f) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f));
+	          } else if ((b1 & 0xf8) === 0xf0) {
+	            var b2 = bytes.charCodeAt(j++) & 0xff;
+	            var b3 = bytes.charCodeAt(j++) & 0xff;
+	            var b4 = bytes.charCodeAt(j++) & 0xff;
+	            var cp = ((b1 & 0x07) << 18) | ((b2 & 0x3f) << 12) | ((b3 & 0x3f) << 6) | (b4 & 0x3f);
+	            cp -= 0x10000;
+	            out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+	          }
+	        }
+	        return out;
+	      }
     };
   }
 })();
@@ -150,6 +221,136 @@ export function getPolyfillScript(): string {
         if (!isNaN(code)) result += String.fromCharCode(code);
       }
       return result;
+    };
+  }
+})();
+
+// --- java.base64Encode / java.base64Decode 兼容 ---
+(function() {
+  var _j = typeof java !== "undefined" ? java : globalThis.java;
+  if (_j) {
+    if (!_j.base64Encode) {
+      _j.base64Encode = function(str) {
+        return Base64.encode(String(str));
+      };
+    }
+    if (!_j.base64Decode) {
+      _j.base64Decode = function(str) {
+        return Base64.decode(String(str));
+      };
+    }
+    if (!_j.ajax) {
+      _j.ajax = function(url) {
+        // 返回空字符串，Worker 中会拦截并真正发请求
+        console.log('[Polyfill] java.ajax called (will be intercepted): ' + String(url).substring(0, 80));
+        return '';
+      };
+    }
+    if (!_j.longToast) {
+      _j.longToast = function(msg) {
+        console.log('[java.longToast] ' + msg);
+      };
+    }
+    if (!_j.toast) {
+      _j.toast = function(msg) {
+        console.log('[java.toast] ' + msg);
+      };
+    }
+    if (!_j.startBrowser) {
+      _j.startBrowser = function(url, title) {
+        console.log('[java.startBrowser] ' + (title || '') + ': ' + url);
+      };
+    }
+  }
+})();
+
+// --- getVariable / setVariable 兼容 ---
+(function() {
+  if (typeof getVariable === 'undefined') {
+    var _variables = {};
+    globalThis.getVariable = function(key) {
+      return _variables[key];
+    };
+    globalThis.setVariable = function(key, value) {
+      _variables[key] = value;
+    };
+  }
+})();
+
+// --- BaseUrl() 全局函数（返回书源 base URL，由 ArkTS 侧在执行前注入） ---
+(function() {
+  if (typeof BaseUrl === 'undefined') {
+    globalThis.BaseUrl = function() {
+      return typeof baseUrl !== 'undefined' ? baseUrl : '';
+    };
+  }
+})();
+
+// --- hosts 变量（聚合书源常用，默认空） ---
+(function() {
+  if (typeof hosts === 'undefined') {
+    globalThis.hosts = '';
+  }
+})();
+
+// --- checkEnv() 兼容（聚合书源用） ---
+(function() {
+  if (typeof checkEnv === 'undefined') {
+    globalThis.checkEnv = function() {
+      return '鸿蒙';
+    };
+  }
+})();
+
+// --- getFqToken / getToken 兼容（聚合书源番茄/晴天登录） ---
+(function() {
+  if (typeof getFqToken === 'undefined') {
+    globalThis.getFqToken = function() { return ''; };
+  }
+  if (typeof getToken === 'undefined') {
+    globalThis.getToken = function() { return ''; };
+  }
+})();
+
+// --- createFilter / createText / createButton 兼容（聚合书源发现页） ---
+(function() {
+  if (typeof createFilter === 'undefined') {
+    globalThis.createFilter = function(name, options, selected, key, width, label) {
+      return { title: name, type: 'filter', options: options, selected: selected, key: key, width: width, label: label };
+    };
+  }
+  if (typeof createText === 'undefined') {
+    globalThis.createText = function(name, action, defaultValue, width, placeholder) {
+      return { title: name, type: 'text', action: action, defaultValue: defaultValue, width: width, placeholder: placeholder };
+    };
+  }
+  if (typeof createButton === 'undefined') {
+    globalThis.createButton = function(name, action, width) {
+      return { title: name, type: 'button', action: action, width: width };
+    };
+  }
+})();
+
+// --- getCloudSettings / renderVersionPage / getHtmlSettings 兼容 ---
+(function() {
+  if (typeof getCloudSettings === 'undefined') {
+    globalThis.getCloudSettings = function(force) {
+      console.log('[Polyfill] getCloudSettings called, force=' + force);
+    };
+  }
+  if (typeof renderVersionPage === 'undefined') {
+    globalThis.renderVersionPage = function() {
+      console.log('[Polyfill] renderVersionPage called');
+    };
+  }
+  if (typeof getHtmlSettings === 'undefined') {
+    globalThis.getHtmlSettings = function() {
+      console.log('[Polyfill] getHtmlSettings called');
+    };
+  }
+  if (typeof exploreSearch === 'undefined') {
+    globalThis.exploreSearch = function() {
+      console.log('[Polyfill] exploreSearch called');
     };
   }
 })();

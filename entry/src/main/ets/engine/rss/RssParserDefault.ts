@@ -45,6 +45,8 @@ export function parseXML(
 
   try {
     console.info('[RssParserDefault] parsing XML, length: ' + xml.length + ', isAtom: ' + (xml.includes('<feed') || xml.includes('xmlns="http://www.w3.org/2005/Atom"')));
+    // 诊断：打印前 500 字符，用于判断内容是 HTML 还是 XML
+    console.info('[RssParserDefault] content preview (first 500): ' + xml.substring(0, Math.min(500, xml.length)));
     // 简单预清理
     const cleaned = xml.replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
 
@@ -55,6 +57,15 @@ export function parseXML(
       parseAtom(cleaned, sortName, sourceUrl, articles);
     } else {
       parseRSS(cleaned, sortName, sourceUrl, articles);
+    }
+
+    // 兜底：如果默认解析没找到文章，且内容看起来像 HTML，尝试提取链接
+    if (articles.length === 0) {
+      const isHtml = /<(!DOCTYPE|html|head|body|meta|div|span|script|style)\b/i.test(xml);
+      if (isHtml) {
+        console.info('[RssParserDefault] 未找到 RSS/Atom 条目，内容疑似 HTML，尝试提取链接');
+        extractLinksFromHtml(xml, sortName, sourceUrl, articles);
+      }
     }
 
     return [articles, null];
@@ -123,6 +134,12 @@ function extractTags(xml: string, tag: string): string[] {
   // eslint-disable-next-line no-cond-assign
   while ((match = regex.exec(xml)) !== null) {
     results.push(match[0]);
+  }
+  if (results.length === 0) {
+    // 诊断：检查 content 中是否存在该标签（不区分大小写）
+    const hasOpenTag = new RegExp(`<${tag}[\\s>]`, 'i').test(xml);
+    const hasCloseTag = new RegExp(`<\\/${tag}>`, 'i').test(xml);
+    console.info(`[RssParserDefault] extractTags<${tag}>: found 0. hasOpenTag=${hasOpenTag}, hasCloseTag=${hasCloseTag}`);
   }
   return results;
 }
@@ -234,4 +251,77 @@ function getFirstImageUrl(html: string): string | null {
   const imgRegex2 = /<img[^>]+src\s*=\s*'([^']+)'/i;
   const match2 = imgRegex2.exec(html);
   return match2 ? match2[1].trim() : null;
+}
+
+/**
+ * HTML 兜底：当内容不是 RSS/Atom XML 而是 HTML 页面时，
+ * 提取页面中的链接作为文章列表
+ */
+function extractLinksFromHtml(html: string, sortName: string, sourceUrl: string, articles: RSSArticle[]): void {
+  // 提取 title 标签内容作为页面标题
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const pageTitle = titleMatch ? titleMatch[1].trim() : '';
+
+  // 提取所有的 <a href="...">text</a>
+  const linkRegex = /<a\s[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const seen = new Set<string>();
+  let linkMatch: RegExpExecArray | null;
+
+  while ((linkMatch = linkRegex.exec(html)) !== null) {
+    let href = linkMatch[1].trim();
+    const text = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+
+    // 跳过空文本、纯空白、javascript:、#锚点
+    if (!text || text.length === 0 || text.length > 200) continue;
+    if (href.startsWith('javascript:') || href === '#' || href.startsWith('#')) continue;
+
+    // 相对 URL 转绝对 URL
+    if (!href.startsWith('http')) {
+      if (href.startsWith('//')) {
+        href = 'https:' + href;
+      } else if (href.startsWith('/')) {
+        try {
+          const protocolEnd = sourceUrl.indexOf('://');
+          const protocol = protocolEnd > 0 ? sourceUrl.substring(0, protocolEnd + 3) : 'https://';
+          const rest = protocolEnd > 0 ? sourceUrl.substring(protocolEnd + 3) : sourceUrl;
+          const hostEnd = rest.indexOf('/');
+          const host = hostEnd > 0 ? rest.substring(0, hostEnd) : rest;
+          href = protocol + host + href;
+        } catch (_e) {
+          continue;
+        }
+      } else {
+        // 相对路径，拼接
+        const lastSlash = sourceUrl.lastIndexOf('/');
+        if (lastSlash > 8) {
+          href = sourceUrl.substring(0, lastSlash + 1) + href;
+        } else {
+          href = sourceUrl + '/' + href;
+        }
+      }
+    }
+
+    // 去重
+    if (seen.has(href)) continue;
+    seen.add(href);
+
+    articles.push({
+      origin: sourceUrl,
+      sort: sortName,
+      link: href,
+      title: text,
+      order: 0,
+      pubDate: null,
+      description: null,
+      content: null,
+      image: null,
+      group: pageTitle || '默认分组',
+      read: false,
+      variable: null,
+      type: 0,
+      durPos: 0,
+    });
+  }
+
+  console.info('[RssParserDefault] extractLinksFromHtml: found ' + articles.length + ' links');
 }

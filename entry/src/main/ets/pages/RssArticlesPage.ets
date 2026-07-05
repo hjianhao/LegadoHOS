@@ -55,25 +55,16 @@ struct RssArticlesPage {
         console.info('[RssArticlesPage] cleaned URL: ' + cleanUrl);
       }
 
-      // 直接 HTTP 获取
-      let body: string;
-      try {
-        body = await NetUtil.httpGet(cleanUrl, {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
-          'Accept': 'text/html,application/xml;q=0.9,*/*;q=0.8',
-        }, 15000);
-      } catch (httpErr) {
-        const errMsg = (httpErr instanceof Error) ? httpErr.message : String(httpErr);
-        this.statusMsg = '网络请求失败: ' + errMsg;
-        this.isLoading = false;
-        return;
-      }
+      // fetchArticles 内部会做 HTTP 请求 + 规则解析
+      const hasRules = !!(source.ruleArticles && source.ruleArticles.trim().length > 0);
+      console.info('[RssArticlesPage] calling fetchArticles, hasRules=' + hasRules + ', singleUrl=' + source.singleUrl + ', url=' + cleanUrl);
 
-      // 解析
       const result = await fetchArticles(source.sourceName || '默认分类', cleanUrl, source);
       const fetchedArticles = result[0];
       if (fetchedArticles.length > 0) {
         await this.db.rssArticleTable.batchInsert(fetchedArticles);
+      } else {
+        this.statusMsg = '未解析到文章，该 URL 可能不是 RSS/Atom 格式';
       }
 
       this.articles = await this.db.rssArticleTable.getByOrigin(this.sourceUrl);

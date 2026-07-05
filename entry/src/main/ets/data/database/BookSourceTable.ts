@@ -48,6 +48,7 @@ export const BookSourceTableCreate = `
     header TEXT DEFAULT '',
     raw_json TEXT DEFAULT '',
     rule_book_info_toc_url TEXT DEFAULT '',
+    is_ai_generated INTEGER DEFAULT 0,
     create_time INTEGER DEFAULT 0,
     update_time INTEGER DEFAULT 0
   );
@@ -419,6 +420,7 @@ export class BookSourceTable {
         ruleReviewPostTime: '',
         ruleReviewQuoteUrl: '',
         rawJson: '',
+        isAiGenerated: RdbUtil.long(rs, 'is_ai_generated') === 1,
       };
 
       // 从 raw_json 恢复完整数据
@@ -428,6 +430,8 @@ export class BookSourceTable {
         try {
           const parsed = JSON.parse(rawJson);
           const fixed = parseBookSource(parsed);
+          // 恢复 jsLib（聚合书源的核心脚本）
+          if (fixed.jsLib) source.jsLib = fixed.jsLib;
           // 恢复 exploreUrl
           if (fixed.exploreUrl && !source.exploreUrl) {
             source.exploreUrl = fixed.exploreUrl;
@@ -522,6 +526,7 @@ export class BookSourceTable {
       'header': source.header,
       'raw_json': (source as any).rawJson || '',
       'rule_book_info_toc_url': source.ruleBookInfoTocUrl,
+      'is_ai_generated': source.isAiGenerated ? 1 : 0,
       'create_time': source.createTime,
       'update_time': source.updateTime,
     };

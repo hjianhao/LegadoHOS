@@ -87,8 +87,11 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
   // 移除剩余未处理的 {{}} JS 表达式
   url = url.replace(/\{\{[^}]*\}\}/g, '');
 
-  // 处理 <js>...</js> 和 @js: — 移除（无法执行 JS 时只能兜底）
-  url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
+  // 处理 <js>...</js> 和 @js: — 提醒调用方应预先评估
+  if (/<js>[\s\S]*?<\/js>/i.test(url)) {
+    console.warn('[buildUrl] Un-evaluated <js> block found in URL, stripping. Caller should evaluate via JsExpressionEvaluator first.');
+    url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
+  }
   url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
 
   // 处理页码分组 <选项1,选项2,...>
@@ -100,7 +103,8 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
   }
 
   // 相对路径处理 — 必须在 JSON 选项提取之前，保证 URL 以 http(s):// 开头
-  if (!url.startsWith('http://') && !url.startsWith('https://') && baseUrl) {
+  // data: URI 是内部格式（聚合书源），不拼接 baseUrl
+  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:') && baseUrl) {
     const base = baseUrl.replace(/\/+$/, '');
     url = base + (url.startsWith('/') ? url : '/' + url);
   }
@@ -120,6 +124,10 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
   if (!jsonOptMatch) {
     // 最后尝试: url#xxx{...} (有 # 选择器后跟 JSON)
     jsonOptMatch = url.match(/^(https?:\/\/[^#]+)#[^,]*?,?(\{[\s\S]*\})$/);
+  }
+  // data: URI 的 JSON 选项（聚合书源常用，如 data:;base64,xxx,{"type":"gysearch"}）
+  if (!jsonOptMatch) {
+    jsonOptMatch = url.match(/^(data:[^,]+),(\{[\s\S]*\})$/);
   }
 
   /** 从 JSON 字符串中提取 webView/webview 标志 */
@@ -444,19 +452,126 @@ export class SourceExecutor {
   
   private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
-    const baseUrl = getBaseUrl(source.sourceUrl);
-    const { url, method, body, charset, webView } = buildUrl(source.ruleSearchUrl, keyword, page, baseUrl);
+    let baseUrl = getBaseUrl(source.sourceUrl);
 
-    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-      console.warn('[SrcEx] Invalid URL for', source.sourceName, ':', url);
+    // 如果 sourceUrl 不是合法 HTTP URL（聚合书源常见），尝试从 rawJson 或 jsLib 中获取后端地址
+    if (this.engineInitialized && baseUrl && !baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+      // 优先从 rawJson/jsLib 文本中直接提取 hosts[0]（正则提取，不走 JS 引擎）
+      const rawJson = (source as any).rawJson || '';
+      const jsLib = source.jsLib || '';
+      const searchText = jsLib || rawJson;
+      const urls = searchText.match(/'((?:https?:)?\/\/[^']+)'/g);
+      if (urls && urls.length > 0) {
+        const resolved = urls[0].replace(/^'|'$/g, '').replace(/\/+$/, '');
+        if (resolved.startsWith('http')) {
+          console.info('[SrcEx] Resolved base URL from source text:', resolved);
+          baseUrl = resolved;
+        }
+      }
+      // 回退：尝试 JS 求值
+      if (!baseUrl.startsWith('http')) {
+        try {
+          const resolved = await JsExpressionEvaluator.evaluate(
+            '(function(){var v=getVariable("线路");if(v&&/^https?:\\/\\//.test(v))return v;if(typeof hosts==="string"&&/^https?:\\/\\//.test(hosts))return hosts;if(Array.isArray(hosts)&&hosts.length>0)return hosts[0];return "";})()',
+            { source: source, jsLib: source.jsLib || '' }
+          );
+          if (resolved && resolved.startsWith('http')) {
+            console.info('[SrcEx] Resolved base URL from JS vars:', resolved);
+            baseUrl = resolved.replace(/\/+$/, '');
+          } else {
+            console.info('[SrcEx] baseUrl resolve returned:', resolved, 'len=', resolved?.length);
+          }
+        } catch (_e) { /* ignore */ }
+      }
+    }
+
+    // 评估 searchUrl 中的 <js>...</js> 块（Legado 聚合书源常用）
+    let searchUrlTemplate = source.ruleSearchUrl;
+    const jsBlockMatch = searchUrlTemplate.match(/<js>([\s\S]*?)<\/js>/i);
+    if (jsBlockMatch) {
+      try {
+        if (this.engineInitialized) {
+          const jsCode = jsBlockMatch[1];
+          console.info('[SrcEx] Evaluating JS in searchUrl for', source.sourceName,
+            '(jsCode len=' + jsCode.length + ')');
+          const jsResult = await JsExpressionEvaluator.evaluate(jsCode, {
+            key: keyword,
+            page: page,
+            baseUrl: baseUrl,
+            source: source,
+          });
+          if (jsResult && jsResult.trim()) {
+            searchUrlTemplate = searchUrlTemplate.replace(/<js>[\s\S]*?<\/js>/gi, jsResult.trim());
+            console.info('[SrcEx] JS evaluated OK, result:', jsResult.trim().substring(0, 120));
+          } else {
+            console.warn('[SrcEx] JS evaluation returned empty for', source.sourceName);
+          }
+        } else {
+          console.warn('[SrcEx] Engine not initialized, cannot evaluate JS for', source.sourceName);
+        }
+      } catch (e) {
+        console.warn('[SrcEx] JS evaluation failed for', source.sourceName, ':', (e as Error).message);
+      }
+    }
+
+    const { url, method, body, charset, webView } = buildUrl(searchUrlTemplate, keyword, page, baseUrl);
+
+    // data: URI 转换（聚合书源如光遇聚合）
+    // data:;base64,<body>,{"type":"gysearch"} → POST body 到 baseUrl
+    let finalUrl = url;
+    let finalMethod = method;
+    let finalBody = body;
+    if (url && url.startsWith('data:;base64,')) {
+      console.info('[SrcEx] data: URI detected, baseUrl=', baseUrl, 'sourceUrl=', source.sourceUrl);
+      // 从 rawJson/jsLib 文本中正则提取第一个 HTTP host
+      let httpBase = baseUrl;
+      if (!httpBase || (!httpBase.startsWith('http://') && !httpBase.startsWith('https://'))) {
+        const rawJson = (source as any).rawJson || '';
+        const jsLibText = source.jsLib || '';
+        const searchText = jsLibText || rawJson;
+        const urls = searchText.match(/'((?:https?:)?\/\/[^']+)'/g);
+        if (urls && urls.length > 0) {
+          httpBase = urls[0].replace(/^'|'$/g, '').replace(/\/+$/, '');
+          console.info('[SrcEx] Parsed HTTP base from source text:', httpBase);
+        }
+      }
+      if (httpBase && httpBase.startsWith('http')) {
+        const dataMatch = url.match(/^data:;base64,([^,]*)/);
+        if (dataMatch) {
+          const decoded = CryptoUtil.base64Decode(dataMatch[1]);
+          // gysearch: 解码 body 为 JSON，构造 /search?title=... GET 请求
+          try {
+            const params = JSON.parse(decoded) as Record<string, string>;
+            const query = Object.entries(params)
+              .map(([k, v]) => `${k === 'key' ? 'title' : k === 'sourcesKey' ? 'source' : k}=${encodeURIComponent(String(v))}`)
+              .join('&');
+            finalUrl = `${httpBase}/search?${query}`;
+            finalMethod = 'GET';
+            finalBody = '';
+            console.info('[SrcEx] Converted data: URI → GET', finalUrl.substring(0, 120));
+          } catch (_) {
+            // 非 JSON body，回退 POST
+            finalUrl = httpBase;
+            finalMethod = 'POST';
+            finalBody = decoded;
+            console.info('[SrcEx] Converted data: URI → POST', httpBase, 'body len=', decoded.length);
+          }
+        }
+      } else {
+        console.warn('[SrcEx] data: URI cannot resolve HTTP host');
+      }
+    }
+
+    if (!finalUrl || (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://'))) {
+      console.warn('[SrcEx] Invalid URL for', source.sourceName, ':', finalUrl);
       return [];
     }
 
     // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
-    if (webView && WebViewFetcher.isReady() && method !== 'POST') {
+    if (webView && WebViewFetcher.isReady() && finalMethod !== 'POST') {
       console.info('[SrcEx] WebView request (source config) for', source.sourceName);
       try {
-        const wvResult = await WebViewFetcher.fetch(url, 30000);
+        const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
         const bodyText = wvResult.html;
         if (bodyText && bodyText.length > 100) {
           console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
@@ -475,16 +590,16 @@ export class SourceExecutor {
         headers['Accept-Charset'] = charset;
       }
 
-      console.info('[SrcEx] Fetching:', (method || 'GET'), url.substring(0, 80));
+      console.info('[SrcEx] Fetching:', (finalMethod || 'GET'), finalUrl.substring(0, 80));
 
       let bodyText = '';
-      if (method === 'POST') {
+      if (finalMethod === 'POST') {
         if (!headers['Content-Type'] && !headers['content-type']) {
-          headers['Content-Type'] = 'application/x-www-form-urlencoded';
+          headers['Content-Type'] = 'application/json';
         }
-        bodyText = await NetUtil.httpPost(url, body || '', headers, 15000);
+        bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', headers, 15000);
       } else {
-        bodyText = await NetUtil.httpGet(url, headers, 15000);
+        bodyText = await NetUtil.httpGet(finalUrl, headers, 15000);
       }
       if (!bodyText) {
         console.warn('[SrcEx] Empty response from', source.sourceName);
@@ -492,7 +607,11 @@ export class SourceExecutor {
       }
       console.info('[SrcEx] Got', bodyText.length, 'bytes from', source.sourceName);
 
-      return this.parseResponse(bodyText, source, baseUrl, 0);
+      // 尝试 hex 解码（聚合书源的 API 返回 hex 编码的 JSON）
+      const hexDecoded = this.tryHexDecode_(bodyText);
+      const parsedBody = hexDecoded || bodyText;
+
+      return this.parseResponse(parsedBody, source, baseUrl, 0);
     } catch (err) {
       const msg = (err as Error).message;
       if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
@@ -503,7 +622,7 @@ export class SourceExecutor {
           const wvHtml = wvResult.html;
           if (wvHtml && wvHtml.length > 100) {
             console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);
-            return this.parseResponse(wvHtml, source, baseUrl, Date.now() - Date.now());
+            return this.parseResponse(this.tryHexDecode_(wvHtml) || wvHtml, source, baseUrl, Date.now() - Date.now());
           }
         } catch (_wv) { /* WebView fallback also failed */ }
       }
@@ -520,6 +639,26 @@ export class SourceExecutor {
     });
   }
 
+  /** 尝试 hex 解码（聚合书源 API 返回 hex 编码的 JSON） */
+  private tryHexDecode_(text: string): string {
+    if (!text || text.length < 4) return '';
+    // hex 字符串只包含 0-9 a-f A-F，尝试解码
+    if (!/^[0-9a-fA-F]+$/.test(text.trim())) return '';
+    try {
+      let result = '';
+      const hex = text.trim();
+      for (let i = 0; i < hex.length; i += 2) {
+        result += String.fromCharCode(parseInt(hex.substring(i, i + 2), 16));
+      }
+      // 简单验证：解码后应该是 JSON
+      if (result.startsWith('{') || result.startsWith('[')) {
+        console.info('[SrcEx] Hex decoded', hex.length, '→', result.length, 'bytes');
+        return result;
+      }
+    } catch (_) { /* ignore */ }
+    return '';
+  }
+
   /** 将搜索 HTML dump 到日志（用于诊断） */
   /** 解析搜索响应：先 JSON，再 HTML，再 Fallback */
   private parseResponse(bodyText: string, source: BookSource, baseUrl: string, duration: number): SearchResult[] {
@@ -531,10 +670,11 @@ export class SourceExecutor {
         console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
         return results;
       } else {
-        console.info('[SrcEx] JSON parsed but 0 results, ruleSearchList=' + source.ruleSearchList + ' first100=' + bodyText.substring(0, 100));
+        const stripped = (source.ruleSearchList || '').replace(/<js>[\s\S]*?<\/js>/g, '').trim();
+        console.info('[SrcEx] JSON parsed but 0 results, ruleSearchList stripped=', stripped, 'first100=', bodyText.substring(0, 200));
       }
     } catch (_e) {
-      console.info('[SrcEx] JSON parse failed, first100=' + bodyText.substring(0, 100));
+      console.info('[SrcEx] JSON parse failed, first200=' + bodyText.substring(0, 200));
       /* not JSON */ }
 
     // HtmlParser + CSS 选择器
@@ -1052,7 +1192,8 @@ export class SourceExecutor {
     try {
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
-        'Referer': source.sourceUrl || '',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': tocUrl,
         ...parseHeader(source.header)
       };
       let resp = await this.fetchWithOpts(tocUrl, headers);
@@ -1332,7 +1473,29 @@ export class SourceExecutor {
         }
       }
     } catch (err) {
-      console.warn('[SrcEx] getToc failed:', (err as Error).message);
+      const msg = (err as Error).message;
+      console.warn('[SrcEx] getToc failed:', msg);
+      // WebView 回退（Cloudflare 等反爬保护）
+      if ((msg.includes('403') || msg.includes('Cloudflare') || msg.includes('503') || msg.includes('page not found')) && WebViewFetcher.isReady()) {
+        console.info('[SrcEx] getToc trying WebView for', tocUrl.substring(0, 60));
+        try {
+          const wvResult = await WebViewFetcher.fetch(tocUrl, 20000);
+          const wvHtml = wvResult.html;
+          if (wvHtml && wvHtml.length > 100) {
+            console.info('[SrcEx] getToc WebView got', wvHtml.length, 'bytes');
+            const wvTocRules: Record<string, string> = {
+              toc: source.ruleToc || '',
+              tocTitle: source.ruleTocTitle || '',
+              tocUrlItem: source.ruleTocUrlItem || '',
+            };
+            const wvChapters = this.parseTocFromRules(wvHtml, wvTocRules, tocUrl);
+            if (wvChapters.length > 0) {
+              console.info('[SrcEx] getToc WebView OK:', wvChapters.length, 'chapters');
+              return wvChapters;
+            }
+          }
+        } catch (_wv) { /* WebView also failed */ }
+      }
       return [];
     }
     return [];
@@ -1745,7 +1908,7 @@ export class SourceExecutor {
         console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
       }
       let noteUrl = this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl) ||
-        this.firstStr(itemObj, 'noteUrl', 'bookUrl', 'novelId', 'id', 'url');
+        this.firstStr(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
@@ -1771,8 +1934,10 @@ export class SourceExecutor {
 
   private getPath(obj: Record<string, unknown>, path: string): unknown {
     if (!path) return undefined;
+    // 剥离 <js>...</js> 块（Legado 规则中的预处理脚本）
+    const cleanPath = path.replace(/<js>[\s\S]*?<\/js>/g, '').trim();
     // 处理 || 备用规则：尝试每个备选，返回第一个有值的
-    const alternatives = path.split('||');
+    const alternatives = cleanPath.split('||');
     for (const alt of alternatives) {
       const val = this.getSinglePath(obj, alt.trim());
       if (val !== undefined && val !== null) return val;

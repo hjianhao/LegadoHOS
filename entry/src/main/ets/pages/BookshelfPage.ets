@@ -384,8 +384,26 @@ export struct BookshelfPage {
           failed++;
           continue;
         }
+        // 保存旧章节中的已缓存内容，避免更新目录后丢失
+        const oldChapters = await chapterDao.getChaptersByBookId(book.id);
+        const contentByUrl = new Map<string, string>();
+        for (const old of oldChapters) {
+          if (old.content && old.content.length > 50 && old.url) {
+            contentByUrl.set(old.url, old.content);
+          }
+        }
         await chapterDao.deleteChaptersByBookId(book.id);
-        await chapterDao.insertChapters(this.toBookChapters(book.id, chapters));
+        // 插入新目录时还原已缓存的内容
+        const newChapters = this.toBookChapters(book.id, chapters);
+        for (const nc of newChapters) {
+          const cached = contentByUrl.get(nc.url);
+          if (cached) {
+            nc.content = cached;
+            nc.contentLength = cached.length;
+            nc.isCached = true;
+          }
+        }
+        await chapterDao.insertChapters(newChapters);
         await bookDao.updateTocInfo(book.id, chapters.length, chapters[chapters.length - 1].title);
         success++;
       }
@@ -675,6 +693,7 @@ export struct BookshelfPage {
         this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
         this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
         this.mi('添加URL', () => { this.showMenu = false; this.addUrlDlg?.open(); })
+        this.mi('🤖 AI 智能导入', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiImportBookPage' }); })
         this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
         this.mi('书架管理', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookshelfManagePage' }); })
         this.mi('导出书架', () => { this.showMenu = false; this.openExportDialog(this.currentTargetBooks()); })
