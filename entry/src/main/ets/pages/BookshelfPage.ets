@@ -546,7 +546,7 @@ export struct BookshelfPage {
   }
 
   build() { Stack() {
-    Column().width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5') {
+    Column().width('100%').height('100%').backgroundColor(this.cs().background) {
       // 顶部栏
       Row() {
         Text('\uD83D\uDCDA 书架').fontSize(20).fontWeight(FontWeight.Bold)
@@ -567,7 +567,7 @@ export struct BookshelfPage {
         }.height(28).padding({ left: 8, right: 8 })
         .backgroundColor(this.cs().surfaceVariant).borderRadius(14).margin({ left: 4 })
         .onClick(() => { this.onSortToggle(); })
-        Button() { Text('⋮').fontSize(22).fontColor(this.isDark ? '#CCC' : '#555') }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
+        Button() { Text('⋮').fontSize(22).fontColor(this.cs().onSurface) }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
       }.padding({ left: 16, right: 12, top: 12 }).width('100%')
 
       // 搜索栏
@@ -616,7 +616,7 @@ export struct BookshelfPage {
             .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.removeSelectedFromShelf(); })
         }.width('100%').height(40).padding({ left: 16, right: 12 })
-        .backgroundColor(this.isDark ? '#1F1F1F' : '#F0F7FF')
+        .backgroundColor(this.cs().surfaceVariant)
       }
 
       // 内容

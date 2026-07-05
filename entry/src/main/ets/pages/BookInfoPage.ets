@@ -23,6 +23,7 @@ import { UiUtil } from '../util/UiUtil';
 @Entry
 @Component
 struct BookInfoPage {
+  private cs() { return AppTheme.getInstance().colorScheme; }
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State coverUrl: string = '';
