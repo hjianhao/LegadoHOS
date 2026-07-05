@@ -30,7 +30,6 @@ interface ExploreCategory {
 
 @Component
 export struct ExplorePage {
-  private cs() { return AppTheme.getInstance().colorScheme; }
   @StorageLink('isDark') isDark: boolean = false;
   @State exploreSources: BookSource[] = [];
   @State searchKey: string = '';
@@ -489,7 +488,7 @@ export struct ExplorePage {
                 }
               }
               .width('100%')
-              .backgroundColor(this.cs().surface)
+              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
               .borderRadius(12).margin({ left: 16, right: 16, bottom: 10 })
               .border({ width: 1, color: this.isDark ? '#333' : '#E8E8E8' })
             }
@@ -497,7 +496,7 @@ export struct ExplorePage {
         }.width('100%').layoutWeight(1)
       }
     }
-    .width('100%').height('100%').backgroundColor(this.cs().background)
+    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
   }
 
   @Builder

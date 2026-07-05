@@ -9,7 +9,6 @@ interface MenuEntry { icon: string; title: string; desc: string; page: string; }
 
 @Component
 export struct MyPage {
-  private cs() { return AppTheme.getInstance().colorScheme; }
   @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 
@@ -53,7 +52,7 @@ export struct MyPage {
       }
       .width('100%').layoutWeight(1)
     }
-    .width('100%').height('100%').backgroundColor(this.cs().background)
+    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
     .alignItems(HorizontalAlign.Center)
   }
 }

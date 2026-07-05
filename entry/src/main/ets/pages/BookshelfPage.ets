@@ -41,7 +41,6 @@ export struct BookshelfPage {
   @State isLoading: boolean = false;
   @State isRefreshing: boolean = false;
   @StorageLink('isDark') isDark: boolean = false;
-  private cs() { return AppTheme.getInstance().colorScheme; }
   @State activeTabIndex: number = 0;
   @State activeGroupId: number = BookGroup.ALL;
   @State groups: BookGroupItem[] = [];
@@ -546,34 +545,34 @@ export struct BookshelfPage {
   }
 
   build() { Stack() {
-    Column().width('100%').height('100%').backgroundColor(this.cs().background) {
+    Column().width('100%').height('100%').onClick(() => { console.info("[Bookshelf] isDark=" + this.isDark + " bg=" + this.cs().background + " surface=" + this.cs().surface); }).backgroundColor(this.isDark ? '#121212' : '#F5F5F5') {
       // 顶部栏
       Row() {
         Text('\uD83D\uDCDA 书架').fontSize(20).fontWeight(FontWeight.Bold)
         Blank()
         if (this.filteredBooks.length > 0) {
-          Text(this.filteredBooks.length + '本').fontSize(13).fontColor(this.cs().onSurface).margin({ right: 8 })
+          Text(this.filteredBooks.length + '本').fontSize(13).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ right: 8 })
         }
         Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor('#FFF')
           .height(32).padding({ left: 10, right: 10 })
         .backgroundColor('#0078D7').borderRadius(16).margin({ right: 6 })
         .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
         Button() {
-          Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor(this.cs().onSurface)
+          Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
         }.width(36).height(36).backgroundColor('transparent')
         .onClick(() => { this.onLayoutToggle(); })
         Button() {
-          Text(this.sortLabels[this.sortMode]).fontSize(12).fontColor(this.cs().onSurface)
+          Text(this.sortLabels[this.sortMode]).fontSize(12).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
         }.height(28).padding({ left: 8, right: 8 })
-        .backgroundColor(this.cs().surfaceVariant).borderRadius(14).margin({ left: 4 })
+        .backgroundColor(this.isDark ? '#2C2C2C' : '#E0E0E0').borderRadius(14).margin({ left: 4 })
         .onClick(() => { this.onSortToggle(); })
-        Button() { Text('⋮').fontSize(22).fontColor(this.cs().onSurface) }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
+        Button() { Text('⋮').fontSize(22).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E') }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
       }.padding({ left: 16, right: 12, top: 12 }).width('100%')
 
       // 搜索栏
       TextInput({ placeholder: '搜索书名或作者...', text: this.searchText })
         .width('calc(100% - 32)').height(36).margin({ left: 16, right: 16, top: 8 })
-        .padding({ left: 12 }).backgroundColor(this.cs().surface)
+        .padding({ left: 12 }).backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
         .borderRadius(18).fontSize(14).placeholderColor('#999')
         .onChange((value: string) => { this.onSearchChange(value); })
 
@@ -605,7 +604,7 @@ export struct BookshelfPage {
       if (this.isSelectMode) {
         Row() {
           Text('已选 ' + this.selectedBookIds.length + ' / ' + this.filteredBooks.length)
-            .fontSize(13).fontColor(this.cs().onSurface).layoutWeight(1)
+            .fontSize(13).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').layoutWeight(1)
           Button('全选').fontSize(13).fontColor('#0078D7')
             .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.selectAllVisible(); })
@@ -616,7 +615,7 @@ export struct BookshelfPage {
             .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.removeSelectedFromShelf(); })
         }.width('100%').height(40).padding({ left: 16, right: 12 })
-        .backgroundColor(this.cs().surfaceVariant)
+        .backgroundColor(this.isDark ? '#2C2C2C' : '#E0E0E0')
       }
 
       // 内容
@@ -631,14 +630,14 @@ export struct BookshelfPage {
               Column() {
                 Text('\uD83D\uDCDA').fontSize(64).margin({ top: 100 })
                 if (this.searchText) {
-                  Text('没有匹配的书籍').fontSize(16).fontColor(this.cs().onSurface).margin({ top: 12 })
-                  Text('试试其他关键词').fontSize(13).fontColor(this.cs().onSurface).margin({ top: 4 })
+                  Text('没有匹配的书籍').fontSize(16).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 12 })
+                  Text('试试其他关键词').fontSize(13).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 4 })
                 } else if (this.activeTabIndex > 0) {
-                  Text('当前分组没有书籍').fontSize(16).fontColor(this.cs().onSurface).margin({ top: 12 })
-                  Text('去搜索添加书籍吧').fontSize(13).fontColor(this.cs().onSurface).margin({ top: 4 })
+                  Text('当前分组没有书籍').fontSize(16).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 12 })
+                  Text('去搜索添加书籍吧').fontSize(13).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 4 })
                 } else {
-                  Text('书架是空的').fontSize(16).fontColor(this.cs().onSurface).margin({ top: 12 })
-                  Text('去搜索添加书籍吧').fontSize(13).fontColor(this.cs().onSurface).margin({ top: 4 })
+                  Text('书架是空的').fontSize(16).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 12 })
+                  Text('去搜索添加书籍吧').fontSize(13).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E').margin({ top: 4 })
                 }
               }.width('100%').height('100%').alignItems(HorizontalAlign.Center)
             }.width('100%').height('100%')
@@ -723,11 +722,11 @@ export struct BookshelfPage {
           }
         }.width('100%').alignItems(VerticalAlign.Center)
         if (!this.isCompact) {
-          Text(book.author || '未知作者').fontSize(12).fontColor(this.cs().onSurface)
+          Text(book.author || '未知作者').fontSize(12).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
             .alignSelf(ItemAlign.Start).margin({ top: 2 })
         }
         if (!this.isCompact && book.durChapterTitle) {
-          Text(book.durChapterTitle).fontSize(11).fontColor(this.cs().onSurface)
+          Text(book.durChapterTitle).fontSize(11).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
             .alignSelf(ItemAlign.Start).margin({ top: 1 })
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
@@ -789,7 +788,7 @@ export struct BookshelfPage {
           .maxLines(this.gridStyle === 1 ? 1 : this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
           .margin({ top: 4 }).fontColor(this.isDark ? '#CCC' : '#333')
         if (this.gridStyle === 0) {
-          Text(book.author || '未知作者').fontSize(11).fontColor(this.cs().onSurface)
+          Text(book.author || '未知作者').fontSize(11).fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
       }
