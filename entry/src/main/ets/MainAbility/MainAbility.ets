@@ -21,6 +21,17 @@ export default class MainAbility extends UIAbility {
   }
 
   private async initServices(): Promise<void> {
+    // 读取当前系统色模式，传递给 AppTheme 初始化
+    let systemDark = false;
+    try {
+      // UIAbilityContext.config.colorMode — 0=DARK, 1=LIGHT
+      const cfg: Configuration = this.context.config;
+      if (cfg !== undefined && cfg !== null) {
+        systemDark = cfg.colorMode === 0;
+      }
+    } catch (_e) {
+      console.warn('[MainAbility] unable to read system color mode');
+    }
     try {
       await AppDatabase.getInstance().init(this.context);
       console.info('[MainAbility] Database initialized');
@@ -28,7 +39,7 @@ export default class MainAbility extends UIAbility {
       console.error('[MainAbility] Database init failed:', err);
     }
     try {
-      await AppTheme.getInstance().init(this.context);
+      await AppTheme.getInstance().init(this.context, systemDark);
       console.info('[MainAbility] Theme initialized');
     } catch (err) {
       console.warn('[MainAbility] Theme init failed:', err);
@@ -64,6 +75,7 @@ export default class MainAbility extends UIAbility {
   onWindowStageCreate(windowStage: Window.WindowStage): void {
     console.info('[MainAbility] onWindowStageCreate');
     try {
+      AppStorage.setOrCreate<object>('abilityContext', this.context);
       windowStage.loadContent('pages/MainPage');
     } catch (err) {
       console.error('[MainAbility] loadContent failed:', err);

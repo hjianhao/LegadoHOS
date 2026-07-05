@@ -14,6 +14,7 @@ import { BookChapter } from '../model/BookChapter';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ChapterCache } from '../util/ChapterCache';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface ContentSearchResult {
   chapterIndex: number;
@@ -350,19 +351,19 @@ struct SearchContentPage {
   }
 
   private bgColor(): ResourceColor {
-    return this.isDark ? '#111111' : '#F7F8FA';
+    return ThemeColors.background(this.isDark);
   }
 
   private surfaceColor(): ResourceColor {
-    return this.isDark ? '#1D1D1F' : '#FFFFFF';
+    return ThemeColors.surface(this.isDark);
   }
 
   private textColor(): ResourceColor {
-    return this.isDark ? '#F2F2F2' : '#222222';
+    return ThemeColors.onBackground(this.isDark);
   }
 
   private subTextColor(): ResourceColor {
-    return this.isDark ? '#A8A8A8' : '#777777';
+    return ThemeColors.secondaryText(this.isDark);
   }
 
   @Builder
@@ -371,7 +372,7 @@ struct SearchContentPage {
       .fontSize(13)
       .fontColor(active ? '#FFFFFF' : this.textColor())
       .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(active ? '#0078D7' : (this.isDark ? '#2A2A2D' : '#EEF1F4'))
+      .backgroundColor(active ? '#0078D7' : (ThemeColors.surfaceVariant(this.isDark)))
       .borderRadius(16)
       .onClick(onTap)
   }
@@ -444,7 +445,7 @@ struct SearchContentPage {
         }
         .height(42)
         .margin({ left: 16, right: 16, top: 10 })
-        .backgroundColor(this.isDark ? '#2A2A2D' : '#EEF1F4')
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
         .borderRadius(21)
 
         Row({ space: 8 }) {
@@ -505,7 +506,7 @@ struct SearchContentPage {
               }
             }, (item: string) => item)
           }
-          .divider({ strokeWidth: 0.5, color: this.isDark ? '#333333' : '#E7E7E7' })
+          .divider({ strokeWidth: 0.5, color: ThemeColors.outlineVariant(this.isDark) })
           .layoutWeight(1)
         } else if (this.keyword && this.results.length === 0 && !this.isSearching) {
           Column() {
@@ -551,7 +552,7 @@ struct SearchContentPage {
               }
             }, (item: ContentSearchResult) => `${item.chapterIndex}_${item.count}_${item.chapterTitle}`)
           }
-          .divider({ strokeWidth: 0.5, color: this.isDark ? '#333333' : '#E7E7E7' })
+          .divider({ strokeWidth: 0.5, color: ThemeColors.outlineVariant(this.isDark) })
           .layoutWeight(1)
         }
       }

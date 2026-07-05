@@ -3,6 +3,7 @@
  * 直接走 SourceExecutor 引擎解析，复用搜索/发现规则。
  */
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeColors } from '../theme/ThemeColors';
 import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
@@ -148,11 +149,11 @@ struct ExploreBookPage {
   build() {
     Column() {
       Row() {
-        Text('\u2190').fontSize(20).fontColor(this.isDark ? '#FFF' : '#333')
+        Text('\u2190').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
           .onClick((): void => { UiUtil.back(this.getUIContext()); })
         Text(this.categoryName || this.sourceName)
           .fontSize(18).fontWeight(FontWeight.Medium)
-          .fontColor(this.isDark ? '#FFF' : '#111')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 12 }).layoutWeight(1).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text('').width(20)
@@ -195,10 +196,10 @@ struct ExploreBookPage {
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(62).justifyContent(FlexAlign.Center)
               }.padding(12).width('100%')
               .onClick((): void => { this.openBookDetail(item); })
-            }.border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+            }.border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
           })
         }.width('100%').layoutWeight(1)
       }
-    }.width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

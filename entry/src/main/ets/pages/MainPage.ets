@@ -5,6 +5,7 @@ import { BookshelfPage } from './BookshelfPage';
 import { ExplorePage } from './ExplorePage';
 import { MyPage } from './MyPage';
 import { RssMainPage } from './RssMainPage';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface TabCfg {
   icon: ResourceStr;
@@ -34,22 +35,23 @@ struct MainPage {
       }
       .width('100%')
       .layoutWeight(1)
+      .backgroundColor(ThemeColors.background(this.isDark))
 
       Row() {
         ForEach(this.tabs, (tab: TabCfg, idx: number) => {
           Column() {
-            Text(tab.icon).fontSize(22).margin({ bottom: 2 })
+            Text(tab.icon).fontSize(22).margin({ bottom: 2 }).fontColor(this.currentTab === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
             Text(tab.label).fontSize(11)
-              .fontColor(this.currentTab === idx ? '#0078D7' : '#888')
+              .fontColor(this.currentTab === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
           }
           .width('25%').padding({ top: 6, bottom: 6 })
           .onClick(() => { this.currentTab = idx; })
         })
       }
       .width('100%').height(56)
-      .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
-      .border({ width: { top: 1 }, color: this.isDark ? '#333' : '#E0E0E0' })
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .border({ width: { top: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
     }
-    .width('100%').height('100%')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

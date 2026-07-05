@@ -2,6 +2,7 @@
  * 我的页面 - 支持跳转到子页
  */
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeColors } from '../theme/ThemeColors';
 import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
 
@@ -20,9 +21,9 @@ export struct MyPage {
 
   build() {
     Column() {
-      Text('\uD83D\uDC64').fontSize(48).margin({ top: 32 })
-      Text('Legado HOS').fontSize(20).fontWeight(FontWeight.Bold).margin({ top: 8 })
-      Text('v1.0.0').fontSize(13).fontColor('#888').margin({ top: 4 })
+      Text('\uD83D\uDC64').fontSize(48).margin({ top: 32 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text('Legado HOS').fontSize(20).fontWeight(FontWeight.Bold).margin({ top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text('v1.0.0').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
 
       List() {
         ForEach([
@@ -35,24 +36,24 @@ export struct MyPage {
         ] as MenuEntry[], (item: MenuEntry) => {
           ListItem() {
             Row() {
-              Text(item.icon).fontSize(22).margin({ right: 14 })
+              Text(item.icon).fontSize(22).margin({ right: 14 }).fontColor(ThemeColors.onBackground(this.isDark))
               Column() {
                 Text(item.title).fontSize(15).fontWeight(FontWeight.Medium)
-                  .alignSelf(ItemAlign.Start)
-                Text(item.desc).fontSize(12).fontColor('#888')
+                  .alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
+                Text(item.desc).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                   .alignSelf(ItemAlign.Start)
               }
               .layoutWeight(1).alignItems(HorizontalAlign.Start)
-              Text('>').fontSize(18).fontColor('#888')
+              Text('>').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark))
             }.padding(14).width('100%')
           }
-          .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+          .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
           .onClick(() => { if (item.page) { this.goTo(item.page); } })
         })
       }
       .width('100%').layoutWeight(1)
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
     .alignItems(HorizontalAlign.Center)
   }
 }

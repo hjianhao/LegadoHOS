@@ -35,7 +35,7 @@ export class AppTheme {
   /**
    * 初始化：从 SettingsStore 读取已保存的模式
    */
-  async init(context: Context): Promise<void> {
+  async init(context: Context, systemDark: boolean): Promise<void> {
     if (this.inited_) return;
     this.inited_ = true;
     try {
@@ -44,9 +44,15 @@ export class AppTheme {
       const savedMode = await store.getThemeMode();
       if (savedMode === 'light') { this.config_.mode = ThemeMode.LIGHT; this.isDark_ = false; }
       else if (savedMode === 'dark') { this.config_.mode = ThemeMode.DARK; this.isDark_ = true; }
-      else { this.config_.mode = ThemeMode.SYSTEM; this.isDark_ = false; }
-    } catch (_e) { /* default to light */ }
+      else { this.config_.mode = ThemeMode.SYSTEM; this.isDark_ = systemDark; }
+    } catch (_e) {
+      this.config_.mode = ThemeMode.SYSTEM;
+      this.isDark_ = systemDark;
+    }
     this.apply_();
+    // 保存系统色模式，供 setFollowSystem() 读取
+    AppStorage.setOrCreate<number>('systemColorMode', systemDark ? 0 : 1);
+    console.info('[AppTheme] init done: mode=' + this.config_.mode + ', isDark=' + this.isDark_);
   }
 
   /**
@@ -64,9 +70,15 @@ export class AppTheme {
    */
   onSystemColorChange(colorMode: number): void {
     // 0=DARK, 1=LIGHT
+    AppStorage.setOrCreate<number>('systemColorMode', colorMode);
+    console.info('[AppTheme] onSystemColorChange: colorMode=' + colorMode + ', currentMode=' + this.config_.mode);
     if (this.config_.mode === ThemeMode.SYSTEM) {
-      this.isDark_ = (colorMode === 0);
-      this.apply_();
+      const dark = (colorMode === 0);
+      if (dark !== this.isDark_) {
+        this.isDark_ = dark;
+        this.apply_();
+        console.info('[AppTheme] system color changed: isDark=' + this.isDark_);
+      }
     }
   }
 
@@ -75,18 +87,11 @@ export class AppTheme {
    */
   setFollowSystem(): void {
     this.config_.mode = ThemeMode.SYSTEM;
-    // 读取当前系统模式
-    let sysDark = false;
-    try {
-      const ctx = (AppStorage.get<object>('abilityContext') as Record<string, Object>);
-      if (ctx && typeof ctx['config'] === 'object') {
-        const cfg = ctx['config'] as Record<string, number>;
-        sysDark = cfg['colorMode'] === 0; // 0=DARK
-      }
-    } catch (_e) { /* keep false */ }
-    this.isDark_ = sysDark;
+    const colorMode = AppStorage.get<number>('systemColorMode');
+    this.isDark_ = (colorMode === 0); // 0=DARK, 1=LIGHT
     this.apply_();
     this.save_();
+    console.info('[AppTheme] setFollowSystem: isDark=' + this.isDark_);
   }
 
   /**
@@ -110,6 +115,7 @@ export class AppTheme {
     this.colorScheme_ = ColorScheme.resolve(this.config_, this.isDark_);
     AppStorage.set<boolean>('isDark', this.isDark_);
     AppStorage.set<boolean>('isFollowSystem', this.config_.mode === ThemeMode.SYSTEM);
+    AppStorage.set<AppColorScheme>('colorScheme', this.colorScheme_);
     for (const listener of this.listeners_) listener(this.isDark_);
   }
 

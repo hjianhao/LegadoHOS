@@ -24,6 +24,7 @@ import { BookTable } from '../data/database/BookTable';
 import { BookGroupTable } from '../data/database/BookGroupTable';
 import { ReadRecordTable } from '../data/database/ReadRecordTable';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 /** 每日阅读记录数据结构 */
 interface SessionInfo {
@@ -386,8 +387,8 @@ export struct ChangeSourceSheet {
           .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
           .onClick(() => { this.searchSources(); })
         Button('刷新').fontSize(13).height(36).width(56).margin({ left: 4 })
-          .backgroundColor(this.isDark ? '#555' : '#E0E0E0')
-          .fontColor(this.isDark ? '#FFF' : '#333').borderRadius(18)
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+          .fontColor(ThemeColors.onBackground(this.isDark)).borderRadius(18)
           .onClick(() => { this.cachedSources = []; this.searchSources(); })
       }
       .width('100%').padding({ left: 16, right: 16, bottom: 4 })
@@ -468,7 +469,7 @@ export struct ChangeSourceSheet {
       }
     }
     .width('100%').height('70%')
-    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }
@@ -669,9 +670,9 @@ export struct BookReadRecordSheet {
     Column() {
       Row() {
         Text('阅读记录').fontSize(16).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#FFF' : '#333')
+          .fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor(this.isDark ? '#AAA' : '#666') }
+        Button() { Text('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .width(32).height(32).backgroundColor('transparent')
           .onClick(() => { this.controller.close(); })
       }
@@ -682,28 +683,28 @@ export struct BookReadRecordSheet {
         Text('累计阅读时长').fontSize(13).fontColor('#999')
         Text(this.formatDuration(this.realTotalTime > 0 ? this.realTotalTime : this.totalReadTime))
           .fontSize(20).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#FFF' : '#333')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ top: 4 })
       }
       .width('100%').padding(16).alignItems(HorizontalAlign.Center)
 
-      Divider().strokeWidth(0.5).color(this.isDark ? '#333' : '#EEEEEE')
+      Divider().strokeWidth(0.5).color(ThemeColors.outlineVariant(this.isDark))
 
       // 章节统计
       Row() {
         Column() {
           Text(this.durChapterIndex.toString()).fontSize(22).fontWeight(FontWeight.Bold)
-            .fontColor(this.isDark ? '#FFF' : '#333')
+            .fontColor(ThemeColors.onBackground(this.isDark))
           Text('当前章节').fontSize(11).fontColor('#999').margin({ top: 2 })
         }.layoutWeight(1)
         Column() {
           Text(this.totalChapterNum.toString()).fontSize(22).fontWeight(FontWeight.Bold)
-            .fontColor(this.isDark ? '#FFF' : '#333')
+            .fontColor(ThemeColors.onBackground(this.isDark))
           Text('总章节数').fontSize(11).fontColor('#999').margin({ top: 2 })
         }.layoutWeight(1)
         Column() {
           Text(this.progressPercent + '%').fontSize(22).fontWeight(FontWeight.Bold)
-            .fontColor(this.isDark ? '#FFF' : '#333')
+            .fontColor(ThemeColors.onBackground(this.isDark))
           Text('阅读进度').fontSize(11).fontColor('#999').margin({ top: 2 })
         }.layoutWeight(1)
       }
@@ -721,7 +722,7 @@ export struct BookReadRecordSheet {
               Column() {
                 Row() {
                   Text(this.dailyRecords[di].date).fontSize(13).fontWeight(FontWeight.Medium)
-                    .fontColor(this.isDark ? '#0078D7' : '#0078D7')
+                    .fontColor(ThemeColors.primary(this.isDark))
                   Blank()
                   Text(this.dailyRecords[di].totalMinutes + ' 分钟').fontSize(11).fontColor('#999')
                 }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 4 })
@@ -730,7 +731,7 @@ export struct BookReadRecordSheet {
                 ForEach(this.dailyRecords[di].sessions, (sess: SessionInfo, si: number) => {
                   Row() {
                     Text(this.dailyRecords[di].sessions[si].time).fontSize(12)
-                      .fontColor(this.isDark ? '#CCC' : '#555')
+                      .fontColor(ThemeColors.secondaryText(this.isDark))
                     Text(' 阅读 ' + Math.floor(this.dailyRecords[di].sessions[si].dur / 60) + ' 分钟')
                       .fontSize(11).fontColor('#999').margin({ left: 8 })
                   }
@@ -748,7 +749,7 @@ export struct BookReadRecordSheet {
       }
     }
     .width('100%').height('60%')
-    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

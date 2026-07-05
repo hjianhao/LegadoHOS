@@ -8,6 +8,7 @@ import { wantAgent, bundleManager } from '@kit.AbilityKit';
 import { avSession } from '@kit.AVSessionKit';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../../util/UiUtil';
+import { ThemeColors } from '../../theme/ThemeColors';
 
 @Component
 export struct ReadAloudPanel {
@@ -363,14 +364,14 @@ export struct ReadAloudPanel {
   voiceListContent_() {
     if (this.voicesLoading) {
       Row() {
-        LoadingProgress().width(18).height(18).color('#0078D7')
-        Text('正在加载音色').fontSize(12).fontColor(this.isDark ? '#AAA' : '#666').margin({ left: 8 })
+        LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
+        Text('正在加载音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
       }
       .width('100%')
       .height(44)
       .justifyContent(FlexAlign.Center)
     } else if (this.voices.length === 0) {
-      Text('未获取到系统音色').fontSize(12).fontColor(this.isDark ? '#AAA' : '#666')
+      Text('未获取到系统音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').textAlign(TextAlign.Center).padding({ top: 12, bottom: 12 })
     } else {
       Scroll() {
@@ -380,12 +381,12 @@ export struct ReadAloudPanel {
               Column() {
                 Text(this.voiceDisplayName_(voice))
                   .fontSize(13)
-                  .fontColor(voice.key === this.currentVoiceKey_() ? '#0078D7' : (this.isDark ? '#E0E0E0' : '#333'))
+                  .fontColor(voice.key === this.currentVoiceKey_() ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 Text(this.voiceSubText_(voice))
                   .fontSize(10)
-                  .fontColor(voice.downloaded ? (this.isDark ? '#888' : '#777') : '#F57C00')
+                  .fontColor(voice.downloaded ? ThemeColors.secondaryText(this.isDark) : '#F57C00')
                   .margin({ top: 2 })
               }
               .layoutWeight(1)
@@ -393,28 +394,28 @@ export struct ReadAloudPanel {
 
               if (this.downloadingVoiceKey === voice.key) {
                 Row() {
-                  LoadingProgress().width(16).height(16).color('#0078D7')
+                  LoadingProgress().width(16).height(16).color(ThemeColors.primary(this.isDark))
                   Text(this.voiceDownloadProgress ? this.voiceDownloadProgress : '下载中')
                     .fontSize(11)
-                    .fontColor('#0078D7')
+                    .fontColor(ThemeColors.primary(this.isDark))
                     .margin({ left: 4 })
                 }
               } else if (voice.key === this.currentVoiceKey_()) {
-                Text('使用中').fontSize(11).fontColor('#0078D7')
+                Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
               } else if (voice.downloaded) {
                 Button('选择')
                   .fontSize(11)
                   .height(28)
                   .padding({ left: 10, right: 10 })
-                  .backgroundColor(this.isDark ? '#333' : '#F0F0F0')
-                  .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                  .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+                  .fontColor(ThemeColors.onSurface(this.isDark))
                   .onClick(() => { this.selectVoice_(voice); })
               } else {
                 Button('下载')
                   .fontSize(11)
                   .height(28)
                   .padding({ left: 10, right: 10 })
-                  .backgroundColor('#0078D7')
+                  .backgroundColor(ThemeColors.primary(this.isDark))
                   .fontColor('#FFF')
                   .enabled(this.downloadingVoiceKey.length === 0)
                   .onClick(() => { this.selectVoice_(voice); })
@@ -440,9 +441,9 @@ export struct ReadAloudPanel {
       // 标题行
       Row() {
         Text(this.chapterTitle || '朗读').fontSize(14).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#333').maxLines(1)
+          .fontColor(ThemeColors.onSurface(this.isDark)).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor(this.isDark ? '#AAA' : '#888')
+        Button('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
           .backgroundColor('transparent').width(32).height(32)
           .onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 12, right: 8, top: 8 })
@@ -451,24 +452,24 @@ export struct ReadAloudPanel {
       if (this.isPlaying_() || this.isPaused) {
         Row() {
           Progress({ value: this.progress, total: 100, type: ProgressType.Linear })
-            .width('100%').height(3).color('#0078D7')
+            .width('100%').height(3).color(ThemeColors.primary(this.isDark))
         }.width('100%').padding({ left: 12, right: 12, top: 4 })
-        Text(this.progressText).fontSize(10).fontColor('#888').margin({ left: 12, top: 2 })
+        Text(this.progressText).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 12, top: 2 })
       }
 
       // 错误信息
       if (this.errorText) {
-        Text(this.errorText).fontSize(11).fontColor('#FF4444')
+        Text(this.errorText).fontSize(11).fontColor(ThemeColors.error(this.isDark))
           .padding({ left: 12, right: 12, top: 4 })
       }
 
       // 音色选择
       Row() {
-        Text('音色').fontSize(12).fontColor('#888').width(36)
+        Text('音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Column() {
           Text(this.selectedVoiceName)
             .fontSize(13)
-            .fontColor(this.isDark ? '#E0E0E0' : '#333')
+            .fontColor(ThemeColors.onSurface(this.isDark))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Blank()
@@ -480,8 +481,8 @@ export struct ReadAloudPanel {
           .fontSize(12)
           .height(30)
           .padding({ left: 12, right: 12 })
-          .backgroundColor(this.isDark ? '#333' : '#F2F2F2')
-          .fontColor(this.isDark ? '#E0E0E0' : '#333')
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark))
           .onClick(() => {
             this.showVoiceSelect = !this.showVoiceSelect;
             if (this.showVoiceSelect && this.voices.length === 0 && !this.voicesLoading) {
@@ -496,31 +497,31 @@ export struct ReadAloudPanel {
 
       // 语速调节
       Row() {
-        Text('语速').fontSize(12).fontColor('#888').width(36)
+        Text('语速').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Slider({ value: this.speed, min: 0.5, max: 2.0, step: 0.25 })
           .width('60%').margin({ left: 4, right: 8 })
           .onChange((v: number) => { this.changeSpeed(v); })
-        Text(this.speedLabel()).fontSize(13).fontColor('#0078D7').width(40).textAlign(TextAlign.End)
+        Text(this.speedLabel()).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).width(40).textAlign(TextAlign.End)
       }.width('100%').padding({ left: 12, right: 12, top: 8 })
 
       // 控制按钮
       Row() {
-        Button('⏮').fontSize(22)
+        Button('⏮').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor('transparent').layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
             this.onPrevChapter?.();
           })
-        Button(this.isPlaying ? '⏸' : '▶️').fontSize(28)
+        Button(this.isPlaying ? '⏸' : '▶️').fontSize(28).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor('transparent').layoutWeight(1)
           .onClick(() => { this.togglePlay(); })
-        Button('⏭').fontSize(22)
+        Button('⏭').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor('transparent').layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
             this.onNextChapter?.();
           })
-        Button('⏹').fontSize(22)
+        Button('⏹').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor('transparent').layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
@@ -534,12 +535,12 @@ export struct ReadAloudPanel {
           .backgroundColor(this.isDark ? '#1A3A2A' : '#E8F5E9').fontColor('#4CAF50')
           .onClick(() => { this.stopPlay(); this.startPlay(); })
         Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
-          .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor('#0078D7')
+          .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (eng && eng.state === AloudState.PLAYING) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 
     }
-    .width('100%').backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')
+    .width('100%').backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

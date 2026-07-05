@@ -7,6 +7,7 @@
  * 点击分类可跳转到书籍列表页（ExploreBookPage）。
  */
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeColors } from '../theme/ThemeColors';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
@@ -426,14 +427,14 @@ export struct ExplorePage {
       // 顶部标题
       Row() {
         Text('发现').fontSize(20).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#FFF' : '#111')
+          .fontColor(ThemeColors.onBackground(this.isDark))
       }.width('100%').padding({ left: 16, top: 12, bottom: 8 })
 
       // 搜索框 — 过滤当前显示的发现源
       Row() {
         TextInput({ placeholder: '筛选发现源...' })
           .height(42).layoutWeight(1)
-          .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
           .onChange((v: string) => { this.searchKey = v; })
         if (this.searchKey.length > 0) {
@@ -459,7 +460,7 @@ export struct ExplorePage {
                 Flex({ alignItems: ItemAlign.Center }) {
                   Column() {
                     Text(source.sourceName).fontSize(16).fontWeight(FontWeight.Medium)
-                      .fontColor(this.isDark ? '#FFF' : '#111').alignSelf(ItemAlign.Start)
+                      .fontColor(ThemeColors.onBackground(this.isDark)).alignSelf(ItemAlign.Start)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(source.group || '').fontSize(11).fontColor('#888')
                       .alignSelf(ItemAlign.Start).margin({ top: 2 })
@@ -488,15 +489,15 @@ export struct ExplorePage {
                 }
               }
               .width('100%')
-              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+              .backgroundColor(ThemeColors.surface(this.isDark))
               .borderRadius(12).margin({ left: 16, right: 16, bottom: 10 })
-              .border({ width: 1, color: this.isDark ? '#333' : '#E8E8E8' })
+              .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
             }
           })
         }.width('100%').layoutWeight(1)
       }
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 
   @Builder
@@ -507,13 +508,13 @@ export struct ExplorePage {
           ForEach(row, (cat: ExploreCategory) => {
             Text(cat.name)
               .fontSize(13)
-              .fontColor(this.isDark ? '#DDD' : '#333')
+              .fontColor(ThemeColors.onBackground(this.isDark))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textAlign(TextAlign.Center)
               .height(36)
               .padding({ left: 6, right: 6 })
-              .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+              .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
               .borderRadius(8)
               .layoutWeight(cat.flexBasisPercent > 0 ? cat.flexBasisPercent : 1)
               .margin({ left: 3, right: 3, bottom: 4 })

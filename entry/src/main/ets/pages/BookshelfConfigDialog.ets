@@ -2,6 +2,7 @@
  * 书架布局配置面板 — 通过 GlobalConfig 统一管理
  */
 import { GlobalConfig } from '../data/preferences/GlobalConfig';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct BookshelfConfigDialog {
@@ -101,7 +102,7 @@ export struct BookshelfConfigDialog {
               .onClick(() => { this.groupStyle = (this.groupStyle + 1) % 3; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('排序方式').fontSize(14).layoutWeight(1)
@@ -116,7 +117,7 @@ export struct BookshelfConfigDialog {
               .onChange((v: boolean) => { this.sortOrder = v ? 1 : 0; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('布局模式').fontSize(14).layoutWeight(1)
@@ -162,7 +163,7 @@ export struct BookshelfConfigDialog {
             }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
           }
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('书名最大行数').fontSize(14)
@@ -177,7 +178,7 @@ export struct BookshelfConfigDialog {
               .onChange((v: boolean) => { this.coverShadow = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('显示未读数').fontSize(14).layoutWeight(1)
@@ -197,7 +198,7 @@ export struct BookshelfConfigDialog {
               .onChange((v: boolean) => { this.showLastUpdateTime = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('显示更多信息').fontSize(14).layoutWeight(1)
@@ -226,7 +227,7 @@ export struct BookshelfConfigDialog {
             }
           }
 
-          Divider().color(this.isDark ? '#333' : '#E8E8E8').width('100%').margin({ left: 8 })
+          Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
             Text('刷新上限').fontSize(14)
@@ -241,7 +242,7 @@ export struct BookshelfConfigDialog {
     }
     .padding({ left: 8, right: 8, top: 0, bottom: 12 })
     .width('100%').height('70%')
-    .backgroundColor(this.isDark ? '#1E1E1E' : '#FFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

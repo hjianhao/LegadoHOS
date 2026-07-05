@@ -16,6 +16,7 @@ import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface SearchSourceGroup {
   sourceName: string;
@@ -944,12 +945,12 @@ struct SearchPage {
   }
 
   primaryColor(): string { return '#0A7F70'; }
-  bgColor(): string { return this.isDark ? '#111314' : '#F6F7F7'; }
-  surfaceColor(): string { return this.isDark ? '#1B1E20' : '#FFFFFF'; }
-  surfaceAltColor(): string { return this.isDark ? '#25292B' : '#EEF3F1'; }
-  textColor(): string { return this.isDark ? '#F1F4F3' : '#202525'; }
-  subTextColor(): string { return this.isDark ? '#A8B1AF' : '#65706D'; }
-  lineColor(): string { return this.isDark ? '#303638' : '#E4E9E7'; }
+  bgColor(): string { return ThemeColors.background(this.isDark); }
+  surfaceColor(): string { return ThemeColors.surface(this.isDark); }
+  surfaceAltColor(): string { return ThemeColors.surfaceVariant(this.isDark); }
+  textColor(): string { return ThemeColors.onBackground(this.isDark); }
+  subTextColor(): string { return ThemeColors.secondaryText(this.isDark); }
+  lineColor(): string { return ThemeColors.outlineVariant(this.isDark); }
 
   build() {
     Stack() {
@@ -2093,7 +2094,7 @@ struct SearchPage {
       }
       .layoutWeight(1)
       .width('100%')
-      .divider({ strokeWidth: 0.5, color: this.isDark ? '#333333' : '#E7E7E7' })
+      .divider({ strokeWidth: 0.5, color: ThemeColors.outlineVariant(this.isDark) })
       .onReachEnd(() => {
         if (this.expandedSourceHasMore && !this.expandedSourceLoading) {
           this.loadMoreExpandedSource();

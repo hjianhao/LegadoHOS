@@ -11,6 +11,7 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import http from '@ohos.net.http';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface SortTab {
   name: string;
@@ -264,20 +265,20 @@ export struct RssSortPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor('#0078D7')
+        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
           Text(this.articleStyle === 0 ? '列表' : this.articleStyle === 1 ? '大卡' : this.articleStyle === 2 ? '网格' : '瀑布')
-            .fontSize(13).fontColor('#0078D7')
+            .fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent').margin({ right: 4 })
         .onClick(() => this.switchLayout())
         Button({ type: ButtonType.Normal }) {
-          Text('搜索').fontSize(13).fontColor('#0078D7')
+          Text('搜索').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => {
@@ -309,11 +310,11 @@ export struct RssSortPage {
             ForEach(this.sortTabs, (tab: SortTab, idx: number) => {
               Column() {
                 Text(tab.name).fontSize(14)
-                  .fontColor(this.currentTab === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#666'))
+                  .fontColor(this.currentTab === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
                   .fontWeight(this.currentTab === idx ? FontWeight.Bold : FontWeight.Normal)
                   .padding({ left: 12, right: 12, top: 6, bottom: 6 })
                 if (this.currentTab === idx) {
-                  Divider().color('#0078D7').width('80%').height(2).borderRadius(1)
+                  Divider().color(ThemeColors.primary(this.isDark)).width('80%').height(2).borderRadius(1)
                 }
               }
               .onClick(() => this.onTabChange(idx))
@@ -327,11 +328,11 @@ export struct RssSortPage {
 
       // ===== 文章列表 =====
       if (this.loadState.isRefreshing && this.articles.length === 0) {
-        LoadingProgress().color('#0078D7')
+        LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.articles.length === 0) {
         Column() {
           Text(this.loadState.errorMessage || '暂无文章').fontSize(14)
-            .fontColor(this.isDark ? '#AAA' : '#888')
+            .fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
@@ -358,12 +359,12 @@ export struct RssSortPage {
 
             // 加载更多
             if (this.loadState.isLoadingMore) {
-              LoadingProgress().color('#0078D7').height(60)
+              LoadingProgress().color(ThemeColors.primary(this.isDark)).height(60)
             } else if (this.loadState.errorMessage) {
-              Text(this.loadState.errorMessage).fontSize(12).fontColor('#F44336')
+              Text(this.loadState.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
                 .padding(12).onClick(() => this.loadMore())
             } else if (!this.loadState.hasMore && this.articles.length > 0) {
-              Text('— 已加载全部 —').fontSize(12).fontColor(this.isDark ? '#888' : '#AAA')
+              Text('— 已加载全部 —').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                 .width('100%').textAlign(TextAlign.Center).padding(12)
             }
           }
@@ -382,7 +383,7 @@ export struct RssSortPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 
   @Builder
@@ -390,11 +391,11 @@ export struct RssSortPage {
     Row() {
       Column() {
         Text(article.title).fontSize(15)
-          .fontColor(article.read ? (this.isDark ? '#888' : '#999') : (this.isDark ? '#E0E0E0' : '#333'))
+          .fontColor(article.read ? ThemeColors.secondaryText(this.isDark) : ThemeColors.onBackground(this.isDark))
           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
           .lineHeight(20)
         if (article.pubDate) {
-          Text(article.pubDate).fontSize(11).fontColor(this.isDark ? '#888' : '#AAA')
+          Text(article.pubDate).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 4 })
         }
       }
@@ -410,7 +411,7 @@ export struct RssSortPage {
     }
     .padding(12).margin({ left: 12, right: 12, top: 4, bottom: 4 })
     .borderRadius(10)
-    .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .width('100%')
     .onClick(() => this.openReadArticle(article))
   }
@@ -425,19 +426,19 @@ export struct RssSortPage {
       } else {
         Column()
           .width('100%').height(120).borderRadius(8)
-          .backgroundColor(this.isDark ? '#2A2A2A' : '#F0F0F0')
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
       }
       Text(article.title).fontSize(13)
-        .fontColor(article.read ? (this.isDark ? '#888' : '#999') : (this.isDark ? '#E0E0E0' : '#333'))
+        .fontColor(article.read ? ThemeColors.secondaryText(this.isDark) : ThemeColors.onBackground(this.isDark))
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
         .lineHeight(18).margin({ top: 6 })
       if (article.pubDate) {
-        Text(article.pubDate).fontSize(10).fontColor(this.isDark ? '#888' : '#AAA')
+        Text(article.pubDate).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
           .margin({ top: 2 })
       }
     }
     .padding(8).borderRadius(10)
-    .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .onClick(() => this.openReadArticle(article))
   }
 }

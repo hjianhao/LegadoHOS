@@ -6,6 +6,7 @@ import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -121,7 +122,7 @@ struct AiSourceGeneratePage {
     Column() {
       // 顶栏
       Row() {
-        Button('←').fontSize(18).fontColor(this.isDark ? '#CCC' : '#666').width(36).height(36)
+        Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
           .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('AI 生成书源').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('⚙️').fontSize(20)
@@ -163,7 +164,7 @@ struct AiSourceGeneratePage {
                     Text(this.statusIcon(r.status)).fontSize(14)
                     Text(this.stepLabel(r.step)).fontSize(14)
                       .fontWeight(r.status === 'running' ? FontWeight.Bold : FontWeight.Normal)
-                      .fontColor(this.isDark ? '#CCC' : '#333').margin({ left: 8 })
+                      .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })
                     Text(r.summary).fontSize(11).fontColor('#888').maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1).margin({ left: 8 })
                     Button(this.expandedStep === r.step ? '▲' : '▼').fontSize(12)
@@ -174,13 +175,13 @@ struct AiSourceGeneratePage {
                   if (this.expandedStep === r.step && (r.status === 'done' || r.status === 'error')) {
                     Text(r.status === 'error' ? '错误: ' + r.summary : JSON.stringify(r.data, null, 2))
                       .fontSize(10).fontColor(r.status === 'error' ? '#FF4444' : '#666').fontFamily('monospace')
-                      .width('100%').padding(8).backgroundColor(this.isDark ? '#1A1A1A' : '#F8F8F8')
+                      .width('100%').padding(8).backgroundColor(ThemeColors.surface(this.isDark))
                       .borderRadius(6).margin({ top: 6 }).maxLines(20)
                   }
                 }
                 .padding({ top: 10, bottom: 10, left: 12, right: 12 })
               }
-              .border({ width: { bottom: 1 }, color: this.isDark ? '#333' : '#E8E8E8' })
+              .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
             })
           }.layoutWeight(1)
 
@@ -192,14 +193,14 @@ struct AiSourceGeneratePage {
               List() {
                 ForEach(this.logMessages, (msg: string) => {
                   ListItem() {
-                    Text(msg).fontSize(10).fontColor(this.isDark ? '#AAA' : '#666')
+                    Text(msg).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
                       .fontFamily('monospace').width('100%')
                       .padding({ top: 2, bottom: 2, left: 4, right: 4 })
                   }
                 })
               }
               .height(80).width('100%')
-              .backgroundColor(this.isDark ? '#1A1A1A' : '#F0F0F0').borderRadius(6)
+              .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(6)
             }.padding({ left: 16, right: 16 }).width('100%')
           }
 
@@ -217,6 +218,6 @@ struct AiSourceGeneratePage {
         }.width('100%').layoutWeight(1)
       }
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

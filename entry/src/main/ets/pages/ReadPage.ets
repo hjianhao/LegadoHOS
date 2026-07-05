@@ -3,6 +3,7 @@
  */
 import router from '@ohos.router';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
+import { ThemeColors } from '../theme/ThemeColors';
 import { MeasureUtils } from '@kit.ArkUI';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -889,7 +890,7 @@ struct ReadPage {
   build() {
     Stack() {
       if (this.isLoading) {
-        Column() { LoadingProgress().width(40).height(40).color('#0078D7') }
+        Column() { LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark)) }
         .width('100%').height('100%').justifyContent(FlexAlign.Center)
       } else if (!this.pageMode && this.scrollText) {
         Scroll(this.scroller_) {
@@ -949,17 +950,17 @@ struct ReadPage {
       if (!this.isLoading && this.pages.length > 0 && this.cfg.showFooter) {
         Stack({ alignContent: Alignment.Bottom }) {
           Column() {
-            Row().width('100%').height(1).backgroundColor(this.isDark ? '#555' : '#CCC')
+            Row().width('100%').height(1).backgroundColor(ThemeColors.outlineVariant(this.isDark))
               .margin({ top: 4, bottom: 4 })
             Row() {
               Text(this.allChapters_[this.currentIndex]?.title || '')
-                .fontSize(11).fontColor(this.isDark ? '#AAA' : '#999')
+                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
               Text(this.formatCurTime())
-                .fontSize(11).fontColor(this.isDark ? '#AAA' : '#999').margin({ right: 10 })
+                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
               Text(`${this.pageIndex + 1}/${this.pages.length}` +
                 (this.totalChapters_ > 0 ? ` (${this.getProgressPercent()}%)` : ''))
-                .fontSize(11).fontColor(this.isDark ? '#AAA' : '#999')
+                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
             }.width('100%')
               .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight })
           }

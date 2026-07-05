@@ -171,3 +171,40 @@ git checkout -b feat/功能名
 - 一个完整的功能点调通后立即 commit
 - 不要在大量未验证改动上继续堆叠
 - commit message 用中文描述改了什么
+
+## 深色模式 / 浅色模式规范
+
+**所有新增页面和组件必须同时支持深色和浅色模式。**
+
+### 1. 引入 ThemeColors
+```typescript
+import { ThemeColors } from '../theme/ThemeColors';
+```
+
+### 2. 声明 isDark
+```typescript
+@StorageLink('isDark') isDark: boolean = false;
+```
+
+### 3. 使用语义化 Token（禁止硬编码颜色）
+
+| 用途 | 正确写法 |
+|------|----------|
+| 页面背景 | `ThemeColors.background(this.isDark)` |
+| 正文文字 | `ThemeColors.onBackground(this.isDark)` |
+| 卡片/浮层背景 | `ThemeColors.surface(this.isDark)` |
+| 卡片上文字 | `ThemeColors.onSurface(this.isDark)` |
+| 分割线/边框 | `ThemeColors.outlineVariant(this.isDark)` |
+| 次要说明文字 | `ThemeColors.secondaryText(this.isDark)` |
+| 主色调/链接 | `ThemeColors.primary(this.isDark)` |
+| 错误/删除色 | `ThemeColors.error(this.isDark)` |
+
+### 4. 禁止写法
+- ❌ `this.isDark ? '#E0E0E0' : '#1A1A2E'` — 硬编码文字色
+- ❌ `this.isDark ? '#121212' : '#F5F5F5'` — 硬编码背景色
+- ❌ `'#0078D7'` — 硬编码主色调
+- ❌ `'#888'` / `'#999'` — 硬编码灰色
+- ❌ Text 组件不设置 fontColor — 深色模式下默认黑色，不可见
+
+### 5. 统一定义位置
+所有颜色统一在 `entry/src/main/ets/theme/ThemeColors.ets` 中修改，全局生效。

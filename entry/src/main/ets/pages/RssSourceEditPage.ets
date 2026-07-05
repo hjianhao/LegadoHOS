@@ -9,6 +9,7 @@ import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface FieldGroup {
   key: string;
@@ -176,15 +177,15 @@ struct RssSourceEditPage {
       // 标题栏
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('← 返回').fontSize(16).fontColor('#0078D7')
+          Text('← 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.isNew ? '添加 RSS 源' : '编辑 RSS 源').fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#333').margin({ left: 8 })
+          .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
-          Text('保存').fontSize(14).fontColor('#0078D7').fontWeight(FontWeight.Bold)
+          Text('保存').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)
         }
         .backgroundColor('transparent')
         .onClick(() => { this.save(); })
@@ -195,7 +196,7 @@ struct RssSourceEditPage {
       Row() {
         ForEach(this.tabs, (tab: string, idx: number) => {
           Text(tab).fontSize(13)
-            .fontColor(this.currentTab === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#888'))
+            .fontColor(this.currentTab === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
             .padding({ left: 6, right: 6, top: 4, bottom: 4 })
             .onClick(() => { this.currentTab = idx; })
         })
@@ -208,7 +209,7 @@ struct RssSourceEditPage {
           ForEach(this.getFieldsForTab(), (field: FieldGroup) => {
             Row() {
               Text(field.label).fontSize(13)
-                .fontColor(this.isDark ? '#CCC' : '#666')
+                .fontColor(ThemeColors.secondaryText(this.isDark))
                 .width(60)
               TextInput({ text: this.editSource[field.key] as string, placeholder: field.placeholder })
                 .fontSize(13)
@@ -219,12 +220,12 @@ struct RssSourceEditPage {
             }
             .width('100%').padding(8).margin({ bottom: 4 })
             .borderRadius(6)
-            .backgroundColor(this.isDark ? '#1E1E1E' : '#FFF')
+            .backgroundColor(ThemeColors.surface(this.isDark))
           })
         }.width('100%').padding({ left: 8, right: 8 })
       }.layoutWeight(1)
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

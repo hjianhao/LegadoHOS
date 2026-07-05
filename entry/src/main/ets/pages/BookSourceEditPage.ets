@@ -13,6 +13,7 @@ import { BookSourceTable, setSourceRawJson } from '../data/database/BookSourceTa
 import promptAction from '@ohos.promptAction';
 import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface FieldGroup {
   key: string;
@@ -363,7 +364,7 @@ struct BookSourceEditPage {
       ForEach(fields, (field: FieldGroup) => {
         Column() {
           Row() {
-            Text(field.label).fontSize(13).fontColor(this.isDark ? '#CCC' : '#666')
+            Text(field.label).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
               .layoutWeight(1)
             Button() { Text('✕').fontSize(10).fontColor('#F44336') }
               .width(20).height(20).backgroundColor('transparent')
@@ -406,7 +407,7 @@ struct BookSourceEditPage {
             ForEach(TAB_LABELS, (label: string, idx: number) => {
               Column() {
                 Text(label).fontSize(13)
-                  .fontColor(this.currentTab === idx ? '#0078D7' : (this.isDark ? '#AAA' : '#666'))
+                  .fontColor(this.currentTab === idx ? '#0078D7' : ThemeColors.secondaryText(this.isDark))
                   .fontWeight(this.currentTab === idx ? FontWeight.Medium : FontWeight.Regular)
                   .padding({ left: 12, right: 12, top: 8, bottom: 8 })
                 if (this.currentTab === idx) {
@@ -440,6 +441,6 @@ struct BookSourceEditPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

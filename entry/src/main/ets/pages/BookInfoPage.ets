@@ -19,6 +19,7 @@ import {
   RemarkEditDialog
 } from '../components/BookInfoSheets';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -1012,7 +1013,7 @@ struct BookInfoPage {
       if (this.chapterCount === 0 && !this.isRefreshing) {
         Text('目录加载失败或书源暂无目录')
           .fontSize(12)
-          .fontColor('#E35D5B')
+          .fontColor(ThemeColors.error(this.isDark))
           .width('100%')
           .margin({ top: 8 })
       }
@@ -1082,7 +1083,7 @@ struct BookInfoPage {
     .width(150)
     .padding({ top: 8, bottom: 8 })
     .borderRadius(16)
-    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .shadow({ radius: 20, color: '#00000026', offsetX: 0, offsetY: 8 })
     .position({ x: 'calc(100% - 166vp)', y: 82 })
     .zIndex(30)
@@ -1141,7 +1142,7 @@ struct BookInfoPage {
   }
 
   private surfaceColor(): string {
-    return this.isDark ? '#121212' : '#FFFFFF';
+    return ThemeColors.surface(this.isDark);
   }
 
   private surfaceTranslucentColor(): string {
@@ -1149,34 +1150,34 @@ struct BookInfoPage {
   }
 
   private containerColor(): string {
-    return this.isDark ? '#2A2A2A' : '#EEF2F3';
+    return ThemeColors.surface(this.isDark);
   }
 
   private containerLowColor(): string {
-    return this.isDark ? '#1F1F1F' : '#F5F7F8';
+    return ThemeColors.surfaceVariant(this.isDark);
   }
 
   private primaryTextColor(): string {
-    return this.isDark ? '#F2F2F2' : '#1B1B1F';
+    return ThemeColors.onBackground(this.isDark);
   }
 
   private secondaryTextColor(): string {
-    return this.isDark ? '#C6C6C6' : '#5F6368';
+    return ThemeColors.secondaryText(this.isDark);
   }
 
   private tertiaryTextColor(): string {
-    return this.isDark ? '#9A9A9A' : '#7A7D82';
+    return ThemeColors.secondaryText(this.isDark);
   }
 
   private primaryColor(): string {
-    return this.isDark ? '#8AB4F8' : '#2F6F8F';
+    return ThemeColors.primary(this.isDark);
   }
 
   private fabColor(): string {
-    return this.isDark ? '#B8D7EA' : '#355F72';
+    return ThemeColors.primary(this.isDark);
   }
 
   private fabTextColor(): string {
-    return this.isDark ? '#12313F' : '#FFFFFF';
+    return ThemeColors.onSurface(this.isDark);
   }
 }

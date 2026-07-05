@@ -1,4 +1,5 @@
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -9,6 +10,7 @@ export struct ReadRecordPage {
   build() {
     Column() {
       Text('\uD83D\uDCCA 阅读记录').fontSize(20).fontWeight(FontWeight.Bold)
+        .fontColor(ThemeColors.onBackground(this.isDark))
         .alignSelf(ItemAlign.Start).padding(16)
       Row() {
         Column() {
@@ -28,6 +30,6 @@ export struct ReadRecordPage {
         Text('暂无阅读记录').fontSize(14).fontColor('#888').margin({ top: 40 })
       }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

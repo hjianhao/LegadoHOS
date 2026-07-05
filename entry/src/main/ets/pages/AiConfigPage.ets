@@ -9,6 +9,7 @@ import { NetUtil } from '../util/NetUtil';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 interface PresetItem { name: string; label: string; endpoint: string; }
 
@@ -126,19 +127,19 @@ struct AiConfigPage {
   @Builder presetChip(p: PresetItem) {
     Text(p.label)
       .fontSize(12).padding({ top: 6, bottom: 6, left: 10, right: 10 })
-      .fontColor(this.activePreset === p.name ? '#FFF' : (this.isDark ? '#CCC' : '#555'))
-      .backgroundColor(this.activePreset === p.name ? '#0078D7' : (this.isDark ? '#333' : '#E8E8E8'))
+      .fontColor(this.activePreset === p.name ? '#FFF' : ThemeColors.secondaryText(this.isDark))
+      .backgroundColor(this.activePreset === p.name ? '#0078D7' : ThemeColors.outlineVariant(this.isDark))
       .borderRadius(14).margin({ right: 6, bottom: 6 })
       .onClick(() => { this.onPresetTap(p); })
   }
 
   @Builder modelItem(m: string) {
     Row() {
-      Text(m).fontSize(13).fontColor(this.isDark ? '#CCC' : '#333').layoutWeight(1)
+      Text(m).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       if (this.model === m) { Text('✓').fontSize(13).fontColor('#0078D7').margin({ left: 8 }) }
     }.padding({ left: 8, right: 8, top: 8, bottom: 8 }).width('100%')
-    .backgroundColor(this.model === m ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+    .backgroundColor(this.model === m ? ThemeColors.surfaceVariant(this.isDark) : 'transparent')
     .borderRadius(6)
     .onClick(() => { this.model = m; this.showModelPicker = false; })
   }
@@ -146,7 +147,7 @@ struct AiConfigPage {
   build() {
     Column() {
       Row() {
-        Button('←').fontSize(18).fontColor(this.isDark ? '#CCC' : '#666').width(36).height(36)
+        Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
           .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('AI 配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('保存').fontSize(13).fontColor('#FFF').backgroundColor('#0078D7')
@@ -199,13 +200,13 @@ struct AiConfigPage {
               })
             }
             .height(Math.min(this.models.length * 36, 180)).width('100%')
-            .backgroundColor(this.isDark ? '#1A1A1A' : '#F8F8F8').borderRadius(8)
+            .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(8)
           }
 
           // ===== 测试连通性 =====
           Button(this.isTesting ? '测试中...' : '🧪 测试连通性').fontSize(14)
-            .fontColor(this.isDark ? '#CCC' : '#333')
-            .backgroundColor(this.isDark ? '#333' : '#E8E8E8')
+            .fontColor(ThemeColors.onBackground(this.isDark))
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').height(40).borderRadius(20).margin({ top: 20 })
             .onClick(() => { this.testConnection(); })
 
@@ -219,6 +220,6 @@ struct AiConfigPage {
       }
       .layoutWeight(1).scrollBar(BarState.Off)
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

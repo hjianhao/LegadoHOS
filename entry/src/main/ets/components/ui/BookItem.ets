@@ -1,4 +1,5 @@
 import { Book } from '../../model/Book';
+import { ThemeColors } from '../../theme/ThemeColors';
 /**
  * 书籍封面组件（网格模式）
  */
@@ -28,7 +29,7 @@ export struct BookItem {
       // 书名
       Text(this.book.name)
         .fontSize(13)
-        .fontColor(this.isDark ? '#E0E0E0' : '#333')
+        .fontColor(ThemeColors.onBackground(this.isDark))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .margin({ top: 4 })
@@ -78,7 +79,7 @@ export struct BookListItem {
         Text(this.book.name)
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#333')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .alignSelf(ItemAlign.Start)

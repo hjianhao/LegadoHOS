@@ -14,6 +14,7 @@ import { UiUtil } from '../util/UiUtil';
 import { BackupService } from '../service/BackupService';
 import { WebDavService, WebDavConfig } from '../service/WebDavService';
 import { SettingsStore } from '../data/preferences/SettingsStore';
+import { ThemeColors } from '../theme/ThemeColors';
 
 // PersistentStorage 持久化 WebDAV 设置
 PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
@@ -201,23 +202,23 @@ struct BackupSettingsPage {
           this.buildSection('🌩 WebDAV 云端配置')
           TextInput({ placeholder: '服务器地址', text: this.webDavUrl })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
-            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUrl = v; })
           TextInput({ placeholder: '用户名', text: this.webDavUser })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
-            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUser = v; })
           TextInput({ placeholder: '密码', text: this.webDavPwd })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
-            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .type(InputType.Password)
             .onChange((v: string) => { this.webDavPwd = v; this.savePassword(v); })
           TextInput({ placeholder: '路径前缀', text: this.webDavPath })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
-            .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavPath = v; })
           Row() {
@@ -260,12 +261,12 @@ struct BackupSettingsPage {
           Row() {
             TextInput({ placeholder: '如 backup_2026-07-03.zip', text: this.manualBackupName })
               .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
-              .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
               .layoutWeight(1)
               .onChange((v: string) => { this.manualBackupName = v; })
             Blank().width(8)
             Button('恢复').fontSize(13).height(40).fontColor('#0078D7')
-              .backgroundColor(this.isDark ? '#444' : '#E0E0E0').borderRadius(8)
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(8)
               .onClick(() => {
                 const name = this.manualBackupName.trim();
                 if (name) this.restoreFromCloud(name);
@@ -286,7 +287,7 @@ struct BackupSettingsPage {
         }.width('100%').padding(16)
       }.layoutWeight(1)
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 
   @Builder

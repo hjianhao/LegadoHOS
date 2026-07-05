@@ -11,6 +11,7 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import web_webview from '@ohos.web.webview';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -214,11 +215,11 @@ export struct RssReadPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor('#0078D7')
+        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.title || 'RSS 阅读')
           .fontSize(17).fontWeight(FontWeight.Medium)
-          .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
@@ -228,7 +229,7 @@ export struct RssReadPage {
         .backgroundColor('transparent').margin({ right: 4 })
         .onClick(() => this.toggleStar())
         Button({ type: ButtonType.Normal }) {
-          Text('分享').fontSize(13).fontColor('#0078D7')
+          Text('分享').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => this.shareUrl())
@@ -239,13 +240,13 @@ export struct RssReadPage {
       if (this.webProgress < 100) {
         Row()
           .width(`${this.webProgress}%`).height(3)
-          .backgroundColor('#0078D7')
+          .backgroundColor(ThemeColors.primary(this.isDark))
           .borderRadius(2)
       }
 
       // ===== 内容区 =====
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7')
+        LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.content) {
         // 使用 WebView 渲染 HTML 内容
         Web({ src: '', controller: this.webviewController })
@@ -275,7 +276,7 @@ export struct RssReadPage {
       // ===== 底部操作栏 =====
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('打开浏览器').fontSize(13).fontColor('#0078D7')
+          Text('打开浏览器').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => this.openInBrowser())
@@ -284,7 +285,7 @@ export struct RssReadPage {
 
         if (this.isStarred) {
           Button({ type: ButtonType.Normal }) {
-            Text('编辑收藏').fontSize(13).fontColor('#0078D7')
+            Text('编辑收藏').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
           .backgroundColor('transparent')
           .onClick(() => {
@@ -293,7 +294,7 @@ export struct RssReadPage {
         }
 
         Button({ type: ButtonType.Normal }) {
-          Text('刷新').fontSize(13).fontColor('#0078D7')
+          Text('刷新').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent').margin({ left: 8 })
         .onClick(() => {
@@ -305,6 +306,6 @@ export struct RssReadPage {
       .width('100%').padding({ left: 16, right: 16, bottom: 12, top: 8 })
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

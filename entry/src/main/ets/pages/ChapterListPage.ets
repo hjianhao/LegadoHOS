@@ -16,6 +16,7 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 /** PERF-001: LazyForEach IDataSource — 章节数据源 */
 class ChapterDataSource implements IDataSource {
@@ -303,7 +304,7 @@ struct ChapterListPage {
           .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('目录').fontSize(16).fontWeight(FontWeight.Bold)
           .margin({ left: 8 })
-        Text('- ' + this.bookName).fontSize(14).fontColor(this.isDark ? '#AAA' : '#888')
+        Text('- ' + this.bookName).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1).margin({ left: 4 })
         // 排序切换按钮
@@ -311,11 +312,11 @@ struct ChapterListPage {
           Row() {
             Text(this.isAscending ? '↑' : '↓').fontSize(14)
             Text(this.isAscending ? '正序' : '倒序').fontSize(12)
-              .fontColor(this.isDark ? '#CCC' : '#333')
+              .fontColor(ThemeColors.onBackground(this.isDark))
           }.alignItems(VerticalAlign.Center)
         }
         .height(36).borderRadius(18)
-        .backgroundColor(this.isDark ? '#333' : '#EEE')
+        .backgroundColor(ThemeColors.outlineVariant(this.isDark))
         .padding({ left: 12, right: 12 })
         .margin({ right: 8 })
         .onClick(() => { this.toggleSort(); })
@@ -324,11 +325,11 @@ struct ChapterListPage {
 
       // ===== 加载中 =====
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 100 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 100 })
       } else if (this.chapters_.length === 0) {
         // ===== 空状态 =====
         Column() {
-          Text('暂无目录').fontSize(16).fontColor(this.isDark ? '#AAAAAA' : '#888').margin({ top: 80 })
+          Text('暂无目录').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
           Text('请确认书源支持目录获取').fontSize(13).fontColor('#AAA').margin({ top: 8 })
         }.width('100%').alignItems(HorizontalAlign.Center)
       } else {
@@ -340,7 +341,7 @@ struct ChapterListPage {
                 // 卷标题
                 Row() {
                   Text(ch.title).fontSize(15).fontWeight(FontWeight.Bold)
-                    .fontColor(this.isDark ? '#0078D7' : '#0078D7')
+                    .fontColor(ThemeColors.primary(this.isDark))
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
                 .width('100%').padding({ top: 12, bottom: 12, left: 16, right: 16 })
@@ -353,8 +354,8 @@ struct ChapterListPage {
                     .margin({ right: 8 })
                   Text(ch.title).fontSize(14)
                     .fontColor(ch.index === this.durChapterIndex
-                      ? '#0078D7'
-                      : (this.isDark ? '#CCC' : '#444'))
+                      ? ThemeColors.primary(this.isDark)
+                      : ThemeColors.onBackground(this.isDark))
                     .fontWeight(ch.index === this.durChapterIndex
                       ? FontWeight.Bold
                       : FontWeight.Normal)
@@ -376,18 +377,18 @@ struct ChapterListPage {
         // ===== 底部信息 =====
         Row() {
           Text('共 ' + this.chapters_.length + ' 章')
-            .fontSize(12).fontColor(this.isDark ? '#888' : '#999')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
           Blank()
           Text(this.isAscending ? '正序 ▲' : '倒序 ▼')
-            .fontSize(12).fontColor(this.isDark ? '#888' : '#999')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
             .onClick(() => { this.toggleSort(); })
         }
         .padding({ left: 16, right: 16, top: 10, bottom: 10 })
         .width('100%').height(40)
-        .backgroundColor(this.isDark ? '#1A1A1A' : '#F8F8F8')
+        .backgroundColor(ThemeColors.surface(this.isDark))
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

@@ -13,6 +13,7 @@ import notificationManager from '@ohos.notificationManager';
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
 import wantAgent from '@ohos.app.ability.wantAgent';
 import { UiUtil } from '../../util/UiUtil';
+import { ThemeColors } from '../../theme/ThemeColors';
 
 @Component
 export struct CacheDialog {
@@ -63,7 +64,7 @@ export struct CacheDialog {
       }
     }
     .width('100%')
-    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 
@@ -71,44 +72,44 @@ export struct CacheDialog {
   buildInputPanel() {
     Column() {
       Text('离线缓存').fontSize(18).fontWeight(FontWeight.Bold)
-        .fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
+        .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 4 }).alignSelf(ItemAlign.Start)
 
       Text('将章节内容下载到本地，离线阅读')
-        .fontSize(13).fontColor(this.isDark ? '#AAAAAA' : '#888')
+        .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, bottom: 12 }).alignSelf(ItemAlign.Start)
 
       // 章节范围
       Row() {
-        Text('起始章节').fontSize(14).fontColor(this.isDark ? '#E0E0E0' : '#333').width(80)
+        Text('起始章节').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         TextInput({ placeholder: '1', text: this.startChapter })
           .width(80).height(36)
           .fontSize(14)
-          .backgroundColor(this.isDark ? '#444' : '#F5F5F5')
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .onChange((v: string) => { this.startChapter = v; })
       }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
 
       Row() {
-        Text('结束章节').fontSize(14).fontColor(this.isDark ? '#E0E0E0' : '#333').width(80)
+        Text('结束章节').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         TextInput({ placeholder: String(this.totalChapters), text: this.endChapter })
           .width(80).height(36)
           .fontSize(14)
-          .backgroundColor(this.isDark ? '#444' : '#F5F5F5')
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .onChange((v: string) => { this.endChapter = v; })
       }.padding({ left: 16, right: 16, bottom: 16 }).width('100%')
 
       Text('共 ' + this.totalChapters + ' 章，当前第 ' + (this.currentIndex + 1) + ' 章')
-        .fontSize(12).fontColor(this.isDark ? '#AAAAAA' : '#888')
+        .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, bottom: 12 }).alignSelf(ItemAlign.Start)
 
       // 按钮
       Row() {
-        Button('取消').fontSize(15).fontColor(this.isDark ? '#CCCCCC' : '#666')
+        Button('取消').fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
           .backgroundColor(Color.Transparent)
           .height(44).layoutWeight(1)
           .onClick(() => { this.onDismiss?.(); })
         Button('开始缓存').fontSize(15).fontColor('#FFF')
-          .backgroundColor('#0078D7')
+          .backgroundColor(ThemeColors.primary(this.isDark))
           .height(44).layoutWeight(1).borderRadius(0)
           .onClick(() => { this.startCache(); })
       }.width('100%').height(48)
@@ -119,26 +120,26 @@ export struct CacheDialog {
   buildProgressPanel() {
     Column() {
       Text('正在缓存...').fontSize(16).fontWeight(FontWeight.Bold)
-        .fontColor(this.isDark ? '#E0E0E0' : '#1A1A2E')
+        .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 8 }).alignSelf(ItemAlign.Start)
 
       Text(this.progressText)
-        .fontSize(13).fontColor(this.isDark ? '#CCCCCC' : '#666')
+        .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, bottom: 12 }).alignSelf(ItemAlign.Start)
 
       // 进度条
       Row() {
-        Column().width(this.progressPercent + '%').height(6).backgroundColor('#0078D7').borderRadius(3)
+        Column().width(this.progressPercent + '%').height(6).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(3)
           .alignSelf(ItemAlign.Start)
-      }.width('100%').height(6).backgroundColor(this.isDark ? '#444' : '#EEE').borderRadius(3)
+      }.width('100%').height(6).backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(3)
       .padding({ left: 0, right: 0 })
 
       Row() {
         Button('取消缓存').fontSize(14).fontColor('#FFF')
-          .backgroundColor('#F44336').height(40).layoutWeight(1).margin({ right: 4 })
+          .backgroundColor(ThemeColors.error(this.isDark)).height(40).layoutWeight(1).margin({ right: 4 })
           .onClick(() => { this.stopCaching(); })
         Button('后台运行').fontSize(14).fontColor('#FFF')
-          .backgroundColor('#0078D7').height(40).layoutWeight(1).margin({ left: 4 })
+          .backgroundColor(ThemeColors.primary(this.isDark)).height(40).layoutWeight(1).margin({ left: 4 })
           .onClick(() => { this.runInBackground(); })
       }.width('100%').padding({ left: 16, right: 16, bottom: 12 })
     }

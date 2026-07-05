@@ -9,6 +9,7 @@ import { AppTheme } from '../theme/AppTheme';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -169,14 +170,14 @@ export struct RssFavoritesPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor('#0078D7')
+        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => UiUtil.back(this.getUIContext()))
         Text('收藏文章').fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
-          Text(this.currentGroup || '全部分组').fontSize(13).fontColor('#0078D7')
+          Text(this.currentGroup || '全部分组').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => this.groupActionDialog())
@@ -192,10 +193,10 @@ export struct RssFavoritesPage {
       // ===== 选中操作栏 =====
       if (this.selectedIds.size > 0) {
         Row() {
-          Text(`已选 ${this.selectedIds.size} 项`).fontSize(13).fontColor('#0078D7')
+          Text(`已选 ${this.selectedIds.size} 项`).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           Blank()
           Button({ type: ButtonType.Normal }) {
-            Text('删除').fontSize(13).fontColor('#F44336')
+            Text('删除').fontSize(13).fontColor(ThemeColors.error(this.isDark))
           }.backgroundColor('transparent')
           .onClick(() => this.deleteSelected())
         }
@@ -204,10 +205,10 @@ export struct RssFavoritesPage {
 
       // ===== 列表 =====
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7')
+        LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.items.length === 0) {
         Column() {
-          Text('暂无收藏').fontSize(14).fontColor(this.isDark ? '#AAA' : '#888')
+          Text('暂无收藏').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
@@ -223,17 +224,17 @@ export struct RssFavoritesPage {
 
                 Column() {
                   Text(star.title).fontSize(15)
-                    .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                    .fontColor(ThemeColors.onBackground(this.isDark))
                     .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                   if (star.pubDate) {
                     Text(star.pubDate).fontSize(11)
-                      .fontColor(this.isDark ? '#888' : '#AAA')
+                      .fontColor(ThemeColors.secondaryText(this.isDark))
                       .margin({ top: 4 })
                   }
                   if (star.group && star.group !== '默认分组') {
-                    Text(star.group).fontSize(10).fontColor('#0078D7')
+                    Text(star.group).fontSize(10).fontColor(ThemeColors.primary(this.isDark))
                       .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                      .border({ radius: 4 }).borderColor('#0078D7').borderWidth(0.5)
+                      .border({ radius: 4 }).borderColor(ThemeColors.primary(this.isDark)).borderWidth(0.5)
                       .margin({ top: 4 })
                   }
                 }
@@ -241,14 +242,14 @@ export struct RssFavoritesPage {
                 .margin({ left: 8 })
 
                 Button({ type: ButtonType.Normal }) {
-                  Text('阅读').fontSize(12).fontColor('#0078D7')
+                  Text('阅读').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
                 }
                 .backgroundColor('transparent')
                 .onClick(() => this.openRead(star))
               }
               .padding(12)
               .borderRadius(8)
-              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+              .backgroundColor(ThemeColors.surface(this.isDark))
               .margin({ left: 12, right: 12, top: 4, bottom: 4 })
               .width('100%')
               // 长按进入选择模式
@@ -268,12 +269,12 @@ export struct RssFavoritesPage {
       Row() {
         if (this.selectedIds.size > 0) {
           Button({ type: ButtonType.Normal }) {
-            Text('取消选择').fontSize(13).fontColor('#0078D7')
+            Text('取消选择').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
           .backgroundColor('transparent').onClick(() => this.clearSelection())
           Blank()
           Button({ type: ButtonType.Normal }) {
-            Text('全选').fontSize(13).fontColor('#0078D7')
+            Text('全选').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
           .backgroundColor('transparent').onClick(() => this.selectAll())
         }
@@ -281,6 +282,6 @@ export struct RssFavoritesPage {
       .padding({ left: 16, right: 16, bottom: 12 })
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

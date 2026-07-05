@@ -8,6 +8,7 @@ import { fetchArticles } from '../engine/rss/RssService';
 import { NetUtil } from '../util/NetUtil';
 import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -88,12 +89,12 @@ struct RssArticlesPage {
     Column() {
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('← 返回').fontSize(16).fontColor('#0078D7')
+          Text('← 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark))
         }
         .backgroundColor('transparent')
         .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#333')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1).margin({ left: 8 })
       }
@@ -105,12 +106,12 @@ struct RssArticlesPage {
       }
 
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7')
+        LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.articles.length === 0) {
         Column() {
-          Text('暂无文章').fontSize(16).fontColor(this.isDark ? '#AAA' : '#888')
+          Text('暂无文章').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
           Text('该源暂无内容，请检查源URL是否正确')
-            .fontSize(13).fontColor(this.isDark ? '#888' : '#AAA').margin({ top: 8 })
+            .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
@@ -119,12 +120,12 @@ struct RssArticlesPage {
             ForEach(this.articles, (article: RSSArticle) => {
               Column() {
                 Text(article.title).fontSize(15)
-                  .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                  .fontColor(ThemeColors.onBackground(this.isDark))
                   .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                 Row() {
                   if (article.pubDate) {
                     Text(article.pubDate).fontSize(11)
-                      .fontColor(this.isDark ? '#888' : '#AAA')
+                      .fontColor(ThemeColors.secondaryText(this.isDark))
                   }
                   Blank()
                   if (article.read) {
@@ -135,7 +136,7 @@ struct RssArticlesPage {
                 }.width('100%').margin({ top: 4 })
               }
               .padding(12).borderRadius(8)
-              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+              .backgroundColor(ThemeColors.surface(this.isDark))
               .margin({ left: 12, right: 12, top: 4, bottom: 4 })
               .width('100%')
             })
@@ -144,6 +145,6 @@ struct RssArticlesPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

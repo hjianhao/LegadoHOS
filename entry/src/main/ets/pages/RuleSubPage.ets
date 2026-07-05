@@ -3,6 +3,7 @@
  * 对应 Android RuleSubScreen — 管理自动订阅的规则（书源/RSS源/替换规则）
  */
 import { AppTheme } from '../theme/AppTheme';
+import { ThemeColors } from '../theme/ThemeColors';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
@@ -211,7 +212,7 @@ export struct RuleSubPage {
         Text('←').fontSize(22).fontColor('#0078D7')
           .onClick(() => UiUtil.back(this.getUIContext()))
         Text('规则订阅').fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#E0E0E0' : '#1A1A1A')
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
@@ -233,9 +234,9 @@ export struct RuleSubPage {
       } else if (this.filteredItems.length === 0) {
         Column() {
           Text(this.searchKey ? '无匹配结果' : '暂无规则订阅')
-            .fontSize(14).fontColor(this.isDark ? '#AAA' : '#888')
+            .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
           Text('点击右上角「添加」新增订阅')
-            .fontSize(12).fontColor(this.isDark ? '#888' : '#AAA').margin({ top: 8 })
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
@@ -245,12 +246,12 @@ export struct RuleSubPage {
               Row() {
                 Column() {
                   Text(item.name).fontSize(15)
-                    .fontColor(this.isDark ? '#E0E0E0' : '#333')
+                    .fontColor(ThemeColors.onBackground(this.isDark))
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(this.getTypeLabel(item.type)).fontSize(11)
                     .fontColor('#0078D7').margin({ top: 2 })
                   Text(item.url).fontSize(11)
-                    .fontColor(this.isDark ? '#888' : '#AAA')
+                    .fontColor(ThemeColors.secondaryText(this.isDark))
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     .margin({ top: 2 })
                 }
@@ -269,7 +270,7 @@ export struct RuleSubPage {
               }
               .padding(12)
               .borderRadius(8)
-              .backgroundColor(this.isDark ? '#1E1E1E' : '#FFFFFF')
+              .backgroundColor(ThemeColors.surface(this.isDark))
               .margin({ left: 12, right: 12, top: 4, bottom: 4 })
               .width('100%')
             })
@@ -280,6 +281,6 @@ export struct RuleSubPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

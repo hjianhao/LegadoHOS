@@ -21,6 +21,7 @@ import { SearchResult, createSearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SourceSwitchStore } from '../util/SourceSwitchStore';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
@@ -305,13 +306,13 @@ export struct ChangeSourcePage {
       // ===== 顶部导航栏 =====
       Row() {
         Button() {
-          Text('←').fontSize(18).fontColor(this.isDark ? '#FFF' : '#333')
+          Text('←').fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
         }
         .width(40).height(40).backgroundColor('transparent')
         .onClick((): void => { this.searching = false; UiUtil.back(this.getUIContext()); })
 
         Text('更换书源').fontSize(16).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDark ? '#FFF' : '#333')
+          .fontColor(ThemeColors.onBackground(this.isDark))
 
         Blank()
       }
@@ -323,8 +324,8 @@ export struct ChangeSourcePage {
         TextInput({ placeholder: '输入文字过滤源...', text: this.filterText })
           .layoutWeight(1).height(36).fontSize(13)
           .borderRadius(18)
-          .backgroundColor(this.isDark ? '#333' : '#F5F5F5')
-          .fontColor(this.isDark ? '#FFF' : '#333')
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+          .fontColor(ThemeColors.onBackground(this.isDark))
           .padding({ left: 12, right: 12 })
           .onChange((value: string) => { this.onFilterChange(value); })
 
@@ -335,8 +336,8 @@ export struct ChangeSourcePage {
 
         // 刷新按钮（重新搜索）
         Button('🔄').fontSize(14).height(36).width(44).margin({ left: 6 })
-          .backgroundColor(this.isDark ? '#555' : '#E0E0E0')
-          .fontColor(this.isDark ? '#FFF' : '#333').borderRadius(18)
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+          .fontColor(ThemeColors.onBackground(this.isDark)).borderRadius(18)
           .onClick(() => { this.onRefresh(); })
       }
       .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 4 })
@@ -370,7 +371,7 @@ export struct ChangeSourcePage {
                 Column() {
                   Row() {
                     Text(item.origin || '未知').fontSize(14).fontWeight(FontWeight.Medium)
-                      .fontColor(item.originUrl === this.sourceOriginUrl ? '#4CAF50' : (this.isDark ? '#FFF' : '#333'))
+                      .fontColor(item.originUrl === this.sourceOriginUrl ? '#4CAF50' : (ThemeColors.onBackground(this.isDark)))
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     if (item.originUrl === this.sourceOriginUrl) {
                       Text('  当前').fontSize(11).fontColor('#4CAF50')
@@ -378,7 +379,7 @@ export struct ChangeSourcePage {
                   }.alignSelf(ItemAlign.Start)
 
                   Text((item.name || '') + ' · ' + (item.author || ''))
-                    .fontSize(12).fontColor(this.isDark ? '#AAA' : '#888')
+                    .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
 
@@ -391,7 +392,7 @@ export struct ChangeSourcePage {
               }
               .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
             }
-            .border({ width: { bottom: 0.5 }, color: this.isDark ? '#333' : '#EEEEEE' })
+            .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
             .onClick(() => { this.onSourceSelect(item); })
           })
         }
@@ -399,6 +400,6 @@ export struct ChangeSourcePage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }
