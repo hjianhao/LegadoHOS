@@ -9,7 +9,7 @@ interface MenuEntry { icon: string; title: string; desc: string; page: string; }
 
 @Component
 export struct MyPage {
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 
   goTo(page: string): void {

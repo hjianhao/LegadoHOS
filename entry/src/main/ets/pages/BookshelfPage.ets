@@ -40,7 +40,7 @@ export struct BookshelfPage {
   @State filteredBooks: Book[] = [];
   @State isLoading: boolean = false;
   @State isRefreshing: boolean = false;
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State activeTabIndex: number = 0;
   @State activeGroupId: number = BookGroup.ALL;
   @State groups: BookGroupItem[] = [];
@@ -79,7 +79,6 @@ export struct BookshelfPage {
   private isLoadingShelf: boolean = false;
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     GlobalConfig.getInstance().syncToAppStorage();
     this.cfgDlg = new CustomDialogController({
       builder: BookshelfConfigDialog({

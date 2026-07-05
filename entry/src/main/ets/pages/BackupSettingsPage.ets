@@ -34,14 +34,13 @@ struct BackupSettingsPage {
   @StorageLink('webdav_sync_progress') syncProgress: boolean = true;
   @StorageLink('webdav_sync_progress_plus') syncProgressPlus: boolean = false;
 
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State isBusy: boolean = false;
   @State statusText: string = '';
   @State backupNames: string[] = [];
   @State manualBackupName: string = '';
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     // 从 SettingsStore 加载加密的密码
     this.loadPassword();
   }

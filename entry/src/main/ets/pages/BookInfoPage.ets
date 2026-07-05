@@ -35,7 +35,7 @@ struct BookInfoPage {
   @State wordCount: string = '';
   @State lastUpdateTime: string = '';
   @State remark: string = '';
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State isLoading: boolean = true;
   @State isRefreshing: boolean = false;
   @State isBusy: boolean = false;
@@ -67,7 +67,6 @@ struct BookInfoPage {
   private remarkDlg?: CustomDialogController
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.bookName = params['name'] || '';

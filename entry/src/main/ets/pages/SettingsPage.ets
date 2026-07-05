@@ -13,7 +13,7 @@ interface SettingItem { icon: string; title: string; key: string; }
 @Component
 struct SettingsPage {
   @State currentSection: string = 'main';
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
@@ -24,7 +24,6 @@ struct SettingsPage {
   @State autoCacheSize: number = 10;
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
     this.dnsServers = AppStorage.get<string>('dnsServers') || '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
     this.dnsEnabled = AppStorage.get<boolean>('dnsEnabled') !== false;

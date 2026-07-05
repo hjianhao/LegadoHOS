@@ -28,13 +28,12 @@ struct ExploreBookPage {
   @State ruleExploreLastUpdateTime: string = '';
   @State ruleExploreNoteUrl: string = '';
 
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State books: SearchResult[] = [];
   @State isLoading: boolean = true;
   @State errorMsg: string = '';
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
       this.sourceName = String(params['sourceName'] || '');

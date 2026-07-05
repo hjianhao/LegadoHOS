@@ -30,7 +30,7 @@ interface ExploreCategory {
 
 @Component
 export struct ExplorePage {
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   @State exploreSources: BookSource[] = [];
   @State searchKey: string = '';
   @State expandedSourceUrl: string = '';
@@ -40,7 +40,6 @@ export struct ExplorePage {
   @State resolvedFoundSource: BookSource | null = null;
 
   aboutToAppear(): void {
-    this.isDark = AppTheme.getInstance().isDark;
     void this.loadExploreSources();
   }
 

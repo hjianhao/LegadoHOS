@@ -3,7 +3,7 @@ import { AppTheme } from '../theme/AppTheme';
 @Entry
 @Component
 export struct ComicReadPage {
-  @State isDark: boolean = false;
+  @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 
   build() {
