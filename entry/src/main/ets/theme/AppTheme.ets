@@ -60,6 +60,17 @@ export class AppTheme {
   }
 
   /**
+   * 系统色模式变化回调（由 MainAbility.onConfigurationUpdate 触发）
+   */
+  onSystemColorChange(colorMode: number): void {
+    // 0=DARK, 1=LIGHT
+    if (this.config_.mode === ThemeMode.SYSTEM) {
+      this.isDark_ = (colorMode === 0);
+      this.apply_();
+    }
+  }
+
+  /**
    * 切换为跟随系统
    */
   setFollowSystem(): void {

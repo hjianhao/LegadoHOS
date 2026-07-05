@@ -6,8 +6,7 @@
  * - onWindowStageCreate: 加载首页
  */
 import UIAbility from '@ohos.app.ability.UIAbility';
-import { Want } from '@kit.AbilityKit';
-import { AbilityConstant } from '@kit.AbilityKit';
+import { Want, AbilityConstant, Configuration } from '@kit.AbilityKit';
 import Window from '@ohos.window';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
@@ -82,5 +81,12 @@ export default class MainAbility extends UIAbility {
 
   onBackground(): void {
     console.info('[MainAbility] onBackground');
+  }
+
+  /** 系统色模式切换时自动更新 */
+  onConfigurationUpdate(newConfig: Configuration): void {
+    console.info('[MainAbility] onConfigurationUpdate colorMode=', newConfig.colorMode);
+    // HarmonyOS: 0=DARK, 1=LIGHT
+    AppTheme.getInstance().onSystemColorChange(newConfig.colorMode ?? 1);
   }
 }
