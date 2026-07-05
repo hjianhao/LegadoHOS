@@ -106,6 +106,7 @@ export class AppTheme {
   }
 
   private apply_(): void {
+    console.info("[AppTheme] apply: isDark=" + this.isDark_ + " background=" + ColorScheme.resolve(this.config_, this.isDark_).background);
     this.colorScheme_ = ColorScheme.resolve(this.config_, this.isDark_);
     AppStorage.set<boolean>('isDark', this.isDark_);
     AppStorage.set<boolean>('isFollowSystem', this.config_.mode === ThemeMode.SYSTEM);
