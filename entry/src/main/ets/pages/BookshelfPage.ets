@@ -41,6 +41,7 @@ export struct BookshelfPage {
   @State isLoading: boolean = false;
   @State isRefreshing: boolean = false;
   @StorageLink('isDark') isDark: boolean = false;
+  private cs() { return AppTheme.getInstance().colorScheme; }
   @State activeTabIndex: number = 0;
   @State activeGroupId: number = BookGroup.ALL;
   @State groups: BookGroupItem[] = [];
