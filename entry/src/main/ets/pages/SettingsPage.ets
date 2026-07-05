@@ -1,7 +1,7 @@
 import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
-import { ThemeMode } from '../theme/ThemeMode';
 import { NetUtil } from '../util/NetUtil';
+
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
@@ -12,6 +12,7 @@ interface SettingItem { icon: string; title: string; key: string; }
 @Entry
 @Component
 struct SettingsPage {
+  private cs() { return AppTheme.getInstance().colorScheme; }
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('isFollowSystem') isFollowSystem: boolean = false;
@@ -81,7 +82,7 @@ struct SettingsPage {
         this.buildAboutPage();
       }
     }
-    .width('100%').height('100%').backgroundColor(this.isDark ? '#121212' : '#F5F5F5')
+    .width('100%').height('100%').backgroundColor(this.cs().background)
   }
 
   @Builder
