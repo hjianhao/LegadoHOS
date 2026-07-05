@@ -101,7 +101,7 @@ struct SettingsPage {
             Text(item.icon).fontSize(22).margin({ right: 14 })
             Text(item.title).fontSize(16).fontWeight(FontWeight.Medium)
             Blank()
-            Text('>').fontSize(18).fontColor('#888')
+            Text('>').fontSize(18).fontColor(this.cs().onSurface)
           }.padding(16).width('100%')
         }
         .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
@@ -137,7 +137,7 @@ struct SettingsPage {
       })
 
       Text('同时搜索的书源数量，值越大搜索越快但网络负载越高')
-        .fontSize(12).fontColor('#888').padding({ left: 16, right: 16, top: 4 })
+        .fontSize(12).fontColor(this.cs().onSurface).padding({ left: 16, right: 16, top: 4 })
 
       // 分组：默认启用
       Row() {
@@ -147,7 +147,7 @@ struct SettingsPage {
       .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
       Text('关闭后仅使用已启用的书源搜索')
-        .fontSize(12).fontColor('#888').padding({ left: 16, right: 16, bottom: 8 })
+        .fontSize(12).fontColor(this.cs().onSurface).padding({ left: 16, right: 16, bottom: 8 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -172,7 +172,7 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
         .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
-      Text('关闭后使用滚动模式阅读').fontSize(12).fontColor('#888').padding({ left: 16, right: 16, bottom: 12 })
+      Text('关闭后使用滚动模式阅读').fontSize(12).fontColor(this.cs().onSurface).padding({ left: 16, right: 16, bottom: 12 })
 
       // 自动缓存章节数
       Text('自动缓存').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 8 })
@@ -191,7 +191,7 @@ struct SettingsPage {
       }.width('100%').margin({ top: 4 })
         .border({ width: { bottom: 1 }, color: this.cs().outlineVariant })
 
-      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor('#888')
+      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor(this.cs().onSurface)
         .padding({ left: 16, right: 16, top: 4, bottom: 12 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
@@ -213,7 +213,7 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16, top: 12, bottom: 4 }).width('100%')
 
       Row() {
-        Text('深色模式').fontSize(16).fontColor(this.isFollowSystem ? '#AAA' : '#333').layoutWeight(1)
+        Text('深色模式').fontSize(16).fontColor(this.isFollowSystem ? this.cs().onSurface : this.cs().onBackground).layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.isDark })
           .enabled(!this.isFollowSystem)
           .onChange((v: boolean) => { AppTheme.getInstance().setDarkMode(v); this.isDark = v; })
@@ -243,7 +243,7 @@ struct SettingsPage {
           .onChange((v: string) => { this.netTimeout = v; })
       }.padding({ left: 16, right: 16 }).width('100%')
       Row() {
-        Text('秒（默认60秒，影响目录加载、搜索等操作）').fontSize(11).fontColor('#999').padding({ left: 16 })
+        Text('秒（默认60秒，影响目录加载、搜索等操作）').fontSize(11).fontColor(this.cs().onSurface).padding({ left: 16 })
       }.width('100%')
       Button('保存超时').fontSize(12).height(28).margin({ left: 16, top: 4 }).onClick(() => {
         const val = parseInt(this.netTimeout);
@@ -297,7 +297,7 @@ struct SettingsPage {
         })
       }.margin({ top: 4 })
 
-      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor('#888').padding(16)
+      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor(this.cs().onSurface).padding(16)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -305,9 +305,9 @@ struct SettingsPage {
   buildAboutPage() {
     Column() {
       Text('LegadoHOS').fontSize(24).fontWeight(FontWeight.Bold).margin({ top: 40 })
-      Text('v1.0.0').fontSize(14).fontColor('#888').margin({ top: 4 })
-      Text('鸿蒙原生阅读APP').fontSize(14).fontColor('#888').margin({ top: 2 })
-      Text('基于 legado-with-MD3 重构').fontSize(13).fontColor('#AAA').margin({ top: 16 })
+      Text('v1.0.0').fontSize(14).fontColor(this.cs().onSurface).margin({ top: 4 })
+      Text('鸿蒙原生阅读APP').fontSize(14).fontColor(this.cs().onSurface).margin({ top: 2 })
+      Text('基于 legado-with-MD3 重构').fontSize(13).fontColor(this.cs().onSurface).margin({ top: 16 })
     }
     .width('100%').alignItems(HorizontalAlign.Center)
   }
