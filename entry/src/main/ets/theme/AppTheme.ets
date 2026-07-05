@@ -108,6 +108,7 @@ export class AppTheme {
   private apply_(): void {
     this.colorScheme_ = ColorScheme.resolve(this.config_, this.isDark_);
     AppStorage.set<boolean>('isDark', this.isDark_);
+    AppStorage.set<boolean>('isFollowSystem', this.config_.mode === ThemeMode.SYSTEM);
     for (const listener of this.listeners_) listener(this.isDark_);
   }
 

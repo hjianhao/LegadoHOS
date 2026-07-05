@@ -14,6 +14,7 @@ interface SettingItem { icon: string; title: string; key: string; }
 struct SettingsPage {
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
+  @StorageLink('isFollowSystem') isFollowSystem: boolean = false;
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
@@ -203,7 +204,7 @@ struct SettingsPage {
 
       Row() {
         Text('跟随系统').fontSize(16).layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: AppTheme.getInstance().isFollowSystem })
+        Toggle({ type: ToggleType.Switch, isOn: this.isFollowSystem })
           .onChange((v: boolean) => {
             if (v) { AppTheme.getInstance().setFollowSystem(); this.isDark = AppTheme.getInstance().isDark; }
             else { AppTheme.getInstance().setDarkMode(this.isDark); }
@@ -211,9 +212,9 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16, top: 12, bottom: 4 }).width('100%')
 
       Row() {
-        Text('深色模式').fontSize(16).fontColor(AppTheme.getInstance().isFollowSystem ? '#AAA' : '#333').layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: AppTheme.getInstance().isDark })
-          .enabled(!AppTheme.getInstance().isFollowSystem)
+        Text('深色模式').fontSize(16).fontColor(this.isFollowSystem ? '#AAA' : '#333').layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.isDark })
+          .enabled(!this.isFollowSystem)
           .onChange((v: boolean) => { AppTheme.getInstance().setDarkMode(v); this.isDark = v; })
       }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
     }
