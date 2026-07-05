@@ -5,6 +5,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
+import { LoginDialog } from '../components/reader/LoginDialog';
 import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceChapter } from '../model/BookSource';
@@ -69,6 +70,7 @@ struct BookInfoPage {
   private groupDlg?: CustomDialogController;
   private readRecordDlg?: CustomDialogController;
   private remarkDlg?: CustomDialogController
+  private loginDlg?: CustomDialogController
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -107,6 +109,13 @@ struct BookInfoPage {
         dlg.open();
       });
     };
+    // 登录弹窗
+    this.loginDlg = new CustomDialogController({
+      builder: LoginDialog({ controller: this.loginDlg! }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center,
+    });
     this.tryFetchBookInfo();
     this.tryFetchCover();
     this.isLoading = false;
@@ -1147,6 +1156,7 @@ struct BookInfoPage {
 
   @Builder buildOverflowMenu() {
     Column() {
+      this.buildMenuItem('登录', () => { this.showMoreMenu = false; this.loginDlg?.open(); })
       this.buildMenuItem('刷新', () => { this.showMoreMenu = false; this.tryFetchBookInfo(); })
       this.buildMenuItem('换封面', () => { this.showMoreMenu = false; this.showCoverSheet(); })
       this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })

@@ -494,6 +494,11 @@ export class SourceExecutor {
     }
   }
 
+  /** 获取聚合源登录 qttoken（从 AppStorage 读取，登录页写入） */
+  private getQttoken_(): string {
+    return AppStorage.get<string>('gy_qttoken') || '';
+  }
+
   private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     let baseUrl = getBaseUrl(source.sourceUrl);
@@ -1066,7 +1071,17 @@ export class SourceExecutor {
     }
     if (!contentUrl) return '';
     if (!contentUrl.startsWith('http://') && !contentUrl.startsWith('https://')) {
-      const baseForContent = bookUrl || source.sourceUrl || '';
+      // 聚合源（sourceUrl 非 HTTP）：相对路径拼 gysearch host，不拼第三方 book URL
+      let baseForContent = bookUrl || source.sourceUrl || '';
+      if (source.sourceUrl && !source.sourceUrl.startsWith('http')) {
+        const rawJson = (source as any).rawJson || '';
+        const jsLib = source.jsLib || '';
+        const searchText = jsLib || rawJson;
+        const urls = searchText.match(/'((?:https?:)?\/\/[^']+)'/g);
+        if (urls && urls.length > 0) {
+          baseForContent = urls[0].replace(/^'|'$/g, '').replace(/\/+$/, '');
+        }
+      }
       if (baseForContent) {
         contentUrl = this.resolvePageUrl(contentUrl, baseForContent);
         console.info('[SrcEx] getContent resolved relative URL:', contentUrl.substring(0, 80));
@@ -1080,6 +1095,13 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
+      // 聚合源：带 qttoken cookie（登录后才有内容）
+      if (source.sourceUrl && !source.sourceUrl.startsWith('http')) {
+        const token = this.getQttoken_();
+        if (token) {
+          headers['Cookie'] = `qttoken=${token}`;
+        }
+      }
       let raw = await this.fetchWithOpts(contentUrl, headers);
       console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
       if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
@@ -1091,6 +1113,11 @@ export class SourceExecutor {
       } catch (_e) { /* not JSON */ }
 
       if (jsonParsed) {
+        // 登录检测：code:-1 且 content 为空 → 需要登录
+        if ((jsonParsed['code'] as number) === -1 && !jsonParsed['content']) {
+          AppStorage.setOrCreate<boolean>('loginRequired', true);
+          return '';
+        }
         // 直接返回已知字段
         if (typeof jsonParsed === 'string') return jsonParsed as string;
         if (jsonParsed['content']) return jsonParsed['content'] as string;
@@ -1202,10 +1229,11 @@ export class SourceExecutor {
       const chapters: BookSourceChapter[] = [];
       for (let i = 0; i < list.length; i++) {
         const item = list[i] as Record<string, unknown>;
-        const title = (item['title'] || this.firstStr(item, source.ruleTocTitle || '') || `第${i + 1}章`) as string;
-        let url = (item['item_id'] || item['id'] || item['url'] || '') as string;
-        if (url && !url.startsWith('http') && !url.startsWith('data:')) {
-          url = `${tocUrl.split('?')[0]}?item_id=${url}`;
+        const title = (item['title'] || `第${i + 1}章`) as string;
+        // content_url 是真实路径，item_id 是 base64 编码的源 URL
+        let url = (item['content_url'] || item['item_id'] || '') as string;
+        if (url && !url.startsWith('http') && !url.startsWith('/')) {
+          url = '/' + url;
         }
         chapters.push({ title, url, index: i });
       }
@@ -1231,45 +1259,28 @@ export class SourceExecutor {
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
 
-    // 聚合源（sourceUrl 非 HTTP）：从第三方 URL 提取 book_id，构造 catalog API 请求
+    // 聚合源（sourceUrl 非 HTTP）：从第三方 URL 构造 base64 book_id，请求 catalog API
     const isAggSource = source.sourceUrl && !source.sourceUrl.startsWith('http');
     if (isAggSource && tocUrl.startsWith('http')) {
-      const bookIdMatch = tocUrl.match(/\/(\d+)\.html?/);
-      if (bookIdMatch) {
-        const bookId = bookIdMatch[1];
-        // 构造完整的 catalog 参数（同 JS 规则 request("/catalog?book_id=...&source=...&tab=...&variable=...", "POST", {html})）
-        // source 和 tab 暂时用默认值
-        const catalogParams = JSON.stringify({
-          book_id: bookId,
-          source: tocUrl.includes('69shuba') ? '69书吧' : '番茄',
-          tab: '小说',
-          variable: '{"custom":""}',
-        });
-        const catalogUri = `data:;base64,${CryptoUtil.base64Encode(catalogParams)}`;
-        const converted = await this.convertDataUri_(catalogUri, '', source);
-        if (converted.url.startsWith('http')) {
-          console.info('[SrcEx] getToc aggregation → catalog:', converted.url.substring(0, 120));
-          // 先试 GET
-          let resp: string = '';
-          resp = await this.fetchWithOpts(converted.url, {
-            'Accept': 'text/html,application/json,*/*',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          }, 30000);
-          // GET 返回错误时试 POST
-          if (!resp || resp.length < 50 || resp.startsWith('<!DOCTYPE') ||
-              (resp.startsWith('{') && resp.includes('"code":-1'))) {
-            const postUrl = `${converted.url},${JSON.stringify({ method: "POST", body: JSON.stringify({ html: '' }) })}`;
-            console.info('[SrcEx] getToc catalog GET returned error, trying POST');
-            resp = await this.fetchWithOpts(postUrl, {
-              'Accept': 'text/html,application/json,*/*',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            }, 30000);
-          }
-          const decoded = this.tryHexDecode_(resp) || resp;
-          console.info('[SrcEx] getToc catalog resp len=', resp.length, 'first200=', decoded.substring(0, 200));
-          if (decoded && decoded.length > 50) {
-            return this.parseCatalogResponse_(decoded, source, tocUrl);
-          }
+      // book_id 是 tocUrl 的 base64 编码（搜索结果里就是这格式）
+      const bookId = CryptoUtil.base64Encode(tocUrl);
+      const catalogParams = JSON.stringify({
+        book_id: bookId,
+        source: '69书吧',  // 从 tocUrl 域名推断
+        tab: '小说',
+        variable: '{"custom":""}',
+      });
+      const catalogUri = `data:;base64,${CryptoUtil.base64Encode(catalogParams)}`;
+      const converted = await this.convertDataUri_(catalogUri, '', source);
+      if (converted.url.startsWith('http')) {
+        console.info('[SrcEx] getToc aggregation → catalog:', converted.url.substring(0, 120));
+        let resp = await this.fetchWithOpts(converted.url, {
+          'Accept': 'text/html,application/json,*/*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }, 30000);
+        const decoded = this.tryHexDecode_(resp) || resp;
+        if (decoded && decoded.length > 50) {
+          return this.parseCatalogResponse_(decoded, source, tocUrl);
         }
       }
     }

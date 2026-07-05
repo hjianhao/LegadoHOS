@@ -31,11 +31,13 @@ import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAlou
 import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { LoginDialog } from '../components/reader/LoginDialog';
 
 @Entry
 @Component
 struct ReadPage {
   @StorageLink('isDark') isDark: boolean = false;
+  @StorageLink('loginRequired') @Watch('onLoginRequired') loginRequired: boolean = false;
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State bookUrl: string = '';
@@ -89,6 +91,20 @@ struct ReadPage {
   private lastProviderIdx_: number = -1;
   private aloudEngine_: ReadAloudEngine | null = null;
   private sourceDlg?: CustomDialogController;
+  private loginDlg?: CustomDialogController;
+
+  onLoginRequired(): void {
+    if (this.loginRequired && !this.loginDlg) {
+      this.loginDlg = new CustomDialogController({
+        builder: LoginDialog({ controller: this.loginDlg! }),
+        autoCancel: true,
+        customStyle: true,
+        alignment: DialogAlignment.Center,
+      });
+      this.loginDlg.open();
+      AppStorage.setOrCreate<boolean>('loginRequired', false);
+    }
+  }
 
   aboutToAppear(): void {
     const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
