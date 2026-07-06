@@ -141,24 +141,22 @@ export struct PageView {
     return Math.round(overall) + '%';
   }
 
-  /** 构建页面文本（段落间插入空行实现段距） */
+  /** 获取当前页的渲染文本：优先使用已格式化的 formattedText */
   private buildPageContent(): string {
     if (this.pages.length === 0) return '';
     const page = this.pages[this.safePageIndex()];
+    if (page.formattedText) return page.formattedText;
+    // 回退逻辑（旧数据兼容）
     if (page.lines.length === 0) return '';
     const paraBreakLines = Math.round(this.config.paragraphSpacing / Math.max(1, this.config.fontSize * 0.25));
     let text = '';
     for (let i = 0; i < page.lines.length; i++) {
       const line = page.lines[i];
       if (i > 0 && line.isParagraphStart && paraBreakLines > 0) {
-        for (let b = 0; b < paraBreakLines; b++) {
-          text += '\n';
-        }
+        for (let b = 0; b < paraBreakLines; b++) text += '\n';
       }
       text += line.text;
-      if (i < page.lines.length - 1) {
-        text += '\n';
-      }
+      if (i < page.lines.length - 1) text += '\n';
     }
     return text;
   }

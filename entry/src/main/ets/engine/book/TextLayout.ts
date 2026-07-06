@@ -31,8 +31,10 @@ export interface LayoutConfig {
 
 export interface LayoutPage {
   lines: LayoutLine[];
-  startOffset: number;         // 在全文中的起始字符偏移
-  endOffset: number;           // 在全文中的结束字符偏移
+  startOffset: number;
+  endOffset: number;
+  /** 完全格式化后的页面文本（含缩进+段间距+换行），可直接渲染 */
+  formattedText?: string;
 }
 
 export interface LayoutLine {
@@ -66,42 +68,79 @@ export class TextLayout {
   ): LayoutPage[] {
     if (!text) return [];
 
-    // pageWidth/pageHeight 来自 onAreaChange（单位 vp），padding 也单位 vp
     const innerW = pageWidth - config.pagePaddingLeft - config.pagePaddingRight;
     const innerH = pageHeight - config.pagePaddingTop - config.pagePaddingBottom;
     if (innerW <= 0 || innerH <= 0) return [];
 
+    // 统一格式化文本（缩进 + 段间距 + 行尾 \n），测量和渲染共用
+    const formatted = TextLayout.formatText(text, config);
+
     if (measure) {
-      return this.splitIntoPagesPrecise_(text, config, innerW, innerH, measure);
+      return this.splitIntoPagesFormatted_(formatted, innerW, innerH, config, measure);
     }
-    return this.splitIntoPagesEstimated_(text, config, pageWidth, pageHeight);
+    return this.splitIntoPagesEstimated_(formatted, config, pageWidth, pageHeight);
   }
 
-  /** 使用 measureTextSize 二分查找每页边界 */
-  private static splitIntoPagesPrecise_(
-    text: string,
-    config: LayoutConfig,
+  /**
+   * 统一格式化原始文本：缩进 + 段间距 + 行尾 \n。
+   * 输出与 PageView.buildPageContent 完全一致，确保测量=渲染。
+   */
+  static formatText(text: string, config: LayoutConfig): string {
+    if (!text) return '';
+    const parts = text.split('\n');
+    const paraBreakLines = Math.round(config.paragraphSpacing / Math.max(1, config.fontSize * 0.25));
+    const result: string[] = [];
+
+    for (let i = 0; i < parts.length; i++) {
+      let seg = parts[i];
+      if (seg.length === 0) {
+        result.push(''); // 保留空段（连续 \n 产生的空行）
+        continue;
+      }
+      // 缩进（非首段）
+      if (i > 0 && config.firstLineIndent && config.indentSize > 0) {
+        let prefix = '';
+        for (let j = 0; j < config.indentSize * 2; j++) prefix += ' ';
+        seg = prefix + seg;
+      }
+      // 段间距（非首段前插入空行）
+      if (i > 0 && paraBreakLines > 0) {
+        for (let b = 0; b < paraBreakLines; b++) result.push('');
+      }
+      result.push(seg);
+    }
+    return result.join('\n');
+  }
+
+  /** 对已格式化的文本做精确分页 */
+  private static splitIntoPagesFormatted_(
+    formatted: string,
     innerW: number,
     innerH: number,
+    config: LayoutConfig,
     measure: MeasureUtils
   ): LayoutPage[] {
     const pages: LayoutPage[] = [];
     let offset = 0;
-    const len = text.length;
+    const len = formatted.length;
 
     while (offset < len) {
-      // 二分查找：最长前缀使其高度 <= innerH
-      const end = this.findPageEnd_(text, offset, len, innerW, innerH, config, measure);
+      const end = this.findPageEnd_(formatted, offset, len, innerW, innerH, config, measure);
       if (end <= offset) {
-        // 连一个字符都放不下，至少放一个字符避免死循环
-        pages.push({ lines: [{ text: text[offset], offset: offset, height: config.fontSize * config.lineHeightMultiplier, isParagraphStart: true, isParagraphEnd: false }], startOffset: offset, endOffset: offset + 1 });
+        pages.push({
+          lines: [{ text: formatted[offset], offset: offset, height: config.fontSize * config.lineHeightMultiplier, isParagraphStart: true, isParagraphEnd: false }],
+          startOffset: offset, endOffset: offset + 1,
+          formattedText: formatted.substring(offset, offset + 1),
+        });
         offset++;
         continue;
       }
-      const pageText = text.substring(offset, end);
-      // 拆成显示用行（用于 PageView 渲染）
-      const lines = this.splitToLines_(pageText, config.fontSize * config.lineHeightMultiplier, config);
-      pages.push({ lines: lines, startOffset: offset, endOffset: end });
+      const pageText = formatted.substring(offset, end);
+      pages.push({
+        lines: [],
+        startOffset: offset, endOffset: end,
+        formattedText: pageText,
+      });
       offset = end;
     }
     return pages;
@@ -171,44 +210,34 @@ export class TextLayout {
     return lines;
   }
 
-  /** 回退：基于字符计数的估算分段 */
+  /** 回退：已格式化文本按行数分页 */
   private static splitIntoPagesEstimated_(
-    text: string,
+    formatted: string,
     config: LayoutConfig,
     pageWidth: number,
     pageHeight: number
   ): LayoutPage[] {
     const pages: LayoutPage[] = [];
-    const paragraphs = text.split('\n');
+    const lines = formatted.split('\n');
     const lineHeight = config.measuredLineHeight > 0
       ? config.measuredLineHeight
       : config.fontSize * config.lineHeightMultiplier;
     const usableHeight = pageHeight - config.pagePaddingTop - config.pagePaddingBottom;
     const maxLinesPerPage = Math.floor(usableHeight / lineHeight);
 
-    let currentLines: LayoutLine[] = [];
-    let globalOffset = 0;
-
-    for (let pi = 0; pi < paragraphs.length; pi++) {
-      const para = paragraphs[pi];
-      const paraLines = this.wrapParagraph(para, config, pageWidth);
-
-      for (const line of paraLines) {
-        if (currentLines.length >= maxLinesPerPage) {
-          const pageStartOffset = currentLines.length > 0 ? currentLines[0].offset : globalOffset;
-          const pageEndOffset = currentLines.length > 0
-            ? currentLines[currentLines.length - 1].offset + currentLines[currentLines.length - 1].text.length
-            : globalOffset;
-          pages.push({ lines: [...currentLines], startOffset: pageStartOffset, endOffset: pageEndOffset });
-          currentLines = [];
-        }
-        currentLines.push({ ...line, offset: globalOffset });
-        globalOffset += line.text.length;
-      }
-      if (pi < paragraphs.length - 1) { globalOffset += 1; }
-    }
-    if (currentLines.length > 0) {
-      pages.push({ lines: currentLines, startOffset: currentLines[0]?.offset || 0, endOffset: globalOffset });
+    let offset = 0;
+    for (let start = 0; start < lines.length; start += maxLinesPerPage) {
+      const end = Math.min(start + maxLinesPerPage, lines.length);
+      const pageLines = lines.slice(start, end);
+      const pageText = pageLines.join('\n');
+      const pageLen = pageText.length + (start + maxLinesPerPage < lines.length ? 1 : 0); // +1 for \n between pages
+      pages.push({
+        lines: [],
+        startOffset: offset,
+        endOffset: offset + pageLen,
+        formattedText: pageText,
+      });
+      offset += pageLen;
     }
     return pages;
   }
