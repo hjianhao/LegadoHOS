@@ -1258,10 +1258,40 @@ export class SourceExecutor {
     } else if (source.ruleBookInfoTocUrl) {
       // 回退：使用 bookInfo 中的 tocUrl 模板
       let tpl = source.ruleBookInfoTocUrl;
-      // 处理 {{$.resourceID}} 模板：从搜索结果 URL 中提取 bookid 替换
-      const bid = tocUrl.match(/bookid=(\d+)/i);
-      if (bid && tpl.includes('{{$.resourceID}}')) {
-        tpl = tpl.replace('{{$.resourceID}}', bid[1]);
+      // 通用处理 {{$.fieldName}} 模板：从书籍详情页 JSON 中提取字段值替换
+      const fieldMatches = tpl.match(/\{\{\$\.(\w+)\}\}/g);
+      if (fieldMatches) {
+        try {
+          // 先尝试从 tocUrl（搜索结果/详情页 URL）中提取 ID
+          for (const fm of fieldMatches) {
+            const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
+            // 尝试从 URL query 或 path 中提取
+            const urlMatch = tocUrl.match(new RegExp(fieldName + '[=:/\\.](\\d+)', 'i'));
+            if (urlMatch) {
+              tpl = tpl.replace(fm, urlMatch[1]);
+            }
+          }
+          // 仍有未替换的模板 → 请求书籍详情页 JSON 获取字段值
+          if (tpl.includes('{{$.')) {
+            const infoResp = await this.fetchWithOpts(tocUrl, {
+              'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              ...parseHeader(source.header)
+            }, 15000);
+            if (infoResp) {
+              const infoJson = JSON.parse(infoResp) as Record<string, unknown>;
+              for (const fm of fieldMatches) {
+                if (!tpl.includes(fm)) continue;
+                const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
+                // 在 JSON 中递归查找字段
+                let val = this.findJsonValue(infoJson, fieldName);
+                if (val !== undefined) {
+                  tpl = tpl.replace(fm, String(val));
+                }
+              }
+            }
+          }
+        } catch (_e) { /* ignore */ }
       }
       tocUrl = this.resolveTocUrlTemplate(tpl, tocUrl);
     }
@@ -2473,6 +2503,19 @@ export class SourceExecutor {
       }
     }
     return result.trim();
+  }
+
+  /** 递归查找 JSON 对象中的字段值 */
+  private findJsonValue(obj: Record<string, unknown>, fieldName: string): unknown {
+    if (obj[fieldName] !== undefined) return obj[fieldName];
+    for (const key of Object.keys(obj)) {
+      const v = obj[key];
+      if (v instanceof Object && !Array.isArray(v)) {
+        const found = this.findJsonValue(v as Record<string, unknown>, fieldName);
+        if (found !== undefined) return found;
+      }
+    }
+    return undefined;
   }
 
   private stripHtml(html: string): string {
