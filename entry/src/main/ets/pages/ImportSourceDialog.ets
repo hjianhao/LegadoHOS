@@ -42,7 +42,9 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.items = await dao.importSourcesPreview(json);
       this.statusText = `${this.items.length} 条书源`;
-    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误',duration:1500}); }
+    } catch (e) {
+      console.error('[ImportSource] loadPreview error: ' + e);
+      UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误: '+String(e).substring(0,80),duration:2000}); }
     this.isLoading = false;
   }
 
@@ -72,8 +74,9 @@ export struct ImportSourceDialog {
       fileIo.closeSync(f);
       const td = util.TextDecoder.create('utf-8');
       const json = td.decodeToString(new Uint8Array(b), {stream:false});
+      console.info('[ImportSource] file loaded, len=' + json.length);
       await this.loadPreview(json);
-    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'读取失败',duration:1500}); }
+    } catch (e) { console.error('[ImportSource] fileImport error: ' + e); UiUtil.showToast(this.getUIContext(), {message:'读取失败',duration:1500}); }
   }
 
   private async doUrlImport(url: string): Promise<void> {
