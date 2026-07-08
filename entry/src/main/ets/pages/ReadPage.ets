@@ -410,7 +410,10 @@ struct ReadPage {
   }
 
   private applyChapterContent_(idx: number, content: string): void {
+    const prevIdx = this.currentIndex;
     this.currentIndex = idx;
+    // 跳转到新章节时从第一页开始
+    if (idx !== prevIdx) this.pageIndex = 0;
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
