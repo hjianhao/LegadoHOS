@@ -207,12 +207,12 @@ export struct PageView {
             .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-                console.info('[PageView] onCreateMenu called, kimiInstalled=' + this.kimiInstalled_);
-                // 临时：强制追加验证 editMenuOptions 是否生效
-                menuItems.push({
-                  id: TextMenuItemId.of('askKimi'),
-                  content: '问Kimi',
-                } as TextMenuItem);
+                if (this.kimiInstalled_) {
+                  menuItems.push({
+                    id: TextMenuItemId.of('askKimi'),
+                    content: '问Kimi',
+                  } as TextMenuItem);
+                }
                 return menuItems;
               },
               onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
@@ -278,11 +278,18 @@ export struct PageView {
   }
 
   private checkKimi_(names: string[], idx: number): void {
-    if (idx >= names.length) return;
-    bundleManager.getBundleInfo(names[idx], 0).then(() => {
-      console.info('[PageView] Kimi found: ' + names[idx]);
+    if (idx >= names.length) {
+      console.info('[PageView] Kimi not found among: ' + names.join(', '));
+      return;
+    }
+    const name = names[idx];
+    console.info('[PageView] checking Kimi: ' + name);
+    bundleManager.getBundleInfo(name, 0).then((info) => {
+      console.info('[PageView] Kimi found: ' + name + ' name=' + info.name);
       this.kimiInstalled_ = true;
-    }).catch(() => {
+      // 恢复条件判断
+    }).catch((err: Error) => {
+      console.info('[PageView] Kimi check failed for ' + name + ': ' + err.message);
       this.checkKimi_(names, idx + 1);
     });
   }
