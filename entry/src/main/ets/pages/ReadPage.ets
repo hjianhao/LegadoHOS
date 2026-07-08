@@ -318,13 +318,7 @@ struct ReadPage {
         this.currentIndex = this.targetIdx_;
       }
       console.info('[ReadPage] pos: targetIdx_=' + this.targetIdx_ + ' pageIdx=' + this.pageIndex + ' chapters=' + this.allChapters_.length);
-      console.info('[ReadPage] loadContent pos: targetIdx_=' + this.targetIdx_ + ' page=' + this.pageIndex + ' savedPage=' + this.pageIndex);
-      const savedPage = this.pageIndex;
       await this.loadChapter(this.currentIndex);
-      if (savedPage > 0 && savedPage < this.pages.length) {
-      console.info('[ReadPage] restored page to ' + savedPage + '/' + this.pages.length);
-        this.pageIndex = savedPage;
-      }
     } catch (e) {
       this.text = '加载失败';
       this.isLoading = false;
