@@ -207,13 +207,12 @@ export struct PageView {
             .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-                console.info('[PageView] onCreateMenu kimi=' + this.kimiInstalled_);
-                if (this.kimiInstalled_) {
-                  menuItems.push({
-                    id: TextMenuItemId.of('askKimi'),
-                    content: '问Kimi',
-                  } as TextMenuItem);
-                }
+                console.info('[PageView] onCreateMenu called, kimiInstalled=' + this.kimiInstalled_);
+                // 临时：强制追加验证 editMenuOptions 是否生效
+                menuItems.push({
+                  id: TextMenuItemId.of('askKimi'),
+                  content: '问Kimi',
+                } as TextMenuItem);
                 return menuItems;
               },
               onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
