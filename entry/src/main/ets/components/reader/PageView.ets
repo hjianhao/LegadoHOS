@@ -202,26 +202,24 @@ export struct PageView {
             .width('100%')
             .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
             .copyOption(CopyOptions.LocalDevice)
+            .onClick((event: ClickEvent) => {
+              const w = this.pageWidth > 0 ? this.pageWidth : 360;
+              const h = this.pageHeight > 0 ? this.pageHeight : 640;
+              const x3 = w / 3; const y3 = h / 3;
+              let zone: number = ClickZone.MC;
+              if (event.y < y3) {
+                zone = event.x < x3 ? ClickZone.TL : (event.x > w - x3 ? ClickZone.TR : ClickZone.TC);
+              } else if (event.y < y3 * 2) {
+                zone = event.x < x3 ? ClickZone.ML : (event.x > w - x3 ? ClickZone.MR : ClickZone.MC);
+              } else {
+                zone = event.x < x3 ? ClickZone.BL : (event.x > w - x3 ? ClickZone.BR : ClickZone.BC);
+              }
+              this.dispatchZoneAction(zone);
+            })
         }
       }
       .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
       .clip(true)
-      .onClick((event: ClickEvent) => {
-        console.info('[PageView] contentClick x=' + event.x + ' y=' + event.y + ' w=' + this.pageWidth + ' h=' + this.pageHeight);
-        const w = this.pageWidth > 0 ? this.pageWidth : 360;
-        const h = this.pageHeight > 0 ? this.pageHeight : 640;
-        const x3 = w / 3;
-        const y3 = h / 3;
-        let zone: number = ClickZone.MC;
-        if (event.y < y3) {
-          zone = event.x < x3 ? ClickZone.TL : (event.x > w - x3 ? ClickZone.TR : ClickZone.TC);
-        } else if (event.y < y3 * 2) {
-          zone = event.x < x3 ? ClickZone.ML : (event.x > w - x3 ? ClickZone.MR : ClickZone.MC);
-        } else {
-          zone = event.x < x3 ? ClickZone.BL : (event.x > w - x3 ? ClickZone.BR : ClickZone.BC);
-        }
-        this.dispatchZoneAction(zone);
-      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
