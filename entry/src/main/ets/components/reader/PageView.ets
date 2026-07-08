@@ -205,7 +205,7 @@ export struct PageView {
             .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
             .width('100%')
             .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-            .copyOption(CopyOptions.None)
+            .copyOption(CopyOptions.LocalDevice)
             .bindSelectionMenu(TextSpanType.TEXT, this.selectionMenuBuilder, TextResponseType.LONG_PRESS)
             .onTextSelectionChange((start: number, end: number) => {
               this.selStart_ = start;
