@@ -334,7 +334,6 @@ struct ReadPage {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
     this.currentIndex = idx;
-    this.pageIndex = 0;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
@@ -408,7 +407,6 @@ struct ReadPage {
 
   private applyChapterContent_(idx: number, content: string): void {
     this.currentIndex = idx;
-    this.pageIndex = 0;
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
@@ -704,7 +702,7 @@ struct ReadPage {
     // TextLayout 内部会减去 paddingTop/paddingBottom，无需再额外减 footerH
     this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
-    if (this.pageIndex >= this.pages.length) this.pageIndex = 0;
+    if (this.pageIndex >= this.pages.length) this.pageIndex = Math.max(0, this.pages.length - 1);
     this.scrollText = scrollText;
   }
 
