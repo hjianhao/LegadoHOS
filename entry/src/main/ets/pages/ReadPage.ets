@@ -403,6 +403,7 @@ struct ReadPage {
 
   private applyChapterContent_(idx: number, content: string): void {
     this.currentIndex = idx;
+    this.pageIndex = 0;
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
