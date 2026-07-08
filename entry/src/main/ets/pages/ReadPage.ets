@@ -166,8 +166,10 @@ struct ReadPage {
           this.totalChapters_ = ChapterCache.chapters.length;
           this.chapters = ChapterCache.chapters;
         }
-        if (idx < this.allChapters_.length && idx !== this.currentIndex) {
+        if (idx < this.allChapters_.length) {
           console.info('[ReadPage] Jump to chapter from toc:', idx, 'current:', this.currentIndex);
+          // TOC 跳转是显式操作，强制从第一页开始
+          this.pageIndex = 0;
           this.loadChapter(idx);
         }
       }
