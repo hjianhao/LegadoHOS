@@ -334,7 +334,6 @@ struct ReadPage {
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
-    this.currentIndex = idx;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
