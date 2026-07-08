@@ -202,6 +202,7 @@ export struct PageView {
             .letterSpacing(this.config.letterSpacing)
             .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
             .width('100%')
+            .height('100%')
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
                 return menuItems;
