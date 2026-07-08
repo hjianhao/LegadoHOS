@@ -334,10 +334,7 @@ struct ReadPage {
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
-    const prevIdx = this.currentIndex;
     this.currentIndex = idx;
-    // 跳转到新章节时从第一页开始，刷新当前章节时保留页码
-    if (idx !== prevIdx) this.pageIndex = 0;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
