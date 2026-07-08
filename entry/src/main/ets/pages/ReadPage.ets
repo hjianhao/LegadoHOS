@@ -120,6 +120,12 @@ struct ReadPage {
     this.loadSettings();
     // 初始化测量工具
     try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
+    // 从目录页跳转时，强制从第一页开始
+    if (ChapterCache.targetIndex >= 0) {
+      this.targetIdx_ = ChapterCache.targetIndex;
+      this.pageIndex = 0;
+      ChapterCache.targetIndex = -1;
+    }
     // 云端同步（异步，不阻塞主流程）
     this.syncFromCloud();
   }
