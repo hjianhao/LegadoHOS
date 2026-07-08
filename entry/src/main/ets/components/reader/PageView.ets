@@ -216,6 +216,7 @@ export struct PageView {
               },
             } as EditMenuOptions)
             .onClick((event: ClickEvent) => {
+              console.info('[PageView] click! x=' + event.x + ' y=' + event.y + ' w=' + (this.pageWidth > 0 ? this.pageWidth : 360) + ' h=' + (this.pageHeight > 0 ? this.pageHeight : 640));
               const w = this.pageWidth > 0 ? this.pageWidth : 360;
               const h = this.pageHeight > 0 ? this.pageHeight : 640;
               const x3 = w / 3; const y3 = h / 3;
