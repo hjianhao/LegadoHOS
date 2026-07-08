@@ -161,27 +161,25 @@ struct ReadPage {
   }
 
   onPageShow(): void {
-    if (!this.isLoading) {
-      // 从目录页返回时，通过 ChapterCache 获取目标章节索引
-      if (ChapterCache.targetIndex >= 0) {
-        const idx = ChapterCache.targetIndex;
-        ChapterCache.targetIndex = -1;
-        // 同步章节列表（目录页可能已重新排序）
-        if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
-          this.allChapters_ = ChapterCache.chapters;
-          this.totalChapters_ = ChapterCache.chapters.length;
-          this.chapters = ChapterCache.chapters;
-        }
-        if (idx < this.allChapters_.length) {
-          console.info('[ReadPage] Jump to chapter from toc:', idx, 'current:', this.currentIndex);
-          // TOC 跳转是显式操作，强制从第一页开始
-          this.pageIndex = 0;
-          this.loadChapter(idx);
-        }
+    // 从目录页返回时，无条件检查跳转目标
+    if (ChapterCache.targetIndex >= 0) {
+      const idx = ChapterCache.targetIndex;
+      ChapterCache.targetIndex = -1;
+      if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
+        this.allChapters_ = ChapterCache.chapters;
+        this.totalChapters_ = ChapterCache.chapters.length;
+        this.chapters = ChapterCache.chapters;
       }
-      return;
+      if (idx < this.allChapters_.length) {
+        console.info('[ReadPage] Jump to chapter from toc:', idx, 'current:', this.currentIndex);
+        this.pageIndex = 0;
+        this.loadChapter(idx);
+        return;
+      }
     }
-    this.loadContent();
+    if (!this.isLoading) {
+      this.loadContent();
+    }
   }
 
   private async loadSettings(): Promise<void> {
