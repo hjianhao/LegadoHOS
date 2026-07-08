@@ -1273,6 +1273,14 @@ export class SourceExecutor {
             for (const fm of fieldMatches) {
               const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
               let val = this.findJsonValue(infoJson, fieldName);
+              // JSON 中未找到 → 尝试从 URL 中提取
+              if (val === undefined) {
+                // 匹配 /novel/xxx 路径中的 ID 或 ?fieldName=xxx 参数
+                const pathMatch = tocUrl.match(new RegExp('/' + fieldName + '/([^/?]+)', 'i'))
+                  || tocUrl.match(new RegExp(fieldName + '=([^&]+)', 'i'))
+                  || tocUrl.match(/\/([a-z0-9]+)(?:[/?#]|$)/i);
+                if (pathMatch) val = pathMatch[1];
+              }
               if (val !== undefined) tpl = tpl.replace(fm, String(val));
             }
           }
