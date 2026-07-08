@@ -274,7 +274,7 @@ export struct PageView {
 
   aboutToAppear(): void {
     // 尝试多个已知的 Kimi 包名
-    const kimiNames = ['com.moonshot.kimi.hmos', 'com.moonshot.kimi', 'com.kimi.app'];
+    const kimiNames = ['com.hos.moonshot.kimichat', 'com.moonshot.kimi.hmos', 'com.moonshot.kimi'];
     this.checkKimi_(kimiNames, 0);
   }
 

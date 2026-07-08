@@ -994,7 +994,7 @@ struct ReadPage {
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const want: Want = {
-        bundleName: 'com.moonshot.kimi', abilityName: 'MainAbility',
+        bundleName: 'com.hos.moonshot.kimichat', abilityName: 'EntryAbility',
         parameters: { 'query': text, 'text': text },
       };
       ctx.startAbility(want).catch(() => { /* ignore */ });
