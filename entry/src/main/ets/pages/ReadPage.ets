@@ -754,6 +754,7 @@ struct ReadPage {
   }
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
+    console.info('[ReadPage] onNextChapter: ' + n + '/' + this.totalChapters_);
     if (n >= this.totalChapters_) return;
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
@@ -763,6 +764,7 @@ struct ReadPage {
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
     this.loadChapter(n).then(() => {
+      console.info('[ReadPage] Fallback loadChapter done:', n);
       this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
       this.justLoadedChapter_ = true;
     });
