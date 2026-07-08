@@ -59,7 +59,7 @@ export struct ImportSourceDialog {
       UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
       this.controller.close();
       if (this.onImportSuccess) this.onImportSuccess();
-    } catch (e) { UiUtil.showToast(this.getUIContext(), {message:'导入失败',duration:1500}); }
+    } catch (e) { console.error('[ImportSource] doImport error: ' + e); UiUtil.showToast(this.getUIContext(), {message:'导入失败',duration:1500}); }
     this.isLoading = false;
   }
 
