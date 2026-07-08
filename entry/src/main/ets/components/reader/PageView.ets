@@ -270,26 +270,34 @@ export struct PageView {
 
   @Builder
   selectionMenuBuilder() {
-    Menu() {
-      MenuItemGroup() {
-        MenuItem({ content: '📋 复制' })
+    Row() {
+      Text('复制')
+        .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .onClick(() => {
+          const text = this.buildPageContent().substring(this.selStart_, this.selEnd_);
+          try {
+            pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(text));
+          } catch (_e) { /* ignore */ }
+        })
+      if (this.kimiInstalled_) {
+        Text('问Kimi')
+          .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
+          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
           .onClick(() => {
-            const text = this.buildPageContent().substring(this.selStart_, this.selEnd_);
-            try {
-              pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(text));
-            } catch (_e) { /* ignore */ }
-          })
-        if (this.kimiInstalled_) {
-          MenuItem({ content: '🤖 问Kimi' })
-            .onClick(() => {
-              this.onAskKimi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
-            })
-        }
-        MenuItem({ content: '🔍 问小艺' })
-          .onClick(() => {
-            this.onAskXiaoYi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
+            this.onAskKimi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
           })
       }
+      Text('问小艺')
+        .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .onClick(() => {
+          this.onAskXiaoYi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
+        })
     }
+    .borderRadius(10)
+    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
+    .shadow({ radius: 8, color: '#00000020', offsetX: 0, offsetY: 4 })
+    .padding({ top: 2, bottom: 2 })
   }
 }
