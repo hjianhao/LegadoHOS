@@ -206,11 +206,6 @@ export struct PageView {
             .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-                // 始终追加问Kimi（无需权限检查安装状态）
-                menuItems.push({
-                  id: TextMenuItemId.of('askKimi'),
-                  content: '问Kimi',
-                } as TextMenuItem);
                 return menuItems;
               },
               onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
