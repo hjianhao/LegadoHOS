@@ -207,6 +207,7 @@ export struct PageView {
             .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
+                console.info('[PageView] onCreateMenu kimi=' + this.kimiInstalled_);
                 if (this.kimiInstalled_) {
                   menuItems.push({
                     id: TextMenuItemId.of('askKimi'),
@@ -272,10 +273,18 @@ export struct PageView {
   private kimiInstalled_: boolean = false;
 
   aboutToAppear(): void {
-    bundleManager.getBundleInfo('com.moonshot.kimi', 0).then(() => {
+    // 尝试多个已知的 Kimi 包名
+    const kimiNames = ['com.moonshot.kimi.hmos', 'com.moonshot.kimi', 'com.kimi.app'];
+    this.checkKimi_(kimiNames, 0);
+  }
+
+  private checkKimi_(names: string[], idx: number): void {
+    if (idx >= names.length) return;
+    bundleManager.getBundleInfo(names[idx], 0).then(() => {
+      console.info('[PageView] Kimi found: ' + names[idx]);
       this.kimiInstalled_ = true;
     }).catch(() => {
-      this.kimiInstalled_ = false;
+      this.checkKimi_(names, idx + 1);
     });
   }
 }
