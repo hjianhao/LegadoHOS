@@ -155,25 +155,25 @@ struct ReadPage {
   }
 
   onPageShow(): void {
-    // 从目录页返回时，无条件检查跳转目标
-    if (ChapterCache.targetIndex >= 0) {
-      const idx = ChapterCache.targetIndex;
-      ChapterCache.targetIndex = -1;
-      if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
-        this.allChapters_ = ChapterCache.chapters;
-        this.totalChapters_ = ChapterCache.chapters.length;
-        this.chapters = ChapterCache.chapters;
-      }
-      if (idx < this.allChapters_.length) {
-        console.info('[ReadPage] Jump to chapter from toc:', idx, 'current:', this.currentIndex);
-        this.pageIndex = 0;
-        this.loadChapter(idx);
-        return;
-      }
-    }
     if (!this.isLoading) {
-      this.loadContent();
+      // 从目录页返回时，通过 ChapterCache 获取目标章节索引
+      if (ChapterCache.targetIndex >= 0) {
+        const idx = ChapterCache.targetIndex;
+        ChapterCache.targetIndex = -1;
+        // 同步章节列表（目录页可能已重新排序）
+        if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
+          this.allChapters_ = ChapterCache.chapters;
+          this.totalChapters_ = ChapterCache.chapters.length;
+          this.chapters = ChapterCache.chapters;
+        }
+        if (idx < this.allChapters_.length && idx !== this.currentIndex) {
+          console.info('[ReadPage] Jump to chapter from toc:', idx);
+          this.loadChapter(idx);
+        }
+      }
+      return;
     }
+    this.loadContent();
   }
 
   private async loadSettings(): Promise<void> {
@@ -318,7 +318,13 @@ struct ReadPage {
         this.currentIndex = this.targetIdx_;
       }
       console.info('[ReadPage] pos: targetIdx_=' + this.targetIdx_ + ' pageIdx=' + this.pageIndex + ' chapters=' + this.allChapters_.length);
+      console.info('[ReadPage] loadContent pos: targetIdx_=' + this.targetIdx_ + ' page=' + this.pageIndex + ' savedPage=' + this.pageIndex);
+      const savedPage = this.pageIndex;
       await this.loadChapter(this.currentIndex);
+      if (savedPage > 0 && savedPage < this.pages.length) {
+      console.info('[ReadPage] restored page to ' + savedPage + '/' + this.pages.length);
+        this.pageIndex = savedPage;
+      }
     } catch (e) {
       this.text = '加载失败';
       this.isLoading = false;
@@ -328,6 +334,7 @@ struct ReadPage {
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
+    this.currentIndex = idx;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
@@ -400,13 +407,7 @@ struct ReadPage {
   }
 
   private applyChapterContent_(idx: number, content: string): void {
-    const prevIdx = this.currentIndex;
-    console.info('[ReadPage] applyChapterContent: idx=' + idx + ' prevIdx=' + prevIdx + ' pageIndex=' + this.pageIndex);
     this.currentIndex = idx;
-    if (idx !== prevIdx) {
-      console.info('[ReadPage] applyChapterContent: reset pageIndex from ' + this.pageIndex + ' to 0');
-      this.pageIndex = 0;
-    }
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
@@ -754,7 +755,6 @@ struct ReadPage {
   }
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
-    console.info('[ReadPage] onNextChapter: ' + n + '/' + this.totalChapters_);
     if (n >= this.totalChapters_) return;
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
@@ -764,7 +764,6 @@ struct ReadPage {
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
     this.loadChapter(n).then(() => {
-      console.info('[ReadPage] Fallback loadChapter done:', n);
       this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
       this.justLoadedChapter_ = true;
     });
