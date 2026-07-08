@@ -31,6 +31,7 @@ import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAlou
 import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
 
 @Entry
@@ -987,6 +988,31 @@ struct ReadPage {
     });
   }
 
+  /** 问 Kimi */
+  private onAskKimi(text: string): void {
+    if (!text) return;
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const want: Want = {
+        bundleName: 'com.moonshot.kimi', abilityName: 'MainAbility',
+        parameters: { 'query': text, 'text': text },
+      };
+      ctx.startAbility(want).catch(() => { /* ignore */ });
+    } catch (_e) { /* ignore */ }
+  }
+
+  /** 问小艺 */
+  private onAskXiaoYi(text: string): void {
+    if (!text) return;
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      ctx.startAbility({
+        action: 'ohos.want.action.search',
+        parameters: { 'query': text },
+      }).catch(() => { /* ignore */ });
+    } catch (_e) { /* ignore */ }
+  }
+
   build() {
     Stack() {
       if (this.isLoading) {
@@ -1040,6 +1066,8 @@ struct ReadPage {
           onNextChapter: () => { this.onNextChapter(); },
           onShowMenu: () => { this.showMenu = true; },
           onShowToc: () => { this.onOpenToc(); },
+          onAskKimi: (text: string) => { this.onAskKimi(text); },
+          onAskXiaoYi: (text: string) => { this.onAskXiaoYi(text); },
           onMeasured: (cw: number, lh: number) => {
             if (cw > 0 && this.measureCharW_ !== cw) { this.measureCharW_ = cw; }
             if (lh > 0 && this.measureLineH_ !== lh) { this.measureLineH_ = lh; }

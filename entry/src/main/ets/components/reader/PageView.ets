@@ -3,6 +3,8 @@
  */
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
+import bundleManager from '@ohos.bundle.bundleManager';
+import pasteboard from '@ohos.pasteboard';
 
 export enum PageTurnAnim { NONE = 0, SLIDE = 1, COVER = 2, FADE = 3 }
 
@@ -57,6 +59,8 @@ export struct PageView {
 
   /** 9 个触控区域的自定义动作配置 */
   @Prop zoneActions: number[] = [];
+  onAskKimi?: (text: string) => void;
+  onAskXiaoYi?: (text: string) => void;
 
   private safePageIndex(): number {
     if (this.pages.length === 0) return 0;
@@ -201,7 +205,12 @@ export struct PageView {
             .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
             .width('100%')
             .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-            .copyOption(CopyOptions.LocalDevice)
+            .copyOption(CopyOptions.None)
+            .bindSelectionMenu(TextSpanType.TEXT, this.selectionMenuBuilder, TextResponseType.LONG_PRESS)
+            .onTextSelectionChange((start: number, end: number) => {
+              this.selStart_ = start;
+              this.selEnd_ = end;
+            })
             .onClick((event: ClickEvent) => {
               const w = this.pageWidth > 0 ? this.pageWidth : 360;
               const h = this.pageHeight > 0 ? this.pageHeight : 640;
@@ -247,4 +256,40 @@ export struct PageView {
 
   private pageWidth: number = 0;
   private pageHeight: number = 0;
+  private selStart_: number = 0;
+  private selEnd_: number = 0;
+  private kimiInstalled_: boolean = false;
+
+  aboutToAppear(): void {
+    bundleManager.getBundleInfo('com.moonshot.kimi', 0).then(() => {
+      this.kimiInstalled_ = true;
+    }).catch(() => {
+      this.kimiInstalled_ = false;
+    });
+  }
+
+  @Builder
+  selectionMenuBuilder() {
+    Menu() {
+      MenuItemGroup() {
+        MenuItem({ content: '📋 复制' })
+          .onClick(() => {
+            const text = this.buildPageContent().substring(this.selStart_, this.selEnd_);
+            try {
+              pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(text));
+            } catch (_e) { /* ignore */ }
+          })
+        if (this.kimiInstalled_) {
+          MenuItem({ content: '🤖 问Kimi' })
+            .onClick(() => {
+              this.onAskKimi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
+            })
+        }
+        MenuItem({ content: '🔍 问小艺' })
+          .onClick(() => {
+            this.onAskXiaoYi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
+          })
+      }
+    }
+  }
 }
