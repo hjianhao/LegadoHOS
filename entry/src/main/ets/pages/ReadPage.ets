@@ -167,7 +167,7 @@ struct ReadPage {
           this.chapters = ChapterCache.chapters;
         }
         if (idx < this.allChapters_.length && idx !== this.currentIndex) {
-          console.info('[ReadPage] Jump to chapter from toc:', idx);
+          console.info('[ReadPage] Jump to chapter from toc:', idx, 'current:', this.currentIndex);
           this.loadChapter(idx);
         }
       }
@@ -401,9 +401,12 @@ struct ReadPage {
 
   private applyChapterContent_(idx: number, content: string): void {
     const prevIdx = this.currentIndex;
+    console.info('[ReadPage] applyChapterContent: idx=' + idx + ' prevIdx=' + prevIdx + ' pageIndex=' + this.pageIndex);
     this.currentIndex = idx;
-    // 跳转到新章节时从第一页开始
-    if (idx !== prevIdx) this.pageIndex = 0;
+    if (idx !== prevIdx) {
+      console.info('[ReadPage] applyChapterContent: reset pageIndex from ' + this.pageIndex + ' to 0');
+      this.pageIndex = 0;
+    }
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
