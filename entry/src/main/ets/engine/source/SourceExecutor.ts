@@ -1255,6 +1255,15 @@ export class SourceExecutor {
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
+    } else if (source.ruleBookInfoTocUrl) {
+      // 回退：使用 bookInfo 中的 tocUrl 模板
+      let tpl = source.ruleBookInfoTocUrl;
+      // 处理 {{$.resourceID}} 模板：从搜索结果 URL 中提取 bookid 替换
+      const bid = tocUrl.match(/bookid=(\d+)/i);
+      if (bid && tpl.includes('{{$.resourceID}}')) {
+        tpl = tpl.replace('{{$.resourceID}}', bid[1]);
+      }
+      tocUrl = this.resolveTocUrlTemplate(tpl, tocUrl);
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
