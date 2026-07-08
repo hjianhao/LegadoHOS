@@ -1282,11 +1282,15 @@ export class SourceExecutor {
               let val = this.findJsonValue(infoJson, fieldName);
               // JSON 中未找到 → 尝试从 URL 中提取
               if (val === undefined) {
-                // 匹配 /novel/xxx 路径中的 ID 或 ?fieldName=xxx 参数
-                const pathMatch = tocUrl.match(new RegExp('/' + fieldName + '/([^/?]+)', 'i'))
-                  || tocUrl.match(new RegExp(fieldName + '=([^&]+)', 'i'))
-                  || tocUrl.match(/\/([a-z0-9]+)(?:[/?#]|$)/i);
-                if (pathMatch) val = pathMatch[1];
+                // 尝试: /fieldName/value 或 ?fieldName=value 或 URL 末尾的 ID
+                val = (tocUrl.match(new RegExp('/' + fieldName + '/([^/?]+)', 'i'))
+                    || tocUrl.match(new RegExp(fieldName + '=([^&]+)', 'i'))
+                    || [undefined])[1];
+                // 仍未找到: 提取 URL path 最后一段作为 ID
+                if (val === undefined && fieldName.toLowerCase().includes('id')) {
+                  const m = tocUrl.match(/\/([a-z0-9]+)(?:[/?#]|$)/i);
+                  if (m && !['novel','book','chapter','api'].includes(m[1].toLowerCase())) val = m[1];
+                }
               }
               if (val !== undefined) tpl = tpl.replace(fm, String(val));
             }
