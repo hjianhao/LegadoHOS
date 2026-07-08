@@ -203,6 +203,8 @@ export struct PageView {
             .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
             .width('100%')
             .height('100%')
+            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+            .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
                 return menuItems;
