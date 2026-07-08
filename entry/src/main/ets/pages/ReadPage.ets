@@ -329,6 +329,7 @@ struct ReadPage {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
     this.currentIndex = idx;
+    this.pageIndex = 0;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
