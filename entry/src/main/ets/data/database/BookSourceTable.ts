@@ -46,10 +46,10 @@ export const BookSourceTableCreate = `
     rule_review TEXT DEFAULT '',
     script TEXT DEFAULT '',
     header TEXT DEFAULT '',
-    raw_json TEXT DEFAULT '',
-    rule_book_info_toc_url TEXT DEFAULT '',
-    is_ai_generated INTEGER DEFAULT 0,
-    create_time INTEGER DEFAULT 0,
+      raw_json TEXT DEFAULT '',
+      rule_book_info_toc_url TEXT DEFAULT '',
+      is_ai_generated INTEGER DEFAULT 0,
+      create_time INTEGER DEFAULT 0,
     update_time INTEGER DEFAULT 0
   );
 `;
