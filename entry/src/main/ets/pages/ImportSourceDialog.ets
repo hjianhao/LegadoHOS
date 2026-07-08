@@ -42,6 +42,7 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.items = await dao.importSourcesPreview(json);
       this.statusText = `${this.items.length} 条书源`;
+      console.info('[ImportSource] preview done: ' + this.items.length + ' items');
     } catch (e) {
       console.error('[ImportSource] loadPreview error: ' + e);
       UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误: '+String(e).substring(0,80),duration:2000}); }
