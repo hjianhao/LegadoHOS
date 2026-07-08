@@ -4,7 +4,6 @@
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
 import bundleManager from '@ohos.bundle.bundleManager';
-import pasteboard from '@ohos.pasteboard';
 
 export enum PageTurnAnim { NONE = 0, SLIDE = 1, COVER = 2, FADE = 3 }
 
@@ -206,11 +205,25 @@ export struct PageView {
             .width('100%')
             .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
             .copyOption(CopyOptions.LocalDevice)
-            .bindSelectionMenu(TextSpanType.TEXT, this.selectionMenuBuilder, TextResponseType.LONG_PRESS)
-            .onTextSelectionChange((start: number, end: number) => {
-              this.selStart_ = start;
-              this.selEnd_ = end;
-            })
+            .editMenuOptions({
+              onCreateMenu: (menuItems: Array<TextMenuItem>) => {
+                if (this.kimiInstalled_) {
+                  menuItems.push({
+                    id: TextMenuItemId.of('askKimi'),
+                    content: '问Kimi',
+                  } as TextMenuItem);
+                }
+                return menuItems;
+              },
+              onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+                if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+                  const pageText = this.buildPageContent();
+                  this.onAskKimi?.(pageText.substring(range.start, range.end));
+                  return true;
+                }
+                return false;
+              },
+            } as EditMenuOptions)
             .onClick((event: ClickEvent) => {
               const w = this.pageWidth > 0 ? this.pageWidth : 360;
               const h = this.pageHeight > 0 ? this.pageHeight : 640;
@@ -256,8 +269,6 @@ export struct PageView {
 
   private pageWidth: number = 0;
   private pageHeight: number = 0;
-  private selStart_: number = 0;
-  private selEnd_: number = 0;
   private kimiInstalled_: boolean = false;
 
   aboutToAppear(): void {
@@ -266,38 +277,5 @@ export struct PageView {
     }).catch(() => {
       this.kimiInstalled_ = false;
     });
-  }
-
-  @Builder
-  selectionMenuBuilder() {
-    Row() {
-      Text('复制')
-        .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
-        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-        .onClick(() => {
-          const text = this.buildPageContent().substring(this.selStart_, this.selEnd_);
-          try {
-            pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(text));
-          } catch (_e) { /* ignore */ }
-        })
-      if (this.kimiInstalled_) {
-        Text('问Kimi')
-          .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
-          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-          .onClick(() => {
-            this.onAskKimi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
-          })
-      }
-      Text('问小艺')
-        .fontSize(14).fontColor(this.isDark ? '#CCCCCC' : '#333333')
-        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-        .onClick(() => {
-          this.onAskXiaoYi?.(this.buildPageContent().substring(this.selStart_, this.selEnd_));
-        })
-    }
-    .borderRadius(10)
-    .backgroundColor(this.isDark ? '#2A2A2A' : '#FFFFFF')
-    .shadow({ radius: 8, color: '#00000020', offsetX: 0, offsetY: 4 })
-    .padding({ top: 2, bottom: 2 })
   }
 }
