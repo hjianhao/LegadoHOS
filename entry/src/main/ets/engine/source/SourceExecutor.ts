@@ -1258,37 +1258,22 @@ export class SourceExecutor {
     } else if (source.ruleBookInfoTocUrl) {
       // 回退：使用 bookInfo 中的 tocUrl 模板
       let tpl = source.ruleBookInfoTocUrl;
-      // 通用处理 {{$.fieldName}} 模板：从书籍详情页 JSON 中提取字段值替换
+      // 通用 {{$.fieldName}} 解析：请求详情页 JSON 获取字段值
       const fieldMatches = tpl.match(/\{\{\$\.(\w+)\}\}/g);
       if (fieldMatches) {
         try {
-          // 先尝试从 tocUrl（搜索结果/详情页 URL）中提取 ID
-          for (const fm of fieldMatches) {
-            const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
-            // 尝试从 URL query 或 path 中提取
-            const urlMatch = tocUrl.match(new RegExp(fieldName + '[=:/\\.](\\d+)', 'i'));
-            if (urlMatch) {
-              tpl = tpl.replace(fm, urlMatch[1]);
-            }
-          }
-          // 仍有未替换的模板 → 请求书籍详情页 JSON 获取字段值
-          if (tpl.includes('{{$.')) {
-            const infoResp = await this.fetchWithOpts(tocUrl, {
-              'Accept': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              ...parseHeader(source.header)
-            }, 15000);
-            if (infoResp) {
-              const infoJson = JSON.parse(infoResp) as Record<string, unknown>;
-              for (const fm of fieldMatches) {
-                if (!tpl.includes(fm)) continue;
-                const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
-                // 在 JSON 中递归查找字段
-                let val = this.findJsonValue(infoJson, fieldName);
-                if (val !== undefined) {
-                  tpl = tpl.replace(fm, String(val));
-                }
-              }
+          // 请求书籍详情页（tocUrl 即搜索结果中的详情页 URL）
+          const infoResp = await this.fetchWithOpts(tocUrl, {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            ...parseHeader(source.header)
+          }, 15000);
+          if (infoResp) {
+            const infoJson = JSON.parse(infoResp) as Record<string, unknown>;
+            for (const fm of fieldMatches) {
+              const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
+              let val = this.findJsonValue(infoJson, fieldName);
+              if (val !== undefined) tpl = tpl.replace(fm, String(val));
             }
           }
         } catch (_e) { /* ignore */ }
