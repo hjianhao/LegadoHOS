@@ -997,8 +997,10 @@ struct ReadPage {
         bundleName: 'com.hos.moonshot.kimichat', abilityName: 'EntryAbility',
         parameters: { 'query': text, 'text': text },
       };
-      ctx.startAbility(want).catch(() => { /* ignore */ });
-    } catch (_e) { /* ignore */ }
+      ctx.startAbility(want).catch(() => {
+        UiUtil.showToast(this.getUIContext(), { message: '未安装Kimi', duration: 1500 });
+      });
+    } catch (_e) { UiUtil.showToast(this.getUIContext(), { message: '启动失败', duration: 1500 }); }
   }
 
   /** 问小艺 */

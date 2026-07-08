@@ -3,7 +3,6 @@
  */
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
-import bundleManager from '@ohos.bundle.bundleManager';
 
 export enum PageTurnAnim { NONE = 0, SLIDE = 1, COVER = 2, FADE = 3 }
 
@@ -207,12 +206,11 @@ export struct PageView {
             .copyOption(CopyOptions.LocalDevice)
             .editMenuOptions({
               onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-                if (this.kimiInstalled_) {
-                  menuItems.push({
-                    id: TextMenuItemId.of('askKimi'),
-                    content: '问Kimi',
-                  } as TextMenuItem);
-                }
+                // 始终追加问Kimi（无需权限检查安装状态）
+                menuItems.push({
+                  id: TextMenuItemId.of('askKimi'),
+                  content: '问Kimi',
+                } as TextMenuItem);
                 return menuItems;
               },
               onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
@@ -269,28 +267,4 @@ export struct PageView {
 
   private pageWidth: number = 0;
   private pageHeight: number = 0;
-  private kimiInstalled_: boolean = false;
-
-  aboutToAppear(): void {
-    // 尝试多个已知的 Kimi 包名
-    const kimiNames = ['com.hos.moonshot.kimichat', 'com.moonshot.kimi.hmos', 'com.moonshot.kimi'];
-    this.checkKimi_(kimiNames, 0);
-  }
-
-  private checkKimi_(names: string[], idx: number): void {
-    if (idx >= names.length) {
-      console.info('[PageView] Kimi not found among: ' + names.join(', '));
-      return;
-    }
-    const name = names[idx];
-    console.info('[PageView] checking Kimi: ' + name);
-    bundleManager.getBundleInfo(name, 0).then((info) => {
-      console.info('[PageView] Kimi found: ' + name + ' name=' + info.name);
-      this.kimiInstalled_ = true;
-      // 恢复条件判断
-    }).catch((err: Error) => {
-      console.info('[PageView] Kimi check failed for ' + name + ': ' + err.message);
-      this.checkKimi_(names, idx + 1);
-    });
-  }
 }
