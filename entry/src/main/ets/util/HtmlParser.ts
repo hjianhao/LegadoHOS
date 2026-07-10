@@ -274,16 +274,42 @@ export class HtmlParser {
     }
 
     // 应用 ## 后缀 post-processing
-    // Legado 约定: ##regex1##replacement1##regex2##replacement2...
-    // (成对处理，而不是逐个当作独立后处理器)
-    for (let i = 0; i + 1 < postProcessors.length; i += 2) {
-      const pattern = postProcessors[i];
-      const replacement = postProcessors[i + 1];
-      if (!pattern) continue;
-      try {
-        result = result.replace(new RegExp(pattern, 'g'), replacement);
-      } catch (e) {
-        console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
+    // Legado 约定两种格式 (doc/source.md §7.2/§7.3):
+    //   净化: ##regex##replacement (循环替换，保留未匹配部分)
+    //   OnlyOne: ##regex##replacement### (只取第一个匹配，返回替换结果，丢弃未匹配部分)
+    // split('##') 后末尾 '#' 表示 OnlyOne (即原规则以 ### 结尾)
+    const isOnlyOne = postProcessors.length > 0 && postProcessors[postProcessors.length - 1] === '#';
+    const pairs = isOnlyOne ? postProcessors.slice(0, -1) : postProcessors;
+    if (isOnlyOne) {
+      // OnlyOne: 取第一个匹配，用替换模板构造结果，丢弃未匹配部分
+      for (let i = 0; i + 1 < pairs.length; i += 2) {
+        const pattern = pairs[i];
+        const replacement = pairs[i + 1];
+        if (!pattern) continue;
+        try {
+          const regex = new RegExp(pattern);
+          const match = regex.exec(result);
+          if (match) {
+            result = replacement.replace(/\$(\d+)/g, (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
+          } else {
+            result = '';
+          }
+        } catch (e) {
+          console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
+        }
+        break; // OnlyOne 只处理第一对
+      }
+    } else {
+      // 净化: 循环替换，保留未匹配部分
+      for (let i = 0; i + 1 < pairs.length; i += 2) {
+        const pattern = pairs[i];
+        const replacement = pairs[i + 1];
+        if (!pattern) continue;
+        try {
+          result = result.replace(new RegExp(pattern, 'g'), replacement);
+        } catch (e) {
+          console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
+        }
       }
     }
 
@@ -325,6 +351,12 @@ export class HtmlParser {
   }
 
   private buildText(el: HtmlElement): void {
+    // 先递归子元素，再按文档顺序拼接：自身直接文本在前，子元素文本在后
+    // 注意：ownText 是该元素所有直接文本节点的拼接（不区分在子元素前还是后），
+    // 但绝大多数实际场景中 ownText 在子元素之前，所以 ownText 先加更接近原文顺序。
+    if (el.ownText) {
+      el.text = el.ownText;
+    }
     for (const child of el.children) {
       this.buildText(child);
       if (child.text) {
@@ -332,10 +364,6 @@ export class HtmlParser {
       } else if (child.ownText) {
         el.text += child.ownText;
       }
-    }
-    // ownText 也要赋给 text（即使已有子元素文本，也要追加直接文本节点内容）
-    if (el.ownText) {
-      el.text += el.ownText;
     }
   }
 

@@ -200,8 +200,8 @@ export class BookSourceTable {
       const src = parseBookSource(arr[i]);
       const raw = JSON.stringify(arr[i]);
       const exist = await this.getSourceByUrl(src.sourceUrl);
-      const status = exist ? ((exist.updateTime || 0) < (src.updateTime || 0) ? 'update' : 'existing') : 'new';
-      result.push({ name: src.sourceName, url: src.sourceUrl, status, source: src, rawJson: raw, checked: status !== 'existing' });
+      const status = exist ? 'update' : 'new';
+      result.push({ name: src.sourceName, url: src.sourceUrl, status, source: src, rawJson: raw, checked: true });
     }
     return result;
   }

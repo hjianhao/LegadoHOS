@@ -610,7 +610,14 @@ export class SourceExecutor {
       let bodyText = '';
       if (finalMethod === 'POST') {
         if (!headers['Content-Type'] && !headers['content-type']) {
-          headers['Content-Type'] = 'application/json';
+          // 根据 body 格式自动选择 Content-Type：
+          // JSON 开头（{ 或 [）→ application/json，否则 → form-urlencoded
+          const bodyStr = (finalBody || '').trim();
+          if (bodyStr.startsWith('{') || bodyStr.startsWith('[')) {
+            headers['Content-Type'] = 'application/json';
+          } else {
+            headers['Content-Type'] = 'application/x-www-form-urlencoded';
+          }
         }
         bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', headers, 15000);
       } else {
@@ -701,11 +708,22 @@ export class SourceExecutor {
       }
     }
 
-    // Fallback
+    // Fallback: CSS 规则未命中时（可能是网站改版），尝试通用提取
     if (source.ruleSearchList) {
-      console.warn('[SrcEx] Skip fallback for configured source', source.sourceName,
-        'ruleSearchList=' + source.ruleSearchList);
-      return [];
+      console.warn('[SrcEx] CSS rule found 0 items for configured source', source.sourceName,
+        'ruleSearchList=' + source.ruleSearchList + ', trying fallback extraction');
+      // 先用通用表格提取（table.grid@tr!0 / table@tr!0），再用 <a> 标签兜底
+      const tableResults = this.extractWithParser(bodyText, { ...source, ruleSearchList: 'table.grid@tr!0' }, baseUrl);
+      if (tableResults.length > 0) {
+        console.info('[SrcEx] Table fallback:', tableResults.length, 'items from', source.sourceName);
+        return tableResults;
+      }
+      // 再尝试不带 .grid 限定
+      const tableResults2 = this.extractWithParser(bodyText, { ...source, ruleSearchList: 'table@tr!0' }, baseUrl);
+      if (tableResults2.length > 0) {
+        console.info('[SrcEx] Table fallback (no grid):', tableResults2.length, 'items from', source.sourceName);
+        return tableResults2;
+      }
     }
     return this.fallbackExtract(bodyText, source, baseUrl);
   }
@@ -892,7 +910,7 @@ export class SourceExecutor {
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
         tocUrl: extractField(source.ruleBookInfoTocUrl) || '',
-        chapters: [],
+        chapters: [] as BookSourceChapter[],
       };
     } catch (_e) {
       return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
@@ -974,6 +992,26 @@ export class SourceExecutor {
         .replace(/\{\{id\}\}/g, chapterId)
         .replace(/\{\{novelId\}\}/g, chapterId);
     }
+    // 处理 {{$.fieldName}} 模板：从 bookUrl 路径中智能提取字段值
+    url = url.replace(/\{\{\$\.(\w+)\}\}/g, (_m: string, fieldName: string) => {
+      // 1) 尝试精确匹配：/fieldName/value（如 /novelId/12345）
+      const pathMatch = bookUrl.match(new RegExp('/' + fieldName + '/([^/?]+)', 'i'));
+      if (pathMatch) return pathMatch[1];
+      // 2) 尝试 query 参数：?fieldName=value 或 &fieldName=value
+      const queryMatch = bookUrl.match(new RegExp('[?&]' + fieldName + '=([^&]+)', 'i'));
+      if (queryMatch) return queryMatch[1];
+      // 3) 字段名含 "id" 时：从 URL path 中提取非通用词段作为 ID
+      if (fieldName.toLowerCase().includes('id')) {
+        const pathOnly = bookUrl.replace(/^https?:\/\/[^\/]+/, '').replace(/[?#].*$/, '');
+        const segments = pathOnly.split('/').filter((s: string) => s.length > 0);
+        const commonWords = ['novel', 'book', 'chapter', 'api', 'chapters', 'catalog',
+          'index', 'list', 'search', 'info', 'detail', 'content', 'read', 'view', 'page', 'pages'];
+        const ids = segments.filter((s: string) =>
+          !commonWords.includes(s.toLowerCase()) && /^[a-z0-9_-]+$/i.test(s));
+        if (ids.length > 0) return ids[0];
+      }
+      return '';
+    });
     // 处理相对路径
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       const base = bookUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
@@ -1203,6 +1241,16 @@ export class SourceExecutor {
           if (!effectiveNextRule) break;
           const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl);
           if (!nextUrl || visited.has(nextUrl)) break;
+          // 检查是否还是同一章节的分页（防止 pt_next 跳到下一章）
+          // 同一章节分页 URL 包含原始章节 URL 的路径前缀
+          // 如: 122156_45809706.html → 122156_45809706_2.html (同章)
+          //     122156_45809706_3.html → 122156_45809707.html (跳到下一章)
+          const originBase = contentUrl.replace(/\.html.*$/i, '');
+          if (!nextUrl.includes(originBase)) {
+            console.info('[SrcEx] getContent stopping: next page belongs to different chapter',
+              'originBase=' + originBase.replace(/^.+\//, '') + ' nextUrl=' + (nextUrl.replace(/^.+\//, '')));
+            break;
+          }
           pageUrl = nextUrl;
           pageHtml = await this.fetchWithOpts(pageUrl, headers);
           if (!pageHtml) break;
@@ -1262,42 +1310,6 @@ export class SourceExecutor {
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
-    } else if (source.ruleBookInfoTocUrl) {
-      // 回退：使用 bookInfo 中的 tocUrl 模板
-      let tpl = source.ruleBookInfoTocUrl;
-      // 通用 {{$.fieldName}} 解析：请求详情页 JSON 获取字段值
-      const fieldMatches = tpl.match(/\{\{\$\.(\w+)\}\}/g);
-      if (fieldMatches) {
-        try {
-          // 请求书籍详情页（tocUrl 即搜索结果中的详情页 URL）
-          const infoResp = await this.fetchWithOpts(tocUrl, {
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            ...parseHeader(source.header)
-          }, 15000);
-          if (infoResp) {
-            const infoJson = JSON.parse(infoResp) as Record<string, unknown>;
-            for (const fm of fieldMatches) {
-              const fieldName = fm.replace(/\{\{\$\./, '').replace(/\}\}/, '');
-              let val = this.findJsonValue(infoJson, fieldName);
-              // JSON 中未找到 → 尝试从 URL 中提取
-              if (val === undefined) {
-                // 尝试: /fieldName/value 或 ?fieldName=value 或 URL 末尾的 ID
-                val = (tocUrl.match(new RegExp('/' + fieldName + '/([^/?]+)', 'i'))
-                    || tocUrl.match(new RegExp(fieldName + '=([^&]+)', 'i'))
-                    || [undefined])[1];
-                // 仍未找到: 提取 URL path 最后一段作为 ID
-                if (val === undefined && fieldName.toLowerCase().includes('id')) {
-                  const m = tocUrl.match(/\/([a-z0-9]+)(?:[/?#]|$)/i);
-                  if (m && !['novel','book','chapter','api'].includes(m[1].toLowerCase())) val = m[1];
-                }
-              }
-              if (val !== undefined) tpl = tpl.replace(fm, String(val));
-            }
-          }
-        } catch (_e) { /* ignore */ }
-      }
-      tocUrl = this.resolveTocUrlTemplate(tpl, tocUrl);
     }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
@@ -1369,8 +1381,9 @@ export class SourceExecutor {
       visitedToc.add(tocUrl);
 
       const nextRule = source.ruleTocNextTocUrl || '';
-      if (nextRule) {
-        try {
+      // 始终运行分页循环：即使 ruleTocNextTocUrl 为空，
+      // collectTocPageUrls 内部的 extractTocOptionPageUrls 会自动检测 <option> 分页
+      try {
           let currentBody = resp;
           let currentUrl = tocUrl;
       let runningChapters = 0;  // 增量章节计数
@@ -1476,7 +1489,6 @@ export class SourceExecutor {
         } catch (_e) {
           /* ignore */
         }
-      }
       console.info('[SrcEx] getToc pages fetched:', tocBodies.length);
 
       const bodyText = tocBodies.join('\n');
@@ -2135,19 +2147,43 @@ export class SourceExecutor {
   private postProcessRule(rule: string, value: string): string {
     if (!value) return value;
     let result = value;
-    // 0. ## 正则替换: $.resourceName##（.* → 去掉括号内容
+    // 0. ## 正则替换: 支持两种格式 (doc/source.md §7.2/§7.3)
+    //    净化: ##regex##replacement (循环替换，保留未匹配部分)
+    //    OnlyOne: ##regex##replacement### (只取第一个匹配，返回替换结果，丢弃未匹配部分)
     const hashIdx = rule.indexOf('##');
     if (hashIdx >= 0) {
       const afterHash = rule.substring(hashIdx + 2);
-      // 支持多级##: ##regex1##replacement1##regex2##replacement2
       const parts = afterHash.split('##');
-      for (let i = 0; i + 1 < parts.length; i += 2) {
-        const pattern = parts[i];
-        const replacement = parts[i + 1];
-        try {
-          result = result.replace(new RegExp(pattern, 'g'), replacement);
-        } catch(_e) {
-          console.warn('[SrcEx] ## regex error: ' + pattern);
+      // 末尾 '#' 表示 OnlyOne (即原规则以 ### 结尾)
+      const isOnlyOne = parts.length > 0 && parts[parts.length - 1] === '#';
+      const pairs = isOnlyOne ? parts.slice(0, -1) : parts;
+      if (isOnlyOne) {
+        // OnlyOne: 取第一个匹配，用替换模板构造结果，丢弃未匹配部分
+        const pattern = pairs[0];
+        const replacement = pairs[1];
+        if (pattern) {
+          try {
+            const regex = new RegExp(pattern);
+            const match = regex.exec(result);
+            if (match) {
+              result = replacement.replace(/\$(\d+)/g, (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
+            } else {
+              result = '';
+            }
+          } catch(_e) {
+            console.warn('[SrcEx] ## regex error: ' + pattern);
+          }
+        }
+      } else {
+        // 净化: 循环替换，保留未匹配部分
+        for (let i = 0; i + 1 < pairs.length; i += 2) {
+          const pattern = pairs[i];
+          const replacement = pairs[i + 1];
+          try {
+            result = result.replace(new RegExp(pattern, 'g'), replacement);
+          } catch(_e) {
+            console.warn('[SrcEx] ## regex error: ' + pattern);
+          }
         }
       }
     }

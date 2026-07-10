@@ -138,19 +138,17 @@ struct BookInfoPage {
           'available=' + sources.map(s => s.sourceUrl).join(', '));
         return;
       }
-      // 获取书籍详情
-      if (!this.introduce || !this.kind || !this.wordCount || (matched.ruleBookInfoTocUrl && !this.sourceTocUrl)) {
-        const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
-        if (info.name && !this.bookName) this.bookName = info.name;
-        if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
-        if (info.coverUrl && !this.coverUrl) this.coverUrl = info.coverUrl;
-        if (info.introduce && !this.introduce) this.introduce = info.introduce;
-        if (info.kind && !this.kind) this.kind = info.kind;
-        if (info.wordCount && !this.wordCount) this.wordCount = info.wordCount;
-        if (info.tocUrl) {
-          this.sourceTocUrl = info.tocUrl;
-          this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
-        }
+      // 获取书籍详情（始终请求，确保简介等字段为最新）
+      const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
+      if (info.name && !this.bookName) this.bookName = info.name;
+      if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
+      if (info.coverUrl && !this.coverUrl) this.coverUrl = info.coverUrl;
+      if (info.introduce) this.introduce = info.introduce;
+      if (info.kind && !this.kind) this.kind = info.kind;
+      if (info.wordCount && !this.wordCount) this.wordCount = info.wordCount;
+      if (info.tocUrl) {
+        this.sourceTocUrl = info.tocUrl;
+        this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
       }
       // 获取目录统计（带进度回调）
       const chapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,

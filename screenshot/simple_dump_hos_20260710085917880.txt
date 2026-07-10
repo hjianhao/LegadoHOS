@@ -1,0 +1,973 @@
+
+-------------------------------[ability]-------------------------------
+
+
+----------------------------------WindowManagerService----------------------------------
+WindowName: hos0
+DisplayId: 0
+WinId: 38
+Pid: 27624
+Type: 1
+Mode: 1
+Flag: 0
+Orientation: 0
+FirstFrameCallbackCalled: 1
+IsVisible: true
+isRSVisible: true
+Focusable: true
+DecoStatus: false
+isPrivacyMode: false
+WindowRect: [ 0, 0, 1256, 2760 ]
+scaleX: 1
+scaleY: 1
+Offset: [ 0, 0 ]
+Scale: [ 1, 1, 0.5, 0.5 ]
+ParentWindowId: 0
+bundleName:io.legado.hos
+moduleName:entry
+ LastRequestVsyncTime: 1668771605086
+ transactionFlags: [27624,9]
+ last vsyncId: 1287
+ finishCount:[ ]
+ UINodeCount:74
+  |-> root childSize:1
+    | ID: 0
+    | compid: 
+    | text: 
+    | accessibilityText: 
+    | accessibilityGroup: 0
+    | accessibilityLevel: auto
+    | accessibilityCustomRole: 
+    | top: 0.000000
+    | left: 0.000000
+    | width: 1256.000000
+    | height: 2760.000000
+    | visible: 1
+    | clickable: 0
+    | longclickable: 0
+    | checkable: 0
+    | scrollable: 0
+    | checked: 0
+    | hint: 
+    | childTree: -1
+    |-> Column childSize:2
+      | ID: 4
+      | compid: 
+      | text: 
+      | accessibilityText: 
+      | accessibilityGroup: 0
+      | accessibilityLevel: auto
+      | accessibilityCustomRole: 
+      | top: 136.000000
+      | left: 0.000000
+      | width: 1256.000000
+      | height: 2526.000000
+      | visible: 1
+      | clickable: 0
+      | longclickable: 0
+      | checkable: 0
+      | scrollable: 0
+      | checked: 0
+      | hint: 
+      | childTree: -1
+      |-> Stack childSize:1
+        | ID: 5
+        | compid: 
+        | text: 
+        | accessibilityText: 
+        | accessibilityGroup: 0
+        | accessibilityLevel: auto
+        | accessibilityCustomRole: 
+        | top: 136.000000
+        | left: 0.000000
+        | width: 1256.000000
+        | height: 2330.000000
+        | visible: 1
+        | clickable: 0
+        | longclickable: 0
+        | checkable: 0
+        | scrollable: 0
+        | checked: 0
+        | hint: 
+        | childTree: -1
+        |-> Stack childSize:1
+          | ID: 26
+          | compid: 
+          | text: 
+          | accessibilityText: 
+          | accessibilityGroup: 0
+          | accessibilityLevel: auto
+          | accessibilityCustomRole: 
+          | top: 136.000000
+          | left: 0.000000
+          | width: 1256.000000
+          | height: 2330.000000
+          | visible: 1
+          | clickable: 0
+          | longclickable: 0
+          | checkable: 0
+          | scrollable: 0
+          | checked: 0
+          | hint: 
+          | childTree: -1
+          |-> Column childSize:4
+            | ID: 27
+            | compid: 
+            | text: 
+            | accessibilityText: 
+            | accessibilityGroup: 0
+            | accessibilityLevel: auto
+            | accessibilityCustomRole: 
+            | top: 136.000000
+            | left: 0.000000
+            | width: 1256.000000
+            | height: 2330.000000
+            | visible: 1
+            | clickable: 0
+            | longclickable: 0
+            | checkable: 0
+            | scrollable: 0
+            | checked: 0
+            | hint: 
+            | childTree: -1
+            |-> Row childSize:6
+              | ID: 28
+              | compid: 
+              | text: 
+              | accessibilityText: 
+              | accessibilityGroup: 0
+              | accessibilityLevel: auto
+              | accessibilityCustomRole: 
+              | top: 136.000000
+              | left: 0.000000
+              | width: 1256.000000
+              | height: 168.000000
+              | visible: 1
+              | clickable: 0
+              | longclickable: 0
+              | checkable: 0
+              | scrollable: 0
+              | checked: 0
+              | hint: 
+              | childTree: -1
+              |-> Text childSize:0
+                  ID: 29
+                  compid: 
+                  text: 📚 书架
+                  accessibilityText: 
+                  accessibilityGroup: 0
+                  accessibilityLevel: auto
+                  accessibilityCustomRole: 
+                  top: 200.000000
+                  left: 56.000000
+                  width: 247.000000
+                  height: 82.000000
+                  visible: 1
+                  clickable: 0
+                  longclickable: 0
+                  checkable: 0
+                  scrollable: 0
+                  checked: 0
+                  hint: 
+                  childTree: -1
+              |-> Blank childSize:0
+                  ID: 30
+                  compid: 
+                  text: 
+                  accessibilityText: 
+                  accessibilityGroup: 0
+                  accessibilityLevel: auto
+                  accessibilityCustomRole: 
+                  top: 178.000000
+                  left: 303.000000
+                  width: 156.000000
+                  height: 126.000000
+                  visible: 1
+                  clickable: 0
+                  longclickable: 0
+                  checkable: 0
+                  scrollable: 0
+                  checked: 0
+                  hint: 
+                  childTree: -1
+              |-> Button childSize:0
+                  ID: 32
+                  compid: 
+                  text: 🔍 搜书
+                  accessibilityText: 
+                  accessibilityGroup: 0
+                  accessibilityLevel: auto
+                  accessibilityCustomRole: 
+                  top: 185.000000
+                  left: 459.000000
+                  width: 243.000000
+                  height: 112.000000
+                  visible: 1
+                  clickable: 1
+                  longclickable: 0
+                  checkable: 0
+                  scrollable: 0
+                  checked: 0
+                  hint: 
+                  childTree: -1
+              |-> Button childSize:1
+                | ID: 34
+                | compid: 
+                | text: 
+                | accessibilityText: 
+                | accessibilityGroup: 0
+                | accessibilityLevel: auto
+                | accessibilityCustomRole: 
+                | top: 178.000000
+                | left: 723.000000
+                | width: 126.000000
+                | height: 126.000000
+                | visible: 1
+                | clickable: 1
+                | longclickable: 0
+                | checkable: 0
+                | scrollable: 0
+                | checked: 0
+                | hint: 
+                | childTree: -1
+                |-> Text childSize:0
+                    ID: 35
+                    compid: 
+                    text: ▦
+                    accessibilityText: 
+                    accessibilityGroup: 0
+                    accessibilityLevel: auto
+                    accessibilityCustomRole: 
+                    top: 201.000000
+                    left: 758.000000
+                    width: 56.000000
+                    height: 81.000000
+                    visible: 1
+                    clickable: 0
+                    longclickable: 0
+                    checkable: 0
+                    scrollable: 0
+                    checked: 0
+                    hint: 
+                    childTree: -1
+              |-> Button childSize:1
+                | ID: 36
+                | compid: 
+                | text: 
+                | accessibilityText: 
+                | accessibilityGroup: 0
+                | accessibilityLevel: auto
+                | accessibilityCustomRole: 
+                | top: 192.000000
+                | left: 863.000000
+                | width: 225.000000
+                | height: 98.000000
+                | visible: 1
+                | clickable: 1
+                | longclickable: 0
+                | checkable: 0
+                | scrollable: 0
+                | checked: 0
+                | hint: 
+                | childTree: -1
+                |-> Text childSize:0
+                    ID: 37
+                    compid: 
+                    text: 最后阅读
+                    accessibilityText: 
+                    accessibilityGroup: 0
+                    accessibilityLevel: auto
+                    accessibilityCustomRole: 
+                    top: 217.000000
+                    left: 891.000000
+                    width: 169.000000
+                    height: 49.000000
+                    visible: 1
+                    clickable: 0
+                    longclickable: 0
+                    checkable: 0
+                    scrollable: 0
+                    checked: 0
+                    hint: 
+                    childTree: -1
+              |-> Button childSize:1
+                | ID: 38
+                | compid: 
+                | text: 
+                | accessibilityText: 
+                | accessibilityGroup: 0
+                | accessibilityLevel: auto
+                | accessibilityCustomRole: 
+                | top: 178.000000
+                | left: 1088.000000
+                | width: 126.000000
+                | height: 126.000000
+                | visible: 1
+                | clickable: 1
+                | longclickable: 0
+                | checkable: 0
+                | scrollable: 0
+                | checked: 0
+                | hint: 
+                | childTree: -1
+                |-> Text childSize:0
+                    ID: 39
+                    compid: 
+                    text: ⋮
+                    accessibilityText: 
+                    accessibilityGroup: 0
+                    accessibilityLevel: auto
+                    accessibilityCustomRole: 
+                    top: 189.000000
+                    left: 1141.000000
+                    width: 21.000000
+                    height: 105.000000
+                    visible: 1
+                    clickable: 0
+                    longclickable: 0
+                    checkable: 0
+                    scrollable: 0
+                    checked: 0
+                    hint: 
+                    childTree: -1
+            |-> TextInput childSize:0
+                ID: 40
+                compid: 
+                text: 
+                accessibilityText: 
+                accessibilityGroup: 0
+                accessibilityLevel: auto
+                accessibilityCustomRole: 
+                top: 332.000000
+                left: 579.000000
+                width: 98.000000
+                height: 70.000000
+                visible: 1
+                clickable: 1
+                longclickable: 1
+                checkable: 0
+                scrollable: 1
+                checked: 0
+                hint: 搜索书名或作者...
+                childTree: -1
+            |-> Scroll childSize:1
+              | ID: 42
+              | compid: 
+              | text: 
+              | accessibilityText: 
+              | accessibilityGroup: 0
+              | accessibilityLevel: auto
+              | accessibilityCustomRole: 
+              | top: 402.000000
+              | left: 0.000000
+              | width: 1256.000000
+              | height: 134.000000
+              | visible: 1
+              | clickable: 0
+              | longclickable: 0
+              | checkable: 0
+              | scrollable: 1
+              | checked: 0
+              | hint: 
+              | childTree: -1
+              |-> Row childSize:4
+                | ID: 43
+                | compid: 
+                | text: 
+                | accessibilityText: 
+                | accessibilityGroup: 0
+                | accessibilityLevel: auto
+                | accessibilityCustomRole: 
+                | top: 402.000000
+                | left: 0.000000
+                | width: 1344.000000
+                | height: 134.000000
+                | visible: 1
+                | clickable: 0
+                | longclickable: 0
+                | checkable: 0
+                | scrollable: 0
+                | checked: 0
+                | hint: 
+                | childTree: -1
+                |-> Column childSize:2
+                  | ID: 58
+                  | compid: 
+                  | text: 
+                  | accessibilityText: 
+                  | accessibilityGroup: 0
+                  | accessibilityLevel: auto
+                  | accessibilityCustomRole: 
+                  | top: 416.000000
+                  | left: 56.000000
+                  | width: 308.000000
+                  | height: 120.000000
+                  | visible: 1
+                  | clickable: 1
+                  | longclickable: 0
+                  | checkable: 0
+                  | scrollable: 0
+                  | checked: 0
+                  | hint: 
+                  | childTree: -1
+                  |-> Text childSize:0
+                      ID: 59
+                      compid: 
+                      text: 全部
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 416.000000
+                      left: 161.000000
+                      width: 99.000000
+                      height: 113.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                  |-> Row childSize:0
+                      ID: 61
+                      compid: 
+                      text: 
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 529.000000
+                      left: 118.000000
+                      width: 185.000000
+                      height: 7.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                |-> Column childSize:1
+                  | ID: 63
+                  | compid: 
+                  | text: 
+                  | accessibilityText: 
+                  | accessibilityGroup: 0
+                  | accessibilityLevel: auto
+                  | accessibilityCustomRole: 
+                  | top: 420.000000
+                  | left: 364.000000
+                  | width: 308.000000
+                  | height: 113.000000
+                  | visible: 1
+                  | clickable: 1
+                  | longclickable: 0
+                  | checkable: 0
+                  | scrollable: 0
+                  | checked: 0
+                  | hint: 
+                  | childTree: -1
+                  |-> Text childSize:0
+                      ID: 64
+                      compid: 
+                      text: 在读
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 420.000000
+                      left: 469.000000
+                      width: 99.000000
+                      height: 113.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                |-> Column childSize:1
+                  | ID: 67
+                  | compid: 
+                  | text: 
+                  | accessibilityText: 
+                  | accessibilityGroup: 0
+                  | accessibilityLevel: auto
+                  | accessibilityCustomRole: 
+                  | top: 420.000000
+                  | left: 672.000000
+                  | width: 308.000000
+                  | height: 113.000000
+                  | visible: 1
+                  | clickable: 1
+                  | longclickable: 0
+                  | checkable: 0
+                  | scrollable: 0
+                  | checked: 0
+                  | hint: 
+                  | childTree: -1
+                  |-> Text childSize:0
+                      ID: 68
+                      compid: 
+                      text: 未读
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 420.000000
+                      left: 777.000000
+                      width: 99.000000
+                      height: 113.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                |-> Column childSize:1
+                  | ID: 71
+                  | compid: 
+                  | text: 
+                  | accessibilityText: 
+                  | accessibilityGroup: 0
+                  | accessibilityLevel: auto
+                  | accessibilityCustomRole: 
+                  | top: 420.000000
+                  | left: 980.000000
+                  | width: 308.000000
+                  | height: 113.000000
+                  | visible: 1
+                  | clickable: 1
+                  | longclickable: 0
+                  | checkable: 0
+                  | scrollable: 0
+                  | checked: 0
+                  | hint: 
+                  | childTree: -1
+                  |-> Text childSize:0
+                      ID: 72
+                      compid: 
+                      text: 已完本
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 420.000000
+                      left: 1060.000000
+                      width: 148.000000
+                      height: 113.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+            |-> Refresh childSize:2
+              | ID: 76
+              | compid: 
+              | text: 
+              | accessibilityText: 
+              | accessibilityGroup: 0
+              | accessibilityLevel: auto
+              | accessibilityCustomRole: 
+              | top: 536.000000
+              | left: 0.000000
+              | width: 1256.000000
+              | height: 1930.000000
+              | visible: 1
+              | clickable: 0
+              | longclickable: 0
+              | checkable: 0
+              | scrollable: 1
+              | checked: 0
+              | hint: 
+              | childTree: -1
+              |-> LoadingProgress childSize:0
+                  ID: 84
+                  compid: 
+                  text: 
+                  accessibilityText: 
+                  accessibilityGroup: 0
+                  accessibilityLevel: auto
+                  accessibilityCustomRole: 
+                  top: 536.000000
+                  left: 572.000000
+                  width: 112.000000
+                  height: 112.000000
+                  visible: 1
+                  clickable: 0
+                  longclickable: 0
+                  checkable: 0
+                  scrollable: 0
+                  checked: 0
+                  hint: 
+                  childTree: -1
+              |-> Scroll childSize:1
+                | ID: 78
+                | compid: 
+                | text: 
+                | accessibilityText: 
+                | accessibilityGroup: 0
+                | accessibilityLevel: auto
+                | accessibilityCustomRole: 
+                | top: 536.000000
+                | left: 0.000000
+                | width: 1256.000000
+                | height: 1930.000000
+                | visible: 1
+                | clickable: 0
+                | longclickable: 0
+                | checkable: 0
+                | scrollable: 0
+                | checked: 0
+                | hint: 
+                | childTree: -1
+                |-> Column childSize:3
+                  | ID: 79
+                  | compid: 
+                  | text: 
+                  | accessibilityText: 
+                  | accessibilityGroup: 0
+                  | accessibilityLevel: auto
+                  | accessibilityCustomRole: 
+                  | top: 536.000000
+                  | left: 0.000000
+                  | width: 1256.000000
+                  | height: 1930.000000
+                  | visible: 1
+                  | clickable: 0
+                  | longclickable: 0
+                  | checkable: 0
+                  | scrollable: 0
+                  | checked: 0
+                  | hint: 
+                  | childTree: -1
+                  |-> Text childSize:0
+                      ID: 80
+                      compid: 
+                      text: 📚
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 886.000000
+                      left: 488.000000
+                      width: 280.000000
+                      height: 263.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                  |-> Text childSize:0
+                      ID: 82
+                      compid: 
+                      text: 书架是空的
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 1191.000000
+                      left: 488.000000
+                      width: 280.000000
+                      height: 66.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+                  |-> Text childSize:0
+                      ID: 83
+                      compid: 
+                      text: 去搜索添加书籍吧
+                      accessibilityText: 
+                      accessibilityGroup: 0
+                      accessibilityLevel: auto
+                      accessibilityCustomRole: 
+                      top: 1271.000000
+                      left: 446.000000
+                      width: 365.000000
+                      height: 53.000000
+                      visible: 1
+                      clickable: 0
+                      longclickable: 0
+                      checkable: 0
+                      scrollable: 0
+                      checked: 0
+                      hint: 
+                      childTree: -1
+      |-> Row childSize:4
+        | ID: 8
+        | compid: 
+        | text: 
+        | accessibilityText: 
+        | accessibilityGroup: 0
+        | accessibilityLevel: auto
+        | accessibilityCustomRole: 
+        | top: 2466.000000
+        | left: 0.000000
+        | width: 1256.000000
+        | height: 196.000000
+        | visible: 1
+        | clickable: 0
+        | longclickable: 0
+        | checkable: 0
+        | scrollable: 0
+        | checked: 0
+        | hint: 
+        | childTree: -1
+        |-> Column childSize:2
+          | ID: 11
+          | compid: 
+          | text: 
+          | accessibilityText: 
+          | accessibilityGroup: 0
+          | accessibilityLevel: auto
+          | accessibilityCustomRole: 
+          | top: 2474.000000
+          | left: 0.000000
+          | width: 314.000000
+          | height: 184.000000
+          | visible: 1
+          | clickable: 1
+          | longclickable: 0
+          | checkable: 0
+          | scrollable: 0
+          | checked: 0
+          | hint: 
+          | childTree: -1
+          |-> Text childSize:0
+              ID: 12
+              compid: 
+              text: 📚
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2495.000000
+              left: 109.000000
+              width: 97.000000
+              height: 90.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+          |-> Text childSize:0
+              ID: 13
+              compid: 
+              text: 书架
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2592.000000
+              left: 118.000000
+              width: 78.000000
+              height: 45.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+        |-> Column childSize:2
+          | ID: 15
+          | compid: 
+          | text: 
+          | accessibilityText: 
+          | accessibilityGroup: 0
+          | accessibilityLevel: auto
+          | accessibilityCustomRole: 
+          | top: 2474.000000
+          | left: 314.000000
+          | width: 314.000000
+          | height: 184.000000
+          | visible: 1
+          | clickable: 1
+          | longclickable: 0
+          | checkable: 0
+          | scrollable: 0
+          | checked: 0
+          | hint: 
+          | childTree: -1
+          |-> Text childSize:0
+              ID: 16
+              compid: 
+              text: 🔍
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2495.000000
+              left: 423.000000
+              width: 97.000000
+              height: 90.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+          |-> Text childSize:0
+              ID: 17
+              compid: 
+              text: 发现
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2592.000000
+              left: 432.000000
+              width: 78.000000
+              height: 45.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+        |-> Column childSize:2
+          | ID: 19
+          | compid: 
+          | text: 
+          | accessibilityText: 
+          | accessibilityGroup: 0
+          | accessibilityLevel: auto
+          | accessibilityCustomRole: 
+          | top: 2474.000000
+          | left: 628.000000
+          | width: 314.000000
+          | height: 184.000000
+          | visible: 1
+          | clickable: 1
+          | longclickable: 0
+          | checkable: 0
+          | scrollable: 0
+          | checked: 0
+          | hint: 
+          | childTree: -1
+          |-> Text childSize:0
+              ID: 20
+              compid: 
+              text: 📡
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2495.000000
+              left: 737.000000
+              width: 97.000000
+              height: 90.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+          |-> Text childSize:0
+              ID: 21
+              compid: 
+              text: RSS
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2592.000000
+              left: 750.000000
+              width: 70.000000
+              height: 45.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+        |-> Column childSize:2
+          | ID: 23
+          | compid: 
+          | text: 
+          | accessibilityText: 
+          | accessibilityGroup: 0
+          | accessibilityLevel: auto
+          | accessibilityCustomRole: 
+          | top: 2474.000000
+          | left: 942.000000
+          | width: 314.000000
+          | height: 184.000000
+          | visible: 1
+          | clickable: 1
+          | longclickable: 0
+          | checkable: 0
+          | scrollable: 0
+          | checked: 0
+          | hint: 
+          | childTree: -1
+          |-> Text childSize:0
+              ID: 24
+              compid: 
+              text: 👤
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2495.000000
+              left: 1051.000000
+              width: 97.000000
+              height: 90.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+          |-> Text childSize:0
+              ID: 25
+              compid: 
+              text: 我的
+              accessibilityText: 
+              accessibilityGroup: 0
+              accessibilityLevel: auto
+              accessibilityCustomRole: 
+              top: 2592.000000
+              left: 1060.000000
+              width: 78.000000
+              height: 45.000000
+              visible: 1
+              clickable: 0
+              longclickable: 0
+              checkable: 0
+              scrollable: 0
+              checked: 0
+              hint: 
+              childTree: -1
+

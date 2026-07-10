@@ -86,6 +86,23 @@ export struct PageView {
     }
   }
 
+  /** 统一点击处理（Text 和父 Column 共享同一逻辑） */
+  private handleClick_(x: number, y: number): void {
+    console.info('[PageView] click! x=' + x + ' y=' + y + ' w=' + (this.pageWidth > 0 ? this.pageWidth : 360) + ' h=' + (this.pageHeight > 0 ? this.pageHeight : 640));
+    const w = this.pageWidth > 0 ? this.pageWidth : 360;
+    const h = this.pageHeight > 0 ? this.pageHeight : 640;
+    const x3 = w / 3; const y3 = h / 3;
+    let zone: number = ClickZone.MC;
+    if (y < y3) {
+      zone = x < x3 ? ClickZone.TL : (x > w - x3 ? ClickZone.TR : ClickZone.TC);
+    } else if (y < y3 * 2) {
+      zone = x < x3 ? ClickZone.ML : (x > w - x3 ? ClickZone.MR : ClickZone.MC);
+    } else {
+      zone = x < x3 ? ClickZone.BL : (x > w - x3 ? ClickZone.BR : ClickZone.BC);
+    }
+    this.dispatchZoneAction(zone);
+  }
+
   /** 根据区域动作配置执行对应操作 */
   private dispatchZoneAction(zone: number): void {
     const actions = this.zoneActions.length === 9 ? this.zoneActions : [];
@@ -192,51 +209,41 @@ export struct PageView {
           .fontSize(12).fontColor(this.config.titleColor)
           .width('100%').textAlign(TextAlign.Center)
       }
-      Column() {
-        if (this.pages.length > 0) {
-          Text(this.buildPageContent())
-            .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-            .fontFamily(this.config.fontFamily)
-            .fontWeight(this.getFontWeight())
-            .lineHeight(this.config.fontSize * this.config.lineHeight)
-            .letterSpacing(this.config.letterSpacing)
-            .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-            .width('100%')
-            .height('100%')
-            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-            .copyOption(CopyOptions.LocalDevice)
-            .editMenuOptions({
-              onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-                return menuItems;
-              },
-              onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-                if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-                  const pageText = this.buildPageContent();
-                  this.onAskKimi?.(pageText.substring(range.start, range.end));
-                  return true;
-                }
-                return false;
-              },
-            } as EditMenuOptions)
-            .onClick((event: ClickEvent) => {
-              console.info('[PageView] click! x=' + event.x + ' y=' + event.y + ' w=' + (this.pageWidth > 0 ? this.pageWidth : 360) + ' h=' + (this.pageHeight > 0 ? this.pageHeight : 640));
-              const w = this.pageWidth > 0 ? this.pageWidth : 360;
-              const h = this.pageHeight > 0 ? this.pageHeight : 640;
-              const x3 = w / 3; const y3 = h / 3;
-              let zone: number = ClickZone.MC;
-              if (event.y < y3) {
-                zone = event.x < x3 ? ClickZone.TL : (event.x > w - x3 ? ClickZone.TR : ClickZone.TC);
-              } else if (event.y < y3 * 2) {
-                zone = event.x < x3 ? ClickZone.ML : (event.x > w - x3 ? ClickZone.MR : ClickZone.MC);
-              } else {
-                zone = event.x < x3 ? ClickZone.BL : (event.x > w - x3 ? ClickZone.BR : ClickZone.BC);
-              }
-              this.dispatchZoneAction(zone);
-            })
-        }
-      }
-      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-      .clip(true)
+		      Column() {
+		        if (this.pages.length > 0) {
+		          Text(this.buildPageContent())
+		            .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+		            .fontFamily(this.config.fontFamily)
+		            .fontWeight(this.getFontWeight())
+		            .lineHeight(this.config.fontSize * this.config.lineHeight)
+		            .letterSpacing(this.config.letterSpacing)
+		            .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+		            .width('100%')
+		            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+		            .copyOption(CopyOptions.LocalDevice)
+		            .editMenuOptions({
+		              onCreateMenu: (menuItems: Array<TextMenuItem>) => {
+		                return menuItems;
+		              },
+		              onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+		                if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+		                  const pageText = this.buildPageContent();
+		                  this.onAskKimi?.(pageText.substring(range.start, range.end));
+		                  return true;
+		                }
+		                return false;
+		              },
+		            } as EditMenuOptions)
+		            .onClick((event: ClickEvent) => {
+		              this.handleClick_(event.x, event.y);
+		            })
+		        }
+		      }
+		      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
+		      .clip(true)
+		      .onClick((event: ClickEvent) => {
+		        this.handleClick_(event.x, event.y);
+		      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
