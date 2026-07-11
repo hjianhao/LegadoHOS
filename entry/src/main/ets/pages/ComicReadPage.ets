@@ -29,6 +29,7 @@ import { ClickAction } from '../components/reader/ClickAction';
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
 const READ_MODE_LEFT_TO_RIGHT: number = 1;  // 左->右翻页
 const READ_MODE_RIGHT_TO_LEFT: number = 2;  // 右->左翻页（日漫）
+const READ_MODE_SINGLE_PAGE: number = 3;  // 单页全屏（每屏一张图，Contain缩放）
 
 /** 缩放范围 */
 const MIN_SCALE: number = 0.5;
@@ -92,6 +93,7 @@ struct ComicReadPage {
   private listScroller_: ListScroller = new ListScroller();
   private swiperController_: SwiperController = new SwiperController();
   private justLoadedChapter_: boolean = false;
+  private chapterSwitching_: boolean = false;  // 章节切换中标记，防止 onReachEnd/onReachStart 重复触发
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
@@ -144,6 +146,8 @@ struct ComicReadPage {
           this.chapters = ChapterCache.chapters;
         }
         if (idx < this.allChapters_.length && idx !== this.currentIndex) {
+          console.info('[ComicRead] Jump to chapter from toc:', idx);
+          this.justLoadedChapter_ = true;
           this.loadChapterImages(idx);
         }
       }
@@ -241,12 +245,19 @@ struct ComicReadPage {
   }
 
   private async loadChapterImages(idx: number): Promise<void> {
-    if (idx < 0 || idx >= this.allChapters_.length) return;
+    if (idx < 0 || idx >= this.allChapters_.length) {
+      this.chapterSwitching_ = false;
+      return;
+    }
+    // 设置标记，防止 onReachEnd/onReachStart 在章节切换时连锁触发
+    this.justLoadedChapter_ = true;
     this.isLoading = true;
     this.currentIndex = idx;
     this.currentPageIndex = 0;
     this.failedImages = new Set<string>();
     this.imagePaths = new Map<string, string>();
+    // 先清空 imageUrls，避免旧列表残留导致 onReachEnd 触发
+    this.imageUrls = [];
     const ch = this.allChapters_[idx];
     this.chapterTitle = ch?.title || '';
 
@@ -258,10 +269,10 @@ struct ComicReadPage {
     if (content) {
       const baseUrl: string = ch?.url || this.bookUrl || this.source_?.sourceUrl || '';
       const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
-      console.info('[ComicRead] extractImageUrls: found', urls.length, 'images');
+      console.info('[ComicRead] extractImageUrls: found', urls.length, 'images for chapter', idx);
       if (urls.length > 0) {
         this.imageUrls = urls;
-        // 预加载前 N 张图片
+        // 预加载前 N 张图片（预加载的图片完成后会自动更新 imagePaths 触发 UI 刷新）
         this.preloadImages_(urls, this.preloadNum_);
         // 恢复页内位置
         if (this.currentPageIndex > 0 && this.currentPageIndex < urls.length) {
@@ -273,6 +284,11 @@ struct ComicReadPage {
               this.swiperController_.changeIndex(restoreIdx, false);
             }
           }, 200);
+        } else {
+          // 新章节滚动到顶部
+          setTimeout(() => {
+            this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+          }, 100);
         }
       } else {
         this.imageUrls = [];
@@ -286,13 +302,19 @@ struct ComicReadPage {
     this.isLoading = false;
     this.saveProgress();
     this.preloadNextChapter_(idx);
+    // 延迟清除标记，确保 List 渲染完成后再允许 onReachEnd/onReachStart
+    setTimeout(() => {
+      this.justLoadedChapter_ = false;
+      this.chapterSwitching_ = false;
+    }, 500);
   }
 
-  /** 预加载前 N 张图片到本地缓存 */
+  /** 预加载前 N 张图片到本地缓存，完成后自动更新 imagePaths 触发渐进式显示 */
   private preloadImages_(urls: string[], count: number): void {
     const n: number = Math.min(count, urls.length);
     for (let i = 0; i < n; i++) {
-      MangaImageLoader.preload(urls[i], this.source_);
+      // loadImage_ 会在下载完成后更新 imagePaths，实现渐进式显示
+      this.loadImage_(urls[i]);
     }
   }
 
@@ -365,12 +387,15 @@ struct ComicReadPage {
     const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
     if (urls.length === 0) return false;
 
+    // 设置标记，防止 onReachEnd 连锁触发
+    this.justLoadedChapter_ = true;
     this.currentIndex = idx;
     this.chapterTitle = ch?.title || '';
-    this.imageUrls = urls;
-    this.currentPageIndex = 0;
+    this.imageUrls = [];
     this.failedImages = new Set<string>();
     this.imagePaths = new Map<string, string>();
+    this.currentPageIndex = 0;
+    this.imageUrls = urls;
     this.isLoading = false;
     if (this.nextChapterIdx_ === idx) {
       this.nextChapterContent_ = '';
@@ -379,6 +404,12 @@ struct ComicReadPage {
     this.saveProgress();
     this.preloadNextChapter_(idx);
     this.preloadImages_(urls, this.preloadNum_);
+    // 滚动到新章节顶部
+    setTimeout(() => {
+      this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+      this.justLoadedChapter_ = false;
+      this.chapterSwitching_ = false;
+    }, 300);
     return true;
   }
 
@@ -443,26 +474,32 @@ struct ComicReadPage {
   // ============ 章节导航 ============
 
   private onPrevChapter(): void {
-    if (this.currentIndex > 0) {
-      this.justLoadedChapter_ = true;
-      this.loadChapterImages(this.currentIndex - 1).then(() => {
-        setTimeout(() => {
-          this.listScroller_.scrollToIndex(0);
-        }, 100);
-      });
+    if (this.currentIndex <= 0) {
+      this.chapterSwitching_ = false;
+      return;
     }
+    this.justLoadedChapter_ = true;
+    this.loadChapterImages(this.currentIndex - 1).then(() => {
+      setTimeout(() => {
+        this.listScroller_.scrollToIndex(0);
+      }, 100);
+    });
   }
 
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
-    if (n >= this.totalChapters) return;
+    if (n >= this.totalChapters) {
+      this.chapterSwitching_ = false;
+      return;
+    }
+    // 设置标记，防止 onReachEnd 连锁触发
+    this.justLoadedChapter_ = true;
     if (await this.tryUsePreloadedChapter_(n)) {
-      this.justLoadedChapter_ = true;
+      // tryUsePreloadedChapter_ 内部已处理 justLoadedChapter_ 的清除
       return;
     }
     this.loadChapterImages(n).then(() => {
       this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-      this.justLoadedChapter_ = true;
     });
   }
 
@@ -493,10 +530,14 @@ struct ComicReadPage {
   /** 异步加载图片：先下载到本地，再更新 state 触发渲染 */
   private async loadImage_(url: string): Promise<void> {
     if (this.imagePaths.has(url) || this.failedImages.has(url)) return;
+    // 检查 url 是否属于当前章节（章节切换后旧 promise 的结果应丢弃）
+    if (this.imageUrls.indexOf(url) < 0) return;
     try {
       const localPath: string = await MangaImageLoader.load(url, this.source_);
+      // 异步返回后再次检查：章节可能已切换
+      if (this.imageUrls.indexOf(url) < 0) return;
       if (localPath && localPath.startsWith('/')) {
-        // 更新 Map 触发 UI 刷新 — 添加 file:// 前缀使 Image 组件能识别本地路径
+        // 更新 Map 触发 UI 刷新 - 添加 file:// 前缀使 Image 组件能识别本地路径
         const newMap = new Map<string, string>(this.imagePaths);
         newMap.set(url, 'file://' + localPath);
         this.imagePaths = newMap;
@@ -507,6 +548,7 @@ struct ComicReadPage {
         this.imagePaths = newMap;
       }
     } catch (err) {
+      if (this.imageUrls.indexOf(url) < 0) return;
       const newSet = new Set<string>(this.failedImages);
       newSet.add(url);
       this.failedImages = newSet;
@@ -630,6 +672,9 @@ struct ComicReadPage {
       } else if (this.readMode === READ_MODE_WEBTOON) {
         // 条漫滚动模式
         this.buildWebtoonMode()
+      } else if (this.readMode === READ_MODE_SINGLE_PAGE) {
+        // 单页全屏模式
+        this.buildSinglePageMode()
       } else {
         // 翻页模式（左右/右左）
         this.buildPagedMode()
@@ -686,13 +731,17 @@ struct ComicReadPage {
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
     .onReachStart(() => {
+      if (this.chapterSwitching_) return;
       if (!this.justLoadedChapter_ && this.currentIndex > 0) {
+        this.chapterSwitching_ = true;
         this.onPrevChapter();
       }
       this.justLoadedChapter_ = false;
     })
     .onReachEnd(() => {
+      if (this.chapterSwitching_) return;
       if (!this.justLoadedChapter_ && this.currentIndex < this.totalChapters - 1) {
+        this.chapterSwitching_ = true;
         this.onNextChapter();
       }
       this.justLoadedChapter_ = false;
@@ -734,6 +783,83 @@ struct ComicReadPage {
             // 不自动触发，让触控区域处理
           }
         }, 300);
+      }
+    })
+    .onClick((event: ClickEvent) => {
+      this.handleComicClick_(event.x, event.y);
+    })
+  }
+
+  @Builder
+  buildSinglePageMode() {
+    Swiper(this.swiperController_) {
+      ForEach(this.imageUrls, (url: string, index: number) => {
+        Stack() {
+          if (this.failedImages.has(url)) {
+            Column() {
+              Text('🖼 图片加载失败').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+              Text(url.substring(0, 80)).fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
+                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
+              Button('重试').margin({ top: 12 }).fontSize(12).height(32)
+                .onClick(() => {
+                  const newSet = new Set<string>(this.failedImages);
+                  newSet.delete(url);
+                  this.failedImages = newSet;
+                  const newMap = new Map<string, string>(this.imagePaths);
+                  newMap.delete(url);
+                  this.imagePaths = newMap;
+                  this.loadImage_(url);
+                })
+            }
+            .justifyContent(FlexAlign.Center)
+          } else if (this.imagePaths.has(url)) {
+            Image(this.imagePaths.get(url))
+              .width('100%').height('100%')
+              .objectFit(ImageFit.Contain)
+              .scale({ x: this.imageScale, y: this.imageScale })
+              .onError(() => {
+                const newSet = new Set<string>(this.failedImages);
+                newSet.add(url);
+                this.failedImages = newSet;
+              })
+              .gesture(
+                PinchGesture({ fingers: 2 })
+                  .onActionStart((_event: GestureEvent) => {
+                    this.pinchStartScale_ = this.imageScale;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    const newScale: number = this.pinchStartScale_ * event.scale;
+                    this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                  })
+              )
+              .gesture(
+                TapGesture({ count: 2 })
+                  .onAction(() => { this.onDoubleTap(); })
+              )
+          } else {
+            Column() {
+              LoadingProgress().width(30).height(30).color(ThemeColors.secondaryText(this.isDark))
+              Text(`${index + 1}/${this.imageUrls.length}`).fontSize(11)
+                .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+            }
+            .justifyContent(FlexAlign.Center)
+            .onAppear(() => { this.loadImage_(url); })
+          }
+        }
+        .width('100%').height('100%')
+        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+      }, (url: string) => url)
+    }
+    .indicator(false)
+    .loop(false)
+    .duration(300)
+    .width('100%').height('100%')
+    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .onChange((index: number) => {
+      this.currentPageIndex = index;
+      this.saveProgress();
+      if (index === this.imageUrls.length - 1) {
+        setTimeout(() => { this.onNextChapter(); }, 300);
       }
     })
     .onClick((event: ClickEvent) => {
@@ -967,6 +1093,7 @@ struct ComicReadPage {
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 16, top: 16 })
         ForEach([
           { mode: READ_MODE_WEBTOON, label: '条漫（从上到下滚动）' } as ReadModeOption,
+          { mode: READ_MODE_SINGLE_PAGE, label: '单页全屏（每屏一张图）' } as ReadModeOption,
           { mode: READ_MODE_LEFT_TO_RIGHT, label: '左 -> 右翻页' } as ReadModeOption,
           { mode: READ_MODE_RIGHT_TO_LEFT, label: '右 -> 左翻页（日漫）' } as ReadModeOption,
         ], (item: ReadModeOption) => {
@@ -1083,6 +1210,7 @@ struct ComicReadPage {
     switch (this.readMode) {
       case READ_MODE_LEFT_TO_RIGHT: return '左->右';
       case READ_MODE_RIGHT_TO_LEFT: return '右->左';
+      case READ_MODE_SINGLE_PAGE: return '单页';
       default: return '条漫';
     }
   }

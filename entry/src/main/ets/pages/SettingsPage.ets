@@ -264,6 +264,7 @@ struct SettingsPage {
       Row() {
         ForEach([
           { mode: 0, label: '条漫' } as ReadModeOption,
+          { mode: 3, label: '单页' } as ReadModeOption,
           { mode: 1, label: '左->右' } as ReadModeOption,
           { mode: 2, label: '右->左' } as ReadModeOption,
         ], (item: ReadModeOption) => {
