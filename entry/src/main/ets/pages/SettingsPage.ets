@@ -1,8 +1,8 @@
-import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
 import { ThemeColors } from '../theme/ThemeColors';
 import { NetUtil } from '../util/NetUtil';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
+import { MangaImageLoader } from '../util/MangaImageLoader';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -10,6 +10,41 @@ import { UiUtil } from '../util/UiUtil';
 import router from '@ohos.router';
 
 interface SettingItem { icon: string; title: string; key: string; }
+interface ReadModeOption { mode: number; label: string; }
+
+@CustomDialog
+struct DnsDialog {
+  controller: CustomDialogController;
+  dnsServers: string = '';
+  dnsEnabled: boolean = true;
+  onSave: (servers: string, enabled: boolean) => void = () => {};
+
+  build() {
+    Column() {
+      Text('DNS 设置').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#000000')
+        .padding({ bottom: 12 })
+      Text('逗号分隔多个 DNS 服务器地址').fontSize(12).fontColor('#666666')
+        .padding({ bottom: 8 })
+      TextInput({ text: this.dnsServers, placeholder: '如 8.8.8.8,114.114.114.114' })
+        .height(36).fontSize(13).width('100%')
+        .onChange((v: string) => { this.dnsServers = v; })
+      Row() {
+        Text('启用').fontSize(14).fontColor('#333333').margin({ right: 8 })
+        Toggle({ type: ToggleType.Switch, isOn: this.dnsEnabled })
+          .onChange((v: boolean) => { this.dnsEnabled = v; })
+      }.margin({ top: 12 })
+      Row() {
+        Button('取消').fontSize(13).height(32).margin({ right: 8 }).onClick(() => {
+          this.controller.close();
+        })
+        Button('保存').fontSize(13).height(32).onClick(() => {
+          this.onSave(this.dnsServers, this.dnsEnabled);
+          this.controller.close();
+        })
+      }.margin({ top: 16 }).justifyContent(FlexAlign.Center).width('100%')
+    }.padding(20).width(300)
+  }
+}
 
 @Entry
 @Component
@@ -20,21 +55,21 @@ struct SettingsPage {
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
-  @State proxyHost: string = '';
-  @State proxyPort: string = '';
-  @State netTimeout: string = '60';
+  @StorageLink('proxyHost') proxyHost: string = '';
+  @StorageLink('proxyPort') proxyPort: string = '';
+  @StorageLink('network_timeout') netTimeout: number = 60;
   @State pageMode: boolean = true;
   @State autoCacheSize: number = 10;
+  @State comicReadMode: number = 0;
+  @State comicPreloadNum: number = 3;
+  @State comicCacheSize: number = 0;
 
   aboutToAppear(): void {
     this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
     this.dnsServers = AppStorage.get<string>('dnsServers') || '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
     this.dnsEnabled = AppStorage.get<boolean>('dnsEnabled') !== false;
-    this.proxyHost = AppStorage.get<string>('proxyHost') || '';
-    this.proxyPort = AppStorage.get<string>('proxyPort') || '';
     NetUtil.setDns(this.dnsServers, this.dnsEnabled);
-    this.netTimeout = String(AppStorage.get<number>('network_timeout') || 60);
-    if (this.proxyHost && this.proxyPort) {
+    if (this.proxyHost && parseInt(this.proxyPort) > 0) {
       NetUtil.setProxy(this.proxyHost, parseInt(this.proxyPort));
     }
     this.syncWebViewNetwork();
@@ -47,7 +82,23 @@ struct SettingsPage {
       await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.pageMode = (await s.getPageMode()) !== 0;
       this.autoCacheSize = await s.getAutoCacheSize();
+      this.comicReadMode = await s.getComicReadMode();
+      this.comicPreloadNum = await s.getComicPreloadNum();
     } catch (_e) { /* ignore */ }
+    // 加载漫画缓存大小
+    this.loadComicCacheSize();
+  }
+
+  private async loadComicCacheSize(): Promise<void> {
+    try {
+      this.comicCacheSize = await MangaImageLoader.getCacheSize();
+    } catch (_) { /* ignore */ }
+  }
+
+  private formatCacheSize(bytes: number): string {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
   private syncWebViewNetwork(): void {
@@ -70,10 +121,11 @@ struct SettingsPage {
 
       if (this.currentSection === 'main') {
         this.buildMainMenu();
-      } else if (this.currentSection === 'search') {
-        this.buildSearchSettings();
       } else if (this.currentSection === 'read') {
         this.buildReadSettings();
+      } else if (this.currentSection === 'comic') {
+        this.buildComicSettings();
+      } else if (this.currentSection === 'search') {
       } else if (this.currentSection === 'theme') {
         this.buildThemeSettings();
       } else if (this.currentSection === 'backup') {
@@ -93,6 +145,7 @@ struct SettingsPage {
     List() {
       ForEach([
         { icon: '\uD83D\uDCD6', title: '阅读设置', key: 'read' },
+        { icon: '\uD83D\uDCDA', title: '漫画设置', key: 'comic' },
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
         { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
@@ -201,6 +254,77 @@ struct SettingsPage {
   }
 
   @Builder
+  buildComicSettings() {
+    Column() {
+      Text('\uD83D\uDCDA 漫画设置').fontSize(16).fontWeight(FontWeight.Medium)
+        .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
+
+      // 阅读方向
+      Text('阅读方向').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Row() {
+        ForEach([
+          { mode: 0, label: '条漫' } as ReadModeOption,
+          { mode: 1, label: '左->右' } as ReadModeOption,
+          { mode: 2, label: '右->左' } as ReadModeOption,
+        ], (item: ReadModeOption) => {
+          Text(item.label)
+            .fontSize(14).padding({ left: 16, right: 16, top: 8, bottom: 8 })
+            .fontColor(this.comicReadMode === item.mode ? ThemeColors.primary(this.isDark) : ThemeColors.onBackground(this.isDark))
+            .borderRadius(8)
+            .backgroundColor(this.comicReadMode === item.mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+            .margin({ right: 8 })
+            .onClick(async () => {
+              this.comicReadMode = item.mode;
+              try {
+                const s = SettingsStore.getInstance();
+                await s.init(UiUtil.getHostContext(this.getUIContext()));
+                await s.setComicReadMode(item.mode);
+              } catch (_e) { /* ignore */ }
+            })
+        }, (item: ReadModeOption) => item.mode.toString())
+      }.padding({ left: 16, right: 16, top: 8, bottom: 12 })
+      .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+
+      // 预加载数量
+      Text('图片预加载数量').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Row() {
+        Slider({ value: this.comicPreloadNum, min: 1, max: 20, step: 1 })
+          .width('60%').margin({ left: 16 })
+          .onChange(async (v: number) => {
+            this.comicPreloadNum = Math.round(v);
+            try {
+              const s = SettingsStore.getInstance();
+              await s.init(UiUtil.getHostContext(this.getUIContext()));
+              await s.setComicPreloadNum(this.comicPreloadNum);
+            } catch (_e) { /* ignore */ }
+          })
+        Text(this.comicPreloadNum + ' 张').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
+      }.width('100%').margin({ top: 4 })
+        .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+      Text('预先下载当前章节前 N 张图片到本地缓存').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
+        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
+
+      // 缓存管理
+      Text('图片缓存管理').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Row() {
+        Text('当前缓存').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Text(this.formatCacheSize(this.comicCacheSize)).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 8 })
+        Button('清理').fontSize(13).height(32).onClick(async () => {
+          try {
+            await MangaImageLoader.clearAllCache();
+            await this.loadComicCacheSize();
+            UiUtil.showToast(this.getUIContext(), { message: '缓存已清理', duration: 1500 });
+          } catch (e) {
+            UiUtil.showToast(this.getUIContext(), { message: '清理失败', duration: 1500 });
+          }
+        })
+      }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 12 })
+      .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+    }
+    .width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
   buildThemeSettings() {
     Column() {
       Text('\uD83C\uDFA8 主题设置').fontSize(16).fontWeight(FontWeight.Medium)
@@ -247,69 +371,82 @@ struct SettingsPage {
         })
       }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
 
+      // DNS 服务器（紧凑：一行显示当前值 + 设置按钮）
+      Row() {
+        Text('DNS 服务器').fontSize(15).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
+        Text(this.dnsServers).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+          .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Button('设置').fontSize(12).height(28).onClick(() => {
+          const dlg = new CustomDialogController({
+            builder: DnsDialog({
+              dnsServers: this.dnsServers,
+              dnsEnabled: this.dnsEnabled,
+              onSave: (servers: string, enabled: boolean) => {
+                this.dnsServers = servers;
+                this.dnsEnabled = enabled;
+                AppStorage.set<string>('dnsServers', servers);
+                AppStorage.set<boolean>('dnsEnabled', enabled);
+                NetUtil.setDns(servers, enabled);
+                this.syncWebViewNetwork();
+                UiUtil.showToast(this.getUIContext(), { message: 'DNS 已保存', duration: 1500 });
+              }
+            })
+          });
+          dlg.open();
+        })
+      }.padding({ left: 16, right: 16 }).width('100%').margin({ top: 4, bottom: 8 })
+
       // 网络超时
       Row() { Text('网络超时').fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-        TextInput({ text: this.netTimeout, placeholder: '60' })
+        TextInput({ text: String(this.netTimeout), placeholder: '60' })
           .height(36).fontSize(13).width(60).type(InputType.Number)
-          .onChange((v: string) => { this.netTimeout = v; })
+          .onChange((v: string) => {
+            const val = parseInt(v);
+            if (val && val > 0) {
+              this.netTimeout = val;
+              AppStorage.set<number>('network_timeout', val);
+            }
+          })
+        Text('秒').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 4 })
       }.padding({ left: 16, right: 16 }).width('100%')
       Row() {
-        Text('秒（默认60秒，影响目录加载、搜索等操作）').fontSize(11).fontColor(ThemeColors.onBackground(this.isDark)).padding({ left: 16 })
-      }.width('100%')
-      Button('保存超时').fontSize(12).height(28).margin({ left: 16, top: 4 }).onClick(() => {
-        const val = parseInt(this.netTimeout);
-        if (val && val > 0) {
-          AppStorage.set<number>('network_timeout', val);
-          UiUtil.showToast(this.getUIContext(), { message: '超时已保存为 ' + val + ' 秒', duration: 1500 });
-        }
-      })
+        Text('默认60秒，影响目录加载、搜索等操作，修改后即时生效').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16 })
+      }.width('100%').margin({ bottom: 8 })
 
-      // DNS 服务器
-      TextInput({ text: this.dnsServers, placeholder: '逗号分隔多个 DNS，如 8.8.8.8,114.114.114.114' })
-        .height(36).fontSize(13).layoutWeight(1).margin({ left: 16, right: 16 })
-        .onChange((v: string) => { this.dnsServers = v; })
-      Button('保存 DNS').fontSize(12).height(28).margin({ left: 16, top: 4 }).onClick(() => {
-        AppStorage.set<string>('dnsServers', this.dnsServers);
-        NetUtil.setDns(this.dnsServers, this.dnsEnabled);
-        this.syncWebViewNetwork();
-        UiUtil.showToast(this.getUIContext(), { message: 'DNS 已保存', duration: 1500 });
-      })
+      Divider().margin({ top: 8, bottom: 8 })
+      Text('HTTP 代理').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 4, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
 
-      // 代理
-      Divider().margin({ top: 16 })
-      Text('HTTP 代理').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 12, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
-
+      // 代理地址和端口（@StorageLink 自动同步，无需手动保存）
       Row() {
         TextInput({ text: this.proxyHost, placeholder: '代理地址 如 127.0.0.1' })
           .height(36).fontSize(13).layoutWeight(1).margin({ left: 16 })
-          .onChange((v: string) => { this.proxyHost = v; })
+          .onChange((v: string) => { this.proxyHost = v; this.applyProxy_(); })
         TextInput({ text: this.proxyPort, placeholder: '端口' })
           .height(36).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
-          .onChange((v: string) => { this.proxyPort = v; })
+          .onChange((v: string) => { this.proxyPort = v; this.applyProxy_(); })
       }.width('100%').margin({ top: 4 })
 
       Row() {
-        Button('保存代理').fontSize(12).height(28).margin({ left: 16 }).onClick(() => {
-          AppStorage.set<string>('proxyHost', this.proxyHost);
-          AppStorage.set<string>('proxyPort', this.proxyPort);
-          const port = parseInt(this.proxyPort);
-          if (this.proxyHost && port > 0) NetUtil.setProxy(this.proxyHost, port);
-          else NetUtil.clearProxy();
-          this.syncWebViewNetwork();
-          UiUtil.showToast(this.getUIContext(), { message: '代理已保存', duration: 1500 });
-        })
-        Button('清除').fontSize(12).height(28).margin({ left: 8 }).backgroundColor('#FF5722').fontColor('#FFF').onClick(() => {
+        Button('清除代理').fontSize(12).height(28).margin({ left: 16 }).backgroundColor('#FF5722').fontColor('#FFF').onClick(() => {
           this.proxyHost = ''; this.proxyPort = '';
-          AppStorage.set<string>('proxyHost', '');
-          AppStorage.set<string>('proxyPort', '');
           NetUtil.clearProxy();
           this.syncWebViewNetwork();
           UiUtil.showToast(this.getUIContext(), { message: '代理已清除', duration: 1500 });
         })
       }.margin({ top: 4 })
 
-      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark)).padding(16)
+      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
     }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  private applyProxy_(): void {
+    const port = parseInt(this.proxyPort);
+    if (this.proxyHost && port > 0) {
+      NetUtil.setProxy(this.proxyHost, port);
+    } else if (!this.proxyHost) {
+      NetUtil.clearProxy();
+    }
+    this.syncWebViewNetwork();
   }
 
   @Builder

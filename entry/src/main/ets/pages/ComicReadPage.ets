@@ -22,6 +22,8 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { UiUtil } from '../util/UiUtil';
+import { SettingsStore } from '../data/preferences/SettingsStore';
+import { ClickAction } from '../components/reader/ClickAction';
 
 /** 阅读方向模式 */
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
@@ -32,6 +34,12 @@ const READ_MODE_RIGHT_TO_LEFT: number = 2;  // 右->左翻页（日漫）
 const MIN_SCALE: number = 0.5;
 const MAX_SCALE: number = 3.0;
 const DOUBLE_TAP_SCALE: number = 2.0;
+
+/** 阅读模式选项 */
+interface ReadModeOption {
+  mode: number;
+  label: string;
+}
 
 @Entry
 @Component
@@ -65,6 +73,17 @@ struct ComicReadPage {
   @State imageScale: number = 1.0;
   private pinchStartScale_: number = 1.0;  // 手势开始时的缩放基准
 
+  // 触控区域动作配置（9宫格）
+  @State comicZoneActions: number[] = [4, 2, 3, 2, 0, 1, 2, 1, 1];
+  // 菜单子面板
+  @State showModeSelect: boolean = false;
+  @State showZoneConfig: boolean = false;
+  // 屏幕宽高（用于触控区域计算）
+  @State screenWidth: number = 0;
+  @State screenHeight: number = 0;
+  // 预加载数量
+  private preloadNum_: number = 3;
+
   // 内部状态
   private source_: BookSource | null = null;
   private bookId_: number = -1;
@@ -89,22 +108,28 @@ struct ComicReadPage {
     this.origin = String(p['origin'] || '');
     this.tocUrl = String(p['tocUrl'] || '');
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
-    // 加载阅读模式设置
-    this.loadReadMode();
+    // 加载阅读模式和触控配置
+    this.loadSettings();
   }
 
-  private loadReadMode(): void {
+  private async loadSettings(): Promise<void> {
     try {
-      const mode = AppStorage.get<number>('comic_read_mode');
-      if (mode !== null && mode !== undefined) {
-        this.readMode = mode;
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      this.readMode = await s.getComicReadMode();
+      this.preloadNum_ = await s.getComicPreloadNum();
+      const actions: number[] = [];
+      for (let i = 0; i < 9; i++) {
+        actions.push(await s.getComicClickAction(i));
       }
+      this.comicZoneActions = actions;
     } catch (_) { /* ignore */ }
   }
 
-  private saveReadMode(): void {
+  private async saveReadMode(): Promise<void> {
     try {
-      AppStorage.setOrCreate<number>('comic_read_mode', this.readMode);
+      const s = SettingsStore.getInstance();
+      await s.setComicReadMode(this.readMode);
     } catch (_) { /* ignore */ }
   }
 
@@ -144,6 +169,10 @@ struct ComicReadPage {
           if (!this.origin) this.origin = book.origin || '';
           if (!this.bookName) this.bookName = book.name || '';
           if (this.targetIdx_ < 0) this.targetIdx_ = book.durChapterIndex || 0;
+          // 恢复页内进度
+          if (book.durChapterPos && book.durChapterPos > 0) {
+            this.currentPageIndex = book.durChapterPos;
+          }
         }
       } catch (_) { /* ignore */ }
 
@@ -232,8 +261,19 @@ struct ComicReadPage {
       console.info('[ComicRead] extractImageUrls: found', urls.length, 'images');
       if (urls.length > 0) {
         this.imageUrls = urls;
-        // 预加载前3张图片
-        this.preloadImages_(urls, 3);
+        // 预加载前 N 张图片
+        this.preloadImages_(urls, this.preloadNum_);
+        // 恢复页内位置
+        if (this.currentPageIndex > 0 && this.currentPageIndex < urls.length) {
+          const restoreIdx: number = this.currentPageIndex;
+          setTimeout(() => {
+            if (this.readMode === READ_MODE_WEBTOON) {
+              this.listScroller_.scrollToIndex(restoreIdx);
+            } else {
+              this.swiperController_.changeIndex(restoreIdx, false);
+            }
+          }, 200);
+        }
       } else {
         this.imageUrls = [];
         this.loadError = '本章没有图片';
@@ -338,7 +378,7 @@ struct ComicReadPage {
     }
     this.saveProgress();
     this.preloadNextChapter_(idx);
-    this.preloadImages_(urls, 3);
+    this.preloadImages_(urls, this.preloadNum_);
     return true;
   }
 
@@ -389,14 +429,14 @@ struct ComicReadPage {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, 0).catch(() => {});
+    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, this.currentPageIndex).catch(() => {});
   }
 
   async aboutToDisappear(): Promise<void> {
     const ch = this.allChapters_[this.currentIndex];
     if (ch && this.bookUrl) {
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-      try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, 0); } catch (_) { /* ignore */ }
+      try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, this.currentPageIndex); } catch (_) { /* ignore */ }
     }
   }
 
@@ -435,6 +475,7 @@ struct ComicReadPage {
         from: 'ComicReadPage', bookName: this.bookName, bookAuthor: '',
         bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl,
         durChapterIndex: this.currentIndex,
+        isManga: '1',
       }
     });
   }
@@ -455,9 +496,9 @@ struct ComicReadPage {
     try {
       const localPath: string = await MangaImageLoader.load(url, this.source_);
       if (localPath && localPath.startsWith('/')) {
-        // 更新 Map 触发 UI 刷新
+        // 更新 Map 触发 UI 刷新 — 添加 file:// 前缀使 Image 组件能识别本地路径
         const newMap = new Map<string, string>(this.imagePaths);
-        newMap.set(url, localPath);
+        newMap.set(url, 'file://' + localPath);
         this.imagePaths = newMap;
       } else {
         // localPath 为原始 URL，Image 组件直接加载（可能无 Referer 头，但有些源不需要）
@@ -479,6 +520,89 @@ struct ComicReadPage {
     } else {
       this.imageScale = DOUBLE_TAP_SCALE;
     }
+  }
+
+  // ============ 9 宫格触控分发 ============
+
+  /** 处理点击事件，按 3x3 区域分发动作 */
+  private handleComicClick_(x: number, y: number): void {
+    const w: number = this.screenWidth > 0 ? this.screenWidth : 360;
+    const h: number = this.screenHeight > 0 ? this.screenHeight : 640;
+    const x3: number = w / 3;
+    const y3: number = h / 3;
+    let zone: number = 4;  // 默认中间
+    if (y < y3) {
+      zone = x < x3 ? 0 : (x > w - x3 ? 2 : 1);         // TL/TC/TR
+    } else if (y < y3 * 2) {
+      zone = x < x3 ? 3 : (x > w - x3 ? 5 : 4);         // ML/MC/MR
+    } else {
+      zone = x < x3 ? 6 : (x > w - x3 ? 8 : 7);         // BL/BC/BR
+    }
+    this.dispatchZoneAction_(zone);
+  }
+
+  /** 根据区域动作配置执行对应操作 */
+  private dispatchZoneAction_(zone: number): void {
+    const actions: number[] = this.comicZoneActions.length === 9 ? this.comicZoneActions : [4,2,3,2,0,1,2,1,1];
+    const action: number = actions[zone] ?? -1;
+    switch (action) {
+      case ClickAction.NONE:
+        break;
+      case ClickAction.MENU:
+        this.showMenu = !this.showMenu;
+        break;
+      case ClickAction.NEXT_PAGE:
+        this.nextPage();
+        break;
+      case ClickAction.PREV_PAGE:
+        this.prevPage();
+        break;
+      case ClickAction.NEXT_CHAPTER:
+        this.onNextChapter();
+        break;
+      case ClickAction.PREV_CHAPTER:
+        this.onPrevChapter();
+        break;
+      default:
+        this.showMenu = !this.showMenu;
+        break;
+    }
+  }
+
+  /** 下一页（条漫模式滚动一屏，翻页模式 Swiper 下一项） */
+  private nextPage(): void {
+    if (this.readMode === READ_MODE_WEBTOON) {
+      this.listScroller_.scrollBy(0, this.screenHeight > 0 ? this.screenHeight * 0.8 : 500);
+    } else {
+      if (this.currentPageIndex < this.imageUrls.length - 1) {
+        this.currentPageIndex++;
+        this.swiperController_.changeIndex(this.currentPageIndex, true);
+      } else {
+        this.onNextChapter();
+      }
+    }
+  }
+
+  /** 上一页 */
+  private prevPage(): void {
+    if (this.readMode === READ_MODE_WEBTOON) {
+      this.listScroller_.scrollBy(0, this.screenHeight > 0 ? -(this.screenHeight * 0.8) : -500);
+    } else {
+      if (this.currentPageIndex > 0) {
+        this.currentPageIndex--;
+        this.swiperController_.changeIndex(this.currentPageIndex, true);
+      } else {
+        this.onPrevChapter();
+      }
+    }
+  }
+
+  /** 获取翻页模式下的有效图片列表（RTL 模式反转） */
+  private getDisplayImageUrls(): string[] {
+    if (this.readMode === READ_MODE_RIGHT_TO_LEFT) {
+      return this.imageUrls.slice().reverse();
+    }
+    return this.imageUrls;
   }
 
   build() {
@@ -520,9 +644,23 @@ struct ComicReadPage {
       if (this.showMenu) {
         this.buildMenu()
       }
+      // 模式选择面板
+      if (this.showModeSelect) {
+        this.buildModeSelectPanel()
+      }
+      // 触控设置面板
+      if (this.showZoneConfig) {
+        this.buildZoneConfigPanel()
+      }
     }
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .onAreaChange((_old: Area, n: Area) => {
+      const w: number = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
+      const h: number = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
+      if (w > 0) this.screenWidth = w;
+      if (h > 0) this.screenHeight = h;
+    })
   }
 
   @Builder
@@ -559,15 +697,15 @@ struct ComicReadPage {
       }
       this.justLoadedChapter_ = false;
     })
-    .onClick(() => {
-      this.showMenu = !this.showMenu;
+    .onClick((event: ClickEvent) => {
+      this.handleComicClick_(event.x, event.y);
     })
   }
 
   @Builder
   buildPagedMode() {
     Swiper(this.swiperController_) {
-      ForEach(this.imageUrls, (url: string, index: number) => {
+      ForEach(this.getDisplayImageUrls(), (url: string, index: number) => {
         Stack() {
           this.buildImageItem(url, index)
         }
@@ -581,14 +719,25 @@ struct ComicReadPage {
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
     .onChange((index: number) => {
-      this.currentPageIndex = index;
+      // RTL 模式下反转 index 映射
+      const actualIndex: number = this.readMode === READ_MODE_RIGHT_TO_LEFT
+        ? this.imageUrls.length - 1 - index : index;
+      this.currentPageIndex = actualIndex;
+      this.saveProgress();
+      // 翻到边界自动切章
       if (index === this.imageUrls.length - 1) {
-        // 到最后一张，延迟自动下一章
         setTimeout(() => { this.onNextChapter(); }, 300);
+      } else if (index === 0) {
+        // 翻到第一张，延迟检查是否上一章
+        setTimeout(() => {
+          if (this.currentPageIndex === 0 && this.currentIndex > 0) {
+            // 不自动触发，让触控区域处理
+          }
+        }, 300);
       }
     })
-    .onClick(() => {
-      this.showMenu = !this.showMenu;
+    .onClick((event: ClickEvent) => {
+      this.handleComicClick_(event.x, event.y);
     })
   }
 
@@ -722,52 +871,219 @@ struct ComicReadPage {
         Text('〈').fontSize(24).fontColor(ThemeColors.onSurface(this.isDark))
           .onClick(() => { UiUtil.back(this.getUIContext()); })
           .padding({ left: 12, right: 12 })
-        Text(this.bookName || '漫画阅读').fontSize(16).fontColor(ThemeColors.onSurface(this.isDark))
-          .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        // 模式切换
+        Column() {
+          Text(this.bookName || '漫画阅读').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.chapterTitle || '').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 4 })
+        // 模式选择
         Text(this.readModeLabel()).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .borderRadius(4)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-          .onClick(() => { this.cycleReadMode(); })
+          .onClick(() => { this.showModeSelect = true; })
       }
-      .width('100%').height(48)
+      .width('100%').height(52)
       .backgroundColor(ThemeColors.surface(this.isDark))
       .padding({ left: 8, right: 12 })
       .justifyContent(FlexAlign.SpaceBetween)
 
       Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
 
-      // 底部栏
-      Row() {
-        Text('上一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .onClick(() => { this.showMenu = false; this.onPrevChapter(); })
-        Text('目录').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .onClick(() => { this.showMenu = false; this.onOpenToc(); })
-        Text('下一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .onClick(() => { this.showMenu = false; this.onNextChapter(); })
+      // 章节进度条
+      if (this.totalChapters > 1) {
+        Row() {
+          Text(`${this.currentIndex + 1}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(30).textAlign(TextAlign.End)
+          Slider({ value: this.currentIndex + 1, min: 1, max: this.totalChapters, step: 1 })
+            .layoutWeight(1).margin({ left: 8, right: 8 })
+            .onChange((val: number) => {
+              const idx: number = Math.round(val) - 1;
+              if (idx >= 0 && idx < this.allChapters_.length && idx !== this.currentIndex) {
+                this.showMenu = false;
+                this.loadChapterImages(idx);
+              }
+            })
+          Text(`${this.totalChapters}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(30)
+        }
+        .width('100%').height(40)
+        .backgroundColor(ThemeColors.surface(this.isDark))
+        .padding({ left: 16, right: 16 })
       }
-      .width('100%').height(56)
+
+      // 底部按钮栏
+      Row() {
+        Column() {
+          Text('上一章').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onPrevChapter(); })
+
+        Column() {
+          Text('目录').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+
+        Column() {
+          Text('下一章').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onNextChapter(); })
+      }
+      .width('100%').height(48)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .justifyContent(FlexAlign.SpaceEvenly)
+
+      Row() {
+        Column() {
+          Text('刷新').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onRefresh(); })
+
+        Column() {
+          Text('换源').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+
+        Column() {
+          Text('触控').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.showZoneConfig = true; })
+      }
+      .width('100%').height(48)
       .backgroundColor(ThemeColors.surface(this.isDark))
       .justifyContent(FlexAlign.SpaceEvenly)
     }
     .width('100%').height('100%')
   }
 
-  private readModeLabel(): string {
-    switch (this.readMode) {
-      case READ_MODE_LEFT_TO_RIGHT: return '左→右';
-      case READ_MODE_RIGHT_TO_LEFT: return '右→左';
-      default: return '条漫';
+  @Builder
+  buildModeSelectPanel() {
+    Column() {
+      Column().width('100%').layoutWeight(1).onClick(() => { this.showModeSelect = false; })
+      Column() {
+        Text('阅读模式').fontSize(16).fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 16, top: 16 })
+        ForEach([
+          { mode: READ_MODE_WEBTOON, label: '条漫（从上到下滚动）' } as ReadModeOption,
+          { mode: READ_MODE_LEFT_TO_RIGHT, label: '左 -> 右翻页' } as ReadModeOption,
+          { mode: READ_MODE_RIGHT_TO_LEFT, label: '右 -> 左翻页（日漫）' } as ReadModeOption,
+        ], (item: ReadModeOption) => {
+          Row() {
+            Text(item.label).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+            if (this.readMode === item.mode) {
+              Text('✓').fontSize(18).fontColor(ThemeColors.primary(this.isDark))
+            }
+          }
+          .width('100%').height(48).padding({ left: 24, right: 24 })
+          .onClick(() => {
+            this.readMode = item.mode;
+            this.saveReadMode();
+            this.showModeSelect = false;
+            this.showMenu = false;
+          })
+        }, (item: ReadModeOption) => item.mode.toString())
+      }
+      .width('100%')
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .borderRadius({ topLeft: 16, topRight: 16 })
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildZoneConfigPanel() {
+    Column() {
+      Column().width('100%').layoutWeight(1).onClick(() => { this.showZoneConfig = false; })
+      Column() {
+        Text('触控区域设置').fontSize(16).fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 8, top: 16 })
+        Text('点击各区域设置动作').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+          .margin({ bottom: 16 })
+        // 3x3 网格
+        ForEach([0, 1, 2], (rowIdx: number) => {
+          Row() {
+            ForEach([0, 1, 2], (colIdx: number) => {
+              this.buildZoneCell_(rowIdx * 3 + colIdx)
+            }, (colIdx: number) => colIdx.toString())
+          }
+          .width('100%').height(80)
+          .justifyContent(FlexAlign.SpaceEvenly)
+        }, (rowIdx: number) => rowIdx.toString())
+        // 保存按钮
+        Button('保存').margin({ top: 16, bottom: 16 }).onClick(async () => {
+          try {
+            const s = SettingsStore.getInstance();
+            await s.init(UiUtil.getHostContext(this.getUIContext()));
+            for (let i = 0; i < 9; i++) {
+              await s.setComicClickAction(i, this.comicZoneActions[i]);
+            }
+          } catch (_) { /* ignore */ }
+          this.showZoneConfig = false;
+          UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
+        })
+      }
+      .width('100%')
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .borderRadius({ topLeft: 16, topRight: 16 })
+      .padding({ left: 16, right: 16, bottom: 16 })
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  buildZoneCell_(zone: number) {
+    Column() {
+      Text(this.zoneLabel_(zone)).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
+      Text(this.actionLabel_(this.comicZoneActions[zone])).fontSize(12)
+        .fontColor(ThemeColors.onSurface(this.isDark))
+    }
+    .width('30%').height(70)
+    .borderRadius(8)
+    .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+    .justifyContent(FlexAlign.Center)
+    .onClick(() => { this.cycleZoneAction_(zone); })
+  }
+
+  private zoneLabel_(zone: number): string {
+    const labels: string[] = ['左上', '上中', '右上', '左中', '中央', '右中', '左下', '下中', '右下'];
+    return labels[zone] || '';
+  }
+
+  private actionLabel_(action: number): string {
+    switch (action) {
+      case -1: return '无';
+      case 0: return '菜单';
+      case 1: return '下页';
+      case 2: return '上页';
+      case 3: return '下章';
+      case 4: return '上章';
+      default: return '无';
     }
   }
 
-  private cycleReadMode(): void {
-    this.readMode = (this.readMode + 1) % 3;
-    this.saveReadMode();
-    this.showMenu = false;
+  private cycleZoneAction_(zone: number): void {
+    const actions: number[] = [-1, 0, 1, 2, 3, 4];  // 无/菜单/下页/上页/下章/上章
+    const current: number = this.comicZoneActions[zone];
+    const idx: number = actions.indexOf(current);
+    const next: number = actions[(idx + 1) % actions.length];
+    const newActions: number[] = [...this.comicZoneActions];
+    newActions[zone] = next;
+    this.comicZoneActions = newActions;
+  }
+
+  private onRefresh(): void {
+    this.loadChapterImages(this.currentIndex).then(() => {
+      UiUtil.showToast(this.getUIContext(), { message: '已刷新', duration: 1500 });
+    });
+  }
+
+  private readModeLabel(): string {
+    switch (this.readMode) {
+      case READ_MODE_LEFT_TO_RIGHT: return '左->右';
+      case READ_MODE_RIGHT_TO_LEFT: return '右->左';
+      default: return '条漫';
+    }
   }
 }

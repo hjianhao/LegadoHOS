@@ -370,6 +370,31 @@ export class SettingsStore {
     await this.put(this.ZONE_KEYS_[zone], action);
   }
 
+  // ---- 漫画阅读设置 ----
+
+  /** 漫画阅读方向：0=条漫, 1=左->右, 2=右->左 */
+  async getComicReadMode(): Promise<number> { return await this.get('comic_read_mode', 0); }
+  async setComicReadMode(mode: number): Promise<void> { await this.put('comic_read_mode', mode); }
+
+  /** 漫画图片预加载数量 */
+  async getComicPreloadNum(): Promise<number> { return await this.get('comic_preload_num', 3); }
+  async setComicPreloadNum(n: number): Promise<void> { await this.put('comic_preload_num', n); }
+
+  /** 漫画触控区域 key 前缀 */
+  private readonly COMIC_ZONE_KEYS_: string[] = [
+    'comic_click_tl', 'comic_click_tc', 'comic_click_tr',
+    'comic_click_ml', 'comic_click_mc', 'comic_click_mr',
+    'comic_click_bl', 'comic_click_bc', 'comic_click_br',
+  ];
+  private readonly COMIC_DEFAULT_ACTIONS_: number[] = [4,2,3, 2,0,1, 2,1,1];
+
+  async getComicClickAction(zone: number): Promise<number> {
+    return await this.get(this.COMIC_ZONE_KEYS_[zone], this.COMIC_DEFAULT_ACTIONS_[zone]);
+  }
+  async setComicClickAction(zone: number, action: number): Promise<void> {
+    await this.put(this.COMIC_ZONE_KEYS_[zone], action);
+  }
+
   // ---- 备份/恢复设置 ----
 
   /** 导出所有设置键值 */
