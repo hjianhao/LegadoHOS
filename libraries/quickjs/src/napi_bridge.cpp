@@ -15,11 +15,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <thread>
+#include <chrono>
 
 #include "quickjs.h"
 #include "quickjs-libc.h"
 #include "napi/native_api.h"
 #include "node_api.h"
+#include "uv.h"
 
 // ============================================================
 // 全局状态管理
@@ -132,11 +134,16 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
   JS_FreeCString(ctx, url);
 
   // 等待请求完成（同步阻塞，JS 引擎单线程）
-  // 实际生产中应该使用异步方案，这里简化为同步
+  // 必须用 napi_get_uv_event_loop 获取 ArkTS 运行时的真实 libuv loop，
+  // uv_default_loop() 拿到的是 C++ 侧独立 loop，无法 pump RCP 的 Promise 回调
   int waited = 0;
   while (!req->completed && waited < timeout_ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    waited++;
+    uv_loop_t *loop = nullptr;
+    if (g_main_env && napi_get_uv_event_loop(g_main_env, &loop) == napi_ok && loop) {
+      uv_run(loop, UV_RUN_NOWAIT);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    waited += 2;
   }
 
   JSValue resp_obj = JS_NewObject(ctx);
@@ -266,11 +273,15 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
     napi_call_function(env, global, cb, 5, args, &result);
   }
 
-  // 等待完成...
+  // 等待完成...（同步阻塞，需处理事件循环避免死锁）
   int waited = 0;
   while (!req->completed && waited < timeout_ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    waited++;
+    uv_loop_t *loop = nullptr;
+    if (g_main_env && napi_get_uv_event_loop(g_main_env, &loop) == napi_ok && loop) {
+      uv_run(loop, UV_RUN_NOWAIT);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    waited += 2;
   }
 
   JSValue resp_obj = JS_NewObject(ctx);

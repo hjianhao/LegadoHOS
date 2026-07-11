@@ -79,13 +79,20 @@ export class HtmlParser {
         if (tagEnd === -1) break;
         const tagName = html.substring(pos + 2, tagEnd).trim().split(/\s+/)[0].toLowerCase();
 
-        // 从栈中找到匹配的开启标签
-        while (stack.length > 1) {
-          const last = stack.pop()!;
-          if (last.tagName === tagName) break;
+        // 从栈中找到匹配的开启标签，只弹出到匹配位置
+        // 避免不匹配的结束标签（如不规范的 </a>）弹出整个栈，破坏后续解析
+        let found = false;
+        for (let j = stack.length - 1; j > 0; j--) {
+          if (stack[j].tagName === tagName) {
+            while (stack.length > j) {
+              stack.pop();
+            }
+            found = true;
+            break;
+          }
         }
+        // 没找到匹配的开启标签 → 忽略该结束标签（浏览器行为）
         pos = tagEnd + 1;
-        // 关闭标签后的文本属于父元素
         continue;
       }
 
@@ -709,40 +716,52 @@ export class HtmlParser {
       if (!classes.includes(classMatch[1])) return false;
     }
 
-    // 基础选择器匹配后，检查伪类
-    if (pseudoType) {
-      const parent = el.parent;
-      if (!parent) return pseudoType === 'first' || pseudoType === 'last'; // root always matches :first/:last
-
-      // 收集符合条件的兄弟元素
-      let siblings: HtmlElement[];
-      if (pseudoType === 'nth-of-type') {
-        siblings = parent.children.filter(child => child.tagName === el.tagName);
-      } else {
-        siblings = parent.children;
-      }
-
-      const idx = siblings.indexOf(el);
-      if (idx < 0) return false;
-
-      const n = pseudoArg ? parseInt(pseudoArg) : 0;
-      switch (pseudoType) {
-        case 'nth-of-type':
-        case 'eq':
-          return idx === n - 1; // CSS :nth-of-type is 1-indexed, :eq(0) is 0-indexed
-        case 'first':
-          return idx === 0;
-        case 'last':
-          return idx === siblings.length - 1;
-      }
-    }
-
-    // 如果选择器只有 .class 或 #id（没有标签名），检查通过
-    if (!tagMatch || !tagMatch[1]) return true;
-
-    // 标签名匹配（包括通配符）
-    if (tagMatch[1] === '*') return true;
-    return el.tagName === tagMatch[1];
+	    // 基础选择器匹配后，检查伪类
+	    if (pseudoType) {
+	      const parent = el.parent;
+	      if (!parent) return pseudoType === 'first' || pseudoType === 'last'; // root always matches :first/:last
+	
+	      // 收集符合条件的兄弟元素
+	      let siblings: HtmlElement[];
+	      if (pseudoType === 'nth-of-type') {
+	        siblings = parent.children.filter(child => child.tagName === el.tagName);
+	      } else {
+	        siblings = parent.children;
+	      }
+	
+	      const idx = siblings.indexOf(el);
+	      if (idx < 0) return false;
+	
+	      const n = pseudoArg ? parseInt(pseudoArg) : 0;
+	      switch (pseudoType) {
+	        case 'nth-of-type':
+	        case 'eq':
+	          return idx === n - 1; // CSS :nth-of-type is 1-indexed, :eq(0) is 0-indexed
+	        case 'first':
+	          return idx === 0;
+	        case 'last':
+	          return idx === siblings.length - 1;
+	      }
+	    }
+	
+	    // 处理 tag[attr] 组合属性选择器（如 a[href*=...]、div[data-x=y]）
+	    // 注意: 纯 [attr] 已在前面 startsWith('[') 分支处理，这里只处理 tag[attr] 组合
+	    const attrSelStart = s.indexOf('[');
+	    if (attrSelStart >= 0) {
+	      const attrPart = s.substring(attrSelStart);
+	      // 检查该属性选择器是否在 [] 外部（排除已处理的伪类参数中的 [）
+	      // 对于合法 CSS 选择器，[ 必然在 tag 名之后，不会是第一个字符
+	      if (!this.matchAttrSelector(el, attrPart)) {
+	        return false;
+	      }
+	    }
+	
+	    // 如果选择器只有 .class 或 #id（没有标签名），检查通过
+	    if (!tagMatch || !tagMatch[1]) return true;
+	
+	    // 标签名匹配（包括通配符）
+	    if (tagMatch[1] === '*') return true;
+	    return el.tagName === tagMatch[1];
   }
 
   private matchAttrSelector(el: HtmlElement, selector: string): boolean {

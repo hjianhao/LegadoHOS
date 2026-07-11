@@ -19,23 +19,41 @@ export class NetUtil {
   private static proxyHost: string = '';
   private static proxyPort: number = 0;
 
+  // ========== 配置变更标记（DNS/Proxy 变更后需重建 session） ==========
+  private static configVersion: number = 0;
+  private static sessionConfigVersion: number = -1;
+
   // ========== 公共配置方法 ==========
 
   static setDns(servers: string, enabled: boolean = true): void {
     NetUtil.dnsServers = servers;
     NetUtil.dnsEnabled = enabled;
+    NetUtil.configVersion++;
     console.info('[NetUtil] DNS set:', servers, 'enabled:', enabled);
   }
 
   static setProxy(host: string, port: number): void {
     NetUtil.proxyHost = host;
     NetUtil.proxyPort = port;
+    NetUtil.configVersion++;
     console.info('[NetUtil] Proxy set:', host, port);
   }
 
   static clearProxy(): void {
     NetUtil.proxyHost = '';
     NetUtil.proxyPort = 0;
+    NetUtil.configVersion++;
+  }
+
+  /** 获取当前 DNS/Proxy 配置快照（供 Worker 使用） */
+  static getNetworkConfig(): { dnsServers: string; dnsEnabled: boolean; proxyHost: string; proxyPort: number; timeout: number } {
+    return {
+      dnsServers: NetUtil.dnsServers,
+      dnsEnabled: NetUtil.dnsEnabled,
+      proxyHost: NetUtil.proxyHost,
+      proxyPort: NetUtil.proxyPort,
+      timeout: NetUtil.getDefaultTimeout(),
+    };
   }
 
   // ========== HTTP 请求 ==========
@@ -79,8 +97,9 @@ export class NetUtil {
 
   private static getSession(timeout: number): rcp.Session {
     try {
-      // 超时时间变了就重建 session
-      if (NetUtil.session_ && NetUtil.sessionTimeout_ !== timeout) {
+      // 超时或 DNS/Proxy 配置变更时重建 session
+      if (NetUtil.session_ && (NetUtil.sessionTimeout_ !== timeout || NetUtil.sessionConfigVersion !== NetUtil.configVersion)) {
+        try { NetUtil.session_.close(); } catch (_) { /* ignore */ }
         NetUtil.session_ = null;
       }
       if (!NetUtil.session_) {
@@ -91,16 +110,37 @@ export class NetUtil {
             max: 'TlsV1.3' as rcp.TlsVersion
           }
         };
-        const cfg: rcp.SessionConfiguration = {
-          requestConfiguration: {
-            transfer: {
-              timeout: { connectMs: timeout, transferMs: timeout }
-            },
-            security: secCfg
-          }
+
+        // 构建 Configuration，应用 DNS 和 Proxy
+        const cfg: rcp.Configuration = {
+          transfer: {
+            timeout: { connectMs: timeout, transferMs: timeout }
+          },
+          security: secCfg
         };
-        NetUtil.session_ = rcp.createSession(cfg);
+
+        // DNS 配置：dnsRules 为 IpAndPort[] (DnsServers)
+        if (NetUtil.dnsEnabled && NetUtil.dnsServers) {
+          const dnsList = NetUtil.dnsServers.split(',').map(s => s.trim()).filter(s => s);
+          if (dnsList.length > 0) {
+            const dnsServers: rcp.IpAndPort[] = dnsList.map(ip => ({ ip: ip, port: 53 }));
+            cfg.dns = { dnsRules: dnsServers } as rcp.DnsConfiguration;
+            console.info('[NetUtil] DNS applied:', dnsList.join(','));
+          }
+        }
+
+        // Proxy 配置：ProxyConfiguration = 'system' | 'no-proxy' | WebProxy
+        if (NetUtil.proxyHost && NetUtil.proxyPort > 0) {
+          cfg.proxy = { url: 'http://' + NetUtil.proxyHost + ':' + NetUtil.proxyPort } as rcp.WebProxy;
+          console.info('[NetUtil] Proxy applied:', NetUtil.proxyHost + ':' + NetUtil.proxyPort);
+        }
+
+        const sessionCfg: rcp.SessionConfiguration = {
+          requestConfiguration: cfg
+        };
+        NetUtil.session_ = rcp.createSession(sessionCfg);
         NetUtil.sessionTimeout_ = timeout;
+        NetUtil.sessionConfigVersion = NetUtil.configVersion;
         console.info('[NetUtil] Session created, timeout:', timeout, 'ms');
       }
       return NetUtil.session_;

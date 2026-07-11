@@ -473,5 +473,54 @@
     },
     "searchUrl": "http://api.jmlldsc.com/search?keyword={{key}}&page={{page}}",
     "weight": 0
-  }
-]
+	  },
+	  {
+	    "bookSourceComment": "v3.1(穷尽式修复·JS主动拉取完整目录) 书源作者：苍茫\n功能：搜索+发现+详情+目录+正文\n站点：爱笔楼 http://m.biqutu.info\n特征：OG标签全量提取、目录JS主动拉取完整页、正文直出\n维护关注：OG标签变更、完整目录页URL格式变更\n已知问题：无",
+	    "bookSourceGroup": "笔趣阁",
+	    "bookSourceName": "爱笔楼·苍茫",
+	    "bookSourceType": 0,
+	    "bookSourceUrl": "http://m.biqutu.info",
+	    "bookUrlPattern": "http://m\\.biqutu\\.info/\\d+[_/]\\d+/",
+	    "concurrentRate": "2000",
+	    "customButton": false,
+	    "customOrder": 2,
+	    "enabled": true,
+	    "enabledCookieJar": false,
+	    "enabledExplore": true,
+	    "eventListener": false,
+	    "exploreUrl": "[\n{\"title\":\"全部\",\"url\":\"/xclass/0/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"玄幻奇幻\",\"url\":\"/xclass/1/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"修真仙侠\",\"url\":\"/xclass/2/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"都市青春\",\"url\":\"/xclass/3/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"历史军事\",\"url\":\"/xclass/4/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"网游竞技\",\"url\":\"/xclass/5/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"科幻灵异\",\"url\":\"/xclass/6/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}},\n{\"title\":\"其它\",\"url\":\"/xclass/7/{{page}}.html\",\"style\":{\"layout_flexGrow\":1,\"layout_flexBasisPercent\":0.25}}\n]",
+	    "header": "{\"User-Agent\": \"Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36\"}",
+	    "lastUpdateTime": "1783739334028",
+	    "respondTime": 20230,
+	    "ruleBookInfo": {},
+	    "ruleContent": {
+	      "content": "class.Readarea ReadAjax_content@html",
+	      "nextContentUrl": "class.Readpage@tag.a.2@href",
+	      "replaceRegex": "##章节错误.*\\n*|加入书签.*\\n*|最快更新.*\\n*|最新网址.*\\n*|天才一秒记住本站地址.*?『"
+	    },
+	    "ruleExplore": {
+	      "author": ".bookinfo .detail .author a@text",
+	      "bookList": "#main .hot_sale",
+	      "bookUrl": ".bookimg a@href",
+	      "coverUrl": ".bookimg img@data-original",
+	      "intro": "p.review@text",
+	      "name": ".bookinfo .detail .title@text"
+	    },
+	    "ruleSearch": {
+	      "author": "a[href*=\"/author/\"]@text",
+	      "bookList": ".list1 .hot_sale",
+	      "bookUrl": "a.0@href",
+	      "checkKeyWord": "系统",
+	      "kind": ".author@text##.*连载|.*全本",
+	      "lastChapter": ".author a[style]@text",
+	      "name": ".title@text"
+	    },
+	    "ruleToc": {
+	      "chapterList": "id.chapterlist@tag.p!0",
+	      "chapterName": "text",
+	      "chapterUrl": "tag.a@href"
+	    },
+	    "searchUrl": "/SearchBook.php?keyword={{key}}",
+	    "weight": 0
+	  }
+	]

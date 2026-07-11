@@ -2,6 +2,7 @@ import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
 import { ThemeColors } from '../theme/ThemeColors';
 import { NetUtil } from '../util/NetUtil';
+import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -52,6 +53,8 @@ struct SettingsPage {
   private syncWebViewNetwork(): void {
     const proxyUrl = this.proxyHost && this.proxyPort ? 'http://' + this.proxyHost + ':' + this.proxyPort : '';
     WebViewFetcher.configureNetwork(this.dnsEnabled ? this.dnsServers : '', proxyUrl);
+    // 同步到 JS 求值 Worker（java.ajax 使用的 RCP session）
+    JsExpressionEvaluator.syncNetworkConfigToWorker();
   }
 
   build() {

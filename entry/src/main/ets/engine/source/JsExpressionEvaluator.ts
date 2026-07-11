@@ -12,13 +12,29 @@
 import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
 import { getPolyfillScript, getAjaxPolyfill } from './ScriptApi';
+import { NetUtil } from '../../util/NetUtil';
 
 // Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
 let cachedPolyfill_: string | null = null;
 let cachedAjaxPolyfill_: string | null = null;
 function getPolyfillForWorker(): string {
   if (!cachedPolyfill_) {
-    cachedPolyfill_ = getPolyfillScript();
+    // QuickJS 引擎没有 console 对象，需要先注入 console shim
+    // 否则 polyfill 中大量的 console.log() 会抛出 ReferenceError
+    const consoleShim = `
+(function() {
+  if (typeof console === 'undefined') {
+    globalThis.console = {
+      log: function() {},
+      info: function() {},
+      warn: function() {},
+      error: function() {},
+      debug: function() {}
+    };
+  }
+})();
+`;
+    cachedPolyfill_ = consoleShim + '\n' + getPolyfillScript();
   }
   if (!cachedAjaxPolyfill_) {
     cachedAjaxPolyfill_ = getAjaxPolyfill();
@@ -140,6 +156,8 @@ export class JsExpressionEvaluator {
       this.workerReady = ok;
       if (ok) {
         console.info('[JsEval] Worker initialized successfully');
+        // 同步网络配置（DNS/Proxy/超时）到 Worker
+        this.syncNetworkConfigToWorker();
       } else {
         console.warn('[JsEval] Worker init failed (timeout), falling back');
         this.terminateWorker();
@@ -198,6 +216,17 @@ export class JsExpressionEvaluator {
       this.workerInstance = null;
       this.workerReady = false;
     }
+  }
+
+  /**
+   * 同步网络配置（DNS/Proxy/超时）到 Worker
+   * 在 Worker 初始化后和网络设置变更时调用
+   */
+  static syncNetworkConfigToWorker(): void {
+    if (!this.workerInstance) return;
+    const cfg = NetUtil.getNetworkConfig();
+    this.workerInstance.postMessage({ type: 'config', config: cfg });
+    console.info('[JsEval] Network config synced to Worker: dns=', cfg.dnsEnabled, 'proxy=', cfg.proxyHost || 'none', 'timeout=', cfg.timeout);
   }
 
   /**
@@ -407,23 +436,47 @@ export class JsExpressionEvaluator {
       parts.push(`var baseUrl=${JSON.stringify(ctx.baseUrl)};`);
     }
 
-    // source 对象
+    // source 对象 — 注入所有字段，与 Legado Android 一致
+    // 安卓版直接把整个 BookSource Java 对象注入 Rhino（FEATURE_ENABLE_JAVA_MAP_ACCESS）
+    // 所以 JS 可访问 source 的所有字段; 我们逐个字段注入保持兼容
     if (ctx.source !== undefined) {
-      const src = ctx.source;
+      const src = ctx.source as Record<string, unknown>;
       const srcObj: Record<string, unknown> = {};
-      // source.key = 书源 URL（Legado 兼容，string 属性）
-      if (src.sourceUrl) {
-        srcObj['sourceUrl'] = src.sourceUrl;
-        srcObj['key'] = src.sourceUrl;        // source.key 是字符串，不是函数
+
+      // 安卓版使用 bookSourceUrl/bookSourceName 等 JSON 原字段名，
+      // 我们的 ArkTS 接口使用 sourceUrl/sourceName，加别名
+      const aliasMap: Record<string, string[]> = {
+        sourceUrl: ['bookSourceUrl'],
+        sourceName: ['bookSourceName'],
+        group: ['bookSourceGroup', 'sourceGroup'],
+        sourceType: ['bookSourceType'],
+      };
+
+      for (const key of Object.keys(src)) {
+        const val = src[key];
+        if (val === undefined || val === null) continue;
+        if (typeof val === 'string') {
+          if (!val) continue; // 跳过空字符串
+          srcObj[key] = val;
+          const aliases = aliasMap[key];
+          if (aliases) for (const alias of aliases) srcObj[alias] = val;
+        } else if (typeof val === 'number' || typeof val === 'boolean') {
+          srcObj[key] = val;
+          const aliases = aliasMap[key];
+          if (aliases) for (const alias of aliases) srcObj[alias] = val;
+        }
       }
-      if (src.sourceName) srcObj['sourceName'] = src.sourceName;
-      if (src.header) srcObj['header'] = src.header;
+      // 保证 source.key 始终存在（Legado JS 兼容）
+      if (!srcObj['key']) {
+        srcObj['key'] = srcObj['sourceUrl'] || srcObj['bookSourceUrl'] || '';
+      }
+
       // source 序列化为 JSON 后注入，再添加方法
       parts.push(`var source=${JSON.stringify(srcObj)};`);
       // getKey() — URL-encoded source URL，用于 cookie 操作
-      parts.push(`if(typeof source.getKey==='undefined')source.getKey=function(){return encodeURIComponent(source.sourceUrl||'');};`);
+      parts.push(`if(typeof source.getKey==='undefined')source.getKey=function(){return encodeURIComponent(source.sourceUrl||source.bookSourceUrl||'');};`);
       // getUrl() — 返回 sourceUrl（兼容）
-      parts.push(`if(typeof source.getUrl==='undefined')source.getUrl=function(){return source.sourceUrl||'';};`);
+      parts.push(`if(typeof source.getUrl==='undefined')source.getUrl=function(){return source.sourceUrl||source.bookSourceUrl||'';};`);
     }
 
     // 注入自定义额外变量

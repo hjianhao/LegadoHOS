@@ -331,6 +331,7 @@ export class SourceExecutor {
 
         // 2. 过滤无效结果
         if (!isValidBookName(cleanName)) {
+          console.info('[SrcEx] Filtered out: name="' + rawName + '" clean="' + cleanName + '" author="' + rawAuthor + '" from', r.origin);
           continue;
         }
 
@@ -417,9 +418,13 @@ export class SourceExecutor {
     const runOneSource = async (source: BookSource): Promise<void> => {
       if (!source.enabled || !source.ruleSearchUrl) return;
       try {
-        const results = await this.searchWithTimeout(keyword, source, 20000, page);
+        const searchTimeout = NetUtil.getDefaultTimeout();
+        const results = await this.searchWithTimeout(keyword, source, searchTimeout, page);
+        console.info('[SrcEx] searchWithTimeout returned', results.length, 'results for', source.sourceName);
         incrementMerge(results);
+        console.info('[SrcEx] After merge, mergedMap size=', mergedMap.size, 'for', source.sourceName);
       } catch (_e) {
+        console.warn('[SrcEx] searchWithTimeout threw for', source.sourceName, ':', (_e as Error).message);
         // 单个源失败/超时不影响其他源
       } finally {
         processedCount++;
@@ -619,9 +624,9 @@ export class SourceExecutor {
             headers['Content-Type'] = 'application/x-www-form-urlencoded';
           }
         }
-        bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', headers, 15000);
+        bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', headers);
       } else {
-        bodyText = await NetUtil.httpGet(finalUrl, headers, 15000);
+        bodyText = await NetUtil.httpGet(finalUrl, headers);
       }
       if (!bodyText) {
         console.warn('[SrcEx] Empty response from', source.sourceName);
@@ -858,11 +863,25 @@ export class SourceExecutor {
       url = jm[1];
     }
     console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(headers).substring(0, 200));
-    if (method === 'POST') {
-      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-      return await NetUtil.httpPost(url, body, headers, timeout);
+    try {
+      if (method === 'POST') {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        return await NetUtil.httpPost(url, body, headers, timeout);
+      }
+      return await NetUtil.httpGet(url, headers, timeout);
+    } catch (err) {
+      const msg = (err as Error).message || '';
+      // RCP 并发取消错误，重试一次
+      if (msg.includes('canceled') || msg.includes('Cancelled')) {
+        console.info('[SrcEx] fetchWithOpts canceled, retrying once:', url.substring(0, 60));
+        await new Promise(r => setTimeout(r, 100));
+        if (method === 'POST') {
+          return await NetUtil.httpPost(url, body, headers, timeout);
+        }
+        return await NetUtil.httpGet(url, headers, timeout);
+      }
+      throw err;
     }
-    return await NetUtil.httpGet(url, headers, timeout);
   }
 
   // ============ 书籍详情 ============
@@ -909,7 +928,7 @@ export class SourceExecutor {
         kind: extractField(source.ruleBookInfoKind) || '',
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
-        tocUrl: extractField(source.ruleBookInfoTocUrl) || '',
+        tocUrl: this.resolvePageUrl(extractField(source.ruleBookInfoTocUrl) || '', noteUrl),
         chapters: [] as BookSourceChapter[],
       };
     } catch (_e) {
@@ -1311,6 +1330,10 @@ export class SourceExecutor {
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
     }
+    // 协议相对 URL 补全（//www.example.com -> https://www.example.com）
+    if (tocUrl.startsWith('//')) {
+      tocUrl = 'https:' + tocUrl;
+    }
     if (!tocUrl) return [];
     console.info('[SrcEx] getToc URL:', tocUrl.substring(0, 80));
 
@@ -1515,7 +1538,7 @@ export class SourceExecutor {
           } catch (_je) { /* fallback */ }
         }
         if (chapters.length === 0) {
-          chapters = this.parseTocFromRules(bodyText, tocRules, tocUrl);
+          chapters = this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
         }
         // 去重
         const seen = new Set<string>();
@@ -1595,9 +1618,12 @@ export class SourceExecutor {
         const doc = parser.parse(bodyText);
         const cssRule = this.normalizeCssRule(source.ruleBookInfoTocUrl);
         const tocPageUrl = parser.extractAttr(doc, cssRule);
-        if (tocPageUrl && tocPageUrl.startsWith('http') && tocPageUrl !== tocUrl) {
-          console.info('[SrcEx] getToc resolve ruleBookInfoTocUrl CSS:', tocPageUrl.substring(0, 80));
-          const altResp = await this.fetchWithOpts(tocPageUrl, {
+        if (tocPageUrl && tocPageUrl !== tocUrl) {
+          // 协议相对 URL 补全
+          const resolvedTocUrl = tocPageUrl.startsWith('//') ? 'https:' + tocPageUrl : tocPageUrl;
+          if (resolvedTocUrl.startsWith('http')) {
+            console.info('[SrcEx] getToc resolve ruleBookInfoTocUrl CSS:', resolvedTocUrl.substring(0, 80));
+          const altResp = await this.fetchWithOpts(resolvedTocUrl, {
             'Accept': 'text/html,application/json,*/*',
             'Referer': source.sourceUrl || '',
             ...parseHeader(source.header)
@@ -1611,21 +1637,59 @@ export class SourceExecutor {
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
-              altChapters = this.parseTocFromRules(altResp, tocRules, tocPageUrl);
+              altChapters = this.parseTocFromRules(altResp, tocRules, resolvedTocUrl, source);
             }
             if (altChapters.length > 0) {
-              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', tocPageUrl.substring(0, 60));
+              console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', resolvedTocUrl.substring(0, 60));
               return altChapters.map(ch => ({
                 ...ch,
-                url: this.resolveTocUrlTemplate(ch.url, tocPageUrl) || ch.url,
+                url: this.resolveTocUrlTemplate(ch.url, resolvedTocUrl) || ch.url,
               }));
             }
+          }
           }
         }
       }
     } catch (err) {
       const msg = (err as Error).message;
       console.warn('[SrcEx] getToc failed:', msg);
+      // "Request is canceled" 是 RCP 并发导致的临时错误，重试一次
+      if (msg.includes('canceled') || msg.includes('Cancelled')) {
+        console.info('[SrcEx] getToc retrying after cancel...');
+        try {
+          const headers: Record<string, string> = {
+            'Accept': 'text/html,application/json,*/*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': tocUrl,
+            ...parseHeader(source.header)
+          };
+          const retryResp = await this.fetchWithOpts(tocUrl, headers);
+          if (retryResp && retryResp.length > 100) {
+            console.info('[SrcEx] getToc retry got', retryResp.length, 'bytes');
+            // 重新走完整解析流程
+            const retryTocBodies: string[] = [retryResp];
+            const retryBodyText = retryTocBodies.join('\n');
+            let retryTocListRule = source.ruleToc || '';
+            if (retryTocListRule.startsWith('-')) {
+              retryTocListRule = retryTocListRule.substring(1);
+            } else if (retryTocListRule.startsWith('+')) {
+              retryTocListRule = retryTocListRule.substring(1);
+            }
+            const retryTocRules: Record<string, string> = {
+              toc: retryTocListRule,
+              tocTitle: source.ruleTocTitle || '',
+              tocUrlItem: source.ruleTocUrlItem || '',
+            };
+            if (retryTocRules.toc) {
+              let retryChapters = this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
+              if (retryChapters.length > 0) {
+                console.info('[SrcEx] getToc retry OK:', retryChapters.length, 'chapters');
+                return retryChapters;
+              }
+            }
+          }
+        } catch (_r) { /* retry failed, fall through */ }
+      }
       // WebView 回退（Cloudflare 等反爬保护）
       if ((msg.includes('403') || msg.includes('Cloudflare') || msg.includes('503') || msg.includes('page not found')) && WebViewFetcher.isReady()) {
         console.info('[SrcEx] getToc trying WebView for', tocUrl.substring(0, 60));
@@ -1639,7 +1703,7 @@ export class SourceExecutor {
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
             };
-            const wvChapters = this.parseTocFromRules(wvHtml, wvTocRules, tocUrl);
+            const wvChapters = this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
               console.info('[SrcEx] getToc WebView OK:', wvChapters.length, 'chapters');
               return wvChapters;
@@ -1805,8 +1869,19 @@ export class SourceExecutor {
       'tfoot','h1','h2','h3','h4','h5','h6','img','dl','dt','dd','em','strong','b','i','u','s','br','hr',
       'form','input','button','select','option','textarea','label','pre','code','blockquote','section','nav',
       'header','footer','article','aside','main','figure','figcaption','video','audio','source','iframe']);
-    // 1. id.xxx → #xxx
-    let normalized = rule.replace(/\bid\.([\w-]+)/g, '#$1');
+    // 0. Legado class.xxx yyy -> .xxx.yyy (class 前缀 + 空格分隔多类名)
+    //    例如 class.Readarea ReadAjax_content@html -> .Readarea.ReadAjax_content@html
+    //    注意：class. 后面可能包含空格分隔的多个类名，需要匹配到 @ 或行尾
+    let normalized = rule.replace(/\bclass\.([^@\n]+)/g, (match, classNames) => {
+      // 去掉末尾可能的空白
+      classNames = classNames.trim();
+      return classNames.split(/\s+/).map(c => '.' + c).join('');
+    });
+    // 0.4. Legado tag.xxx -> xxx (tag 前缀表示 HTML 标签)
+    //    例如 tag.a -> a, tag.p -> p, tag.div -> div
+    normalized = normalized.replace(/\btag\.(\w[\w-]*)/g, '$1');
+    // 0.5. Legado id.xxx -> #xxx
+    normalized = normalized.replace(/\bid\.([\w-]+)/g, '#$1');
     // 2. @@class →  .class (Legado 简写)
     normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
     // 2.4. Legado 范围选择器: tag.N:M → tag.N||tag.M, tag.N:M:O → tag.N||tag.M||tag.O
@@ -1820,7 +1895,9 @@ export class SourceExecutor {
         return indices.map(i => sel + '.' + i).join('||');
       });
     // 2.5. 保留 Legado .N / !N 位置索引，HtmlParser 会在选择阶段处理。
-    // 3. @后跟标签名 → 空格 + 标签名（后代）
+    // 3. @后跟标签名 -> 空格 + 标签名（后代）
+    //    Legado tag.xxx 语法: @tag.p -> p, @tag.a -> a
+    normalized = normalized.replace(/@tag\.(\w[\w-]*)/g, ' $1');
     normalized = normalized.replace(/@(\w[\w-]*)/g, (match: string, afterAt: string) => {
       if (htmlTags.has(afterAt.toLowerCase())) return ' ' + afterAt;
       if (afterAt.startsWith('.')) return ' ' + afterAt;
@@ -2651,14 +2728,28 @@ export class SourceExecutor {
   /**
    * 从规则解析目录列表
    */
-  private parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string): BookSourceChapter[] {
+  private parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string, source?: BookSource): BookSourceChapter[] {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
 
     const parser = getHtmlParser();
     const doc = parser.parse(html);
-    const items = parser.querySelectorAll(doc, this.normalizeCssRule(tocRule));
-    if (!items || items.length === 0) return [];
+    // ruleToc 支持 || 连接器，逐个尝试
+    const { rules: tocRuleParts, connector } = splitConnectorRules(tocRule.trim());
+    let items: HtmlElement[] = [];
+    for (const part of tocRuleParts) {
+      const normalized = this.normalizeCssRule(part);
+      const found = parser.querySelectorAll(doc, normalized);
+      if (found && found.length > 0) {
+        items = found;
+        console.info('[SrcEx] parseToc CSS matched: rule="' + part + '" norm="' + normalized + '" count=' + items.length);
+        break;
+      }
+    }
+    if (!items || items.length === 0) {
+      console.info('[SrcEx] parseToc CSS 0 items for rule:', tocRule);
+      return [];
+    }
 
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
@@ -2674,6 +2765,19 @@ export class SourceExecutor {
           cleanRule = parts[0];
           postProcessors = parts.slice(1);
         }
+        // 处理 \n@js: 后缀（Legado 语法：先提取前面的规则，再用 JS 后处理 result）
+        let jsPostProcess = '';
+        const jsIdx = cleanRule.indexOf('\n@js:');
+        if (jsIdx >= 0) {
+          jsPostProcess = cleanRule.substring(jsIdx + 5); // 去掉 \n，保留 @js:code
+          cleanRule = cleanRule.substring(0, jsIdx).trim();
+        }
+        // 也处理 @js: 不带换行的情况
+        const jsIdx2 = cleanRule.indexOf('@js:');
+        if (jsIdx2 >= 0) {
+          jsPostProcess = cleanRule.substring(jsIdx2);
+          cleanRule = cleanRule.substring(0, jsIdx2).trim();
+        }
         let result = '';
         if (cleanRule === 'text') {
           result = item.text || '';
@@ -2685,6 +2789,11 @@ export class SourceExecutor {
           result = item.innerHtml || '';
         } else if (cleanRule) {
           result = parser.extractAttr(item, this.normalizeCssRule(cleanRule));
+        }
+        // 应用 @js: 后处理（通过 JsExpressionEvaluator.processJsResult）
+        if (jsPostProcess && result) {
+          const processed = JsExpressionEvaluator.processJsResult(jsPostProcess, result, { source: source });
+          if (processed) result = processed;
         }
         // 应用 ## 后缀 post-processing
         for (const proc of postProcessors) {
@@ -2788,8 +2897,12 @@ export class SourceExecutor {
         // 相对路径转绝对
         if (!linkUrl.startsWith('http://') && !linkUrl.startsWith('https://')) {
           const before = linkUrl;
-          linkUrl = (baseUrl || '') + (linkUrl.startsWith('/') ? linkUrl : '/' + linkUrl);
-          console.info('[SrcEx] extractTocFromHtml URL resolved:', before, '→', linkUrl);
+          if (linkUrl.startsWith('//')) {
+            linkUrl = 'https:' + linkUrl;
+          } else {
+            linkUrl = (baseUrl || '') + (linkUrl.startsWith('/') ? linkUrl : '/' + linkUrl);
+          }
+          console.info('[SrcEx] extractTocFromHtml URL resolved:', before, '->', linkUrl);
         }
 
         chapters.push({ title: title, url: linkUrl, index: chapters.length });

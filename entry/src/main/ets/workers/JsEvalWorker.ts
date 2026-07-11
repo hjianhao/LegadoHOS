@@ -15,6 +15,42 @@ declare function requireNapi(name: string): object;
 
 // ============ RCP HTTP 工具 ============
 
+// Worker 侧的网络配置（由主线程通过 postMessage 同步）
+let workerDnsServers: string = '';
+let workerDnsEnabled: boolean = false;
+let workerProxyHost: string = '';
+let workerProxyPort: number = 0;
+let workerTimeout: number = 60000;
+let rcpSession: rcp.Session | null = null;
+let rcpConfigVersion: number = 0;
+
+function getRcpSession(): rcp.Session {
+  // 配置变更时重建 session
+  if (rcpSession) {
+    return rcpSession;
+  }
+  const cfg: rcp.Configuration = {
+    transfer: {
+      timeout: { connectMs: workerTimeout, transferMs: workerTimeout }
+    }
+  };
+  // DNS
+  if (workerDnsEnabled && workerDnsServers) {
+    const dnsList = workerDnsServers.split(',').map(s => s.trim()).filter(s => s);
+    if (dnsList.length > 0) {
+      const dnsServers: rcp.IpAndPort[] = dnsList.map(ip => ({ ip: ip, port: 53 }));
+      cfg.dns = { dnsRules: dnsServers } as rcp.DnsConfiguration;
+    }
+  }
+  // Proxy
+  if (workerProxyHost && workerProxyPort > 0) {
+    cfg.proxy = { url: 'http://' + workerProxyHost + ':' + workerProxyPort } as rcp.WebProxy;
+  }
+  rcpSession = rcp.createSession({ requestConfiguration: cfg });
+  console.info('[JsWorker] RCP session created, timeout:', workerTimeout, 'dns:', workerDnsEnabled, 'proxy:', workerProxyHost || 'none');
+  return rcpSession;
+}
+
 async function httpRequest(url: string, method: string, headers: Record<string, string>, body?: string): Promise<string> {
   try {
     if (!headers['User-Agent']) {
@@ -25,7 +61,7 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
     }
     const reqHeaders = headers as rcp.RequestHeaders;
     const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
-    const response = await rcp.createSession().fetch(request);
+    const response = await getRcpSession().fetch(request);
     if (response.body === undefined || response.body === null) return '';
     const uint8 = new Uint8Array(response.body);
     const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
@@ -152,6 +188,24 @@ try {
       initialized = false;
       engineId = -1;
       parentPort.postMessage({ type: 'destroy_done' });
+    } else if (msg.type === 'config') {
+      // 同步网络配置（DNS/Proxy/超时）到 Worker
+      const c = msg.config;
+      if (c) {
+        const oldVersion = rcpConfigVersion;
+        workerDnsServers = c.dnsServers || '';
+        workerDnsEnabled = !!c.dnsEnabled;
+        workerProxyHost = c.proxyHost || '';
+        workerProxyPort = c.proxyPort || 0;
+        workerTimeout = c.timeout || 60000;
+        rcpConfigVersion++;
+        // 配置变了就销毁旧 session，下次请求时重建
+        if (rcpSession && rcpConfigVersion !== oldVersion) {
+          try { rcpSession.close(); } catch (_) { /* ignore */ }
+          rcpSession = null;
+        }
+        console.info('[JsWorker] Network config updated: dns=', workerDnsEnabled, 'proxy=', workerProxyHost || 'none', 'timeout=', workerTimeout);
+      }
     }
   };
 } catch (_e) { /* ignore setup errors */ }

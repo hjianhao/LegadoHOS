@@ -462,20 +462,22 @@ export class BookSourceTable {
           source.ruleTocNextTocUrl = fixed.ruleTocNextTocUrl;
           source.ruleBookContentReplaceRegex = fixed.ruleBookContentReplaceRegex;
           if (!source.ruleBookContentNext) source.ruleBookContentNext = fixed.ruleBookContentNext;
-          // 恢复 ruleExplore*（发现页规则）
-          if (fixed.ruleExploreList && !source.ruleExploreList) {
-            source.ruleExploreList = fixed.ruleExploreList;
-            source.ruleExploreName = fixed.ruleExploreName;
-            source.ruleExploreAuthor = fixed.ruleExploreAuthor;
-            source.ruleExploreCover = fixed.ruleExploreCover;
-            source.ruleExploreKind = fixed.ruleExploreKind;
-            source.ruleExploreWordCount = fixed.ruleExploreWordCount;
-            source.ruleExploreLastChapter = fixed.ruleExploreLastChapter;
-            source.ruleExploreLastUpdateTime = fixed.ruleExploreLastUpdateTime;
-            source.ruleExploreNoteUrl = fixed.ruleExploreNoteUrl;
-            source.ruleExploreIntroduce = fixed.ruleExploreIntroduce;
-          }
-        } catch (_e) { /* ignore parse errors */ }
+	          // 恢复 ruleExplore*（发现页规则）
+	          if (fixed.ruleExploreList && !source.ruleExploreList) {
+	            source.ruleExploreList = fixed.ruleExploreList;
+	            source.ruleExploreName = fixed.ruleExploreName;
+	            source.ruleExploreAuthor = fixed.ruleExploreAuthor;
+	            source.ruleExploreCover = fixed.ruleExploreCover;
+	            source.ruleExploreKind = fixed.ruleExploreKind;
+	            source.ruleExploreWordCount = fixed.ruleExploreWordCount;
+	            source.ruleExploreLastChapter = fixed.ruleExploreLastChapter;
+	            source.ruleExploreLastUpdateTime = fixed.ruleExploreLastUpdateTime;
+	            source.ruleExploreNoteUrl = fixed.ruleExploreNoteUrl;
+	            source.ruleExploreIntroduce = fixed.ruleExploreIntroduce;
+	          }
+	          // 恢复 bookSourceComment（书源注释，包含可执行 JS 如 筛选="普通"）
+	          if (fixed.bookSourceComment) source.bookSourceComment = fixed.bookSourceComment;
+	        } catch (_e) { /* ignore parse errors */ }
       }
 
       sources.push(source);

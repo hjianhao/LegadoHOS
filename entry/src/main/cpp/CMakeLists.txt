@@ -50,6 +50,7 @@ add_library(quickjs_bridge SHARED ${QUICKJS_SOURCES})
 target_link_libraries(quickjs_bridge
     PUBLIC
     ${ACE_NAPI_LIB}
+    uv
     c++
     c
     m

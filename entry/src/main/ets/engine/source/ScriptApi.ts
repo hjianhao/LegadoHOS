@@ -270,12 +270,13 @@ export function getPolyfillScript(): string {
         return Base64.decode(String(str));
       };
     }
-    if (!_j.ajax) {
-      _j.ajax = function(url) {
-        console.log('[Polyfill] java.ajax called: ' + String(url).substring(0, 80));
-        return '';
-      };
-    }
+	    if (!_j.ajax) {
+	      _j.ajax = function(url) {
+	        console.log('[Polyfill] java.ajax called: ' + String(url).substring(0, 80));
+	        return '';
+	      };
+	      _j.ajax._isMock = true; // 标记为 mock，让 getAjaxPolyfill 替换为真实实现
+	    }
     if (!_j.longToast) {
       _j.longToast = function(msg) {
         console.log('[java.longToast] ' + msg);
@@ -286,13 +287,18 @@ export function getPolyfillScript(): string {
         console.log('[java.toast] ' + msg);
       };
     }
-    if (!_j.startBrowser) {
-      _j.startBrowser = function(url, title) {
-        console.log('[java.startBrowser] ' + (title || '') + ': ' + url);
-      };
-    }
-  }
-})();
+	    if (!_j.startBrowser) {
+	      _j.startBrowser = function(url, title) {
+	        console.log('[java.startBrowser] ' + (title || '') + ': ' + url);
+	      };
+	    }
+	    if (!_j.log) {
+	      _j.log = function(msg) {
+	        console.log('[java.log] ' + String(msg));
+	      };
+	    }
+	  }
+	})();
 
 // --- getVariable / setVariable 兼容 ---
 (function() {
@@ -385,10 +391,89 @@ export function getPolyfillScript(): string {
   }
 })();
 
-console.log('[Polyfill] Legado compatibility layer loaded');
+	// --- org.jsoup Jsoup.parse 兼容 shim ---
+	// 很多书源用 Jsoup.parse(html).select(".class").attr("attr") 提取页面元素
+	(function() {
+	  if (typeof org === 'undefined') {
+	    globalThis.org = {
+	      jsoup: {
+	        Jsoup: {
+	          parse: function(html) {
+	            return {
+	              // select 返回一个最小 Elements 对象，支持 .attr / .text / .eq / .first
+	              select: function(css) {
+	                var items = [];
+	                // 只支持 .className 选择器：用正则从 HTML 中提取匹配的标签
+	                if (css && css.indexOf('.') === 0) {
+	                  var cls = css.substring(1);
+	                  // 去掉伪类如 :eq(0)
+	                  var colonIdx = cls.indexOf(':');
+	                  if (colonIdx > 0) cls = cls.substring(0, colonIdx);
+	                  try {
+	                    // 构建匹配 class="...className..." 的正则
+	                    var re = new RegExp('<([a-zA-Z0-9]+)[^>]*\\sclass\\s*=\\s*"[^"]*\\b' + cls + '\\b[^"]*"[^>]*>', 'gi');
+	                    var m;
+	                    while ((m = re.exec(html)) !== null) {
+	                      (function(tagMatch, fullTag, pos) {
+	                        items.push({
+	                          attr: function(name) {
+	                            var am = fullTag.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+	                            return am ? am[1] : '';
+	                          },
+	                          text: function() {
+	                            var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
+	                            if (closeIdx > 0) {
+	                              return html.substring(pos + fullTag.length, closeIdx).replace(/<[^>]+>/g, '').trim();
+	                            }
+	                            return '';
+	                          },
+	                          html: function() {
+	                            var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
+	                            if (closeIdx > 0) {
+	                              return html.substring(pos + fullTag.length, closeIdx);
+	                            }
+	                            return '';
+	                          }
+	                        });
+	                      })(m[1], m[0], m.index);
+	                    }
+	                  } catch(_) {}
+	                }
+	                // 构造 Elements 类数组对象
+	                var els = {
+	                  _list: items,
+	                  length: items.length,
+	                  attr: function(name) { return items.length > 0 ? items[0].attr(name) : ''; },
+	                  text: function() { return items.length > 0 ? items[0].text() : ''; },
+	                  html: function() { return items.length > 0 ? items[0].html() : ''; },
+	                  eq: function(i) { return items[i] || { attr:function(){return '';}, text:function(){return '';}, html:function(){return '';} }; },
+	                  first: function() { return items[0] || null; },
+	                  last: function() { return items[items.length-1] || null; },
+	                  isEmpty: function() { return items.length === 0; },
+	                  size: function() { return items.length; },
+	                  get: function(i) { return items[i] || null; },
+	                  toArray: function() { return items; }
+	                };
+	                for (var i = 0; i < items.length; i++) { els[i] = items[i]; }
+	                return els;
+	              },
+	              text: function() { return html.replace(/<[^>]+>/g, '').trim(); },
+	              attr: function(name) {
+	                var m2 = html.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+	                return m2 ? m2[1] : '';
+	              }
+	            };
+	          }
+	        }
+	      }
+	    };
+	  }
+	})();
 
-  `;
-}
+	console.log('[Polyfill] Legado compatibility layer loaded');
+	
+	  `;
+	}
 
 /**
  * 检查书源是否需要脚本执行（有 script 字段），还是只需要规则解析
