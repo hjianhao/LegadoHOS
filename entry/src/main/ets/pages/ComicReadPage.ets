@@ -975,6 +975,10 @@ struct ComicReadPage {
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           Text(this.formatCurTime())
             .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
+          if (this.imageUrls.length > 0) {
+            Text(`${this.currentPageIndex + 1}/${this.imageUrls.length}`)
+              .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
+          }
           Text(`${this.currentIndex + 1}/${this.totalChapters}` +
             (this.totalChapters > 0 ? ` (${this.getProgressPercent()}%)` : ''))
             .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
