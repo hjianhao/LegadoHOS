@@ -229,7 +229,9 @@ export class MangaImageLoader {
         const tempPath: string = `${localPath}.${Date.now()}.tmp`;
         const file: fileFs.File = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
         try {
-          fileFs.writeSync(file.fd, bodyBytes.buffer as ArrayBuffer);
+          // 使用 slice 确保 byteOffset 正确，避免 view 指向大 buffer 的某个切片时写入多余数据
+          const writeBuffer: ArrayBuffer = bodyBytes.buffer.slice(bodyBytes.byteOffset, bodyBytes.byteOffset + bodyBytes.byteLength);
+          fileFs.writeSync(file.fd, writeBuffer);
         } finally {
           fileFs.closeSync(file);
         }

@@ -51,14 +51,35 @@ export class ContentCleaner {
       .replace(/[\n\s]+$/, '')
       .trim();
 
-    // 处理图片 URL：提取 data-src 或 src，做绝对路径
+    // 处理图片 URL：提取 data-src/data-original/src，做绝对路径补全
     if (baseUrl) {
-      const base = baseUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
-      s = s.replace(/<img[^>]*\s(?:data-src|src)\s*=\s*["']([^"']+)["'][^>]*>/gi,
+      // 解析 baseUrl 为 origin + 目录路径
+      const baseMatch: RegExpMatchArray | null = baseUrl.match(/^(https?:\/\/[^\/]+)(\/[^?#]*)?/);
+      const baseOrigin: string = baseMatch ? baseMatch[1] : '';
+      // 目录路径：去掉最后一段文件名，保留目录
+      let baseDir: string = '/';
+      if (baseMatch && baseMatch[2]) {
+        const pathStr: string = baseMatch[2];
+        const lastSlash: number = pathStr.lastIndexOf('/');
+        baseDir = lastSlash > 0 ? pathStr.substring(0, lastSlash + 1) : '/';
+      }
+
+      s = s.replace(/<img[^>]*\s(?:data-original|data-lazy-src|data-cfsrc|data-src|src)\s*=\s*["']([^"']+)["'][^>]*>/gi,
         (match: string, url: string) => {
-          if (url.startsWith('http')) return match;
-          const absUrl = base + (url.startsWith('/') ? url : '/' + url);
-          return match.replace(url, absUrl);
+          if (!url) return match;
+          // 已经是绝对 URL
+          if (url.startsWith('http://') || url.startsWith('https://')) return match;
+          // 协议相对 URL：//cdn.com/1.jpg -> https://cdn.com/1.jpg
+          if (url.startsWith('//')) {
+            const protocol: string = baseOrigin.startsWith('https') ? 'https:' : 'http:';
+            return match.replace(url, protocol + url);
+          }
+          // 根路径：/images/1.jpg -> origin + /images/1.jpg
+          if (url.startsWith('/')) {
+            return match.replace(url, baseOrigin + url);
+          }
+          // 相对路径：images/1.jpg -> origin + baseDir + images/1.jpg
+          return match.replace(url, baseOrigin + baseDir + url);
         });
     }
     return this.removeNavText(s);

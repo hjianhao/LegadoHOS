@@ -375,6 +375,7 @@ struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
+      const isMangaSource: boolean = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -385,7 +386,7 @@ struct BookInfoPage {
         tocUrl: this.getCurrentTocUrl(),
         origin: this.origin,
         originUrl: this.originUrl,
-        type: BookType.TEXT,
+        type: isMangaSource ? BookType.MANGA : BookType.TEXT,
         groupId: BookGroup.ALL,
         chapterCount: this.chapterCount,
         totalChapterNum: this.chapterCount,
@@ -396,7 +397,7 @@ struct BookInfoPage {
         durChapterProgress: 0,
         isRead: false,
         isAudio: false,
-        isManga: false,
+        isManga: isMangaSource,
         isShelf: true,
         order: 0,
         canUpdate: true,
@@ -486,23 +487,43 @@ struct BookInfoPage {
    * 1. 不在书架 → 隐式保存（标记 notShelf），加入数据库后再打开阅读器
    * 2. 已在书架 → 更新 lastOpenTime 后打开
    */
+  /**
+   * 确保已加载书源对象（用于 startRead/startReadAt 时 currentSource_ 可能为 null 的情况）
+   * 返回是否为漫画源
+   */
+  private async ensureMangaFlag_(): Promise<boolean> {
+    if (this.currentSource_) {
+      return this.currentSource_.sourceType === 2;
+    }
+    // currentSource_ 为 null，从 DB 查询
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      const sources = await dao.getAllSources();
+      const matched = sources.find(s => s.sourceUrl === this.originUrl || s.sourceName === this.origin);
+      if (matched) {
+        this.currentSource_ = matched;
+        return matched.sourceType === 2;
+      }
+    } catch (_) { /* ignore */ }
+    return false;
+  }
+
   async startRead(): Promise<void> {
     if (this.isRefreshing) {
       UiUtil.showToast(this.getUIContext(), { message: '目录加载中，请稍候', duration: 1500 });
       return;
     }
     if (!this.isInShelf) {
-      // 不在书架：隐式保存书籍（对齐 Android BookType.notShelf 语义）
       const saved = await this.saveBookImplicitly();
       if (!saved) {
         UiUtil.showToast(this.getUIContext(), { message: '保存失败，请重试', duration: 1500 });
         return;
       }
     } else if (this.bookId > 0) {
-      // 已在书架：更新最后打开时间
       await this.updateLastOpenTime();
     }
-    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+    const isManga: boolean = await this.ensureMangaFlag_();
     const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
@@ -521,8 +542,12 @@ struct BookInfoPage {
     });
   }
 
-  startReadAt(index: number): void {
-    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+  async startReadAt(index: number): Promise<void> {
+    if (this.isRefreshing) {
+      UiUtil.showToast(this.getUIContext(), { message: '目录加载中，请稍候', duration: 1500 });
+      return;
+    }
+    const isManga: boolean = await this.ensureMangaFlag_();
     const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
