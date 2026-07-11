@@ -2,7 +2,12 @@
  * 漫画阅读页
  *
  * 支持图片型书源（bookSourceType=2）的漫画阅读。
- * 功能：条漫滚动模式 / 翻页模式、上下章切换、进度保存、目录跳转。
+ * 功能：
+ * - 条漫滚动 / 左右翻页 / 右左翻页三种阅读方向
+ * - 双指缩放手势（0.5x ~ 3x）+ 双击缩放
+ * - 章节边界提示页（下一章/已读完）
+ * - 图片预加载（带书源 Referer/Cookie 头下载）
+ * - 上下章切换、进度保存、目录跳转
  */
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -10,12 +15,23 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { ContentCleaner } from '../util/ContentCleaner';
+import { MangaImageLoader } from '../util/MangaImageLoader';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { UiUtil } from '../util/UiUtil';
+
+/** 阅读方向模式 */
+const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
+const READ_MODE_LEFT_TO_RIGHT: number = 1;  // 左->右翻页
+const READ_MODE_RIGHT_TO_LEFT: number = 2;  // 右->左翻页（日漫）
+
+/** 缩放范围 */
+const MIN_SCALE: number = 0.5;
+const MAX_SCALE: number = 3.0;
+const DOUBLE_TAP_SCALE: number = 2.0;
 
 @Entry
 @Component
@@ -42,8 +58,12 @@ struct ComicReadPage {
 
   // UI 状态
   @State showMenu: boolean = false;
-  @State pageMode: boolean = false;  // false=滚动(条漫), true=翻页
+  @State readMode: number = READ_MODE_WEBTOON;
   @State currentPageIndex: number = 0;
+
+  // 缩放状态
+  @State imageScale: number = 1.0;
+  private pinchStartScale_: number = 1.0;  // 手势开始时的缩放基准
 
   // 内部状态
   private source_: BookSource | null = null;
@@ -56,7 +76,9 @@ struct ComicReadPage {
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
-  // 图片加载失败标记（key = url）
+  // 图片本地路径缓存：url -> localPath
+  @State imagePaths: Map<string, string> = new Map<string, string>();
+  // 图片加载失败标记
   @State failedImages: Set<string> = new Set<string>();
 
   aboutToAppear(): void {
@@ -67,11 +89,27 @@ struct ComicReadPage {
     this.origin = String(p['origin'] || '');
     this.tocUrl = String(p['tocUrl'] || '');
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
+    // 加载阅读模式设置
+    this.loadReadMode();
+  }
+
+  private loadReadMode(): void {
+    try {
+      const mode = AppStorage.get<number>('comic_read_mode');
+      if (mode !== null && mode !== undefined) {
+        this.readMode = mode;
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  private saveReadMode(): void {
+    try {
+      AppStorage.setOrCreate<number>('comic_read_mode', this.readMode);
+    } catch (_) { /* ignore */ }
   }
 
   onPageShow(): void {
     if (!this.isLoading) {
-      // 从目录页返回时，通过 ChapterCache 获取目标章节索引
       if (ChapterCache.targetIndex >= 0) {
         const idx = ChapterCache.targetIndex;
         ChapterCache.targetIndex = -1;
@@ -116,15 +154,13 @@ struct ComicReadPage {
       this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
         sources.find(s => s.sourceName === this.origin) || null;
-      console.info('[ComicRead] loadContent: source_=', this.source_ ? this.source_.sourceName : 'NULL',
-        'bookUrl=', this.bookUrl.substring(0, 80));
+      console.info('[ComicRead] loadContent: source_=', this.source_ ? this.source_.sourceName : 'NULL');
 
       // 加载章节列表
       let chapters: BookSourceChapter[] = [];
       if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
         chapters = ChapterCache.chapters;
       } else {
-        // 从数据库加载缓存的目录
         if (this.bookId_ > 0) {
           try {
             const ct = new ChapterTable(db);
@@ -136,7 +172,6 @@ struct ComicReadPage {
             }
           } catch (_e) { /* fall through to network */ }
         }
-        // 从网络刷新目录
         if (chapters.length === 0 && this.source_) {
           const primaryTocUrl = this.tocUrl || this.bookUrl;
           chapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
@@ -144,7 +179,6 @@ struct ComicReadPage {
             const fallback = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
             if (fallback.length > 0) chapters = fallback;
           }
-          // 保存到 DB
           if (chapters.length > 0 && this.bookId_ > 0) {
             await this.saveFullTocToDb_(this.bookId_, chapters);
           }
@@ -164,7 +198,6 @@ struct ComicReadPage {
         ChapterCache.bookUrl = this.bookUrl;
       }
 
-      // 恢复阅读位置
       if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
         this.currentIndex = this.targetIdx_;
       } else {
@@ -184,11 +217,10 @@ struct ComicReadPage {
     this.currentIndex = idx;
     this.currentPageIndex = 0;
     this.failedImages = new Set<string>();
+    this.imagePaths = new Map<string, string>();
     const ch = this.allChapters_[idx];
     this.chapterTitle = ch?.title || '';
-    console.info('[ComicRead] loadChapterImages: idx=', idx, 'title=', ch?.title);
 
-    // 尝试从数据库缓存加载
     let content: string = await this.readChapterCache_(idx);
     if (!content || content.length < 10) {
       content = await this.fetchChapterContent_(idx);
@@ -200,6 +232,8 @@ struct ComicReadPage {
       console.info('[ComicRead] extractImageUrls: found', urls.length, 'images');
       if (urls.length > 0) {
         this.imageUrls = urls;
+        // 预加载前3张图片
+        this.preloadImages_(urls, 3);
       } else {
         this.imageUrls = [];
         this.loadError = '本章没有图片';
@@ -212,6 +246,14 @@ struct ComicReadPage {
     this.isLoading = false;
     this.saveProgress();
     this.preloadNextChapter_(idx);
+  }
+
+  /** 预加载前 N 张图片到本地缓存 */
+  private preloadImages_(urls: string[], count: number): void {
+    const n: number = Math.min(count, urls.length);
+    for (let i = 0; i < n; i++) {
+      MangaImageLoader.preload(urls[i], this.source_);
+    }
   }
 
   private async readChapterCache_(idx: number): Promise<string> {
@@ -229,24 +271,20 @@ struct ComicReadPage {
     const ch = this.allChapters_[idx];
     if (!ch) return '';
     const url = ch.url || this.bookUrl;
-    let content = '';
+    let content: string = '';
     if (this.source_) {
-      // preserveImages=true：保留 <img> 标签
       content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl, true);
-      console.info('[ComicRead] getContent(preserveImages) returned:', content.length, 'chars');
     }
     if (!content && url && url.startsWith('http')) {
       const r = await NetUtil.httpGet(url);
       if (r) content = ContentCleaner.formatKeepImg(r, url);
     }
-    // 保存到 DB 缓存
     if (content && content.length > 10) {
       await this.saveToDbCache_(idx, content);
     }
     return content;
   }
 
-  /** 预加载下一章 */
   private preloadNextChapter_(currentIdx: number): void {
     const nextIdx = currentIdx + 1;
     if (nextIdx >= this.allChapters_.length || this.preloadingChapterPromises_.has(nextIdx)) return;
@@ -292,6 +330,7 @@ struct ComicReadPage {
     this.imageUrls = urls;
     this.currentPageIndex = 0;
     this.failedImages = new Set<string>();
+    this.imagePaths = new Map<string, string>();
     this.isLoading = false;
     if (this.nextChapterIdx_ === idx) {
       this.nextChapterContent_ = '';
@@ -299,6 +338,7 @@ struct ComicReadPage {
     }
     this.saveProgress();
     this.preloadNextChapter_(idx);
+    this.preloadImages_(urls, 3);
     return true;
   }
 
@@ -341,7 +381,7 @@ struct ComicReadPage {
       }));
       await ct.insertChapters(newChapters);
     } catch (e) {
-      console.warn('[ComicRead] Failed to save TOC to DB:', (e as Error).message);
+      console.warn('[ComicRead] Failed to save TOC:', (e as Error).message);
     }
   }
 
@@ -366,9 +406,8 @@ struct ComicReadPage {
     if (this.currentIndex > 0) {
       this.justLoadedChapter_ = true;
       this.loadChapterImages(this.currentIndex - 1).then(() => {
-        // 滚动到底部
         setTimeout(() => {
-          this.listScroller_.scrollToIndex(this.imageUrls.length - 1);
+          this.listScroller_.scrollToIndex(0);
         }, 100);
       });
     }
@@ -377,7 +416,6 @@ struct ComicReadPage {
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
     if (n >= this.totalChapters) return;
-    // 尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
       this.justLoadedChapter_ = true;
       return;
@@ -411,11 +449,36 @@ struct ComicReadPage {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   }
 
-  /** 图片加载失败处理 */
-  private onImageError(url: string): void {
-    this.failedImages.add(url);
-    // 触发 UI 更新
-    this.failedImages = new Set<string>(this.failedImages);
+  /** 异步加载图片：先下载到本地，再更新 state 触发渲染 */
+  private async loadImage_(url: string): Promise<void> {
+    if (this.imagePaths.has(url) || this.failedImages.has(url)) return;
+    try {
+      const localPath: string = await MangaImageLoader.load(url, this.source_);
+      if (localPath && localPath.startsWith('/')) {
+        // 更新 Map 触发 UI 刷新
+        const newMap = new Map<string, string>(this.imagePaths);
+        newMap.set(url, localPath);
+        this.imagePaths = newMap;
+      } else {
+        // localPath 为原始 URL，Image 组件直接加载（可能无 Referer 头，但有些源不需要）
+        const newMap = new Map<string, string>(this.imagePaths);
+        newMap.set(url, url);
+        this.imagePaths = newMap;
+      }
+    } catch (err) {
+      const newSet = new Set<string>(this.failedImages);
+      newSet.add(url);
+      this.failedImages = newSet;
+    }
+  }
+
+  /** 双击图片缩放 */
+  private onDoubleTap(): void {
+    if (this.imageScale > 1.0) {
+      this.imageScale = 1.0;
+    } else {
+      this.imageScale = DOUBLE_TAP_SCALE;
+    }
   }
 
   build() {
@@ -440,162 +503,271 @@ struct ComicReadPage {
           })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center)
-      } else if (this.pageMode) {
-        // 翻页模式
-        Swiper(this.swiperController_) {
-          ForEach(this.imageUrls, (url: string, index: number) => {
-            Stack() {
-              Image(url)
-                .width('100%').height('100%')
-                .objectFit(ImageFit.Contain)
-                .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
-                .onError(() => { this.onImageError(url); })
-              if (this.failedImages.has(url)) {
-                Column() {
-                  Text('图片加载失败').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
-                  Text(url.substring(0, 60) + '...').fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 8 })
-                }
-                .justifyContent(FlexAlign.Center)
-              }
-            }
-            .width('100%').height('100%')
-            .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
-          })
-        }
-        .indicator(false)
-        .loop(false)
-        .duration(300)
-        .width('100%').height('100%')
-        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
-        .onChange((index: number) => {
-          this.currentPageIndex = index;
-          if (index === this.imageUrls.length - 1) {
-            // 到最后一张，自动下一章
-          }
-        })
+      } else if (this.readMode === READ_MODE_WEBTOON) {
+        // 条漫滚动模式
+        this.buildWebtoonMode()
       } else {
-        // 滚动模式（条漫，默认）
-        List({ scroller: this.listScroller_ }) {
-          ForEach(this.imageUrls, (url: string, index: number) => {
-            ListItem() {
-              Column() {
-                if (!this.failedImages.has(url)) {
-                  Image(url)
-                    .width('100%')
-                    .objectFit(ImageFit.Auto)
-                    .onError(() => { this.onImageError(url); })
-                } else {
-                  // 加载失败占位
-                  Column() {
-                    Text('图片加载失败').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
-                    Text(url.substring(0, 80)).fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
-                      .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
-                  }
-                  .width('100%').height(200)
-                  .justifyContent(FlexAlign.Center)
-                  .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-                }
-                // 图片序号
-                Text(`${index + 1}/${this.imageUrls.length}`)
-                  .fontSize(11)
-                  .fontColor(ThemeColors.secondaryText(this.isDark))
-                  .margin({ top: 4, bottom: 8 })
-              }
-              .width('100%')
-            }
-          })
-        }
-        .width('100%').height('100%')
-        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
-        .divider({ strokeWidth: 0, color: Color.Transparent, startMargin: 0, endMargin: 0 })
-        .onReachStart(() => {
-          if (!this.justLoadedChapter_ && this.currentIndex > 0) {
-            this.onPrevChapter();
-          }
-          this.justLoadedChapter_ = false;
-        })
-        .onReachEnd(() => {
-          if (!this.justLoadedChapter_ && this.currentIndex < this.totalChapters - 1) {
-            this.onNextChapter();
-          }
-          this.justLoadedChapter_ = false;
-        })
-        .onClick(() => {
-          this.showMenu = !this.showMenu;
-        })
+        // 翻页模式（左右/右左）
+        this.buildPagedMode()
       }
 
-      // 页脚信息条（非加载状态）
+      // 页脚信息条
       if (!this.isLoading && this.imageUrls.length > 0) {
-        Stack({ alignContent: Alignment.Bottom }) {
-          Column() {
-            Row().width('100%').height(1).backgroundColor(ThemeColors.outlineVariant(this.isDark))
-              .margin({ top: 4, bottom: 4 })
-            Row() {
-              Text(this.chapterTitle || '')
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-              Text(this.formatCurTime())
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
-              Text(`${this.currentIndex + 1}/${this.totalChapters}` +
-                (this.totalChapters > 0 ? ` (${this.getProgressPercent()}%)` : ''))
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-            }
-            .width('100%')
-            .padding({ left: 20, right: 20 })
-          }
-          .width('100%')
-          .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
-        }
-        .width('100%').height('100%')
-        .hitTestBehavior(HitTestMode.None)
+        this.buildFooter()
       }
 
-      // 顶部菜单栏
+      // 菜单层
       if (this.showMenu) {
-        Column() {
-          // 顶部栏
-          Row() {
-            Text('〈').fontSize(24).fontColor(ThemeColors.onSurface(this.isDark))
-              .onClick(() => { UiUtil.back(this.getUIContext()); })
-              .padding({ left: 12, right: 12 })
-            Text(this.bookName || '漫画阅读').fontSize(16).fontColor(ThemeColors.onSurface(this.isDark))
-              .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            // 模式切换
-            Text(this.pageMode ? '翻页' : '滚动').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .borderRadius(4)
-              .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-              .onClick(() => { this.pageMode = !this.pageMode; this.showMenu = false; })
-          }
-          .width('100%').height(48)
-          .backgroundColor(ThemeColors.surface(this.isDark))
-          .padding({ left: 8, right: 12 })
-          .justifyContent(FlexAlign.SpaceBetween)
-
-          Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
-
-          // 底部栏
-          Row() {
-            Text('上一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-              .layoutWeight(1).textAlign(TextAlign.Center)
-              .onClick(() => { this.showMenu = false; this.onPrevChapter(); })
-            Text('目录').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-              .layoutWeight(1).textAlign(TextAlign.Center)
-              .onClick(() => { this.showMenu = false; this.onOpenToc(); })
-            Text('下一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-              .layoutWeight(1).textAlign(TextAlign.Center)
-              .onClick(() => { this.showMenu = false; this.onNextChapter(); })
-          }
-          .width('100%').height(56)
-          .backgroundColor(ThemeColors.surface(this.isDark))
-          .justifyContent(FlexAlign.SpaceEvenly)
-        }
-        .width('100%').height('100%')
+        this.buildMenu()
       }
     }
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+  }
+
+  @Builder
+  buildWebtoonMode() {
+    List({ scroller: this.listScroller_ }) {
+      // 章首提示
+      ListItem() {
+        this.buildChapterEdge(false)
+      }
+
+      // 图片列表
+      ForEach(this.imageUrls, (url: string, index: number) => {
+        ListItem() {
+          this.buildImageItem(url, index)
+        }
+      }, (url: string) => url)
+
+      // 章尾提示
+      ListItem() {
+        this.buildChapterEdge(true)
+      }
+    }
+    .width('100%').height('100%')
+    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .onReachStart(() => {
+      if (!this.justLoadedChapter_ && this.currentIndex > 0) {
+        this.onPrevChapter();
+      }
+      this.justLoadedChapter_ = false;
+    })
+    .onReachEnd(() => {
+      if (!this.justLoadedChapter_ && this.currentIndex < this.totalChapters - 1) {
+        this.onNextChapter();
+      }
+      this.justLoadedChapter_ = false;
+    })
+    .onClick(() => {
+      this.showMenu = !this.showMenu;
+    })
+  }
+
+  @Builder
+  buildPagedMode() {
+    Swiper(this.swiperController_) {
+      ForEach(this.imageUrls, (url: string, index: number) => {
+        Stack() {
+          this.buildImageItem(url, index)
+        }
+        .width('100%').height('100%')
+        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+      }, (url: string) => url)
+    }
+    .indicator(false)
+    .loop(false)
+    .duration(300)
+    .width('100%').height('100%')
+    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .onChange((index: number) => {
+      this.currentPageIndex = index;
+      if (index === this.imageUrls.length - 1) {
+        // 到最后一张，延迟自动下一章
+        setTimeout(() => { this.onNextChapter(); }, 300);
+      }
+    })
+    .onClick(() => {
+      this.showMenu = !this.showMenu;
+    })
+  }
+
+  @Builder
+  buildImageItem(url: string, index: number) {
+    Column() {
+      if (this.failedImages.has(url)) {
+        // 加载失败占位
+        Column() {
+          Text('🖼 图片加载失败').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text(url.substring(0, 80)).fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
+          Button('重试').margin({ top: 12 }).fontSize(12).height(32)
+            .onClick(() => {
+              const newSet = new Set<string>(this.failedImages);
+              newSet.delete(url);
+              this.failedImages = newSet;
+              const newMap = new Map<string, string>(this.imagePaths);
+              newMap.delete(url);
+              this.imagePaths = newMap;
+              this.loadImage_(url);
+            })
+        }
+        .width('100%').height(300)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+      } else {
+        // 图片显示
+        if (this.imagePaths.has(url)) {
+          Image(this.imagePaths.get(url))
+            .width('100%')
+            .objectFit(ImageFit.Auto)
+            .scale({ x: this.imageScale, y: this.imageScale })
+            .onError(() => {
+              const newSet = new Set<string>(this.failedImages);
+              newSet.add(url);
+              this.failedImages = newSet;
+            })
+            .gesture(
+              PinchGesture({ fingers: 2 })
+                .onActionStart((_event: GestureEvent) => {
+                  this.pinchStartScale_ = this.imageScale;
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  const newScale: number = this.pinchStartScale_ * event.scale;
+                  this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                })
+            )
+            .gesture(
+              TapGesture({ count: 2 })
+                .onAction(() => { this.onDoubleTap(); })
+            )
+        } else {
+          // 加载中占位，异步触发下载
+          Column() {
+            LoadingProgress().width(30).height(30).color(ThemeColors.secondaryText(this.isDark))
+            Text(`${index + 1}/${this.imageUrls.length}`).fontSize(11)
+              .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+          }
+          .width('100%').height(200)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .onAppear(() => { this.loadImage_(url); })
+        }
+        // 图片序号
+        Text(`${index + 1}/${this.imageUrls.length}`)
+          .fontSize(11)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .margin({ top: 4, bottom: 8 })
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  buildChapterEdge(isEnd: boolean) {
+    Column() {
+      Text(isEnd ? '已读完' : '下一章')
+        .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+      Text(this.chapterTitle || '')
+        .fontSize(12).fontColor(ThemeColors.outlineVariant(this.isDark))
+        .margin({ top: 4 })
+      if (isEnd && this.currentIndex >= this.totalChapters - 1) {
+        Text('已是最后一章').fontSize(12).fontColor(ThemeColors.outlineVariant(this.isDark))
+          .margin({ top: 8 })
+      } else if (isEnd) {
+        Text('继续阅读下一章').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+          .margin({ top: 8 })
+          .onClick(() => { this.onNextChapter(); })
+      } else if (!isEnd && this.currentIndex > 0) {
+        Text('查看上一章').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+          .margin({ top: 8 })
+          .onClick(() => { this.onPrevChapter(); })
+      }
+    }
+    .width('100%').height(120)
+    .justifyContent(FlexAlign.Center)
+  }
+
+  @Builder
+  buildFooter() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        Row().width('100%').height(1).backgroundColor(ThemeColors.outlineVariant(this.isDark))
+          .margin({ top: 4, bottom: 4 })
+        Row() {
+          Text(this.chapterTitle || '')
+            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          Text(this.formatCurTime())
+            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
+          Text(`${this.currentIndex + 1}/${this.totalChapters}` +
+            (this.totalChapters > 0 ? ` (${this.getProgressPercent()}%)` : ''))
+            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20 })
+      }
+      .width('100%')
+      .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    }
+    .width('100%').height('100%')
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  @Builder
+  buildMenu() {
+    Column() {
+      // 顶部栏
+      Row() {
+        Text('〈').fontSize(24).fontColor(ThemeColors.onSurface(this.isDark))
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
+          .padding({ left: 12, right: 12 })
+        Text(this.bookName || '漫画阅读').fontSize(16).fontColor(ThemeColors.onSurface(this.isDark))
+          .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        // 模式切换
+        Text(this.readModeLabel()).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .borderRadius(4)
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .onClick(() => { this.cycleReadMode(); })
+      }
+      .width('100%').height(48)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .padding({ left: 8, right: 12 })
+      .justifyContent(FlexAlign.SpaceBetween)
+
+      Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
+
+      // 底部栏
+      Row() {
+        Text('上一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
+          .layoutWeight(1).textAlign(TextAlign.Center)
+          .onClick(() => { this.showMenu = false; this.onPrevChapter(); })
+        Text('目录').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
+          .layoutWeight(1).textAlign(TextAlign.Center)
+          .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+        Text('下一章').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
+          .layoutWeight(1).textAlign(TextAlign.Center)
+          .onClick(() => { this.showMenu = false; this.onNextChapter(); })
+      }
+      .width('100%').height(56)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .justifyContent(FlexAlign.SpaceEvenly)
+    }
+    .width('100%').height('100%')
+  }
+
+  private readModeLabel(): string {
+    switch (this.readMode) {
+      case READ_MODE_LEFT_TO_RIGHT: return '左→右';
+      case READ_MODE_RIGHT_TO_LEFT: return '右→左';
+      default: return '条漫';
+    }
+  }
+
+  private cycleReadMode(): void {
+    this.readMode = (this.readMode + 1) % 3;
+    this.saveReadMode();
+    this.showMenu = false;
   }
 }
