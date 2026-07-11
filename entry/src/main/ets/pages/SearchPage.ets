@@ -898,6 +898,15 @@ struct SearchPage {
         existing.updateTime = now;
         await bookTable.updateBook(existing);
       } else {
+        // 查询书源类型，判断是否为漫画源
+        let isMangaSource = false;
+        try {
+          const srcDao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+          const sources = await srcDao.getAllSources();
+          const matchedSource = sources.find(s => s.sourceUrl === item.originUrl || s.sourceName === item.origin);
+          if (matchedSource && matchedSource.sourceType === 2) isMangaSource = true;
+        } catch (_) { /* ignore */ }
+
         const book: Book = {
           id: 0,
           name: item.name,
@@ -907,7 +916,7 @@ struct SearchPage {
           bookUrl: item.noteUrl,
           origin: item.origin,
           originUrl: item.originUrl,
-          type: BookType.TEXT,
+          type: isMangaSource ? BookType.MANGA : BookType.TEXT,
           groupId: BookGroup.ALL,
           tocUrl: '',
           chapterCount: 0,
@@ -919,7 +928,7 @@ struct SearchPage {
           durChapterProgress: 0,
           isRead: false,
           isAudio: false,
-          isManga: false,
+          isManga: isMangaSource,
           isShelf: true,
           order: 0,
           canUpdate: true,

@@ -13,6 +13,7 @@ import { RuleParser } from './RuleParser';
 import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from './RuleAnalyzer';
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
+import { ContentCleaner } from '../../util/ContentCleaner';
 import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
 import { CryptoUtil } from '../../util/CryptoUtil';
 import { WebViewFetcher } from '../web/WebViewFetcher';
@@ -1109,7 +1110,7 @@ export class SourceExecutor {
     return lastPathMatch ? decodeURIComponent(lastPathMatch[1]) : '';
   }
 
-  async getContent(source: BookSource, contentUrl: string, bookUrl?: string): Promise<string> {
+  async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false): Promise<string> {
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
     console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
 
@@ -1212,9 +1213,13 @@ export class SourceExecutor {
           console.info('[SrcEx] Content rule after:', content.substring(0, 200));
           // 清理 \r\n → \n（处理真实 CRLF 和转义序列）
           content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
-          // 取纯文本内容（去掉 HTML 标签）
+          // 取纯文本内容或保留图片标签
           if (content && content.length > 0) {
-            content = this.stripHtml(content);
+            if (preserveImages) {
+              content = ContentCleaner.formatKeepImg(content, contentUrl);
+            } else {
+              content = this.stripHtml(content);
+            }
             content = content.trim();
           }
           return content;
@@ -1237,7 +1242,9 @@ export class SourceExecutor {
             console.info('[SrcEx] getContent source=', source.sourceName, 'replaceRule=', source.ruleBookContentReplaceRegex?.substring(0, 100),
               'newlines=', newlineCount, 'preview=', result.substring(0, 200));
             const cleaned = this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex);
-            contentParts.push(cleaned);
+            // 漫画模式：保留并标准化 <img> 标签
+            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(cleaned, pageUrl) : cleaned;
+            contentParts.push(finalContent);
             console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars → cleaned', cleaned.length, 'chars');
           } else {
             console.info('[SrcEx] getContent page', page + 1, 'empty result, ruleBookContent=[' + source.ruleBookContent + '] htmlLen=' + pageHtml.length);
@@ -1279,15 +1286,102 @@ export class SourceExecutor {
         if (merged && merged.length > 0) return merged;
       }
 
-      // 兜底：stripHtml
-      return this.stripHtml(raw);
+      // 兜底：stripHtml 或 formatKeepImg
+      return preserveImages ? ContentCleaner.formatKeepImg(raw, contentUrl) : this.stripHtml(raw);
     } catch (err) {
       console.warn('[SrcEx] getContent failed:', (err as Error).message);
       return '';
     }
   }
 
-  /** 解析 catalog API 返回的 JSON 为章节列表 */
+  /**
+   * 从正文内容中提取图片 URL 列表（用于漫画阅读）
+   *
+   * 支持三种内容格式：
+   * 1. HTML 含 <img> 标签 -> 格式化后正则提取
+   * 2. JSON 数组/对象 -> 解析后提取 URL
+   * 3. 纯文本 URL 列表 -> 按行分割过滤
+   */
+  extractImageUrls(content: string, baseUrl: string): string[] {
+    if (!content || content.trim().length === 0) return [];
+
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    const addUrl = (url: string): void => {
+      const absUrl = this.resolvePageUrl(url, baseUrl);
+      if (absUrl && !seen.has(absUrl)) { seen.add(absUrl); urls.push(absUrl); }
+    };
+
+    // 先尝试 JSON 解析
+    try {
+      const parsed: Record<string, Object> = JSON.parse(content) as Record<string, Object>;
+      if (Array.isArray(parsed)) {
+        // 直接是 URL 数组
+        const arr = parsed as Object[];
+        for (const item of arr) {
+          if (typeof item === 'string' && this.isImageUrl_(item as string)) {
+            addUrl(item as string);
+          } else if (typeof item === 'object' && item !== null) {
+            // 对象数组，尝试常见字段
+            const obj = item as Record<string, Object>;
+            const url = obj['url'] || obj['src'] || obj['image'] || obj['imageUrl'] || obj['pic'];
+            if (typeof url === 'string' && this.isImageUrl_(url as string)) {
+              addUrl(url as string);
+            }
+          }
+        }
+        if (urls.length > 0) return urls;
+      } else if (typeof parsed === 'object' && parsed !== null) {
+        // JSON 对象，尝试常见字段
+        const obj = parsed as Record<string, Object>;
+        const candidates: Object[] = [obj['images'], obj['list'], obj['data'], obj['pics'], obj['content']];
+        for (const c of candidates) {
+          if (Array.isArray(c)) {
+            const arr = c as Object[];
+            for (const item of arr) {
+              if (typeof item === 'string' && this.isImageUrl_(item as string)) {
+                addUrl(item as string);
+              }
+            }
+            if (urls.length > 0) return urls;
+          }
+        }
+      }
+    } catch (_e) { /* not JSON, continue */ }
+
+    // HTML <img> 标签提取
+    const formatted = ContentCleaner.formatKeepImg(content, baseUrl);
+    const imgRegex = /<img[^>]*\ssrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = imgRegex.exec(formatted)) !== null) {
+      let url = match[1];
+      // 处理 URL 后缀参数（如 "url,param"）
+      const commaIdx = url.indexOf(',');
+      if (commaIdx > 0) url = url.substring(0, commaIdx);
+      addUrl(url);
+    }
+    if (urls.length > 0) return urls;
+
+    // 纯文本 URL 提取（按行分割）
+    const lines = content.split(/[\n,]/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        addUrl(trimmed);
+      }
+    }
+
+    return urls;
+  }
+
+  /** 判断字符串是否像图片 URL */
+  private isImageUrl_(url: string): boolean {
+    if (!url) return false;
+    if (url.startsWith('http://') || url.startsWith('https://')) return true;
+    if (url.startsWith('//')) return true;
+    if (url.startsWith('/')) return true;
+    return false;
+  }
   private parseCatalogResponse_(body: string, source: BookSource, tocUrl: string): BookSourceChapter[] {
     try {
       const json = JSON.parse(body) as Record<string, unknown>;

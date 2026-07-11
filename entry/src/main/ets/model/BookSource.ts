@@ -1,4 +1,22 @@
 /**
+ * 书源类型常量（兼容 Legado bookSourceType）
+ * 0=文本, 1=音频, 2=图片/漫画, 3=文件
+ */
+export enum BookSourceType {
+  TEXT = 0,
+  AUDIO = 1,
+  IMAGE = 2,
+  FILE = 3,
+}
+
+/**
+ * 判断书源是否为漫画（图片）类型
+ */
+export function isImageSource(source: BookSource): boolean {
+  return source.sourceType === BookSourceType.IMAGE;
+}
+
+/**
  * 书源数据模型（核心模型）
  * 兼容 Legado 书源 JSON 格式
  *
@@ -9,7 +27,7 @@ export interface BookSource {
   id: number;
   sourceName: string;
   sourceUrl: string;        // 书源网站 URL
-  sourceType: number;       // 0=出版, 1=网络
+  sourceType: number;       // 书源类型: 0=文本, 1=音频, 2=图片/漫画, 3=文件（兼容 Legado bookSourceType）
   group: string;            // 分组标签
   enabled: boolean;
   weight: number;           // 优先级权重
@@ -230,7 +248,7 @@ export function parseBookSource(json: any): BookSource {
     id: json.id || 0,
     sourceName: json.sourceName || json.bookSourceName || '',
     sourceUrl: json.sourceUrl || json.bookSourceUrl || '',
-    sourceType: json.sourceType || 0,
+    sourceType: json.bookSourceType ?? json.sourceType ?? 0,
     group: json.group || '',
     enabled: json.enabled !== false,
     weight: json.weight || 0,
@@ -285,8 +303,8 @@ export function parseBookSource(json: any): BookSource {
     ruleBookContentWebJs: json.ruleBookContentWebJs || '',
     ruleBookContentSourceRegex: json.ruleBookContentSourceRegex || '',
     ruleBookContentReplaceRegex: json.ruleBookContentReplaceRegex || rc.replaceRegex || '',
-    ruleBookContentImageStyle: json.ruleBookContentImageStyle || '',
-    ruleBookContentImageDecode: json.ruleBookContentImageDecode || '',
+    ruleBookContentImageStyle: json.ruleBookContentImageStyle || rc.imageStyle || '',
+    ruleBookContentImageDecode: json.ruleBookContentImageDecode || rc.imageDecode || '',
     ruleBookContentPayAction: json.ruleBookContentPayAction || '',
     ruleBookContentCallBackJs: json.ruleBookContentCallBackJs || '',
     respondTime: json.respondTime || 0,

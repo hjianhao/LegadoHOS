@@ -463,8 +463,9 @@ export struct BookshelfPage {
   }
 
   continueRead(book: Book): void {
+    const targetPage = book.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
-      url: 'pages/ReadPage',
+      url: targetPage,
       params: { bookUrl: book.bookUrl }
     });
   }

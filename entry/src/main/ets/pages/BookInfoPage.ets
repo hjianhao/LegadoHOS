@@ -65,6 +65,7 @@ struct BookInfoPage {
 
   private cachedSearchResults: SearchResult[] = [];
   private sourceTocOriginUrl: string = '';
+  private currentSource_: BookSource | null = null;  // 缓存当前匹配到的书源对象
   private coverDlg?: CustomDialogController;
   private sourceDlg?: CustomDialogController;
   private groupDlg?: CustomDialogController;
@@ -138,6 +139,7 @@ struct BookInfoPage {
           'available=' + sources.map(s => s.sourceUrl).join(', '));
         return;
       }
+      this.currentSource_ = matched;  // 缓存书源对象，供路由分流判断
       // 获取书籍详情（始终请求，确保简介等字段为最新）
       const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
       if (info.name && !this.bookName) this.bookName = info.name;
@@ -500,8 +502,10 @@ struct BookInfoPage {
       // 已在书架：更新最后打开时间
       await this.updateLastOpenTime();
     }
+    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+    const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
-      url: 'pages/ReadPage',
+      url: targetPage,
       params: {
         name: this.bookName,
         author: this.bookAuthor,
@@ -518,8 +522,10 @@ struct BookInfoPage {
   }
 
   startReadAt(index: number): void {
+    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+    const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
-      url: 'pages/ReadPage',
+      url: targetPage,
       params: {
         name: this.bookName,
         author: this.bookAuthor,
@@ -559,6 +565,7 @@ struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
+      const isMangaSource = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -568,7 +575,7 @@ struct BookInfoPage {
         bookUrl: this.noteUrl,
         origin: this.origin,
         originUrl: this.originUrl,
-        type: BookType.TEXT,
+        type: isMangaSource ? BookType.MANGA : BookType.TEXT,
         groupId: BookGroup.ALL,
         tocUrl: this.getCurrentTocUrl(),
         chapterCount: this.chapterCount,
@@ -580,7 +587,7 @@ struct BookInfoPage {
         durChapterProgress: 0,
         isRead: false,
         isAudio: false,
-        isManga: false,
+        isManga: isMangaSource,
         isShelf: false,  // 关键：不在书架（对齐 Android BookType.notShelf）
         order: 0,
         canUpdate: true,
