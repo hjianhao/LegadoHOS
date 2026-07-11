@@ -79,6 +79,8 @@ export interface JsEvalContext {
   source?: Partial<BookSource>;
   /** 书源 JS 库（jsLib），在变量注入前加载 */
   jsLib?: string;
+  /** 书源变量的 JSON 字符串（用于 source.getVariable/setVariable 持久化） */
+  variableBlob?: string;
   /** 额外自定义变量 */
   [key: string]: unknown;
 }
@@ -477,6 +479,15 @@ export class JsExpressionEvaluator {
       parts.push(`if(typeof source.getKey==='undefined')source.getKey=function(){return encodeURIComponent(source.sourceUrl||source.bookSourceUrl||'');};`);
       // getUrl() — 返回 sourceUrl（兼容）
       parts.push(`if(typeof source.getUrl==='undefined')source.getUrl=function(){return source.sourceUrl||source.bookSourceUrl||'';};`);
+      // getVariable() / setVariable() — 书源变量持久化（用于 {{Get('url')}} 等 JS 表达式）
+      // 变量为空时初始化为 null（而非 '{}'），使 loginUrl 中的
+      // JSON.parse(source.getVariable()) 抛异常，触发 catch 分支执行 put(original) 设置默认变量
+      const initialVars = ctx.variableBlob || '';
+      const varsLiteral = initialVars ? JSON.stringify(initialVars) : 'null';
+      parts.push(`(function(){var _vars=${varsLiteral};` +
+        `if(typeof source.getVariable==='undefined')source.getVariable=function(){return typeof _vars==='string'?_vars:JSON.stringify(_vars);};` +
+        `if(typeof source.setVariable==='undefined')source.setVariable=function(v){_vars=v;};` +
+        `})();`);
     }
 
     // 注入自定义额外变量

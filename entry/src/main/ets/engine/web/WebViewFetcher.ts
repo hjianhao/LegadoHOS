@@ -33,6 +33,8 @@ export class WebViewFetcher {
     reject: (err: Error) => void;
   }> = [];
 
+  /** 等待 controller 注册的回调列表（waitForReady 使用） */
+  private static readyWaiters: Array<() => void> = [];
   /**
    * 交互式 Cloudflare 验证处理器
    * 页面启动时注册，当请求被 Cloudflare 拦截时弹出 WebView 让用户手动验证
@@ -95,6 +97,43 @@ export class WebViewFetcher {
   /** 页面在 build() 中调用，注册 WebView controller */
   static register(controller: web_webview.WebviewController): void {
     WebViewFetcher.controller = controller;
+    // 通知所有等待注册的调用方
+    while (WebViewFetcher.readyWaiters.length > 0) {
+      const waiter = WebViewFetcher.readyWaiters.shift();
+      if (waiter) waiter();
+    }
+  }
+
+  /**
+   * 等待 WebView controller 注册就绪。
+   *
+   * ArkUI 中父组件 aboutToAppear 先于 build() 执行，子组件 WebViewEngine 的
+   * aboutToAppear（register）在 build 渲染时才触发。如果搜索在 aboutToAppear
+   * 阶段通过路由参数自动触发，controller 可能尚未注册。此方法轮询等待注册完成。
+   *
+   * @param timeoutMs 等待超时（默认 3 秒）
+   * @returns true 表示已就绪，false 表示超时
+   */
+  static waitForReady(timeoutMs: number = 3000): Promise<boolean> {
+    if (WebViewFetcher.controller) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const wrapped = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // 超时后从等待列表中移除，防止泄漏
+        const idx = WebViewFetcher.readyWaiters.indexOf(wrapped);
+        if (idx >= 0) WebViewFetcher.readyWaiters.splice(idx, 1);
+        resolve(false);
+      }, timeoutMs);
+      WebViewFetcher.readyWaiters.push(wrapped);
+    });
   }
 
   /** 页面在 onPageEnd 中调用，追踪页面加载状态 */
@@ -390,6 +429,8 @@ export class WebViewFetcher {
     WebViewFetcher.controller = null;
     WebViewFetcher.pendingResolve = null;
     WebViewFetcher.pendingReject = null;
+    // 清除等待注册的回调
+    WebViewFetcher.readyWaiters = [];
   }
 
   /** 清除所有定时器 */

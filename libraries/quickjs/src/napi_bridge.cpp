@@ -483,9 +483,11 @@ static napi_value ExecuteScript(napi_env env, napi_callback_info info) {
   int64_t engine_id;
   napi_get_value_int64(env, argv[0], &engine_id);
 
+  // 先获取脚本长度，再动态分配缓冲区（避免 64KB 固定缓冲区截断长脚本）
   size_t script_len;
-  char script_buf[65536];
-  napi_get_value_string_utf8(env, argv[1], script_buf, sizeof(script_buf), &script_len);
+  napi_get_value_string_utf8(env, argv[1], nullptr, 0, &script_len);
+  std::vector<char> script_buf(script_len + 1);
+  napi_get_value_string_utf8(env, argv[1], script_buf.data(), script_buf.size(), &script_len);
 
   ScriptEngineContext *ctx = nullptr;
   {
@@ -501,7 +503,7 @@ static napi_value ExecuteScript(napi_env env, napi_callback_info info) {
 
   std::lock_guard<std::mutex> lock(ctx->mutex);
 
-  JSValue result = JS_Eval(ctx->ctx, script_buf, script_len,
+  JSValue result = JS_Eval(ctx->ctx, script_buf.data(), script_len,
                            "<source>", JS_EVAL_TYPE_GLOBAL);
 
   napi_value napi_result;

@@ -770,7 +770,7 @@ struct ReadPage {
   private onOpenToc(): void {
     ChapterCache.chapters = this.allChapters_;
     ChapterCache.bookUrl = this.bookUrl;
-    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex } });
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex, isManga: '0' } });
   }
 
   private onOpenSearchContent(): void {

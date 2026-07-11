@@ -9,6 +9,7 @@
  */
 import rcp from '@hms.collaboration.rcp';
 import fileFs from '@ohos.file.fs';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BookSource } from '../model/BookSource';
 import { NetUtil } from './NetUtil';
 
@@ -112,9 +113,14 @@ export class MangaImageLoader {
 
     const localPath: string = MangaImageLoader.getLocalPath(url);
 
-    // 已缓存，直接返回
+    // 已缓存，验证缓存文件是否为有效图片（旧缓存可能存的是加密数据）
     if (MangaImageLoader.isCached(url)) {
-      return localPath;
+      if (MangaImageLoader.isValidImageFile(localPath)) {
+        return localPath;
+      }
+      // 缓存无效 → 删除文件，重新下载
+      try { fileFs.unlinkSync(localPath); } catch (_) { /* ignore */ }
+      console.info('[MangaImg] Invalidated stale cache for', url.substring(0, 60));
     }
 
     // 正在下载同一张图，复用 Promise
@@ -132,6 +138,33 @@ export class MangaImageLoader {
     } finally {
       MangaImageLoader.downloading.delete(url);
     }
+  }
+
+  /** 检查本地缓存文件是否为有效的图片格式 */
+  private static isValidImageFile(filePath: string): boolean {
+    try {
+      const file: fileFs.File = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
+      try {
+        const buf: ArrayBuffer = new ArrayBuffer(16);
+        const readLen: number = fileFs.readSync(file.fd, buf);
+        if (readLen < 2) return false;
+        const bytes: Uint8Array = new Uint8Array(buf);
+        return MangaImageLoader.isValidImageBytes(bytes);
+      } finally {
+        fileFs.closeSync(file);
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** 检查字节是否为有效图片魔数 */
+  private static isValidImageBytes(bytes: Uint8Array): boolean {
+    if (bytes.length < 2) return false;
+    return (bytes[0] === 0xFF && bytes[1] === 0xD8) ||    // JPEG
+      (bytes[0] === 0x89 && bytes[1] === 0x50) ||         // PNG
+      (bytes[0] === 0x47 && bytes[1] === 0x49) ||         // GIF
+      (bytes[0] === 0x52 && bytes[1] === 0x49);           // WebP/RIFF
   }
 
   /** 带并发队列的下载 */
@@ -219,6 +252,9 @@ export class MangaImageLoader {
           return false;
         }
 
+        // 尝试解密图片（部分漫画源使用 AES 加密图片，自动检测魔数决定是否解密）
+        let finalBytes: Uint8Array = await MangaImageLoader.tryDecryptImage(bodyBytes);
+
         // 确保目录存在
         const dir: string = localPath.substring(0, localPath.lastIndexOf('/'));
         if (!fileFs.accessSync(dir)) {
@@ -230,7 +266,7 @@ export class MangaImageLoader {
         const file: fileFs.File = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
         try {
           // 使用 slice 确保 byteOffset 正确，避免 view 指向大 buffer 的某个切片时写入多余数据
-          const writeBuffer: ArrayBuffer = bodyBytes.buffer.slice(bodyBytes.byteOffset, bodyBytes.byteOffset + bodyBytes.byteLength);
+          const writeBuffer: ArrayBuffer = finalBytes.buffer.slice(finalBytes.byteOffset, finalBytes.byteOffset + finalBytes.byteLength);
           fileFs.writeSync(file.fd, writeBuffer);
         } finally {
           fileFs.closeSync(file);
@@ -248,6 +284,55 @@ export class MangaImageLoader {
     } catch (err) {
       console.warn('[MangaImg] Download error:', (err as Error).message, 'url:', url.substring(0, 80));
       return false;
+    }
+  }
+
+  /**
+   * 检测图片是否已加密，如果是则用预置算法解密。
+   *
+   * 当前支持：AES-256-CBC/PKCS7 解密（漫蛙等漫画源通用格式）
+   * - IV = 密文前 16 字节
+   * - 密钥 = '0B6666A0-BB59-1381-B746-a0E4C9AC' 的 ASCII 字节（32 字节 = AES-256）
+   */
+  private static async tryDecryptImage(data: Uint8Array): Promise<Uint8Array> {
+    // 检查图片魔数，判断是否为有效图片格式
+    if (data.length >= 2 && MangaImageLoader.isValidImageBytes(data)) {
+      return data; // 已经是有效图片，无需解密
+    }
+
+    // 数据不是标准图片格式，尝试 AES-256-CBC 解密
+    if (data.length < 17) { // 至少需要 16 字节 IV + 1 字节数据
+      console.warn('[MangaImg] Encrypted data too short, length:', data.length);
+      return data;
+    }
+
+    try {
+      // IV = 前 16 字节
+      const iv: Uint8Array = data.slice(0, 16);
+      const ciphertext: Uint8Array = data.slice(16);
+
+      // 密钥 = 字符串 ASCII 字节（AES-256 需 32 字节）
+      const keyStr: string = '0B6666A0-BB59-1381-B746-a0E4C9AC';
+      const keyBytes: Uint8Array = new Uint8Array(keyStr.length);
+      for (let i = 0; i < keyStr.length; i++) {
+        keyBytes[i] = keyStr.charCodeAt(i) & 0xFF;
+      }
+
+      // 使用 cryptoFramework 解密
+      const generator: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
+      const symKey: cryptoFramework.SymKey = await generator.convertKey({ data: keyBytes });
+      const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES256|CBC|PKCS7');
+      const params: cryptoFramework.IvParamsSpec = {
+        algName: 'IvParamsSpec',
+        iv: { data: iv },
+      };
+      await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
+      const decoded: cryptoFramework.DataBlob = await cipher.doFinal({ data: ciphertext });
+      console.info('[MangaImg] Decrypted:', decoded.data.length, 'bytes (was', data.length, 'bytes encrypted)');
+      return new Uint8Array(decoded.data);
+    } catch (err) {
+      console.warn('[MangaImg] Decrypt failed:', (err as Error).message, 'returning raw data');
+      return data;
     }
   }
 

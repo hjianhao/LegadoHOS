@@ -7,7 +7,7 @@
 import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../../model/BookSource';
 import { SearchResult, getBookMergeKey } from '../../model/SearchResult';
 import { globalScriptEngine } from './ScriptEngine';
-import { JsExpressionEvaluator } from './JsExpressionEvaluator';
+import { JsExpressionEvaluator, JsEvalContext } from './JsExpressionEvaluator';
 import { getPolyfillScript, getAjaxPolyfill, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
 import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from './RuleAnalyzer';
@@ -540,6 +540,31 @@ export class SourceExecutor {
       }
     }
 
+    // 如果书源变量未初始化但 loginUrl 存在，先执行 loginUrl 初始化变量
+    // （禁漫天堂等源依赖 loginUrl 设置 $$$ 变量，Get('url') 才能返回正确线路）
+    if (this.engineInitialized && source.loginUrl && !source.variableComment) {
+      try {
+        console.info('[SrcEx] Initializing source variables from loginUrl for', source.sourceName);
+        // 把 loginUrl 执行和 getVariable() 读取合并到同一次 JS 求值中，
+        // 确保 setVariable 设置的变量在同上下文中可被 getVariable 读取
+        const combinedScript = `${source.loginUrl}\nsource.getVariable();`;
+        const vars = await JsExpressionEvaluator.evaluate(
+          combinedScript,
+          { source: source, jsLib: source.jsLib || '', baseUrl: baseUrl }
+        );
+        if (vars && vars.trim() && vars !== '{}' && !vars.startsWith('SyntaxError')) {
+          source.variableComment = vars;
+          console.info('[SrcEx] loginUrl initialized variables for', source.sourceName,
+            'vars=' + vars.substring(0, 100));
+        } else {
+          console.warn('[SrcEx] loginUrl did not set variables for', source.sourceName,
+            'vars=' + vars.substring(0, 80));
+        }
+      } catch (e) {
+        console.warn('[SrcEx] loginUrl evaluation failed for', source.sourceName, ':', (e as Error).message);
+      }
+    }
+
     // 评估 searchUrl 中的 <js>...</js> 块（Legado 聚合书源常用）
     let searchUrlTemplate = source.ruleSearchUrl;
     const jsBlockMatch = searchUrlTemplate.match(/<js>([\s\S]*?)<\/js>/i);
@@ -569,15 +594,32 @@ export class SourceExecutor {
       }
     }
 
+    // 评估 {{expression}} 模式（如 {{Get('url')}}），提供 JS 表达式替换
+    searchUrlTemplate = await this.evaluateTemplateExpressions(
+      searchUrlTemplate, source, keyword, page, baseUrl
+    );
+
     const { url, method, body, charset, webView } = buildUrl(searchUrlTemplate, keyword, page, baseUrl);
 
-    // data: URI 转换（聚合书源如光遇聚合）
-    // data:;base64,<body>,{"type":"gysearch"} → POST body 到 baseUrl
+    // 禁漫天堂网站改版：/search/photos?search_query=xxx 重定向到 /error/invalid_search
+    // 正确的搜索路径是 /albums?search_query=xxx，且返回静态 HTML（无需 WebView）
     let finalUrl = url;
+    let finalWebView = webView;
+    if (url.includes('/search/photos?search_query=')) {
+      const fixedUrl = url.replace('/search/photos?search_query=', '/albums?search_query=');
+      // 移除禁漫搜索 URL 中多余的参数（search-type, main_tag）
+      const fixedClean = fixedUrl.replace(/[&?]search-type=photos/g, '').replace(/[&?]main_tag=0/g, '');
+      finalUrl = fixedClean;
+      finalWebView = false; // /albums 路径返回静态 HTML，不需要 WebView
+      console.info('[SrcEx] Fixed search URL for', source.sourceName, '-> /albums?search_query=');
+    }
+
+    // data: URI 转换（聚合书源如光遇聚合）
+    // data:;base64,<body>,{"type":"gysearch"} -> POST body 到 baseUrl
     let finalMethod = method;
     let finalBody = body;
-    if (url && url.startsWith('data:;base64,')) {
-      const converted = await this.convertDataUri_(url, baseUrl, source);
+    if (finalUrl && finalUrl.startsWith('data:;base64,')) {
+      const converted = await this.convertDataUri_(finalUrl, baseUrl, source);
       finalUrl = converted.url;
       finalMethod = converted.method;
       finalBody = converted.body;
@@ -589,16 +631,27 @@ export class SourceExecutor {
     }
 
     // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
-    if (webView && WebViewFetcher.isReady() && finalMethod !== 'POST') {
-      console.info('[SrcEx] WebView request (source config) for', source.sourceName);
-      try {
-        const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
-        const bodyText = wvResult.html;
-        if (bodyText && bodyText.length > 100) {
-          console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
-          return this.parseResponse(bodyText, source, baseUrl, 0);
-        }
-      } catch (_wv) { /* WebView failed, try direct */ }
+    if (finalWebView && finalMethod !== 'POST') {
+      // controller 可能尚未注册（搜索在 SearchPage.aboutToAppear 阶段触发时，
+      // WebViewEngine 子组件的 build() 尚未执行），等待注册完成
+      if (!WebViewFetcher.isReady()) {
+        console.info('[SrcEx] Source requires webView but controller not ready, waiting for', source.sourceName);
+        const ready = await WebViewFetcher.waitForReady(3000);
+        console.info('[SrcEx] WebView ready=' + ready + ' for', source.sourceName);
+      }
+      if (WebViewFetcher.isReady()) {
+        console.info('[SrcEx] WebView request (source config) for', source.sourceName);
+        try {
+          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
+          const bodyText = wvResult.html;
+          if (bodyText && bodyText.length > 100) {
+            console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
+            return this.parseResponse(bodyText, source, baseUrl, 0);
+          }
+        } catch (_wv) { /* WebView failed, try direct */ }
+      } else {
+        console.warn('[SrcEx] webView required but controller still not ready for', source.sourceName, '- falling back to HTTP');
+      }
     }
 
     try {
@@ -639,7 +692,26 @@ export class SourceExecutor {
       const hexDecoded = this.tryHexDecode_(bodyText);
       const parsedBody = hexDecoded || bodyText;
 
-      return this.parseResponse(parsedBody, source, baseUrl, 0);
+      const httpResults = this.parseResponse(parsedBody, source, baseUrl, 0);
+
+      // HTTP 返回 200 但 CSS 提取 0 条且响应不是 JSON → WebView 兜底（JS 动态渲染的站点）
+      if (httpResults.length === 0 && !parsedBody.trim().startsWith('{') && !parsedBody.trim().startsWith('[')
+        && WebViewFetcher.isReady()) {
+        console.info('[SrcEx] CSS 0 results, trying WebView fallback for', source.sourceName);
+        try {
+          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
+          if (wvResult.html && wvResult.html.length > 100) {
+            const wvParsed = this.tryHexDecode_(wvResult.html) || wvResult.html;
+            const wvResults = this.parseResponse(wvParsed, source, baseUrl, 0);
+            if (wvResults.length > 0) {
+              console.info('[SrcEx] WebView fallback got', wvResults.length, 'results for', source.sourceName);
+              return wvResults;
+            }
+          }
+        } catch (_wv) { /* WebView 兜底失败，回退到 fallbackExtract */ }
+      }
+
+      return httpResults;
     } catch (err) {
       const msg = (err as Error).message;
       if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
@@ -665,6 +737,72 @@ export class SourceExecutor {
       const timer = setTimeout(() => reject(new Error('搜索超时')), timeoutMs);
       this.searchSingle(keyword, source, page).then(r => { clearTimeout(timer); resolve(r); }).catch(e => { clearTimeout(timer); reject(e); });
     });
+  }
+
+  /**
+   * 评估 searchUrl 模板中未被 replaceSearchTemplateVars 处理的 {{expression}} 模式
+   * 如 {{Get('url')}}、{{Get('shunt')}} 等 JS 函数调用。
+   * 若求值失败则保留原样，由 buildUrl 后续剥离。
+   */
+  private async evaluateTemplateExpressions(
+    template: string, source: BookSource,
+    keyword: string, page: number, baseUrl: string
+  ): Promise<string> {
+    if (!template || !this.engineInitialized) return template;
+
+    // 构建 JS 求值上下文
+    const ctx: JsEvalContext = {
+      key: keyword,
+      page: page,
+      baseUrl: baseUrl,
+      source: source,
+      jsLib: source.jsLib || '',
+      variableBlob: source.variableComment || '',
+    };
+
+    // 已知的简单变量模式（由 replaceSearchTemplateVars 处理），跳过
+    const knownPattern = /^\{\{(key|keyword|page|pageNum)\}\}$|^\{\{(page|pageNum)\s*[+-]\s*\d+\s*\}\}$/i;
+
+    // 手动收集所有 {{expr}} 模式并逐一求值（String.replace 不支持 async 回调）
+    const exprRegex = /\{\{([^}]+)\}\}/g;
+    const matches: { full: string; expr: string; index: number }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = exprRegex.exec(template)) !== null) {
+      matches.push({ full: m[0], expr: m[1], index: m.index });
+    }
+
+    if (matches.length === 0) return template;
+
+    // 对每个非已知变量模式并行求值
+    const replacements: Map<string, string> = new Map();
+    const evalPromises: Promise<void>[] = [];
+
+    for (const match of matches) {
+      if (knownPattern.test(match.full)) continue;
+      evalPromises.push((async (): Promise<void> => {
+        try {
+          const result = await JsExpressionEvaluator.evaluate(match.expr, ctx);
+          if (result && result.trim() && result !== 'null' && result !== 'undefined') {
+            replacements.set(match.full, result.trim());
+            console.info('[SrcEx] Template expr: `' + match.expr + '` → `' + result.trim().substring(0, 80) + '`');
+          }
+        } catch (_) { /* 求值失败，保留原样 */ }
+      })());
+    }
+
+    await Promise.all(evalPromises);
+
+    // 从右到左替换（保持 index 有效）
+    if (replacements.size === 0) return template;
+    let result = template;
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const match = matches[i];
+      const replacement = replacements.get(match.full);
+      if (replacement !== undefined) {
+        result = result.substring(0, match.index) + replacement + result.substring(match.index + match.full.length);
+      }
+    }
+    return result;
   }
 
   /** 尝试 hex 解码（聚合书源 API 返回 hex 编码的 JSON） */
@@ -1226,6 +1364,37 @@ export class SourceExecutor {
         }
       }
 
+      // @js: 规则处理：将原始响应作为 src 变量传入 JS 求值（漫画等场景）
+      if (source.ruleBookContent) {
+        const contentRule = source.ruleBookContent.trim();
+        const jsMatch = contentRule.match(/(?:^|[^@])@js:\s*([\s\S]*)$/);
+        if (jsMatch) {
+          const jsCode = jsMatch[1].trim();
+          if (jsCode) {
+            const ctx: JsEvalContext = {
+              src: raw,
+              result: raw,
+              baseUrl: (() => {
+                const m = (contentUrl || '').match(/^https?:\/\/[^\/]+/);
+                return m ? m[0] : '';
+              })(),
+            };
+            const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
+            if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+              let content = evalResult;
+              try {
+                const parsed = JSON.parse(evalResult);
+                if (typeof parsed === 'string') content = parsed;
+              } catch (_e) { /* not JSON, use as-is */ }
+              content = this.applyReplaceRegex(content, source.ruleBookContentReplaceRegex);
+              const finalContent = preserveImages ? ContentCleaner.formatKeepImg(content, contentUrl) : content;
+              console.info('[SrcEx] getContent @js: rule returned', finalContent.length, 'bytes');
+              return finalContent;
+            }
+          }
+        }
+      }
+
       // 规则解析：直接使用书源的内容规则，不通过 QuickJS（避免大数据传参溢出）
       if (source.ruleBookContent) {
         const contentParts: string[] = [];
@@ -1634,55 +1803,21 @@ export class SourceExecutor {
         if (chapters.length === 0) {
           chapters = this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
         }
-        // 去重
+        // 去重：只按 URL 去重（与安卓 Legado 一致，BookChapter.equals 只比较 url）
         const seen = new Set<string>();
         const deduped: BookSourceChapter[] = [];
         for (let ci = 0; ci < chapters.length; ci++) { const ch = chapters[ci];
-          const key = ch.title + '|' + ch.url;
+          const key = ch.url;
           if (!seen.has(key)) {
             seen.add(key);
             deduped.push(ch);
           }
         }
         chapters = deduped;
-        // 智能排序
+        // 排序：与安卓 Legado 一致，不按章节号排序，保持源顺序
+        // 仅根据书源 ruleToc 的 - 前缀决定是否反转
         if (reverseToc) {
           chapters.reverse();
-        } else if (chapters.length > 1) {
-          // 通用排序：按标题中的数字排序（支持中文数字如"第四百九十八"）
-          const cnNumMap: Record<string, number> = {
-            '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
-            '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
-            '十': 10, '百': 100, '千': 1000, '万': 10000,
-          };
-          const extractChapterNum = (title: string): number => {
-            // 优先：阿拉伯数字
-            const arabicM = title.match(/(\d+)/);
-            if (arabicM) return parseInt(arabicM[1]);
-            // 中文数字：第xxx章 → xxx
-            const cnM = title.match(/第([零一二三四五六七八九十百千万]+)章/);
-            if (cnM) {
-              let cn = cnM[1];
-              let result = 0;
-              let section = 0;
-              for (let i = 0; i < cn.length; i++) {
-                const ch = cn.charAt(i);
-                const num = cnNumMap[ch];
-                if (num === undefined) continue;
-                if (num >= 10) {
-                  section = (section || 1) * num;
-                  result += section;
-                  section = 0;
-                } else {
-                  section = num;
-                }
-              }
-              result += section;
-              return result > 0 ? result : 0;
-            }
-            return 0;
-          };
-          chapters.sort((a, b) => extractChapterNum(a.title) - extractChapterNum(b.title));
         }
         chapters.forEach((ch, idx) => { ch.index = idx; });
         console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)');
@@ -2873,14 +3008,20 @@ export class SourceExecutor {
           cleanRule = cleanRule.substring(0, jsIdx2).trim();
         }
         let result = '';
-        if (cleanRule === 'text') {
+        // Legado 规则用 @ 前缀表示提取属性（如 @href、@text、@src、@data-title），去掉前缀再匹配
+        const ruleKey = (cleanRule.startsWith('@') && cleanRule.length > 1 && !cleanRule.startsWith('@@'))
+          ? cleanRule.substring(1) : cleanRule;
+        if (ruleKey === 'text') {
           result = item.text || '';
-        } else if (cleanRule === 'ownText' || cleanRule === 'textNodes') {
+        } else if (ruleKey === 'ownText' || ruleKey === 'textNodes') {
           result = item.ownText || '';
-        } else if (cleanRule === 'href' || cleanRule === 'src') {
-          result = parser.getAttr(item, cleanRule);
-        } else if (cleanRule === 'html') {
+        } else if (ruleKey === 'href' || ruleKey === 'src') {
+          result = parser.getAttr(item, ruleKey);
+        } else if (ruleKey === 'html') {
           result = item.innerHtml || '';
+        } else if (cleanRule !== ruleKey && ruleKey) {
+          // @attrName — 提取任意 HTML 属性（如 @data-title、@title、@data-src）
+          result = parser.getAttr(item, ruleKey) || '';
         } else if (cleanRule) {
           result = parser.extractAttr(item, this.normalizeCssRule(cleanRule));
         }

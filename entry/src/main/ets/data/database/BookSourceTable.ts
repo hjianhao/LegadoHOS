@@ -432,6 +432,9 @@ export class BookSourceTable {
           const fixed = parseBookSource(parsed);
           // 恢复 jsLib（聚合书源的核心脚本）
           if (fixed.jsLib) source.jsLib = fixed.jsLib;
+          // 恢复 loginUrl（禁漫天堂等源依赖 loginUrl 初始化书源变量）
+          if (fixed.loginUrl) source.loginUrl = fixed.loginUrl;
+          if (fixed.loginCheckJs) source.loginCheckJs = fixed.loginCheckJs;
           // 恢复 exploreUrl
           if (fixed.exploreUrl && !source.exploreUrl) {
             source.exploreUrl = fixed.exploreUrl;

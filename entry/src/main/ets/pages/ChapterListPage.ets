@@ -71,6 +71,7 @@ struct ChapterListPage {
   @State tocUrl: string = '';
   @State durChapterIndex: number = 0;     // 当前阅读进度
   @State bookDetailUrl: string = '';       // 原始书籍详情页 URL（用于正文加载兜底）
+  @State isManga: boolean = false;         // 是否为漫画书源
 
   // 章节数据 — 使用 LazyForEach IDataSource 以支持 2000+ 章节流畅滚动
   private dataSource_: ChapterDataSource = new ChapterDataSource();
@@ -94,6 +95,7 @@ struct ChapterListPage {
       this.header = params['header'] || '';
       this.tocUrl = params['tocUrl'] || '';
       this.durChapterIndex = parseInt(params['durChapterIndex'] || '0');
+      this.isManga = params['isManga'] === '1';
     }
     this.loadChapters();
   }
@@ -188,7 +190,7 @@ struct ChapterListPage {
     const extractNum = (s: string): number => {
       const arabicM = s.match(/(\d+)/);
       if (arabicM) return parseInt(arabicM[1]);
-      const cnM = s.match(/第([零一二三四五六七八九十百千万]+)章/);
+      const cnM = s.match(/第([零一二三四五六七八九十百千万]+)[章节局话回卷篇幕部]/);
       if (cnM) {
         let cn = cnM[1];
         let result = 0;
@@ -264,14 +266,15 @@ struct ChapterListPage {
   /** 点击章节跳转到阅读页 */
   onChapterClick(ch: BookSourceChapter): void {
     console.info('[ChapterList] Select chapter:', ch.index, ch.title);
-    // 将当前章节列表缓存给 ReadPage 用
+    // 将当前章节列表缓存给阅读页用
     ChapterCache.chapters = this.chapters_;
     ChapterCache.bookUrl = this.bookUrl;
     ChapterCache.targetIndex = ch.index;
-    if (this.from === 'ReadPage') {
+    const targetPage = this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
+    if (this.from === 'ReadPage' || this.from === 'ComicReadPage') {
       // 从阅读页进来的 → router.back 回到阅读页并传参
       UiUtil.back(this.getUIContext(), {
-        url: 'pages/ReadPage',
+        url: targetPage,
         params: {
           durChapterIndex: ch.index,
           durChapterTitle: ch.title,
@@ -280,7 +283,7 @@ struct ChapterListPage {
     } else {
       // 从其他页（如 BookInfoPage）进来的 → router.pushUrl 跳转到阅读页
       UiUtil.pushUrl(this.getUIContext(), {
-        url: 'pages/ReadPage',
+        url: targetPage,
         params: {
           bookName: this.bookName,
           bookAuthor: this.bookAuthor,

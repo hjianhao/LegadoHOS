@@ -249,8 +249,14 @@ export class HtmlParser {
       }
     }
 
-    const elements = this.findElements(root, cssSel);
-    if (elements.length === 0) return '';
+	    let elements: HtmlElement[];
+	    if (!cssSel) {
+	      // Legado @attrName 独立使用（如 @href、@data-title）—— 以 root 自身为目标元素
+	      elements = root ? [root] : [];
+	    } else {
+	      elements = this.findElements(root, cssSel);
+	    }
+	    if (elements.length === 0) return '';
 
     const el = elements[0];
 

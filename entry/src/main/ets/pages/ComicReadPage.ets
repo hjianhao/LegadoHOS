@@ -69,6 +69,7 @@ struct ComicReadPage {
   @State showMenu: boolean = false;
   @State readMode: number = READ_MODE_WEBTOON;
   @State currentPageIndex: number = 0;
+  @State swiperIndex: number = 0;  // Swiper 声明式 index，用于数据变化时直接定位到正确页
 
   // 缩放状态
   @State imageScale: number = 1.0;
@@ -96,6 +97,8 @@ struct ComicReadPage {
   private chapterSwitching_: boolean = false;  // 章节切换中标记，防止 onReachEnd/onReachStart 重复触发
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
+  private prevChapterContent_: string = '';
+  private prevChapterIdx_: number = -1;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
   // 图片本地路径缓存：url -> localPath
   @State imagePaths: Map<string, string> = new Map<string, string>();
@@ -237,27 +240,38 @@ struct ComicReadPage {
         this.currentIndex = 0;
       }
 
-      await this.loadChapterImages(this.currentIndex);
+      // 恢复页内进度：从 DB 读取的 durChapterPos 传递给 loadChapterImages
+      const savedPageIdx: number = this.currentPageIndex;
+      await this.loadChapterImages(this.currentIndex, false, false, savedPageIdx);
     } catch (e) {
       this.loadError = '加载失败: ' + (e as Error).message;
       this.isLoading = false;
     }
   }
 
-  private async loadChapterImages(idx: number): Promise<void> {
+  private async loadChapterImages(idx: number, boundarySwitch: boolean = false, gotoLastPage: boolean = false, restorePageIdx: number = -1): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) {
       this.chapterSwitching_ = false;
       return;
     }
     // 设置标记，防止 onReachEnd/onReachStart 在章节切换时连锁触发
     this.justLoadedChapter_ = true;
-    this.isLoading = true;
+    if (!boundarySwitch) {
+      this.isLoading = true;
+    }
     this.currentIndex = idx;
-    this.currentPageIndex = 0;
     this.failedImages = new Set<string>();
     this.imagePaths = new Map<string, string>();
-    // 先清空 imageUrls，避免旧列表残留导致 onReachEnd 触发
-    this.imageUrls = [];
+    if (!boundarySwitch) {
+      // 先清空 imageUrls，避免旧列表残留导致 onReachEnd 触发
+      this.imageUrls = [];
+      // 不强制清零 currentPageIndex，保留外部恢复的进度（restorePageIdx 或已有值）
+      if (restorePageIdx >= 0) {
+        this.currentPageIndex = restorePageIdx;
+      } else if (!gotoLastPage) {
+        this.currentPageIndex = 0;
+      }
+    }
     const ch = this.allChapters_[idx];
     this.chapterTitle = ch?.title || '';
 
@@ -271,25 +285,31 @@ struct ComicReadPage {
       const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
       console.info('[ComicRead] extractImageUrls: found', urls.length, 'images for chapter', idx);
       if (urls.length > 0) {
+        // 在设置 imageUrls 之前确定目标页码和 Swiper index，使 Swiper 数据变化时直接从正确页渲染
+        let targetPage: number;
+        if (gotoLastPage) {
+          targetPage = urls.length - 1;
+        } else if (restorePageIdx >= 0 && restorePageIdx < urls.length) {
+          targetPage = restorePageIdx;
+        } else {
+          targetPage = 0;
+        }
+        this.currentPageIndex = targetPage;
+        // RTL 模式下 Swiper index 是反转的
+        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT ? urls.length - 1 - targetPage : targetPage;
         this.imageUrls = urls;
+        this.isLoading = false;
         // 预加载前 N 张图片（预加载的图片完成后会自动更新 imagePaths 触发 UI 刷新）
         this.preloadImages_(urls, this.preloadNum_);
-        // 恢复页内位置
-        if (this.currentPageIndex > 0 && this.currentPageIndex < urls.length) {
-          const restoreIdx: number = this.currentPageIndex;
-          setTimeout(() => {
-            if (this.readMode === READ_MODE_WEBTOON) {
-              this.listScroller_.scrollToIndex(restoreIdx);
+        setTimeout(() => {
+          if (this.readMode === READ_MODE_WEBTOON) {
+            if (gotoLastPage) {
+              this.listScroller_.scrollToIndex(targetPage);
             } else {
-              this.swiperController_.changeIndex(restoreIdx, false);
+              this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
             }
-          }, 200);
-        } else {
-          // 新章节滚动到顶部
-          setTimeout(() => {
-            this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-          }, 100);
-        }
+          }
+        }, 100);
       } else {
         this.imageUrls = [];
         this.loadError = '本章没有图片';
@@ -302,6 +322,7 @@ struct ComicReadPage {
     this.isLoading = false;
     this.saveProgress();
     this.preloadNextChapter_(idx);
+    this.preloadPrevChapter_(idx);
     // 延迟清除标记，确保 List 渲染完成后再允许 onReachEnd/onReachStart
     setTimeout(() => {
       this.justLoadedChapter_ = false;
@@ -369,10 +390,39 @@ struct ComicReadPage {
       });
   }
 
-  private async tryUsePreloadedChapter_(idx: number): Promise<boolean> {
+  /** 预加载上一章文本，用于向前无缝翻页 */
+  private preloadPrevChapter_(currentIdx: number): void {
+    const prevIdx = currentIdx - 1;
+    if (prevIdx < 0 || this.preloadingChapterPromises_.has(prevIdx)) return;
+    const promise = this.readChapterCache_(prevIdx)
+      .then((cached: string): Promise<string> | string => {
+        if (cached && cached.length > 10) return cached;
+        return this.fetchChapterContent_(prevIdx);
+      });
+    this.preloadingChapterPromises_.set(prevIdx, promise);
+    promise
+      .then((content: string): void => {
+        if (content && content.length > 10) {
+          this.prevChapterContent_ = content;
+          this.prevChapterIdx_ = prevIdx;
+        }
+      })
+      .catch((_e: Error) => { /* ignore */ })
+      .then(() => {
+        this.preloadingChapterPromises_.delete(prevIdx);
+      });
+  }
+
+  private async tryUsePreloadedChapter_(idx: number, gotoLastPage: boolean = false): Promise<boolean> {
     let content: string = '';
+    let fromNextCache = false;
+    let fromPrevCache = false;
     if (this.nextChapterIdx_ === idx && this.nextChapterContent_ && this.nextChapterContent_.length > 10) {
       content = this.nextChapterContent_;
+      fromNextCache = true;
+    } else if (this.prevChapterIdx_ === idx && this.prevChapterContent_ && this.prevChapterContent_.length > 10) {
+      content = this.prevChapterContent_;
+      fromPrevCache = true;
     } else {
       const pending = this.preloadingChapterPromises_.get(idx);
       if (pending) {
@@ -391,22 +441,36 @@ struct ComicReadPage {
     this.justLoadedChapter_ = true;
     this.currentIndex = idx;
     this.chapterTitle = ch?.title || '';
-    this.imageUrls = [];
     this.failedImages = new Set<string>();
     this.imagePaths = new Map<string, string>();
-    this.currentPageIndex = 0;
+    // 在设置 imageUrls 之前确定目标页码和 Swiper index，使 Swiper 数据变化时直接从正确页渲染
+    const targetPage: number = gotoLastPage ? urls.length - 1 : 0;
+    this.currentPageIndex = targetPage;
+    // RTL 模式下 Swiper index 是反转的
+    this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT ? urls.length - 1 - targetPage : targetPage;
     this.imageUrls = urls;
     this.isLoading = false;
-    if (this.nextChapterIdx_ === idx) {
+    if (fromNextCache) {
       this.nextChapterContent_ = '';
       this.nextChapterIdx_ = -1;
     }
+    if (fromPrevCache) {
+      this.prevChapterContent_ = '';
+      this.prevChapterIdx_ = -1;
+    }
     this.saveProgress();
     this.preloadNextChapter_(idx);
+    this.preloadPrevChapter_(idx);
     this.preloadImages_(urls, this.preloadNum_);
-    // 滚动到新章节顶部
+    // 条漫模式需要手动滚动到正确位置；翻页模式由 .index(swiperIndex) 声明式绑定处理
     setTimeout(() => {
-      this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+      if (this.readMode === READ_MODE_WEBTOON) {
+        if (gotoLastPage) {
+          this.listScroller_.scrollToIndex(targetPage);
+        } else {
+          this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+        }
+      }
       this.justLoadedChapter_ = false;
       this.chapterSwitching_ = false;
     }, 300);
@@ -479,10 +543,12 @@ struct ComicReadPage {
       return;
     }
     this.justLoadedChapter_ = true;
-    this.loadChapterImages(this.currentIndex - 1).then(() => {
-      setTimeout(() => {
-        this.listScroller_.scrollToIndex(0);
-      }, 100);
+    const prevIdx = this.currentIndex - 1;
+    // 无缝翻页：先尝试预加载内容，保持旧页面不闪烁
+    this.tryUsePreloadedChapter_(prevIdx, true).then((ok: boolean) => {
+      if (ok) return;
+      // 预加载未命中，回退到普通加载（保持旧页面直到新内容就绪）
+      this.loadChapterImages(prevIdx, true, true);
     });
   }
 
@@ -494,13 +560,12 @@ struct ComicReadPage {
     }
     // 设置标记，防止 onReachEnd 连锁触发
     this.justLoadedChapter_ = true;
-    if (await this.tryUsePreloadedChapter_(n)) {
+    if (await this.tryUsePreloadedChapter_(n, false)) {
       // tryUsePreloadedChapter_ 内部已处理 justLoadedChapter_ 的清除
       return;
     }
-    this.loadChapterImages(n).then(() => {
-      this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-    });
+    // 预加载未命中，回退到普通加载（保持旧页面直到新内容就绪）
+    this.loadChapterImages(n, true, false);
   }
 
   private onOpenToc(): void {
@@ -618,7 +683,9 @@ struct ComicReadPage {
     } else {
       if (this.currentPageIndex < this.imageUrls.length - 1) {
         this.currentPageIndex++;
-        this.swiperController_.changeIndex(this.currentPageIndex, true);
+        // RTL 模式下 Swiper index 是反转的
+        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
+          ? this.imageUrls.length - 1 - this.currentPageIndex : this.currentPageIndex;
       } else {
         this.onNextChapter();
       }
@@ -632,7 +699,9 @@ struct ComicReadPage {
     } else {
       if (this.currentPageIndex > 0) {
         this.currentPageIndex--;
-        this.swiperController_.changeIndex(this.currentPageIndex, true);
+        // RTL 模式下 Swiper index 是反转的
+        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
+          ? this.imageUrls.length - 1 - this.currentPageIndex : this.currentPageIndex;
       } else {
         this.onPrevChapter();
       }
@@ -765,6 +834,7 @@ struct ComicReadPage {
     .indicator(false)
     .loop(false)
     .duration(300)
+    .index(this.swiperIndex)
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
     .onChange((index: number) => {
@@ -772,18 +842,10 @@ struct ComicReadPage {
       const actualIndex: number = this.readMode === READ_MODE_RIGHT_TO_LEFT
         ? this.imageUrls.length - 1 - index : index;
       this.currentPageIndex = actualIndex;
+      this.swiperIndex = index;
       this.saveProgress();
-      // 翻到边界自动切章
-      if (index === this.imageUrls.length - 1) {
-        setTimeout(() => { this.onNextChapter(); }, 300);
-      } else if (index === 0) {
-        // 翻到第一张，延迟检查是否上一章
-        setTimeout(() => {
-          if (this.currentPageIndex === 0 && this.currentIndex > 0) {
-            // 不自动触发，让触控区域处理
-          }
-        }, 300);
-      }
+      // 翻到边界时不自动切章，由触控区域 nextPage()/prevPage() 处理，
+      // 避免自动切章定时器与用户点击冲突导致跳到下一章第二页
     })
     .onClick((event: ClickEvent) => {
       this.handleComicClick_(event.x, event.y);
@@ -853,14 +915,14 @@ struct ComicReadPage {
     .indicator(false)
     .loop(false)
     .duration(300)
+    .index(this.swiperIndex)
     .width('100%').height('100%')
     .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
     .onChange((index: number) => {
       this.currentPageIndex = index;
+      this.swiperIndex = index;
       this.saveProgress();
-      if (index === this.imageUrls.length - 1) {
-        setTimeout(() => { this.onNextChapter(); }, 300);
-      }
+      // 翻到边界时不自动切章，由触控区域 nextPage()/prevPage() 处理
     })
     .onClick((event: ClickEvent) => {
       this.handleComicClick_(event.x, event.y);

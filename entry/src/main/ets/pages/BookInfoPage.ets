@@ -792,11 +792,13 @@ struct BookInfoPage {
   }
 
   openToc(): void {
+    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
     UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: {
       from: 'BookInfoPage', bookName: this.bookName, bookAuthor: this.bookAuthor,
       bookUrl: this.noteUrl, originUrl: this.originUrl, origin: this.origin,
       tocUrl: this.getCurrentTocUrl(),
       header: this.sourceHeader,
+      isManga: isManga ? '1' : '0',
     }});
   }
 
