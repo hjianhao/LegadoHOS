@@ -28,6 +28,7 @@ import { CacheDialog } from '../components/reader/CacheDialog';
 import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
+import window from '@ohos.window';
 import { WebDavService } from '../service/WebDavService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
@@ -67,7 +68,7 @@ struct ReadPage {
   private measureCharW_: number = 0;
   private measureLineH_: number = 0;
   private measureUtil_: MeasureUtils | null = null;
-  @State showMenu: boolean = false;
+  @State @Watch('onShowMenuChange_') showMenu: boolean = false;
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
@@ -118,6 +119,8 @@ struct ReadPage {
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
     if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
     this.loadSettings();
+    // 进入沉浸式模式（隐藏状态栏和导航栏）
+    this.setSystemBarVisible_(false);
     // 初始化测量工具
     try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
     // 云端同步（异步，不阻塞主流程）
@@ -155,6 +158,8 @@ struct ReadPage {
   }
 
   onPageShow(): void {
+    // 从其他页面返回时重新进入沉浸式
+    this.setSystemBarVisible_(false);
     if (!this.isLoading) {
       // 从目录页返回时，通过 ChapterCache 获取目标章节索引
       if (ChapterCache.targetIndex >= 0) {
@@ -601,6 +606,29 @@ struct ReadPage {
     console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
     await this.saveProgressAsync_();
     releaseGlobalAloudEngine();
+    // 退出时恢复系统栏
+    this.setSystemBarVisible_(true);
+  }
+
+  /** showMenu 变化时自动同步系统栏：菜单显示->恢复状态栏，菜单隐藏->进入沉浸式 */
+  private onShowMenuChange_(): void {
+    this.setSystemBarVisible_(this.showMenu);
+  }
+
+  /** 控制系统栏显示/隐藏 */
+  private async setSystemBarVisible_(visible: boolean): Promise<void> {
+    try {
+      const ctx = UiUtil.getHostContext(this.getUIContext());
+      if (!ctx) return;
+      const win: window.Window = await window.getLastWindow(ctx);
+      if (visible) {
+        await win.setWindowSystemBarEnable(['status', 'navigation']);
+      } else {
+        await win.setWindowSystemBarEnable([]);
+      }
+    } catch (err) {
+      console.warn('[ReadPage] setSystemBar failed:', (err as Error).message);
+    }
   }
 
   private async saveProgressAsync_(): Promise<void> {

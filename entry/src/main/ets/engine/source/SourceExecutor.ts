@@ -1369,12 +1369,16 @@ export class SourceExecutor {
         }
       }
 
-      // @js: 规则处理：先提取 {{@CSS@attr}} 模板的值作为 result，再执行 JS 后处理
-      if (source.ruleBookContent) {
-        const contentRule = source.ruleBookContent.trim();
-        // 分离 @js: 后缀和前面的 CSS/模板规则
-        const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(contentRule);
-        if (jsCode) {
+	      // @js: 规则处理：先提取 {{@CSS@attr}} 模板的值作为 result，再执行 JS 后处理
+	      if (source.ruleBookContent) {
+	        const contentRule = source.ruleBookContent.trim();
+	        // 分离 @js: 后缀和前面的 CSS/模板规则
+	        const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(contentRule);
+	        if (jsCode) {
+	          // 确保 ScriptEngine 已初始化，否则 evaluateSync 会静默失败
+	          if (!this.engineInitialized) {
+	            await this.initialize();
+	          }
           // 解析 {{@CSS@attr}} 模板：提取所有匹配元素的属性值，用换行连接
           let extractedResult = raw;
           if (ruleBeforeJs) {
@@ -1516,42 +1520,56 @@ export class SourceExecutor {
       if (absUrl && !seen.has(absUrl)) { seen.add(absUrl); urls.push(absUrl); }
     };
 
-    // 先尝试 JSON 解析
-    try {
-      const parsed: Record<string, Object> = JSON.parse(content) as Record<string, Object>;
-      if (Array.isArray(parsed)) {
-        // 直接是 URL 数组
-        const arr = parsed as Object[];
-        for (const item of arr) {
-          if (typeof item === 'string' && this.isImageUrl_(item as string)) {
-            addUrl(item as string);
-          } else if (typeof item === 'object' && item !== null) {
-            // 对象数组，尝试常见字段
-            const obj = item as Record<string, Object>;
-            const url = obj['url'] || obj['src'] || obj['image'] || obj['imageUrl'] || obj['pic'];
-            if (typeof url === 'string' && this.isImageUrl_(url as string)) {
-              addUrl(url as string);
-            }
-          }
-        }
-        if (urls.length > 0) return urls;
-      } else if (typeof parsed === 'object' && parsed !== null) {
-        // JSON 对象，尝试常见字段
-        const obj = parsed as Record<string, Object>;
-        const candidates: Object[] = [obj['images'], obj['list'], obj['data'], obj['pics'], obj['content']];
-        for (const c of candidates) {
-          if (Array.isArray(c)) {
-            const arr = c as Object[];
-            for (const item of arr) {
-              if (typeof item === 'string' && this.isImageUrl_(item as string)) {
-                addUrl(item as string);
-              }
-            }
-            if (urls.length > 0) return urls;
-          }
-        }
-      }
-    } catch (_e) { /* not JSON, continue */ }
+	    // 先尝试 JSON 解析
+	    try {
+	      const parsed: Record<string, Object> = JSON.parse(content) as Record<string, Object>;
+	      if (Array.isArray(parsed)) {
+	        // 直接是 URL 数组
+	        const arr = parsed as Object[];
+	        for (const item of arr) {
+	          if (typeof item === 'string' && this.isImageUrl_(item as string)) {
+	            addUrl(item as string);
+	          } else if (typeof item === 'object' && item !== null) {
+	            // 对象数组，尝试常见字段
+	            const obj = item as Record<string, Object>;
+	            const url = obj['url'] || obj['src'] || obj['image'] || obj['imageUrl'] || obj['pic'];
+	            if (typeof url === 'string' && this.isImageUrl_(url as string)) {
+	              addUrl(url as string);
+	            }
+	          }
+	        }
+	        if (urls.length > 0) return urls;
+	      } else if (typeof parsed === 'object' && parsed !== null) {
+	        // JSON 对象，尝试常见字段（包括嵌套 data.images 等结构）
+	        const collected: string[] = [];
+	        this.collectImageUrlsFromJson_(parsed as Record<string, unknown>, collected, 0);
+	        for (const url of collected) {
+	          addUrl(url);
+	        }
+	        if (urls.length > 0) return urls;
+
+	        // 兼容旧逻辑：检查顶层已知数组字段
+	        const obj = parsed as Record<string, Object>;
+	        const candidates: Object[] = [obj['images'], obj['list'], obj['data'], obj['pics'], obj['content']];
+	        for (const c of candidates) {
+	          if (Array.isArray(c)) {
+	            const arr = c as Object[];
+	            for (const item of arr) {
+	              if (typeof item === 'string' && this.isImageUrl_(item as string)) {
+	                addUrl(item as string);
+	              } else if (typeof item === 'object' && item !== null) {
+	                const obj2 = item as Record<string, Object>;
+	                const url = obj2['url'] || obj2['src'] || obj2['image'] || obj2['imageUrl'] || obj2['pic'];
+	                if (typeof url === 'string' && this.isImageUrl_(url as string)) {
+	                  addUrl(url as string);
+	                }
+	              }
+	            }
+	            if (urls.length > 0) return urls;
+	          }
+	        }
+	      }
+	    } catch (_e) { /* not JSON, continue */ }
 
     // HTML <img> 标签提取
     const formatted = ContentCleaner.formatKeepImg(content, baseUrl);
@@ -1585,6 +1603,83 @@ export class SourceExecutor {
     if (url.startsWith('//')) return true;
     if (url.startsWith('/')) return true;
     return false;
+  }
+
+  /**
+   * 递归从 JSON 对象中提取所有图片 URL（嵌套路径：data.images[].url）
+   * 深度不超过 5 层，避免无限递归
+   */
+  private collectImageUrlsFromJson_(obj: Record<string, unknown>, out: string[], depth: number): void {
+    if (depth > 5 || !obj) return;
+    // 已知可能包含图片 URL 数组的字段名
+    const arrayFields: string[] = ['images', 'imgList', 'imageList', 'pics', 'picList', 'list', 'data',
+      'page', 'pages', 'imgs', 'imgUrls', 'imageUrls', 'urls', 'content', 'results', 'items'];
+    // 已知可能直接包含图片 URL 的字段名
+    const urlFields: string[] = ['url', 'src', 'image', 'imageUrl', 'img', 'pic', 'cover', 'coverUrl',
+      'srcUrl', 'originUrl', 'downloadUrl', 'urls', 'imgUrl'];
+
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (!val) continue;
+
+      // 1) 值本身就是字符串 URL
+      if (typeof val === 'string') {
+        if (this.isImageUrl_(val)) {
+          out.push(val);
+          continue;
+        }
+        // 可能是 JSON 嵌套在字符串中
+        if ((val.startsWith('{') || val.startsWith('[')) && depth < 3) {
+          try {
+            const nested = JSON.parse(val) as Record<string, unknown>;
+            this.collectImageUrlsFromJson_(nested, out, depth + 1);
+          } catch (_) { /* not JSON */ }
+        }
+        continue;
+      }
+
+      // 2) 值是数组
+      if (Array.isArray(val)) {
+        // 已知字段名中的数组 → 逐一检查元素
+        if (arrayFields.indexOf(key) >= 0) {
+          for (const item of val) {
+            if (typeof item === 'string' && this.isImageUrl_(item)) {
+              out.push(item);
+            } else if (typeof item === 'object' && item !== null) {
+              this.collectImageUrlsFromJson_(item as Record<string, unknown>, out, depth + 1);
+            }
+          }
+        } else {
+          // 非已知字段名但深度较浅时也尝试
+          if (depth < 2) {
+            for (const item of val) {
+              if (typeof item === 'string' && this.isImageUrl_(item)) {
+                out.push(item);
+              } else if (typeof item === 'object' && item !== null) {
+                this.collectImageUrlsFromJson_(item as Record<string, unknown>, out, depth + 1);
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      // 3) 值是对象
+      if (typeof val === 'object' && val !== null) {
+        // 对象的已知 URL 字段名直接提取
+        if (urlFields.indexOf(key) >= 0) {
+          const strVal = (val as Record<string, unknown>)['url'] || (val as Record<string, unknown>)['src']
+            || (val as Record<string, unknown>)['image'] || String(val);
+          if (typeof strVal === 'string' && this.isImageUrl_(strVal)) {
+            out.push(strVal);
+          }
+        }
+        // 递归深入（限制深度）
+        if (arrayFields.indexOf(key) >= 0 || key === 'data' || depth < 2) {
+          this.collectImageUrlsFromJson_(val as Record<string, unknown>, out, depth + 1);
+        }
+      }
+    }
   }
   private parseCatalogResponse_(body: string, source: BookSource, tocUrl: string): BookSourceChapter[] {
     try {
