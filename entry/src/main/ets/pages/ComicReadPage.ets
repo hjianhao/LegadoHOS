@@ -29,6 +29,7 @@ import { SearchResult } from '../model/SearchResult';
 import window from '@ohos.window';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import fileFs from '@ohos.file.fs';
+import { common } from '@kit.AbilityKit';
 
 /** 阅读方向模式 */
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
@@ -71,7 +72,7 @@ struct ComicReadPage {
   @State loadError: string = '';
 
   // UI 状态
-  @State showMenu: boolean = false;
+  @State @Watch('onShowMenuChange_') showMenu: boolean = false;
   @State readMode: number = READ_MODE_WEBTOON;
   @State singlePageMode: boolean = false;  // 单页全屏开关（独立于阅读方向）
   @State currentPageIndex: number = 0;
@@ -85,6 +86,8 @@ struct ComicReadPage {
   @State panOffsetY: number = 0;
   private panStartX_: number = 0;
   private panStartY_: number = 0;
+  // 交叉淡入动画
+  @State imageOpacity: number = 0;
 
   // 触控区域动作配置（9宫格）
   @State comicZoneActions: number[] = [4, 2, 3, 2, 0, 1, 2, 1, 1];
@@ -123,6 +126,10 @@ struct ComicReadPage {
   @State autoRead: boolean = false;
   private autoReadTimer_: number = -1;
   private autoReadSpeed_: number = 3;  // 秒
+  // 色彩滤镜亮度（0-100, 50=默认不变）
+  @State comicBrightness: number = 50;
+  // 条漫侧边留白百分比（0-20）
+  @State comicSidePadding: number = 0;
 
   aboutToAppear(): void {
     const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
@@ -146,6 +153,8 @@ struct ComicReadPage {
       this.singlePageMode = await s.getComicSinglePageMode();
       this.preloadNum_ = await s.getComicPreloadNum();
       this.autoReadSpeed_ = await s.getComicAutoReadSpeed();
+      this.comicBrightness = await s.getComicBrightness();
+      this.comicSidePadding = await s.getComicSidePadding();
       const actions: number[] = [];
       for (let i = 0; i < 9; i++) {
         actions.push(await s.getComicClickAction(i));
@@ -272,7 +281,7 @@ struct ComicReadPage {
     }
   }
 
-  private async loadChapterImages(idx: number, boundarySwitch: boolean = false, gotoLastPage: boolean = false, restorePageIdx: number = -1): Promise<void> {
+  private async loadChapterImages(idx: number, boundarySwitch: boolean = false, gotoLastPage: boolean = false, restorePageIdx: number = -1, forceRefresh: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) {
       this.chapterSwitching_ = false;
       return;
@@ -295,13 +304,20 @@ struct ComicReadPage {
         this.currentPageIndex = 0;
       }
     }
-    const ch = this.allChapters_[idx];
-    this.chapterTitle = ch?.title || '';
+	    const ch = this.allChapters_[idx];
+	    this.chapterTitle = ch?.title || '';
 
-    let content: string = await this.readChapterCache_(idx);
-    if (!content || content.length < 10) {
-      content = await this.fetchChapterContent_(idx);
-    }
+	    let content: string = '';
+	    if (forceRefresh) {
+	      // 强制刷新：清除缓存并重新拉取
+	      await this.clearChapterCache_(idx);
+	      content = await this.fetchChapterContent_(idx);
+	    } else {
+	      content = await this.readChapterCache_(idx);
+	      if (!content || content.length < 10) {
+	        content = await this.fetchChapterContent_(idx);
+	      }
+	    }
 
     if (content) {
       const baseUrl: string = ch?.url || this.bookUrl || this.source_?.sourceUrl || '';
@@ -346,6 +362,8 @@ struct ComicReadPage {
     this.saveProgress();
     this.preloadNextChapter_(idx);
     this.preloadPrevChapter_(idx);
+    // 多章图片预下载（前后各 2 章）
+    this.preloadSurroundingChapters_(idx, 2);
     // 延迟清除标记，确保 List 渲染完成后再允许 onReachEnd/onReachStart
     setTimeout(() => {
       this.justLoadedChapter_ = false;
@@ -371,6 +389,22 @@ struct ComicReadPage {
     } catch (_e) {
       return '';
     }
+  }
+
+  /** 清除指定章节的本地缓存（用于强制刷新时重新拉取） */
+  private async clearChapterCache_(idx: number): Promise<void> {
+    if (this.bookId_ <= 0) return;
+    try {
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      const cached = await ct.getChapterByIndex(this.bookId_, idx);
+      if (cached) {
+        cached.content = '';
+        cached.contentLength = 0;
+        cached.isCached = false;
+        cached.updateTime = Date.now();
+        await ct.updateChapter(cached);
+      }
+    } catch (_e) { /* ignore */ }
   }
 
   private async fetchChapterContent_(idx: number): Promise<string> {
@@ -452,6 +486,44 @@ struct ComicReadPage {
         MangaImageLoader.preload(url, this.source_);
       }
     } catch (_) { /* ignore */ }
+  }
+
+  /** 预下载前后各 N 章的图片到本地缓存（不阻塞 UI，异步静默执行） */
+  private preloadSurroundingChapters_(currentIdx: number, range: number): void {
+    for (let offset = 1; offset <= range; offset++) {
+      // 后 N 章
+      const nextIdx: number = currentIdx + offset;
+      if (nextIdx < this.allChapters_.length && !this.preloadingChapterPromises_.has(nextIdx)) {
+        const idx: number = nextIdx;
+        this.readChapterCache_(idx)
+          .then((cached: string): Promise<string> | string => {
+            if (cached && cached.length > 10) return cached;
+            return this.fetchChapterContent_(idx);
+          })
+          .then((content: string): void => {
+            if (content && content.length > 10) {
+              this.preloadChapterImages_(idx, content);
+            }
+          })
+          .catch((_e: Error) => { /* ignore */ });
+      }
+      // 前 N 章
+      const prevIdx: number = currentIdx - offset;
+      if (prevIdx >= 0 && !this.preloadingChapterPromises_.has(prevIdx)) {
+        const idx: number = prevIdx;
+        this.readChapterCache_(idx)
+          .then((cached: string): Promise<string> | string => {
+            if (cached && cached.length > 10) return cached;
+            return this.fetchChapterContent_(idx);
+          })
+          .then((content: string): void => {
+            if (content && content.length > 10) {
+              this.preloadChapterImages_(idx, content);
+            }
+          })
+          .catch((_e: Error) => { /* ignore */ });
+      }
+    }
   }
 
   private async tryUsePreloadedChapter_(idx: number, gotoLastPage: boolean = false): Promise<boolean> {
@@ -580,6 +652,11 @@ struct ComicReadPage {
     this.setSystemBarVisible_(true);
   }
 
+  /** showMenu 变化时自动同步系统栏：菜单显示→恢复状态栏，菜单隐藏→进入沉浸式 */
+  private onShowMenuChange_(): void {
+    this.setSystemBarVisible_(this.showMenu);
+  }
+
   /** 控制系统栏显示/隐藏 */
   private async setSystemBarVisible_(visible: boolean): Promise<void> {
     try {
@@ -701,14 +778,22 @@ struct ComicReadPage {
     }
   }
 
-  /** 双击图片缩放 */
-  private onDoubleTap(): void {
+  /** 双击图片缩放，定位到点击点 */
+  private onDoubleTap(tapX: number = 0, tapY: number = 0): void {
     if (this.imageScale > 1.0) {
+      // 已放大，还原
       this.imageScale = 1.0;
       this.panOffsetX = 0;
       this.panOffsetY = 0;
     } else {
+      // 放大到 2x，以点击点为中心
       this.imageScale = DOUBLE_TAP_SCALE;
+      const w: number = this.screenWidth > 0 ? this.screenWidth : 360;
+      const h: number = this.screenHeight > 0 ? this.screenHeight : 640;
+      // 偏移量 = (屏幕中心 - 点击点) * (scale - 1)
+      const targetX: number = (w / 2 - tapX) * (DOUBLE_TAP_SCALE - 1.0);
+      const targetY: number = (h / 2 - tapY) * (DOUBLE_TAP_SCALE - 1.0);
+      this.clampPanOffset_(targetX, targetY);
     }
   }
 
@@ -758,11 +843,10 @@ struct ComicReadPage {
         break;
       case ClickAction.MENU:
         this.showMenu = !this.showMenu;
-        // 菜单显示时暂停自动阅读、恢复状态栏；隐藏时恢复自动阅读、进入沉浸式
+        // 菜单显示时暂停自动阅读（状态栏由 @Watch onShowMenuChange_ 自动同步）
         if (this.showMenu) {
           this.stopAutoRead();
         }
-        this.setSystemBarVisible_(this.showMenu);
         break;
       case ClickAction.NEXT_PAGE:
         this.nextPage();
@@ -824,26 +908,39 @@ struct ComicReadPage {
 
   build() {
     Stack() {
-      if (this.isLoading) {
-        // 加载中
-        Column() {
-          LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark))
-          if (this.loadError) {
-            Text(this.loadError).fontSize(14).fontColor(ThemeColors.error(this.isDark)).margin({ top: 16 })
-          } else {
-            Text('加载中…').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })
-          }
-        }
-        .width('100%').height('100%').justifyContent(FlexAlign.Center)
-      } else if (this.imageUrls.length === 0) {
-        // 无图片
-        Column() {
-          Text(this.loadError || '本章没有图片').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
-          Button('重试').margin({ top: 20 }).onClick(() => {
-            this.loadChapterImages(this.currentIndex);
-          })
-        }
-        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+	      if (this.isLoading) {
+	        // 加载中 — 可点击调出菜单（方便取消/返回）
+	        Column() {
+	          LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark))
+	          if (this.loadError) {
+	            Text(this.loadError).fontSize(14).fontColor(ThemeColors.error(this.isDark)).margin({ top: 16 })
+	          } else {
+	            Text('加载中…').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })
+	          }
+	        }
+	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+		        .onClick(() => {
+		          this.showMenu = !this.showMenu;
+		        })
+	      } else if (this.imageUrls.length === 0) {
+	        // 无图片 — 同样支持点击调出菜单和刷新
+	        Column() {
+	          Text(this.loadError || '本章没有图片').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+	          Row() {
+	          Button('重试').margin({ top: 20 }).onClick(() => {
+	              this.loadChapterImages(this.currentIndex, false, false, -1, true);
+	            })
+		            Button('菜单').margin({ top: 20 }).margin({ left: 16 }).onClick(() => {
+		              this.showMenu = !this.showMenu;
+		            })
+	          }
+	          .justifyContent(FlexAlign.Center)
+	        }
+	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+	        .onClick(() => {
+	          // 点击页面空白处调出菜单（与正常阅读模式一致的触控行为）
+	          this.handleComicClick_(this.screenWidth / 2, this.screenHeight / 2);
+	        })
       } else if (this.singlePageMode) {
         // 单页全屏模式（独立开关，覆盖阅读方向）
         this.buildSinglePageMode()
@@ -924,6 +1021,10 @@ struct ComicReadPage {
     .onClick((event: ClickEvent) => {
       this.handleComicClick_(event.x, event.y);
     })
+    .padding({
+      left: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+      right: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+    })
   }
 
   @Builder
@@ -956,6 +1057,10 @@ struct ComicReadPage {
     .onClick((event: ClickEvent) => {
       this.handleComicClick_(event.x, event.y);
     })
+    .padding({
+      left: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+      right: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+    })
   }
 
   @Builder
@@ -981,11 +1086,13 @@ struct ComicReadPage {
             }
             .justifyContent(FlexAlign.Center)
           } else if (this.imagePaths.has(url)) {
-            Image(this.imagePaths.get(url))
-              .width('100%').height('100%')
+            Image(this.imagePaths.get(url) as string)
+            .width('100%').height('100%')
               .objectFit(ImageFit.Contain)
               .scale({ x: this.imageScale, y: this.imageScale })
               .translate({ x: this.panOffsetX, y: this.panOffsetY })
+              .opacity(1)
+              .animation({ duration: 300, curve: Curve.EaseInOut })
               .onError(() => {
                 const newSet = new Set<string>(this.failedImages);
                 newSet.add(url);
@@ -1016,7 +1123,13 @@ struct ComicReadPage {
               )
               .gesture(
                 TapGesture({ count: 2 })
-                  .onAction(() => { this.onDoubleTap(); })
+                  .onAction((event: GestureEvent) => {
+                    if (event && event.fingerList && event.fingerList.length > 0) {
+                      this.onDoubleTap(event.fingerList[0].localX, event.fingerList[0].localY);
+                    } else {
+                      this.onDoubleTap();
+                    }
+                  })
               )
           } else {
             Column() {
@@ -1076,11 +1189,13 @@ struct ComicReadPage {
       } else {
         // 图片显示
         if (this.imagePaths.has(url)) {
-          Image(this.imagePaths.get(url))
+          Image(this.imagePaths.get(url) as string)
             .width('100%')
             .objectFit(ImageFit.Auto)
             .scale({ x: this.imageScale, y: this.imageScale })
             .translate({ x: this.panOffsetX, y: this.panOffsetY })
+            .opacity(1)
+            .animation({ duration: 300, curve: Curve.EaseInOut })
             .onError(() => {
               const newSet = new Set<string>(this.failedImages);
               newSet.add(url);
@@ -1210,6 +1325,7 @@ struct ComicReadPage {
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 4 })
+        .onClick(() => { this.openChapterUrl_(); })
         // 模式选择
         Text(this.readModeLabel()).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
@@ -1245,6 +1361,21 @@ struct ComicReadPage {
         .backgroundColor(ThemeColors.surface(this.isDark))
         .padding({ left: 16, right: 16 })
       }
+
+      // 亮度调节
+      Row() {
+        Text('亮度').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
+        Slider({ value: this.comicBrightness, min: 0, max: 100, step: 5 })
+          .layoutWeight(1).margin({ left: 8, right: 8 })
+          .onChange((val: number) => {
+            this.comicBrightness = Math.round(val);
+            this.saveBrightness_();
+          })
+        Text(`${this.comicBrightness}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
+      }
+      .width('100%').height(36)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+      .padding({ left: 16, right: 16 })
 
       // 页内进度条（图片跳转）
       if (this.imageUrls.length > 1) {
@@ -1512,7 +1643,7 @@ struct ComicReadPage {
   }
 
   private onRefresh(): void {
-    this.loadChapterImages(this.currentIndex).then(() => {
+    this.loadChapterImages(this.currentIndex, false, false, -1, true).then(() => {
       UiUtil.showToast(this.getUIContext(), { message: '已刷新', duration: 1500 });
     });
   }
@@ -1599,6 +1730,47 @@ struct ComicReadPage {
       UiUtil.showToast(this.getUIContext(), { message: '已停止自动阅读', duration: 1500 });
     } else {
       this.startAutoRead();
+    }
+  }
+
+  /** 计算色彩滤镜矩阵（亮度调节） */
+  private getColorModify_(): [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] {
+    if (this.comicBrightness === 50) {
+      // 默认矩阵（无变化）
+      return [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+    }
+    // 亮度：50=1.0, 0=0.5(暗), 100=1.5(亮)
+    const factor: number = 0.5 + this.comicBrightness / 100;
+    // 偏移量：亮度高时加正值，低时减
+    const offset: number = (factor - 1.0) * 0.5 * 255;
+    return [factor, 0, 0, 0, offset, 0, factor, 0, 0, offset, 0, 0, factor, 0, offset, 0, 0, 0, 1, 0];
+  }
+
+  /** 保存亮度设置 */
+  private async saveBrightness_(): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.setComicBrightness(this.comicBrightness);
+    } catch (_) { /* ignore */ }
+  }
+
+  /** 用系统浏览器打开当前章节 URL */
+  private openChapterUrl_(): void {
+    const ch = this.allChapters_[this.currentIndex];
+    if (!ch || !ch.url) {
+      UiUtil.showToast(this.getUIContext(), { message: '无章节URL', duration: 1500 });
+      return;
+    }
+    try {
+      const ctx = UiUtil.getHostContext(this.getUIContext()) as common.UIAbilityContext;
+      ctx.startAbility({
+        action: 'ohos.want.action.viewData',
+        uri: ch.url,
+      }).catch(() => {
+        UiUtil.showToast(this.getUIContext(), { message: '打开失败', duration: 1500 });
+      });
+    } catch (_) {
+      UiUtil.showToast(this.getUIContext(), { message: '启动失败', duration: 1500 });
     }
   }
 

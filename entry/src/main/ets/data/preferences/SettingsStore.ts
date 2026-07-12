@@ -384,6 +384,14 @@ export class SettingsStore {
   async getComicAutoReadSpeed(): Promise<number> { return await this.get('comic_auto_read_speed', 3); }
   async setComicAutoReadSpeed(speed: number): Promise<void> { await this.put('comic_auto_read_speed', speed); }
 
+  /** 漫画色彩滤镜亮度（0-100, 50=默认） */
+  async getComicBrightness(): Promise<number> { return await this.get('comic_brightness', 50); }
+  async setComicBrightness(v: number): Promise<void> { await this.put('comic_brightness', v); }
+
+  /** 漫画条漫侧边留白百分比（0-20） */
+  async getComicSidePadding(): Promise<number> { return await this.get('comic_side_padding', 0); }
+  async setComicSidePadding(v: number): Promise<void> { await this.put('comic_side_padding', v); }
+
   /** 漫画图片预加载数量 */
   async getComicPreloadNum(): Promise<number> { return await this.get('comic_preload_num', 3); }
   async setComicPreloadNum(n: number): Promise<void> { await this.put('comic_preload_num', n); }
