@@ -505,6 +505,33 @@ export class SourceExecutor {
     return AppStorage.get<string>('gy_qttoken') || '';
   }
 
+  /**
+   * 如果书源变量未初始化但 loginUrl 存在，执行 loginUrl 初始化变量
+   * （禁漫天堂等源依赖 loginUrl 设置 $$$ 变量，Get('url') 才能返回正确线路）
+   * 在 searchSingle 和 getToc 中调用
+   */
+  private async ensureSourceVariables(source: BookSource, baseUrl: string): Promise<void> {
+    if (!this.engineInitialized || !source.loginUrl || source.variableComment) return;
+    try {
+      console.info('[SrcEx] Initializing source variables from loginUrl for', source.sourceName);
+      const combinedScript = `${source.loginUrl}\nsource.getVariable();`;
+      const vars = await JsExpressionEvaluator.evaluate(
+        combinedScript,
+        { source: source, jsLib: source.jsLib || '', baseUrl: baseUrl }
+      );
+      if (vars && vars.trim() && vars !== '{}' && !vars.startsWith('SyntaxError')) {
+        source.variableComment = vars;
+        console.info('[SrcEx] loginUrl initialized variables for', source.sourceName,
+          'vars=' + vars.substring(0, 100));
+      } else {
+        console.warn('[SrcEx] loginUrl did not set variables for', source.sourceName,
+          'vars=' + vars.substring(0, 80));
+      }
+    } catch (e) {
+      console.warn('[SrcEx] loginUrl evaluation failed for', source.sourceName, ':', (e as Error).message);
+    }
+  }
+
   private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     let baseUrl = getBaseUrl(source.sourceUrl);
@@ -541,29 +568,7 @@ export class SourceExecutor {
     }
 
     // 如果书源变量未初始化但 loginUrl 存在，先执行 loginUrl 初始化变量
-    // （禁漫天堂等源依赖 loginUrl 设置 $$$ 变量，Get('url') 才能返回正确线路）
-    if (this.engineInitialized && source.loginUrl && !source.variableComment) {
-      try {
-        console.info('[SrcEx] Initializing source variables from loginUrl for', source.sourceName);
-        // 把 loginUrl 执行和 getVariable() 读取合并到同一次 JS 求值中，
-        // 确保 setVariable 设置的变量在同上下文中可被 getVariable 读取
-        const combinedScript = `${source.loginUrl}\nsource.getVariable();`;
-        const vars = await JsExpressionEvaluator.evaluate(
-          combinedScript,
-          { source: source, jsLib: source.jsLib || '', baseUrl: baseUrl }
-        );
-        if (vars && vars.trim() && vars !== '{}' && !vars.startsWith('SyntaxError')) {
-          source.variableComment = vars;
-          console.info('[SrcEx] loginUrl initialized variables for', source.sourceName,
-            'vars=' + vars.substring(0, 100));
-        } else {
-          console.warn('[SrcEx] loginUrl did not set variables for', source.sourceName,
-            'vars=' + vars.substring(0, 80));
-        }
-      } catch (e) {
-        console.warn('[SrcEx] loginUrl evaluation failed for', source.sourceName, ':', (e as Error).message);
-      }
-    }
+    await this.ensureSourceVariables(source, baseUrl);
 
     // 评估 searchUrl 中的 <js>...</js> 块（Legado 聚合书源常用）
     let searchUrlTemplate = source.ruleSearchUrl;
@@ -1364,33 +1369,62 @@ export class SourceExecutor {
         }
       }
 
-      // @js: 规则处理：将原始响应作为 src 变量传入 JS 求值（漫画等场景）
+      // @js: 规则处理：先提取 {{@CSS@attr}} 模板的值作为 result，再执行 JS 后处理
       if (source.ruleBookContent) {
         const contentRule = source.ruleBookContent.trim();
-        const jsMatch = contentRule.match(/(?:^|[^@])@js:\s*([\s\S]*)$/);
-        if (jsMatch) {
-          const jsCode = jsMatch[1].trim();
-          if (jsCode) {
-            const ctx: JsEvalContext = {
-              src: raw,
-              result: raw,
-              baseUrl: (() => {
-                const m = (contentUrl || '').match(/^https?:\/\/[^\/]+/);
-                return m ? m[0] : '';
-              })(),
-            };
-            const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
-            if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
-              let content = evalResult;
-              try {
-                const parsed = JSON.parse(evalResult);
-                if (typeof parsed === 'string') content = parsed;
-              } catch (_e) { /* not JSON, use as-is */ }
-              content = this.applyReplaceRegex(content, source.ruleBookContentReplaceRegex);
-              const finalContent = preserveImages ? ContentCleaner.formatKeepImg(content, contentUrl) : content;
-              console.info('[SrcEx] getContent @js: rule returned', finalContent.length, 'bytes');
-              return finalContent;
+        // 分离 @js: 后缀和前面的 CSS/模板规则
+        const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(contentRule);
+        if (jsCode) {
+          // 解析 {{@CSS@attr}} 模板：提取所有匹配元素的属性值，用换行连接
+          let extractedResult = raw;
+          if (ruleBeforeJs) {
+            const templateMatches = ruleBeforeJs.match(/\{\{@\s*([^}]+)\s*\}\}/g);
+            if (templateMatches) {
+              const parser = getHtmlParser();
+              const doc = parser.parse(raw);
+              const parts: string[] = [];
+              for (const tmpl of templateMatches) {
+                // 提取 @CSS@attr 中的 CSS 和 attr
+                const inner = tmpl.replace(/^\{\{@\s*/, '').replace(/\s*\}\}$/, '');
+                const values = parser.extractAttrAll(doc, this.normalizeCssRule(inner));
+                if (values.length > 0) {
+                  parts.push(values.join('\n'));
+                }
+              }
+              if (parts.length > 0) {
+                extractedResult = parts.join('\n');
+                console.info('[SrcEx] getContent {{@CSS@attr}} extracted', extractedResult.split('\n').length,
+                  'items, len=' + extractedResult.length);
+              }
+            } else if (ruleBeforeJs.trim()) {
+              // 无 {{@}} 模板，直接用 CSS 规则提取
+              const parser = getHtmlParser();
+              const doc = parser.parse(raw);
+              const values = parser.extractAttrAll(doc, this.normalizeCssRule(ruleBeforeJs.trim()));
+              if (values.length > 0) {
+                extractedResult = values.join('\n');
+              }
             }
+          }
+          const ctx: JsEvalContext = {
+            src: raw,
+            result: extractedResult,
+            baseUrl: (() => {
+              const m = (contentUrl || '').match(/^https?:\/\/[^\/]+/);
+              return m ? m[0] : '';
+            })(),
+          };
+          const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
+          if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+            let content = evalResult;
+            try {
+              const parsed = JSON.parse(evalResult);
+              if (typeof parsed === 'string') content = parsed;
+            } catch (_e) { /* not JSON, use as-is */ }
+            content = this.applyReplaceRegex(content, source.ruleBookContentReplaceRegex);
+            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(content, contentUrl) : content;
+            console.info('[SrcEx] getContent @js: rule returned', finalContent.length, 'bytes');
+            return finalContent;
           }
         }
       }
@@ -1589,6 +1623,8 @@ export class SourceExecutor {
    * @returns 章节列表
    */
   async getToc(source: BookSource, tocUrl: string, onProgress?: (loaded: number) => void): Promise<BookSourceChapter[]> {
+    // 初始化书源变量（loginUrl）
+    await this.ensureSourceVariables(source, tocUrl);
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
     if (source.ruleTocUrl) {
       tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
@@ -2967,11 +3003,20 @@ export class SourceExecutor {
     const { rules: tocRuleParts, connector } = splitConnectorRules(tocRule.trim());
     let items: HtmlElement[] = [];
     for (const part of tocRuleParts) {
-      const normalized = this.normalizeCssRule(part);
+      // 剥离 \n<js>...</js> 或 @js:... 后缀，只用 CSS 部分查询元素
+      let cssPart = part;
+      const jsBlockMatch = cssPart.match(/\n?<js>[\s\S]*?<\/js>/i);
+      if (jsBlockMatch) {
+        cssPart = cssPart.substring(0, cssPart.indexOf(jsBlockMatch[0])).trim();
+      } else {
+        const { rule: stripped } = JsExpressionEvaluator.stripJsSuffix(cssPart);
+        cssPart = stripped;
+      }
+      const normalized = this.normalizeCssRule(cssPart);
       const found = parser.querySelectorAll(doc, normalized);
       if (found && found.length > 0) {
         items = found;
-        console.info('[SrcEx] parseToc CSS matched: rule="' + part + '" norm="' + normalized + '" count=' + items.length);
+        console.info('[SrcEx] parseToc CSS matched: rule="' + cssPart + '" norm="' + normalized + '" count=' + items.length);
         break;
       }
     }
@@ -3030,27 +3075,51 @@ export class SourceExecutor {
           const processed = JsExpressionEvaluator.processJsResult(jsPostProcess, result, { source: source });
           if (processed) result = processed;
         }
-        // 应用 ## 后缀 post-processing
-        for (const proc of postProcessors) {
+        // 应用 ## 后缀 post-processing（Legado 格式：##regex##replacement，成对处理）
+        for (let pi = 0; pi + 1 < postProcessors.length; pi += 2) {
+          const pattern = postProcessors[pi];
+          const replacement = postProcessors[pi + 1];
+          if (pattern === 'trim' || pattern === 'Trim' || pattern === 'TRIM') {
+            result = result.trim();
+            continue;
+          }
+          try {
+            // $1 $2 等反向引用替换
+            const regex = new RegExp(pattern);
+            const match = result.match(regex);
+            if (match) {
+              let replaced = replacement.replace(/\$(\d+)/g, (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
+              result = replaced;
+            }
+          } catch (_e) { /* 忽略无效正则 */ }
+        }
+        // 单个 postProcessor（如 ##trim）
+        if (postProcessors.length === 1) {
+          const proc = postProcessors[0];
           if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
             result = result.trim();
-          } else {
-            try {
-              const regex = new RegExp(proc);
-              const match = result.match(regex);
-              if (match && match.length > 1 && match[1] !== undefined) {
-                result = match[1];
-              } else {
-                result = result.replace(regex, '');
-              }
-            } catch (_e) { /* 忽略无效正则 */ }
           }
         }
-        // 解析结果中的 {{$.xxx}} 模板（从当前 item 中提取字段值）
-        if (result.includes('{{')) {
-          result = result.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
-            return '';
-          });
+        // 解析结果中的 {{Get('xxx')}} 等模板（通过 JS 求值）
+        if (result.includes('{{') && source) {
+          const ctx: JsEvalContext = { source: source, jsLib: source.jsLib || '', variableBlob: source.variableComment || '' };
+          const exprRegex = /\{\{([^}]+)\}\}/g;
+          const matches: string[] = [];
+          let mm: RegExpExecArray | null;
+          while ((mm = exprRegex.exec(result)) !== null) {
+            matches.push(mm[0]);
+          }
+          for (const tmpl of matches) {
+            const expr = tmpl.replace(/^\{\{/, '').replace(/\}\}$/, '');
+            try {
+              const val = JsExpressionEvaluator.evaluateSync(expr, ctx);
+              if (val && val !== 'null' && val !== 'undefined') {
+                result = result.replace(tmpl, val);
+              } else {
+                result = result.replace(tmpl, '');
+              }
+            } catch (_e) { result = result.replace(tmpl, ''); }
+          }
         }
         return HtmlUtil.stripHtml(result).trim();
       };

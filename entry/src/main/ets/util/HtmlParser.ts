@@ -330,6 +330,69 @@ export class HtmlParser {
   }
 
   /**
+   * 提取所有匹配元素的属性值（用于 {{@CSS@attr}} 多元素提取）
+   * 与 extractAttr 逻辑一致，但返回所有匹配元素的值列表
+   * @returns 属性值数组
+   */
+  extractAttrAll(root: HtmlElement, selector: string): string[] {
+    const s = selector.trim();
+
+    let cleanSelector = s;
+    if (s.includes('##')) {
+      cleanSelector = s.split('##')[0];
+    }
+
+    let attrSuffix = 'text';
+    let cssSel = cleanSelector;
+    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
+    if (attrMatch) {
+      cssSel = attrMatch[1].trim();
+      attrSuffix = attrMatch[2].toLowerCase();
+    } else {
+      const genericMatch = cleanSelector.match(/^(.*?)@([\w-]+)$/i);
+      if (genericMatch) {
+        cssSel = genericMatch[1].trim();
+        attrSuffix = genericMatch[2].toLowerCase();
+      }
+    }
+
+    if (cssSel.includes('@@')) {
+      const parts = cssSel.split('@@');
+      if (parts.length === 2) {
+        cssSel = parts[0] + '.' + parts[1];
+      }
+    }
+
+    let elements: HtmlElement[];
+    if (!cssSel) {
+      elements = root ? [root] : [];
+    } else {
+      elements = this.findElements(root, cssSel);
+    }
+    if (elements.length === 0) return [];
+
+    return elements.map((el: HtmlElement): string => {
+      switch (attrSuffix) {
+        case 'text':
+          return this.cleanText(el.text);
+        case 'ownText':
+          return this.cleanText(el.ownText);
+        case 'textNodes':
+          return this.collectTextNodes(el);
+        case 'href':
+        case 'src':
+          return el.attributes[attrSuffix] || '';
+        case 'html':
+          return el.innerHtml;
+        case 'value':
+          return el.attributes['value'] || '';
+        default:
+          return el.attributes[attrSuffix] || this.cleanText(el.text);
+      }
+    }).filter((v: string): boolean => !!v);
+  }
+
+  /**
    * 获取属性值（用于非标准属性名）
    */
   getAttr(el: HtmlElement, name: string): string {
