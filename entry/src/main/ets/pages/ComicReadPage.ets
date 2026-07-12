@@ -1136,6 +1136,11 @@ struct ComicReadPage {
         .onClick(() => { this.showMenu = false; this.onRefresh(); })
 
         Column() {
+          Text('换源').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+
+        Column() {
           Text(this.singlePageMode ? '单页✓' : '单页').fontSize(12)
             .fontColor(this.singlePageMode ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
