@@ -110,7 +110,7 @@ export class MangaImageLoader {
    * @param source 书源（用于提取 Referer/Cookie/UA）
    * @returns 本地路径或原始 URL
    */
-  static async load(url: string, source?: BookSource | null): Promise<string> {
+  static async load(url: string, source?: BookSource | null, onProgress?: (percent: number) => void): Promise<string> {
     if (!url) return '';
 
     await MangaImageLoader.init();
@@ -134,7 +134,7 @@ export class MangaImageLoader {
     }
 
     // 发起下载
-    const downloadPromise: Promise<string> = MangaImageLoader.downloadWithQueue(url, source, localPath);
+    const downloadPromise: Promise<string> = MangaImageLoader.downloadWithQueue(url, source, localPath, onProgress);
     MangaImageLoader.downloading.set(url, downloadPromise);
     try {
       const result: string = await downloadPromise;
@@ -172,7 +172,7 @@ export class MangaImageLoader {
   }
 
   /** 带并发队列的下载 */
-  private static async downloadWithQueue(url: string, source: BookSource | null, localPath: string): Promise<string> {
+  private static async downloadWithQueue(url: string, source: BookSource | null, localPath: string, onProgress?: (percent: number) => void): Promise<string> {
     // 等待并发槽
     while (MangaImageLoader.activeCount >= MangaImageLoader.MAX_CONCURRENT) {
       await new Promise<void>((resolve: Function) => setTimeout(resolve, 50));
@@ -183,7 +183,7 @@ export class MangaImageLoader {
       // 双重检查
       if (MangaImageLoader.isCached(url)) return localPath;
 
-      const success: boolean = await MangaImageLoader.downloadImage(url, source, localPath);
+      const success: boolean = await MangaImageLoader.downloadImage(url, source, localPath, onProgress);
       if (success) {
         return localPath;
       }
@@ -198,7 +198,7 @@ export class MangaImageLoader {
   }
 
   /** 下载单张图片到本地 */
-  private static async downloadImage(url: string, source: BookSource | null, localPath: string): Promise<boolean> {
+  private static async downloadImage(url: string, source: BookSource | null, localPath: string, onProgress?: (percent: number) => void): Promise<boolean> {
     try {
       // 构建请求头
       const headers: Record<string, string> = {
@@ -221,13 +221,26 @@ export class MangaImageLoader {
       }
 
       // 使用 rcp 下载（获取 ArrayBuffer）
-      const session: rcp.Session = rcp.createSession({
+      const sessionCfg: rcp.SessionConfiguration = {
         requestConfiguration: {
           transfer: {
             timeout: { connectMs: 15000, transferMs: 30000 },
           },
         },
-      });
+      };
+      // 注入进度回调（如果 rcp 支持）
+      if (onProgress) {
+        try {
+          (sessionCfg as Record<string, Object>)['callbacks'] = {
+            onDownloadProgress: (info: Record<string, number>): void => {
+              if (info && info['progress'] >= 0) {
+                onProgress(Math.min(100, Math.round(info['progress'] * 100)));
+              }
+            },
+          };
+        } catch (_) { /* callbacks 字段可能不存在于当前 SDK，忽略 */ }
+      }
+      const session: rcp.Session = rcp.createSession(sessionCfg);
 
       try {
         const request: rcp.Request = new rcp.Request(

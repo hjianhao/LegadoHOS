@@ -380,6 +380,10 @@ export class SettingsStore {
   async getComicSinglePageMode(): Promise<boolean> { return await this.get('comic_single_page', false); }
   async setComicSinglePageMode(on: boolean): Promise<void> { await this.put('comic_single_page', on); }
 
+  /** 漫画自动阅读速度（秒，每次翻页间隔） */
+  async getComicAutoReadSpeed(): Promise<number> { return await this.get('comic_auto_read_speed', 3); }
+  async setComicAutoReadSpeed(speed: number): Promise<void> { await this.put('comic_auto_read_speed', speed); }
+
   /** 漫画图片预加载数量 */
   async getComicPreloadNum(): Promise<number> { return await this.get('comic_preload_num', 3); }
   async setComicPreloadNum(n: number): Promise<void> { await this.put('comic_preload_num', n); }

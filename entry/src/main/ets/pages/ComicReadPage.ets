@@ -27,6 +27,8 @@ import { ClickAction } from '../components/reader/ClickAction';
 import { ChangeSourceSheet } from '../components/BookInfoSheets';
 import { SearchResult } from '../model/SearchResult';
 import window from '@ohos.window';
+import photoAccessHelper from '@ohos.file.photoAccessHelper';
+import fileFs from '@ohos.file.fs';
 
 /** 阅读方向模式 */
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
@@ -115,6 +117,12 @@ struct ComicReadPage {
   @State imagePaths: Map<string, string> = new Map<string, string>();
   // 图片加载失败标记
   @State failedImages: Set<string> = new Set<string>();
+  // 图片下载进度：url -> percent(0-100)
+  @State imageProgress: Map<string, number> = new Map<string, number>();
+  // 自动阅读
+  @State autoRead: boolean = false;
+  private autoReadTimer_: number = -1;
+  private autoReadSpeed_: number = 3;  // 秒
 
   aboutToAppear(): void {
     const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
@@ -137,6 +145,7 @@ struct ComicReadPage {
       this.readMode = await s.getComicReadMode();
       this.singlePageMode = await s.getComicSinglePageMode();
       this.preloadNum_ = await s.getComicPreloadNum();
+      this.autoReadSpeed_ = await s.getComicAutoReadSpeed();
       const actions: number[] = [];
       for (let i = 0; i < 9; i++) {
         actions.push(await s.getComicClickAction(i));
@@ -560,6 +569,8 @@ struct ComicReadPage {
   }
 
   async aboutToDisappear(): Promise<void> {
+    // 停止自动阅读
+    this.stopAutoRead();
     const ch = this.allChapters_[this.currentIndex];
     if (ch && this.bookUrl) {
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
@@ -635,7 +646,16 @@ struct ComicReadPage {
 
   private getProgressPercent(): number {
     if (this.totalChapters <= 0) return 0;
-    return Math.min(100, Math.round((this.currentIndex / this.totalChapters) * 100));
+    // 加权进度：章节进度 + 页内进度
+    const chapterProgress: number = this.currentIndex / this.totalChapters;
+    let pageProgress: number = 0;
+    if (this.imageUrls.length > 0) {
+      pageProgress = (1 / this.totalChapters) * ((this.currentPageIndex + 1) / this.imageUrls.length);
+    }
+    let percent: number = Math.round((chapterProgress + pageProgress) * 100);
+    // 未读完时不超过 99%
+    if (percent >= 100 && this.currentIndex < this.totalChapters - 1) percent = 99;
+    return Math.min(100, Math.max(0, percent));
   }
 
   private formatCurTime(): string {
@@ -649,16 +669,26 @@ struct ComicReadPage {
     // 检查 url 是否属于当前章节（章节切换后旧 promise 的结果应丢弃）
     if (this.imageUrls.indexOf(url) < 0) return;
     try {
-      const localPath: string = await MangaImageLoader.load(url, this.source_);
+      const localPath: string = await MangaImageLoader.load(url, this.source_, (percent: number) => {
+        // 更新进度
+        if (this.imageUrls.indexOf(url) >= 0 && !this.imagePaths.has(url)) {
+          const newProg = new Map<string, number>(this.imageProgress);
+          newProg.set(url, percent);
+          this.imageProgress = newProg;
+        }
+      });
       // 异步返回后再次检查：章节可能已切换
       if (this.imageUrls.indexOf(url) < 0) return;
+      // 清除进度
+      const newProg = new Map<string, number>(this.imageProgress);
+      newProg.delete(url);
+      this.imageProgress = newProg;
+
       if (localPath && localPath.startsWith('/')) {
-        // 更新 Map 触发 UI 刷新 - 添加 file:// 前缀使 Image 组件能识别本地路径
         const newMap = new Map<string, string>(this.imagePaths);
         newMap.set(url, 'file://' + localPath);
         this.imagePaths = newMap;
       } else {
-        // localPath 为原始 URL，Image 组件直接加载（可能无 Referer 头，但有些源不需要）
         const newMap = new Map<string, string>(this.imagePaths);
         newMap.set(url, url);
         this.imagePaths = newMap;
@@ -728,7 +758,10 @@ struct ComicReadPage {
         break;
       case ClickAction.MENU:
         this.showMenu = !this.showMenu;
-        // 菜单显示时恢复状态栏，隐藏时进入沉浸式
+        // 菜单显示时暂停自动阅读、恢复状态栏；隐藏时恢复自动阅读、进入沉浸式
+        if (this.showMenu) {
+          this.stopAutoRead();
+        }
         this.setSystemBarVisible_(this.showMenu);
         break;
       case ClickAction.NEXT_PAGE:
@@ -988,7 +1021,8 @@ struct ComicReadPage {
           } else {
             Column() {
               LoadingProgress().width(30).height(30).color(ThemeColors.secondaryText(this.isDark))
-              Text(`${index + 1}/${this.imageUrls.length}`).fontSize(11)
+              Text(this.imageProgress.has(url) ? `${this.imageProgress.get(url)}%` : `${index + 1}/${this.imageUrls.length}`)
+                .fontSize(11)
                 .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
             }
             .justifyContent(FlexAlign.Center)
@@ -1079,11 +1113,16 @@ struct ComicReadPage {
               TapGesture({ count: 2 })
                 .onAction(() => { this.onDoubleTap(); })
             )
+            .gesture(
+              LongPressGesture()
+                .onAction(() => { this.saveImageToGallery_(url); })
+            )
         } else {
           // 加载中占位，异步触发下载
           Column() {
             LoadingProgress().width(30).height(30).color(ThemeColors.secondaryText(this.isDark))
-            Text(`${index + 1}/${this.imageUrls.length}`).fontSize(11)
+            Text(this.imageProgress.has(url) ? `${this.imageProgress.get(url)}%` : `${index + 1}/${this.imageUrls.length}`)
+              .fontSize(11)
               .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
           }
           .width('100%').height(200)
@@ -1207,6 +1246,33 @@ struct ComicReadPage {
         .padding({ left: 16, right: 16 })
       }
 
+      // 页内进度条（图片跳转）
+      if (this.imageUrls.length > 1) {
+        Row() {
+          Text(`${this.currentPageIndex + 1}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(30).textAlign(TextAlign.End)
+          Slider({ value: this.currentPageIndex + 1, min: 1, max: this.imageUrls.length, step: 1 })
+            .layoutWeight(1).margin({ left: 8, right: 8 })
+            .onChange((val: number) => {
+              const idx: number = Math.round(val) - 1;
+              if (idx >= 0 && idx < this.imageUrls.length && idx !== this.currentPageIndex) {
+                this.currentPageIndex = idx;
+                if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
+                  this.listScroller_.scrollToIndex(idx);
+                } else {
+                  this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
+                    ? this.imageUrls.length - 1 - idx : idx;
+                }
+              }
+            })
+          Text(`${this.imageUrls.length}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(30)
+        }
+        .width('100%').height(40)
+        .backgroundColor(ThemeColors.surface(this.isDark))
+        .padding({ left: 16, right: 16 })
+      }
+
       // 底部按钮栏
       Row() {
         Column() {
@@ -1223,6 +1289,12 @@ struct ComicReadPage {
           Text('下一章').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.onNextChapter(); })
+
+        Column() {
+          Text(this.autoRead ? '自动✓' : '自动').fontSize(12)
+            .fontColor(this.autoRead ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        .onClick(() => { this.toggleAutoRead(); })
       }
       .width('100%').height(48)
       .backgroundColor(ThemeColors.surface(this.isDark))
@@ -1460,6 +1532,74 @@ struct ComicReadPage {
       message: this.singlePageMode ? '单页全屏模式' : '已关闭单页全屏',
       duration: 1500,
     });
+  }
+
+  /** 长按保存图片到相册 */
+  private async saveImageToGallery_(url: string): Promise<void> {
+    try {
+      // 获取本地缓存路径
+      const localPath: string = MangaImageLoader.getLocalPath(url);
+      if (!localPath || !fileFs.accessSync(localPath)) {
+        UiUtil.showToast(this.getUIContext(), { message: '图片未缓存，无法保存', duration: 1500 });
+        return;
+      }
+
+      // 读取本地文件
+      const srcFile: fileFs.File = fileFs.openSync(localPath, fileFs.OpenMode.READ_ONLY);
+      const stat: fileFs.Stat = fileFs.statSync(localPath);
+      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
+      fileFs.readSync(srcFile.fd, buf);
+      fileFs.closeSync(srcFile);
+
+      // 保存到相册
+      const ctx = UiUtil.getHostContext(this.getUIContext());
+      if (!ctx) {
+        UiUtil.showToast(this.getUIContext(), { message: '无法获取上下文', duration: 1500 });
+        return;
+      }
+      const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx);
+      const uri: string = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg');
+      const dstFile: fileFs.File = fileFs.openSync(uri, fileFs.OpenMode.WRITE_ONLY);
+      fileFs.writeSync(dstFile.fd, buf);
+      fileFs.closeSync(dstFile);
+
+      UiUtil.showToast(this.getUIContext(), { message: '已保存到相册', duration: 1500 });
+    } catch (err) {
+      console.warn('[ComicRead] Save image failed:', (err as Error).message);
+      UiUtil.showToast(this.getUIContext(), { message: '保存失败: ' + (err as Error).message, duration: 2000 });
+    }
+  }
+
+  /** 启动自动阅读 */
+  private startAutoRead(): void {
+    if (this.autoRead) return;
+    this.autoRead = true;
+    const interval: number = this.autoReadSpeed_ * 1000;
+    this.autoReadTimer_ = setInterval(() => {
+      this.nextPage();
+    }, interval);
+    this.showMenu = false;
+    UiUtil.showToast(this.getUIContext(), { message: `自动阅读 ${this.autoReadSpeed_}s/页`, duration: 1500 });
+  }
+
+  /** 停止自动阅读 */
+  private stopAutoRead(): void {
+    if (!this.autoRead) return;
+    this.autoRead = false;
+    if (this.autoReadTimer_ >= 0) {
+      clearInterval(this.autoReadTimer_);
+      this.autoReadTimer_ = -1;
+    }
+  }
+
+  /** 切换自动阅读 */
+  private toggleAutoRead(): void {
+    if (this.autoRead) {
+      this.stopAutoRead();
+      UiUtil.showToast(this.getUIContext(), { message: '已停止自动阅读', duration: 1500 });
+    } else {
+      this.startAutoRead();
+    }
   }
 
   private readModeLabel(): string {
