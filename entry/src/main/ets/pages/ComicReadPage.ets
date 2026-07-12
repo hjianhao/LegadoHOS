@@ -68,6 +68,7 @@ struct ComicReadPage {
   // UI 状态
   @State showMenu: boolean = false;
   @State readMode: number = READ_MODE_WEBTOON;
+  @State singlePageMode: boolean = false;  // 单页全屏开关（独立于阅读方向）
   @State currentPageIndex: number = 0;
   @State swiperIndex: number = 0;  // Swiper 声明式 index，用于数据变化时直接定位到正确页
 
@@ -122,6 +123,7 @@ struct ComicReadPage {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.readMode = await s.getComicReadMode();
+      this.singlePageMode = await s.getComicSinglePageMode();
       this.preloadNum_ = await s.getComicPreloadNum();
       const actions: number[] = [];
       for (let i = 0; i < 9; i++) {
@@ -676,9 +678,9 @@ struct ComicReadPage {
     }
   }
 
-  /** 下一页（条漫模式滚动一屏，翻页模式 Swiper 下一项） */
+  /** 下一页（条漫模式滚动一屏，翻页/单页模式 Swiper 下一项） */
   private nextPage(): void {
-    if (this.readMode === READ_MODE_WEBTOON) {
+    if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
       this.listScroller_.scrollBy(0, this.screenHeight > 0 ? this.screenHeight * 0.8 : 500);
     } else {
       if (this.currentPageIndex < this.imageUrls.length - 1) {
@@ -694,7 +696,7 @@ struct ComicReadPage {
 
   /** 上一页 */
   private prevPage(): void {
-    if (this.readMode === READ_MODE_WEBTOON) {
+    if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
       this.listScroller_.scrollBy(0, this.screenHeight > 0 ? -(this.screenHeight * 0.8) : -500);
     } else {
       if (this.currentPageIndex > 0) {
@@ -738,12 +740,12 @@ struct ComicReadPage {
           })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center)
+      } else if (this.singlePageMode) {
+        // 单页全屏模式（独立开关，覆盖阅读方向）
+        this.buildSinglePageMode()
       } else if (this.readMode === READ_MODE_WEBTOON) {
         // 条漫滚动模式
         this.buildWebtoonMode()
-      } else if (this.readMode === READ_MODE_SINGLE_PAGE) {
-        // 单页全屏模式
-        this.buildSinglePageMode()
       } else {
         // 翻页模式（左右/右左）
         this.buildPagedMode()
@@ -1134,9 +1136,10 @@ struct ComicReadPage {
         .onClick(() => { this.showMenu = false; this.onRefresh(); })
 
         Column() {
-          Text('换源').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text(this.singlePageMode ? '单页✓' : '单页').fontSize(12)
+            .fontColor(this.singlePageMode ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
-        .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+        .onClick(() => { this.toggleSinglePageMode(); })
 
         Column() {
           Text('触控').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
@@ -1159,7 +1162,6 @@ struct ComicReadPage {
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 16, top: 16 })
         ForEach([
           { mode: READ_MODE_WEBTOON, label: '条漫（从上到下滚动）' } as ReadModeOption,
-          { mode: READ_MODE_SINGLE_PAGE, label: '单页全屏（每屏一张图）' } as ReadModeOption,
           { mode: READ_MODE_LEFT_TO_RIGHT, label: '左 -> 右翻页' } as ReadModeOption,
           { mode: READ_MODE_RIGHT_TO_LEFT, label: '右 -> 左翻页（日漫）' } as ReadModeOption,
         ], (item: ReadModeOption) => {
@@ -1272,11 +1274,28 @@ struct ComicReadPage {
     });
   }
 
+  /** 切换单页全屏模式开关 */
+  private async toggleSinglePageMode(): Promise<void> {
+    this.singlePageMode = !this.singlePageMode;
+    this.showMenu = false;
+    // 重置缩放
+    this.imageScale = 1.0;
+    // 持久化
+    try {
+      const s = SettingsStore.getInstance();
+      await s.setComicSinglePageMode(this.singlePageMode);
+    } catch (_) { /* ignore */ }
+    UiUtil.showToast(this.getUIContext(), {
+      message: this.singlePageMode ? '单页全屏模式' : '已关闭单页全屏',
+      duration: 1500,
+    });
+  }
+
   private readModeLabel(): string {
+    if (this.singlePageMode) return '单页';
     switch (this.readMode) {
       case READ_MODE_LEFT_TO_RIGHT: return '左->右';
       case READ_MODE_RIGHT_TO_LEFT: return '右->左';
-      case READ_MODE_SINGLE_PAGE: return '单页';
       default: return '条漫';
     }
   }

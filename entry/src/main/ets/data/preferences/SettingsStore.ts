@@ -376,6 +376,10 @@ export class SettingsStore {
   async getComicReadMode(): Promise<number> { return await this.get('comic_read_mode', 0); }
   async setComicReadMode(mode: number): Promise<void> { await this.put('comic_read_mode', mode); }
 
+  /** 漫画单页全屏模式开关（独立于阅读方向） */
+  async getComicSinglePageMode(): Promise<boolean> { return await this.get('comic_single_page', false); }
+  async setComicSinglePageMode(on: boolean): Promise<void> { await this.put('comic_single_page', on); }
+
   /** 漫画图片预加载数量 */
   async getComicPreloadNum(): Promise<number> { return await this.get('comic_preload_num', 3); }
   async setComicPreloadNum(n: number): Promise<void> { await this.put('comic_preload_num', n); }
