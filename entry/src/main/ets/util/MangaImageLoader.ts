@@ -10,6 +10,7 @@
 import rcp from '@hms.collaboration.rcp';
 import fileFs from '@ohos.file.fs';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import image from '@ohos.multimedia.image';
 import { BookSource } from '../model/BookSource';
 import { NetUtil } from './NetUtil';
 
@@ -84,9 +85,12 @@ export class MangaImageLoader {
     }
   }
 
+  /** 缓存版本号（变更后自动失效旧缓存） */
+  private static readonly CACHE_VERSION: number = 2;
+
   /** 获取图片本地缓存路径 */
   static getLocalPath(url: string): string {
-    return `${MangaImageLoader.cacheDir}${md5Short(url)}.${getImageSuffix(url)}`;
+    return `${MangaImageLoader.cacheDir}v${MangaImageLoader.CACHE_VERSION}_${md5Short(url)}.${getImageSuffix(url)}`;
   }
 
   /** 检查图片是否已缓存 */
@@ -255,6 +259,9 @@ export class MangaImageLoader {
         // 尝试解密图片（部分漫画源使用 AES 加密图片，自动检测魔数决定是否解密）
         let finalBytes: Uint8Array = await MangaImageLoader.tryDecryptImage(bodyBytes);
 
+        // 尝试竖条重组解密（禁漫天堂等源的图片打乱加密）
+        finalBytes = await MangaImageLoader.tryUnscrambleImage(url, finalBytes);
+
         // 确保目录存在
         const dir: string = localPath.substring(0, localPath.lastIndexOf('/'));
         if (!fileFs.accessSync(dir)) {
@@ -332,6 +339,115 @@ export class MangaImageLoader {
       return new Uint8Array(decoded.data);
     } catch (err) {
       console.warn('[MangaImg] Decrypt failed:', (err as Error).message, 'returning raw data');
+      return data;
+    }
+  }
+
+  /**
+   * 计算字符串的 MD5 hex 值
+   */
+  private static async md5Hex(input: string): Promise<string> {
+    const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
+    const bytes: Uint8Array = new Uint8Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      bytes[i] = input.charCodeAt(i) & 0xFF;
+    }
+    await md.update({ data: bytes });
+    const result = await md.digest();
+    const hex: string[] = [];
+    for (let i = 0; i < result.data.length; i++) {
+      hex.push((result.data[i] & 0xFF).toString(16).padStart(2, '0'));
+    }
+    return hex.join('');
+  }
+
+  /**
+   * 禁漫天堂图片竖条重组解密
+   *
+   * 禁漫将图片切成 num 条水平条并打乱顺序，解密就是反向重排。
+   * 算法从源的 imageDecode 规则提取：
+   * - 从 URL 提取 bookId 和 imgId: /photos\/(\d+)\/(\d+)/
+   * - GIF 或 bookId < 220980 不解密
+   - bookId > 421925: num = (md5(bookId+imgId) 最后字符 % 8 + 1) * 2
+   - bookId >= 268850: num = (md5(bookId+imgId) 最后字符 % 10 + 1) * 2
+   - 否则: num = 10
+   * - 将图片分成 num 条，每条高度 y=floor(H/num)，余数 r=H%num
+   * - 从下到上反向绘制条带
+   */
+  private static async tryUnscrambleImage(url: string, data: Uint8Array): Promise<Uint8Array> {
+    // 从 URL 提取 bookId 和 imgId
+    const match: RegExpMatchArray | null = url.match(/photos\/(\d+)\/(\d+)/);
+    if (!match) return data; // 不是禁漫图片 URL
+
+    const bookId: number = parseInt(match[1], 10);
+    const imgId: string = match[2];
+
+    // GIF 或旧图不解密
+    if (url.toLowerCase().includes('.gif') || bookId < 220980) {
+      return data;
+    }
+
+    // 计算分割条数 num
+    let num: number;
+    const md5Str: string = await MangaImageLoader.md5Hex(bookId + imgId);
+    const lastCharCode: number = md5Str.charCodeAt(md5Str.length - 1);
+    if (bookId > 421925) {
+      num = (lastCharCode % 8 + 1) * 2;
+    } else if (bookId >= 268850) {
+      num = (lastCharCode % 10 + 1) * 2;
+    } else {
+      num = 10;
+    }
+
+    try {
+      // 解码图片
+      const buffer: ArrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      const imageSource: image.ImageSource = image.createImageSource(buffer);
+      const pixelMap: image.PixelMap = await imageSource.createPixelMap();
+      const info: image.ImageInfo = await pixelMap.getImageInfo();
+      const width: number = info.size.width;
+      const height: number = info.size.height;
+
+      // 读取像素数据（RGBA，每像素 4 字节）
+      const pixelBytes: ArrayBuffer = new ArrayBuffer(width * height * 4);
+      await pixelMap.readPixelsToBuffer(pixelBytes);
+      const srcPixels: Uint8Array = new Uint8Array(pixelBytes);
+
+      // 按条带反向重排
+      const dstPixels: Uint8Array = new Uint8Array(width * height * 4);
+      const y: number = Math.floor(height / num);
+      const remainder: number = height % num;
+
+      for (let i = 1; i <= num; i++) {
+        const h: number = (i === num) ? remainder : 0;
+        const srcStartRow: number = y * (i - 1);
+        const dstStartRow: number = height - y * i - h;
+        const rowsToCopy: number = y + h;
+        const srcOffset: number = srcStartRow * width * 4;
+        const dstOffset: number = dstStartRow * width * 4;
+        const copyLen: number = rowsToCopy * width * 4;
+        dstPixels.set(srcPixels.subarray(srcOffset, srcOffset + copyLen), dstOffset);
+      }
+
+      // 写回新 PixelMap
+      const dstPixelMap: image.PixelMap = await image.createPixelMap(dstPixels.buffer,
+        { size: { width: width, height: height } } as image.InitializationOptions);
+      await dstPixelMap.writeBufferToPixels(dstPixels.buffer);
+
+      // 编码为 JPEG
+      const imagePacker: image.ImagePacker = image.createImagePacker();
+      const packedData: ArrayBuffer = await imagePacker.packToData(dstPixelMap,
+        { format: 'image/jpeg', quality: 90 } as image.PackingOption);
+      imagePacker.release();
+      pixelMap.release();
+      dstPixelMap.release();
+      imageSource.release();
+
+      console.info('[MangaImg] Unscrambled: bookId=' + bookId + ' num=' + num +
+        ' size=' + width + 'x' + height + ' -> ' + packedData.byteLength + ' bytes');
+      return new Uint8Array(packedData);
+    } catch (err) {
+      console.warn('[MangaImg] Unscramble failed:', (err as Error).message, 'bookId=' + bookId);
       return data;
     }
   }

@@ -1394,7 +1394,8 @@ export class SourceExecutor {
               if (parts.length > 0) {
                 extractedResult = parts.join('\n');
                 console.info('[SrcEx] getContent {{@CSS@attr}} extracted', extractedResult.split('\n').length,
-                  'items, len=' + extractedResult.length);
+                  'items, len=' + extractedResult.length,
+                  'first3=' + extractedResult.split('\n').slice(0, 3).join(' | '));
               }
             } else if (ruleBeforeJs.trim()) {
               // 无 {{@}} 模板，直接用 CSS 规则提取
@@ -2239,18 +2240,40 @@ export class SourceExecutor {
     const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
       if (!rule) return (_item: HtmlElement): string => '';
       const { rules, connector } = splitConnectorRules(rule.trim());
+      const compileOne = (rawRule: string): ((item: HtmlElement) => string) => {
+        // 分离 @js: 后缀
+        const { rule: cssPart, jsCode } = JsExpressionEvaluator.stripJsSuffix(rawRule);
+        return (item: HtmlElement): string => {
+          // 先执行 CSS 提取
+          let result = processPutGet(cssPart, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+          // 如果有 @js: 后处理，执行 JS
+          if (jsCode) {
+            try {
+              // 替换 java.getString('rule') 调用为实际提取的值
+              let processedCode = jsCode.replace(/java\.getString\(\s*['"]([^'"]+)['"]\s*\)/g,
+                (_m: string, rule: string): string => {
+                  const val = parser.extractAttr(item, this.normalizeCssRule(rule));
+                  return JSON.stringify(val || '');
+                });
+              const ctx: JsEvalContext = { result: result, baseUrl: baseUrl } as unknown as JsEvalContext;
+              const evalResult = JsExpressionEvaluator.evaluateSync(processedCode, ctx);
+              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+                try {
+                  const parsed = JSON.parse(evalResult);
+                  result = typeof parsed === 'string' ? parsed : String(parsed);
+                } catch (_e) {
+                  result = evalResult.replace(/^['"`]|['"`]$/g, '');
+                }
+              }
+            } catch (_e) { /* ignore JS error */ }
+          }
+          return result;
+        };
+      };
       if (!connector || rules.length === 1) {
-        const nr = this.normalizeCssRule(rules[0]);
-        return (item: HtmlElement): string => {
-          return processPutGet(rules[0], (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
-        };
+        return compileOne(rules[0]);
       }
-      const compiled = rules.map(r => {
-        const nr = this.normalizeCssRule(r);
-        return (item: HtmlElement): string => {
-          return processPutGet(r, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
-        };
-      });
+      const compiled = rules.map(r => compileOne(r));
       if (connector === '||') {
         return (item: HtmlElement): string => firstNonEmpty(compiled.map(fn => fn(item)));
       }

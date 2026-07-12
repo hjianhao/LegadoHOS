@@ -779,10 +779,14 @@ export class HtmlParser {
       if (el.attributes['id'] !== idMatch[1]) return false;
     }
 
-    // 如果指定了类名但不匹配
-    if (classMatch) {
+    // 如果指定了类名但不匹配（支持多 class: .row.thumb-overlay-albums）
+    const allClassMatches = s.match(/\.([\w-]+)/g);
+    if (allClassMatches && allClassMatches.length > 0) {
       const classes = (el.attributes['class'] || '').split(/\s+/);
-      if (!classes.includes(classMatch[1])) return false;
+      for (const cm of allClassMatches) {
+        const className = cm.substring(1); // 去掉前导 .
+        if (!classes.includes(className)) return false;
+      }
     }
 
 	    // 基础选择器匹配后，检查伪类
