@@ -13,7 +13,7 @@ export interface QuickJSBridge {
   executeScript(engineId: number, script: string): string;
   callFunction(engineId: number, functionName: string, argsJson: string): string;
   onHttpResponse(requestId: number, responseBody: string, isError: boolean): void;
-  registerHttpHandler(handler: (requestId: number, url: string, method: string, headersJson: string, body?: string) => void): void;
+  registerHttpHandler(engineId: number, handler: (requestId: number, url: string, method: string, headersJson: string, body?: string) => void): void;
 }
 
 declare function requireNapi(name: string): object;
@@ -32,7 +32,7 @@ function createMockBridge(): QuickJSBridge {
       return '[]';
     },
     onHttpResponse(_id: number, _b: string, _e: boolean): void {},
-    registerHttpHandler(_h: object): void {},
+    registerHttpHandler(_id: number, _h: object): void {},
   };
 }
 

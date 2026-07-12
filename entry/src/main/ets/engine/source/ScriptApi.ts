@@ -17,6 +17,25 @@ export function getAjaxPolyfill(): string {
 (function() {
   var _j = typeof java !== "undefined" ? java : (globalThis.java || {});
   if (!_j.ajax || _j.ajax._isMock) {
+    // 从 http.get/post 返回的响应对象中提取 body 文本
+    // C++ 桥返回 {statusCode, body: {_text, text(), json()}, baseUrl, headers}
+    // java.ajax() 应返回 body 字符串（与 Android Legado 一致）
+    function extractBody(resp) {
+      if (resp === null || resp === undefined) return "";
+      if (typeof resp === 'string') return resp;
+      if (typeof resp === 'object') {
+        // 优先用 body._text（C++ 桥存储的原始响应体）
+        if (resp.body && typeof resp.body === 'object') {
+          if (resp.body._text !== undefined) return String(resp.body._text);
+          if (typeof resp.body.text === 'function') {
+            try { var t = resp.body.text(); if (t) return String(t); } catch(_) {}
+          }
+        }
+        // 兼容：直接 toString
+        try { return String(resp); } catch(_) { return ""; }
+      }
+      return String(resp);
+    }
     _j.ajax = function(url) {
       var s = String(url);
       if (typeof http !== "undefined" && http.get) {
@@ -27,8 +46,8 @@ export function getAjaxPolyfill(): string {
           try { var o = JSON.parse(m[2]); if (o.method) method = o.method.toUpperCase(); if (o.body !== undefined) body = String(o.body); } catch(_) {}
         }
         try {
-          if (method === "POST") return http.post(u, body);
-          return http.get(u);
+          if (method === "POST") return extractBody(http.post(u, body));
+          return extractBody(http.get(u));
         } catch(_e) {}
       }
       return "";
@@ -391,71 +410,173 @@ export function getPolyfillScript(): string {
   }
 })();
 
+	// --- Array.prototype.at 兼容（ES2022，QuickJS 0.15 不支持） ---
+	(function() {
+	  if (!Array.prototype.at) {
+	    Array.prototype.at = function(n) {
+	      n = +n;
+	      if (n < 0) n += this.length;
+	      return n >= 0 && n < this.length ? this[n] : undefined;
+	    };
+	  }
+	  if (!String.prototype.at) {
+	    String.prototype.at = function(n) {
+	      n = +n;
+	      if (n < 0) n += this.length;
+	      return n >= 0 && n < this.length ? this.charAt(n) : undefined;
+	    };
+	  }
+	})();
+
 	// --- org.jsoup Jsoup.parse 兼容 shim ---
 	// 很多书源用 Jsoup.parse(html).select(".class").attr("attr") 提取页面元素
+	// 支持链式调用: parse(html).select('.a').toArray().at(-1).select('a')
 	(function() {
+	  // 从 HTML 片段中按 CSS 选择器提取匹配的标签信息
+	  // 返回 [{tagMatch, fullTag, pos, innerHtml, innerText}, ...]
+	  function selectTags(html, css) {
+	    var items = [];
+	    if (!css) return items;
+	    // 支持 .class、tag、tag.class、#id、多选择器（逗号分隔）
+	    var selectors = css.split(',');
+	    for (var si = 0; si < selectors.length; si++) {
+	      var sel = selectors[si].trim();
+	      if (!sel) continue;
+	      // 去掉伪类如 :eq(0)
+	      var colonIdx = sel.indexOf(':');
+	      if (colonIdx > 0) sel = sel.substring(0, colonIdx).trim();
+
+	      var tagName = '', className = '', idName = '';
+	      // 解析选择器: tag.class#id
+	      var parts = sel.match(/^([a-zA-Z0-9]+)?(?:\.([a-zA-Z0-9_-]+))?(?:#([a-zA-Z0-9_-]+))?$/);
+	      if (parts) {
+	        tagName = parts[1] || '';
+	        className = parts[2] || '';
+	        idName = parts[3] || '';
+	      } else if (sel.indexOf('.') === 0) {
+	        className = sel.substring(1);
+	      } else if (sel.indexOf('#') === 0) {
+	        idName = sel.substring(1);
+	      } else {
+	        tagName = sel;
+	      }
+
+	      // 构建正则
+	      var reStr = '<([a-zA-Z0-9]+)[^>]*';
+	      if (className) reStr += '\\sclass\\s*=\\s*"[^"]*\\b' + className + '\\b[^"]*"';
+	      if (idName) reStr += '\\sid\\s*=\\s*"[^"]*\\b' + idName + '\\b[^"]*"';
+	      reStr += '[^>]*>';
+	      try {
+	        var re = new RegExp(reStr, 'gi');
+	        var m;
+	        while ((m = re.exec(html)) !== null) {
+	          if (tagName && m[1].toLowerCase() !== tagName.toLowerCase()) continue;
+	            (function(tagMatch, fullTag, pos) {
+	              items.push(makeElement(html, tagMatch, fullTag, pos));
+	            })(m[1], m[0], m.index);
+	        }
+	      } catch(_) {}
+	    }
+	    return items;
+	  }
+
+	  // 创建一个 Element 对象，支持 .select/.attr/.text/.html
+	  function makeElement(html, tagMatch, fullTag, pos) {
+	    return {
+	      attr: function(name) {
+	        var am = fullTag.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+	        if (am) return am[1];
+	        var am2 = fullTag.match(new RegExp(name + "\\s*=\\s*'([^']*)'", 'i'));
+	        return am2 ? am2[1] : '';
+	      },
+	      text: function() {
+	        var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
+	        if (closeIdx > 0) {
+	          return html.substring(pos + fullTag.length, closeIdx).replace(/<[^>]+>/g, '').trim();
+	        }
+	        return '';
+	      },
+	      html: function() {
+	        var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
+	        if (closeIdx > 0) {
+	          return html.substring(pos + fullTag.length, closeIdx);
+	        }
+	        return '';
+	      },
+	      // 链式 select：在当前元素的 innerHTML 中查找
+	      select: function(css) {
+	        var inner = this.html();
+	        var subItems = selectTags(inner, css);
+	        return makeElements(inner, subItems);
+	      }
+	    };
+	  }
+
+	  // 创建 Elements 类数组对象（同时是真正的数组，支持 .at()/.toArray()/.select()）
+	  function makeElements(html, items) {
+	    // 用真数组作为基础，使 .at()/.forEach()/for...of 等原生方法可用
+	    var els = items.slice();
+	    // Elements 上的方法（非可枚举，不干扰 for...in）
+	    Object.defineProperty(els, 'attr', {
+	      value: function(name) { return items.length > 0 ? items[0].attr(name) : ''; }
+	    });
+	    Object.defineProperty(els, 'text', {
+	      value: function() {
+	        return items.length > 0 ? items[0].text() : '';
+	      }
+	    });
+	    Object.defineProperty(els, 'html', {
+	      value: function() {
+	        return items.length > 0 ? items[0].html() : '';
+	      }
+	    });
+	    Object.defineProperty(els, 'eq', {
+	      value: function(i) {
+	        return items[i] || { attr:function(){return '';}, text:function(){return '';}, html:function(){return '';}, select:function(){return makeElements('', []);} };
+	      }
+	    });
+	    Object.defineProperty(els, 'first', {
+	      value: function() { return items[0] || null; }
+	    });
+	    Object.defineProperty(els, 'last', {
+	      value: function() { return items[items.length - 1] || null; }
+	    });
+	    Object.defineProperty(els, 'isEmpty', {
+	      value: function() { return items.length === 0; }
+	    });
+	    Object.defineProperty(els, 'size', {
+	      value: function() { return items.length; }
+	    });
+	    Object.defineProperty(els, 'get', {
+	      value: function(i) { return items[i] || null; }
+	    });
+	    Object.defineProperty(els, 'toArray', {
+	      value: function() { return items.slice(); }
+	    });
+	    Object.defineProperty(els, 'select', {
+	      value: function(css) {
+	        // 对所有元素的 innerHTML 做 select，合并结果
+	        var all = [];
+	        for (var i = 0; i < items.length; i++) {
+	          var inner = items[i].html();
+	          var sub = selectTags(inner, css);
+	          for (var j = 0; j < sub.length; j++) all.push(sub[j]);
+	        }
+	        return makeElements(html, all);
+	      }
+	    });
+	    return els;
+	  }
+
 	  if (typeof org === 'undefined') {
 	    globalThis.org = {
 	      jsoup: {
 	        Jsoup: {
 	          parse: function(html) {
 	            return {
-	              // select 返回一个最小 Elements 对象，支持 .attr / .text / .eq / .first
 	              select: function(css) {
-	                var items = [];
-	                // 只支持 .className 选择器：用正则从 HTML 中提取匹配的标签
-	                if (css && css.indexOf('.') === 0) {
-	                  var cls = css.substring(1);
-	                  // 去掉伪类如 :eq(0)
-	                  var colonIdx = cls.indexOf(':');
-	                  if (colonIdx > 0) cls = cls.substring(0, colonIdx);
-	                  try {
-	                    // 构建匹配 class="...className..." 的正则
-	                    var re = new RegExp('<([a-zA-Z0-9]+)[^>]*\\sclass\\s*=\\s*"[^"]*\\b' + cls + '\\b[^"]*"[^>]*>', 'gi');
-	                    var m;
-	                    while ((m = re.exec(html)) !== null) {
-	                      (function(tagMatch, fullTag, pos) {
-	                        items.push({
-	                          attr: function(name) {
-	                            var am = fullTag.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
-	                            return am ? am[1] : '';
-	                          },
-	                          text: function() {
-	                            var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
-	                            if (closeIdx > 0) {
-	                              return html.substring(pos + fullTag.length, closeIdx).replace(/<[^>]+>/g, '').trim();
-	                            }
-	                            return '';
-	                          },
-	                          html: function() {
-	                            var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
-	                            if (closeIdx > 0) {
-	                              return html.substring(pos + fullTag.length, closeIdx);
-	                            }
-	                            return '';
-	                          }
-	                        });
-	                      })(m[1], m[0], m.index);
-	                    }
-	                  } catch(_) {}
-	                }
-	                // 构造 Elements 类数组对象
-	                var els = {
-	                  _list: items,
-	                  length: items.length,
-	                  attr: function(name) { return items.length > 0 ? items[0].attr(name) : ''; },
-	                  text: function() { return items.length > 0 ? items[0].text() : ''; },
-	                  html: function() { return items.length > 0 ? items[0].html() : ''; },
-	                  eq: function(i) { return items[i] || { attr:function(){return '';}, text:function(){return '';}, html:function(){return '';} }; },
-	                  first: function() { return items[0] || null; },
-	                  last: function() { return items[items.length-1] || null; },
-	                  isEmpty: function() { return items.length === 0; },
-	                  size: function() { return items.length; },
-	                  get: function(i) { return items[i] || null; },
-	                  toArray: function() { return items; }
-	                };
-	                for (var i = 0; i < items.length; i++) { els[i] = items[i]; }
-	                return els;
+	                var items = selectTags(html, css);
+	                return makeElements(html, items);
 	              },
 	              text: function() { return html.replace(/<[^>]+>/g, '').trim(); },
 	              attr: function(name) {

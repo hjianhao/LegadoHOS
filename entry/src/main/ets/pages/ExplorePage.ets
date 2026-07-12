@@ -11,6 +11,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
+import { JsExpressionEvaluator, JsEvalContext } from '../engine/source/JsExpressionEvaluator';
 import router from '@ohos.router';
 import { promptAction } from '@kit.ArkUI';
 import { http } from '@kit.NetworkKit';
@@ -92,7 +93,8 @@ export struct ExplorePage {
    * 支持格式:
    * 1. JSON 数组: [{"name":"xxx","url":"..."}, ...]
    * 2. 文本行(&& 或 \n 分隔): 分类名::url
-   * 3. JS 脚本 (<js>...</js> 或 @js:...) — 暂不支持，返回空
+   * 3. JS 脚本 (<js>...</js> 或 @js:...) — 通过 JsExpressionEvaluator 执行
+   * 4. HTTP URL — 请求后解析 JSON 或文本
    */
   async loadCategories(source: BookSource): Promise<ExploreCategory[]> {
     const cacheKey = source.sourceUrl;
@@ -103,7 +105,7 @@ export struct ExplorePage {
     let exploreUrl = source.exploreUrl || '';
     console.info('[Explore] loadCategories for ' + source.sourceName + ', exploreUrl=' + exploreUrl.substring(0, 120));
 
-    // 如果 exploreUrl 是 JSON 数组/对象，直接解析
+    // 1. exploreUrl 是纯 JSON 数组/对象
     const exploreTrimmed = exploreUrl.trim();
     if (exploreTrimmed.startsWith('[') || exploreTrimmed.startsWith('{')) {
       const parsed = this.parseExploreJson(exploreUrl);
@@ -114,7 +116,51 @@ export struct ExplorePage {
       }
     }
 
-    // fallback: 尝试 ruleExplores
+    // 2. JS 脚本: <js>...</js> 或 @js:...（通过 Worker 线程执行，不阻塞 UI）
+    if (exploreUrl.startsWith('<js>') || exploreUrl.startsWith('@js:')) {
+      try {
+        let jsCode = '';
+        if (exploreUrl.startsWith('<js>')) {
+          const match = exploreUrl.match(/<js>([\s\S]*?)<\/js>/i);
+          if (match) jsCode = match[1];
+        } else {
+          jsCode = exploreUrl.substring(4).trim();
+        }
+        if (jsCode) {
+          const baseUrl = this.getBaseUrl_(source.sourceUrl);
+          const ctx: JsEvalContext = {
+            source: source,
+            jsLib: source.jsLib || '',
+            baseUrl: baseUrl
+          };
+          const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
+          console.info('[Explore] JS evaluate result (len=' + (result ? result.length : 0) + '): ' + (result || '').substring(0, 200));
+          if (result && result.trim()) {
+            const parsed = this.parseExploreJson(result);
+            if (parsed.length > 0) {
+              this.categoryCache[cacheKey] = parsed;
+              console.info('[Explore] Parsed ' + parsed.length + ' categories from JS exploreUrl');
+              return parsed;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[Explore] JS exploreUrl evaluation failed: ' + JSON.stringify(e));
+      }
+      // JS 执行失败，fallback 到 ruleExplores JSON 解析
+      if (source.ruleExplores) {
+        const parsed = this.parseExploreJson(source.ruleExplores);
+        if (parsed.length > 0) {
+          this.categoryCache[cacheKey] = parsed;
+          return parsed;
+        }
+      }
+      const result: ExploreCategory[] = [];
+      this.categoryCache[cacheKey] = result;
+      return result;
+    }
+
+    // 3. fallback: 尝试 ruleExplores（文本行 :: 或 JSON）
     if (source.ruleExplores) {
       const lineParsed = this.parseExploreLines(source.ruleExplores);
       if (lineParsed.length > 0) {
@@ -134,32 +180,7 @@ export struct ExplorePage {
       return result;
     }
 
-    // JS脚本暂不支持
-    if (exploreUrl.startsWith('<js>') || exploreUrl.startsWith('@js:')) {
-      console.warn('[Explore] JS exploreUrl not supported yet');
-      // fallback to ruleExplores
-      if (source.ruleExplores) {
-        const parsed = this.parseExploreJson(source.ruleExplores);
-        if (parsed.length > 0) {
-          this.categoryCache[cacheKey] = parsed;
-          return parsed;
-        }
-      }
-      const result: ExploreCategory[] = [];
-      this.categoryCache[cacheKey] = result;
-      return result;
-    }
-
-    // 如果 exploreUrl 本身是 JSON 数组/对象，直接解析
-    if (exploreUrl.trim().startsWith('[') || exploreUrl.trim().startsWith('{')) {
-      const parsed = this.parseExploreJson(exploreUrl);
-      if (parsed.length > 0) {
-        this.categoryCache[cacheKey] = parsed;
-        return parsed;
-      }
-    }
-
-    // 尝试 HTTP 请求获取
+    // 4. HTTP URL — 请求后解析
     if (exploreUrl.startsWith('http')) {
       try {
         const body = await this.httpGet(exploreUrl, source.header || '');
@@ -188,10 +209,16 @@ export struct ExplorePage {
       }
     }
 
-    // 最后尝试按行/&& 解析
+    // 5. 最后尝试按行/&& 解析
     const lineParsed = this.parseExploreLines(exploreUrl);
     this.categoryCache[cacheKey] = lineParsed;
     return lineParsed;
+  }
+
+  /** 从书源 URL 提取基础域名 */
+  private getBaseUrl_(rawUrl: string): string {
+    if (!rawUrl) return '';
+    return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
   }
 
   private buildCategory(item: Record<string, Object>, defaultName: string): ExploreCategory {
@@ -248,7 +275,7 @@ export struct ExplorePage {
         }
       }
     } catch (_e) {
-      console.error('[Explore] JSON parse error');
+      console.error('[Explore] JSON parse error: ' + (_e as Error)?.message?.substring(0, 200) + ', input preview: ' + jsonStr.substring(0, 200));
     }
     return result;
   }
@@ -381,6 +408,11 @@ export struct ExplorePage {
         categoryUrl: category.url,
         categoryKeyword: category.keyword,
         header: source.header || '',
+        // 传递原始 JSON 和 JS 脚本，支持脚本式书源
+        rawJson: source.rawJson || '',
+        jsLib: source.jsLib || '',
+        script: source.script || '',
+        loginUrl: source.loginUrl || '',
       }
     });
   }

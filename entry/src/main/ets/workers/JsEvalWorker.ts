@@ -113,6 +113,7 @@ async function initEngine(): Promise<boolean> {
     initialized = true;
 
     quickjsBridge.registerHttpHandler(
+      engineId,
       (requestId: number, url: string, method: string, headersJson: string, body?: string): void => {
         handleHttpRequest(requestId, url, method, headersJson, body);
       }

@@ -10,7 +10,7 @@ declare namespace quickjs {
   function executeScript(engineId: number, script: string): string;
   function callFunction(engineId: number, functionName: string, argsJson: string): string;
   function onHttpResponse(requestId: number, responseBody: string, isError: boolean): void;
-  function registerHttpHandler(handler: (requestId: number, url: string, method: string, headersJson: string, body?: string) => void): void;
+  function registerHttpHandler(engineId: number, handler: (requestId: number, url: string, method: string, headersJson: string, body?: string) => void): void;
 }
 
 export default quickjs;

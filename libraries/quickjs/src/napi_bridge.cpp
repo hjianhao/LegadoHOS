@@ -31,6 +31,8 @@ struct ScriptEngineContext {
   JSRuntime *rt;
   JSContext *ctx;
   std::mutex mutex;
+  napi_env env = nullptr;             // 创建该引擎的线程的 napi_env
+  napi_ref http_callback = nullptr;   // 该引擎的 HTTP 回调
 };
 
 static std::unordered_map<int64_t, ScriptEngineContext*> g_engines;
@@ -58,9 +60,7 @@ static std::unordered_map<int64_t, HttpRequest*> g_pending_requests;
 static int64_t g_next_request_id = 1;
 static std::mutex g_request_mutex;
 
-// ArkTS 侧注册的回调函数
-static napi_ref g_http_request_callback = nullptr;
-static napi_env g_main_env = nullptr;
+// ArkTS 侧注册的回调函数（已移至 per-engine，见 ScriptEngineContext）
 
 /**
  * JS 函数: http.get(url, options)
@@ -113,11 +113,12 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
 
   int64_t req_id = req->requestId;
 
-  // 调用 ArkTS 回调发起真正的 HTTP 请求
-  if (g_http_request_callback && g_main_env) {
-    napi_env env = g_main_env;
+  // 调用 ArkTS 回调发起真正的 HTTP 请求（使用当前引擎的 env）
+  ScriptEngineContext* engine = (ScriptEngineContext*)JS_GetContextOpaque(ctx);
+  if (engine && engine->http_callback && engine->env) {
+    napi_env env = engine->env;
     napi_value cb;
-    napi_get_reference_value(env, g_http_request_callback, &cb);
+    napi_get_reference_value(env, engine->http_callback, &cb);
 
     napi_value args[4];
     napi_create_int64(env, req_id, &args[0]);
@@ -134,12 +135,11 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
   JS_FreeCString(ctx, url);
 
   // 等待请求完成（同步阻塞，JS 引擎单线程）
-  // 必须用 napi_get_uv_event_loop 获取 ArkTS 运行时的真实 libuv loop，
-  // uv_default_loop() 拿到的是 C++ 侧独立 loop，无法 pump RCP 的 Promise 回调
+  // 使用当前引擎的事件循环泵，避免死锁
   int waited = 0;
   while (!req->completed && waited < timeout_ms) {
     uv_loop_t *loop = nullptr;
-    if (g_main_env && napi_get_uv_event_loop(g_main_env, &loop) == napi_ok && loop) {
+    if (engine && engine->env && napi_get_uv_event_loop(engine->env, &loop) == napi_ok && loop) {
       uv_run(loop, UV_RUN_NOWAIT);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -161,9 +161,14 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
     JSValue body_obj = JS_NewObject(ctx);
     std::string body_text = req->result;
 
-    JSValue text_func = JS_NewCFunction(ctx, [](JSContext *ctx2, JSValueConst,
+    JSValue text_func = JS_NewCFunction(ctx, [](JSContext *ctx2, JSValueConst this_val,
                                                  int, JSValueConst *) -> JSValue {
-      // 从闭包获取 body 文本
+      // 从 _text 属性读取实际响应体（闭包无法捕获 std::string by value）
+      JSValue text_val = JS_GetPropertyStr(ctx2, this_val, "_text");
+      if (JS_IsString(text_val)) {
+        return JS_DupValue(ctx2, text_val);  // 返回 _text 的副本
+      }
+      JS_FreeValue(ctx2, text_val);
       return JS_NewString(ctx2, "");
     }, "text", 0);
     JS_SetPropertyStr(ctx, body_obj, "text", text_func);
@@ -255,10 +260,12 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
 
   int64_t req_id = req->requestId;
 
-  if (g_http_request_callback && g_main_env) {
-    napi_env env = g_main_env;
+  ScriptEngineContext* engine = (ScriptEngineContext*)JS_GetContextOpaque(ctx);
+
+  if (engine && engine->http_callback && engine->env) {
+    napi_env env = engine->env;
     napi_value cb;
-    napi_get_reference_value(env, g_http_request_callback, &cb);
+    napi_get_reference_value(env, engine->http_callback, &cb);
 
     napi_value args[5];
     napi_create_int64(env, req_id, &args[0]);
@@ -273,11 +280,11 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
     napi_call_function(env, global, cb, 5, args, &result);
   }
 
-  // 等待完成...（同步阻塞，需处理事件循环避免死锁）
+  // 等待完成...（同步阻塞，处理事件循环避免死锁）
   int waited = 0;
   while (!req->completed && waited < timeout_ms) {
     uv_loop_t *loop = nullptr;
-    if (g_main_env && napi_get_uv_event_loop(g_main_env, &loop) == napi_ok && loop) {
+    if (engine && engine->env && napi_get_uv_event_loop(engine->env, &loop) == napi_ok && loop) {
       uv_run(loop, UV_RUN_NOWAIT);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -375,8 +382,12 @@ static JSValue js_base64_decode(JSContext *ctx, JSValueConst this_val,
 
 static napi_value CreateEngine(napi_env env, napi_callback_info info) {
   auto *ctx = new ScriptEngineContext();
+  ctx->env = env;  // 保存当前线程的 napi_env
   ctx->rt = JS_NewRuntime();
   ctx->ctx = JS_NewContext(ctx->rt);
+  JS_SetContextOpaque(ctx->ctx, ctx);  // 绑定引擎指针到上下文，供 http.get/post 查找
+
+  // ---- 注入标准 ES 库 ----
 
 	// ---- 注入标准 ES 库 ----
 	  js_init_module_std(ctx->ctx, "std");
@@ -438,10 +449,8 @@ static napi_value CreateEngine(napi_env env, napi_callback_info info) {
     g_engines[engine_id] = ctx;
   }
 
-  // 保存 main_env 供 HTTP 回调使用
-  if (!g_main_env) {
-    g_main_env = env;
-  }
+  // 无需保存全局 env — 每个引擎有自己的 env
+  //（RegisterHttpHandler 会将回调关联到具体引擎）
 
   napi_value result;
   napi_create_int64(env, engine_id, &result);
@@ -666,14 +675,31 @@ static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
 
 /**
  * 注册 ArkTS 侧的 HTTP 请求回调
+ * 参数: engineId, callback
  */
 static napi_value RegisterHttpHandler(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1];
+  size_t argc = 2;
+  napi_value argv[2];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
-  napi_create_reference(env, argv[0], 1, &g_http_request_callback);
-  g_main_env = env;
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  ScriptEngineContext *engine = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    auto it = g_engines.find(engine_id);
+    if (it != g_engines.end()) engine = it->second;
+  }
+
+  if (engine) {
+    // 释放旧引用
+    if (engine->http_callback) {
+      napi_delete_reference(engine->env, engine->http_callback);
+    }
+    napi_create_reference(env, argv[1], 1, &engine->http_callback);
+    engine->env = env;
+  }
 
   napi_value result;
   napi_get_undefined(env, &result);

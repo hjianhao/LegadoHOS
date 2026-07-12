@@ -28,6 +28,11 @@ struct ExploreBookPage {
   @State ruleExploreLastChapter: string = '';
   @State ruleExploreLastUpdateTime: string = '';
   @State ruleExploreNoteUrl: string = '';
+  // 脚本式书源字段
+  @State rawJson: string = '';
+  @State jsLib: string = '';
+  @State script: string = '';
+  @State loginUrl: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
   @State books: SearchResult[] = [];
@@ -51,6 +56,10 @@ struct ExploreBookPage {
       this.ruleExploreLastChapter = String(params['ruleExploreLastChapter'] || '');
       this.ruleExploreLastUpdateTime = String(params['ruleExploreLastUpdateTime'] || '');
       this.ruleExploreNoteUrl = String(params['ruleExploreNoteUrl'] || '');
+      this.rawJson = String(params['rawJson'] || '');
+      this.jsLib = String(params['jsLib'] || '');
+      this.script = String(params['script'] || '');
+      this.loginUrl = String(params['loginUrl'] || '');
     }
     void this.loadBooks();
   }
@@ -85,10 +94,11 @@ struct ExploreBookPage {
       ruleBookContentPayAction: '', ruleBookContentCallBackJs: '',
       ruleExplores: '', ruleReview: '', ruleReviewUrl: '', ruleReviewAvatar: '',
       ruleReviewContent: '', ruleReviewPostTime: '', ruleReviewQuoteUrl: '',
-      script: '', header: this.header,
+      script: this.script, header: this.header,
+      jsLib: this.jsLib, loginUrl: this.loginUrl,
+      rawJson: this.rawJson,
       respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
-      variableComment: '', coverDecodeJs: '', loginUrl: '', loginCheckJs: '',
-      jsLib: '', bookUrlPattern: '',
+      variableComment: '', coverDecodeJs: '', loginCheckJs: '', bookUrlPattern: '',
       ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
       ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
       ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',
@@ -97,7 +107,7 @@ struct ExploreBookPage {
       enabledCookieJar: false, enabledExplore: true, exploreScreen: '',
       review: '', reviewUrl: '', reviewAvatar: '', reviewContent: '',
       reviewPostTime: '', reviewQuoteUrl: '',
-      createTime: 0, updateTime: 0, rawJson: '',
+      createTime: 0, updateTime: 0,
       isAiGenerated: false,
     };
   }

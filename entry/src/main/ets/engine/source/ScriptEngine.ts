@@ -36,9 +36,10 @@ export class ScriptEngine {
       console.info('[ScriptEngine] Engine created, id:', this.engineId);
 
       // 注册 HTTP 请求处理器（由 ArkTS 侧真正发起网络请求）
-      bridge.registerHttpHandler((requestId, url, method, headersJson, body) => {
+      const handler = (requestId: number, url: string, method: string, headersJson: string, body?: string): void => {
         this.handleHttpRequest(requestId, url, method, headersJson, body);
-      });
+      };
+      bridge.registerHttpHandler(this.engineId, handler);
     } catch (err) {
       console.error('[ScriptEngine] Failed to create engine:', err);
       throw err;
