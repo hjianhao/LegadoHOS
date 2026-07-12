@@ -262,6 +262,11 @@ export class MangaImageLoader {
         // 尝试竖条重组解密（禁漫天堂等源的图片打乱加密）
         finalBytes = await MangaImageLoader.tryUnscrambleImage(url, finalBytes);
 
+        // 尝试书源 imageDecode 规则解密
+        if (source && source.ruleBookContentImageDecode) {
+          finalBytes = await MangaImageLoader.tryImageDecodeRule(url, finalBytes, source.ruleBookContentImageDecode);
+        }
+
         // 确保目录存在
         const dir: string = localPath.substring(0, localPath.lastIndexOf('/'));
         if (!fileFs.accessSync(dir)) {
@@ -341,6 +346,131 @@ export class MangaImageLoader {
       console.warn('[MangaImg] Decrypt failed:', (err as Error).message, 'returning raw data');
       return data;
     }
+  }
+
+  /**
+   * 书源 imageDecode 规则解密
+   *
+   * QuickJS 桥不支持 ByteArray 传参，因此用正则匹配常见解密模式，
+   * 匹配成功则原生执行，匹配失败则跳过。
+   *
+   * 支持的模式：
+   * 1. java.aesBase64DecodeToString(result, key, trans, iv) -> AES 解密 Base64 数据
+   * 2. java.base64Decode(result) -> Base64 解码
+   * 3. XOR 模式: result.map(b => b ^ key) 或 result[i] ^= key
+   */
+  private static async tryImageDecodeRule(url: string, data: Uint8Array, ruleJs: string): Promise<Uint8Array> {
+    // 如果已是有效图片，跳过
+    if (MangaImageLoader.isValidImageBytes(data)) return data;
+    if (!ruleJs || ruleJs.trim().length === 0) return data;
+
+    console.info('[MangaImg] Trying imageDecode rule:', ruleJs.substring(0, 80));
+
+    try {
+      // 模式1: java.aesBase64DecodeToString(result, key, trans, iv)
+      const aesMatch: RegExpMatchArray | null = ruleJs.match(/java\.aesBase64DecodeToString\s*\(\s*result\s*,\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+      if (aesMatch) {
+        const key: string = aesMatch[1];
+        const trans: string = aesMatch[2];
+        const iv: string = aesMatch[3];
+        console.info('[MangaImg] imageDecode: AES pattern, key=', key.substring(0, 16), 'trans=', trans, 'iv=', iv.substring(0, 16));
+        const decoded: Uint8Array = await MangaImageLoader.aesDecrypt_(data, key, trans, iv);
+        if (decoded && MangaImageLoader.isValidImageBytes(decoded)) {
+          console.info('[MangaImg] imageDecode AES success:', decoded.length, 'bytes');
+          return decoded;
+        }
+      }
+
+      // 模式2: java.base64Decode(result) - 数据是 Base64 编码的图片
+      if (ruleJs.includes('java.base64Decode') || ruleJs.includes('Base64.decode')) {
+        console.info('[MangaImg] imageDecode: Base64 pattern');
+        try {
+          // 将 Uint8Array 转为字符串（Base64 文本）
+          const b64Str: string = String.fromCharCode.apply(null, Array.from(data));
+          const decoded: Uint8Array = MangaImageLoader.base64Decode_(b64Str);
+          if (decoded && MangaImageLoader.isValidImageBytes(decoded)) {
+            console.info('[MangaImg] imageDecode Base64 success:', decoded.length, 'bytes');
+            return decoded;
+          }
+        } catch (_) { /* not base64 text */ }
+      }
+
+      // 模式3: XOR - result.forEach((b, i) => result[i] = b ^ key) 或类似
+      const xorMatch: RegExpMatchArray | null = ruleJs.match(/\^\s*(?:0x)?([0-9a-fA-F]+)|xor\s*\(\s*(?:0x)?([0-9a-fA-F]+)\s*\)/);
+      if (xorMatch) {
+        const xorKey: number = parseInt(xorMatch[1] || xorMatch[2] || '0', 16);
+        if (xorKey > 0) {
+          console.info('[MangaImg] imageDecode: XOR pattern, key=0x' + xorKey.toString(16));
+          const decoded: Uint8Array = new Uint8Array(data.length);
+          for (let i = 0; i < data.length; i++) {
+            decoded[i] = data[i] ^ xorKey;
+          }
+          if (MangaImageLoader.isValidImageBytes(decoded)) {
+            console.info('[MangaImg] imageDecode XOR success:', decoded.length, 'bytes');
+            return decoded;
+          }
+        }
+      }
+
+      console.warn('[MangaImg] imageDecode rule not matched, skipping');
+      return data;
+    } catch (err) {
+      console.warn('[MangaImg] imageDecode error:', (err as Error).message);
+      return data;
+    }
+  }
+
+  /** AES 解密（支持 ECB/CBC，PKCS5/PKCS7 padding） */
+  private static async aesDecrypt_(data: Uint8Array, keyStr: string, trans: string, ivStr: string): Promise<Uint8Array> {
+    try {
+      // 将 key 字符串转为字节
+      const keyBytes: Uint8Array = new Uint8Array(keyStr.length);
+      for (let i = 0; i < keyStr.length; i++) {
+        keyBytes[i] = keyStr.charCodeAt(i) & 0xFF;
+      }
+      const keySize: number = keyBytes.length === 16 ? 128 : keyBytes.length === 24 ? 192 : 256;
+      const algo: string = `AES${keySize}|${trans || 'CBC'}|PKCS7`;
+
+      const generator: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator(`AES${keySize}`);
+      const symKey: cryptoFramework.SymKey = await generator.convertKey({ data: keyBytes });
+      const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher(algo);
+
+      if (trans === 'ECB' || !ivStr) {
+        await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, null);
+      } else {
+        const ivBytes: Uint8Array = new Uint8Array(ivStr.length);
+        for (let i = 0; i < ivStr.length; i++) {
+          ivBytes[i] = ivStr.charCodeAt(i) & 0xFF;
+        }
+        const params: cryptoFramework.IvParamsSpec = { algName: 'IvParamsSpec', iv: { data: ivBytes } };
+        await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
+      }
+
+      const decoded: cryptoFramework.DataBlob = await cipher.doFinal({ data: data });
+      return new Uint8Array(decoded.data);
+    } catch (err) {
+      console.warn('[MangaImg] AES decrypt error:', (err as Error).message);
+      return data;
+    }
+  }
+
+  /** Base64 解码 */
+  private static base64Decode_(b64: string): Uint8Array {
+    const lookup: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const cleanB64: string = b64.replace(/[^A-Za-z0-9+/=]/g, '');
+    const len: number = cleanB64.length;
+    const bytes: number[] = [];
+    for (let i = 0; i < len; i += 4) {
+      const c1: number = lookup.indexOf(cleanB64[i]);
+      const c2: number = lookup.indexOf(cleanB64[i + 1]);
+      const c3: number = lookup.indexOf(cleanB64[i + 2]);
+      const c4: number = lookup.indexOf(cleanB64[i + 3]);
+      if (c1 < 0 || c2 < 0) break;
+      bytes.push((c1 << 2) | (c2 >> 4));
+      if (c3 >= 0 && cleanB64[i + 2] !== '=') bytes.push(((c2 & 15) << 4) | (c3 >> 2));
+      if (c4 >= 0 && cleanB64[i + 3] !== '=') bytes.push(((c3 & 3) << 6) | c4);
+    }
+    return new Uint8Array(bytes);
   }
 
   /**

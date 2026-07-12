@@ -24,6 +24,9 @@ import { BookChapter } from '../model/BookChapter';
 import { UiUtil } from '../util/UiUtil';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ClickAction } from '../components/reader/ClickAction';
+import { ChangeSourceSheet } from '../components/BookInfoSheets';
+import { SearchResult } from '../model/SearchResult';
+import window from '@ohos.window';
 
 /** 阅读方向模式 */
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
@@ -75,6 +78,11 @@ struct ComicReadPage {
   // 缩放状态
   @State imageScale: number = 1.0;
   private pinchStartScale_: number = 1.0;  // 手势开始时的缩放基准
+  // 缩放后拖动平移
+  @State panOffsetX: number = 0;
+  @State panOffsetY: number = 0;
+  private panStartX_: number = 0;
+  private panStartY_: number = 0;
 
   // 触控区域动作配置（9宫格）
   @State comicZoneActions: number[] = [4, 2, 3, 2, 0, 1, 2, 1, 1];
@@ -86,6 +94,8 @@ struct ComicReadPage {
   @State screenHeight: number = 0;
   // 预加载数量
   private preloadNum_: number = 3;
+  // 换源对话框
+  private sourceDlg?: CustomDialogController;
 
   // 内部状态
   private source_: BookSource | null = null;
@@ -116,6 +126,8 @@ struct ComicReadPage {
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
     // 加载阅读模式和触控配置
     this.loadSettings();
+    // 进入沉浸式模式（隐藏状态栏和导航栏）
+    this.setSystemBarVisible_(false);
   }
 
   private async loadSettings(): Promise<void> {
@@ -384,6 +396,8 @@ struct ComicReadPage {
         if (content && content.length > 10) {
           this.nextChapterContent_ = content;
           this.nextChapterIdx_ = nextIdx;
+          // 预下载下一章图片到本地缓存，切章时秒加载
+          this.preloadChapterImages_(nextIdx, content);
         }
       })
       .catch((_e: Error) => { /* ignore */ })
@@ -407,12 +421,28 @@ struct ComicReadPage {
         if (content && content.length > 10) {
           this.prevChapterContent_ = content;
           this.prevChapterIdx_ = prevIdx;
+          // 预下载上一章图片到本地缓存
+          this.preloadChapterImages_(prevIdx, content);
         }
       })
       .catch((_e: Error) => { /* ignore */ })
       .then(() => {
         this.preloadingChapterPromises_.delete(prevIdx);
       });
+  }
+
+  /** 预下载指定章节的所有图片到本地缓存（不阻塞 UI） */
+  private preloadChapterImages_(idx: number, content: string): void {
+    try {
+      const ch = this.allChapters_[idx];
+      const baseUrl: string = ch?.url || this.bookUrl || this.source_?.sourceUrl || '';
+      const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
+      if (urls.length === 0) return;
+      console.info('[ComicRead] Preloading', urls.length, 'images for chapter', idx);
+      for (const url of urls) {
+        MangaImageLoader.preload(url, this.source_);
+      }
+    } catch (_) { /* ignore */ }
   }
 
   private async tryUsePreloadedChapter_(idx: number, gotoLastPage: boolean = false): Promise<boolean> {
@@ -535,6 +565,25 @@ struct ComicReadPage {
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
       try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, this.currentPageIndex); } catch (_) { /* ignore */ }
     }
+    // 退出时恢复系统栏
+    this.setSystemBarVisible_(true);
+  }
+
+  /** 控制系统栏显示/隐藏 */
+  private async setSystemBarVisible_(visible: boolean): Promise<void> {
+    try {
+      const ctx = UiUtil.getHostContext(this.getUIContext());
+      if (!ctx) return;
+      const win: window.Window = await window.getLastWindow(ctx);
+      if (visible) {
+        await win.setWindowSystemBarEnable(['status', 'navigation']);
+      } else {
+        await win.setWindowSystemBarEnable([]);
+      }
+    } catch (err) {
+      // 部分设备可能不支持，忽略
+      console.warn('[ComicRead] setSystemBar failed:', (err as Error).message);
+    }
   }
 
   // ============ 章节导航 ============
@@ -626,9 +675,29 @@ struct ComicReadPage {
   private onDoubleTap(): void {
     if (this.imageScale > 1.0) {
       this.imageScale = 1.0;
+      this.panOffsetX = 0;
+      this.panOffsetY = 0;
     } else {
       this.imageScale = DOUBLE_TAP_SCALE;
     }
+  }
+
+  /** 缩放时归零偏移（缩放变化后原有偏移不再适用） */
+  private onScaleChange_(): void {
+    if (this.imageScale <= 1.0) {
+      this.panOffsetX = 0;
+      this.panOffsetY = 0;
+    }
+  }
+
+  /** clamp 平移偏移量，防止拖出边界 */
+  private clampPanOffset_(x: number, y: number): void {
+    const w: number = this.screenWidth > 0 ? this.screenWidth : 360;
+    const h: number = this.screenHeight > 0 ? this.screenHeight : 640;
+    const maxX: number = (this.imageScale - 1.0) * w / 2;
+    const maxY: number = (this.imageScale - 1.0) * h / 2;
+    this.panOffsetX = Math.max(-maxX, Math.min(maxX, x));
+    this.panOffsetY = Math.max(-maxY, Math.min(maxY, y));
   }
 
   // ============ 9 宫格触控分发 ============
@@ -659,6 +728,8 @@ struct ComicReadPage {
         break;
       case ClickAction.MENU:
         this.showMenu = !this.showMenu;
+        // 菜单显示时恢复状态栏，隐藏时进入沉浸式
+        this.setSystemBarVisible_(this.showMenu);
         break;
       case ClickAction.NEXT_PAGE:
         this.nextPage();
@@ -881,6 +952,7 @@ struct ComicReadPage {
               .width('100%').height('100%')
               .objectFit(ImageFit.Contain)
               .scale({ x: this.imageScale, y: this.imageScale })
+              .translate({ x: this.panOffsetX, y: this.panOffsetY })
               .onError(() => {
                 const newSet = new Set<string>(this.failedImages);
                 newSet.add(url);
@@ -894,6 +966,19 @@ struct ComicReadPage {
                   .onActionUpdate((event: GestureEvent) => {
                     const newScale: number = this.pinchStartScale_ * event.scale;
                     this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                    this.onScaleChange_();
+                  })
+              )
+              .gesture(
+                PanGesture()
+                  .onActionStart((_event: GestureEvent) => {
+                    this.panStartX_ = this.panOffsetX;
+                    this.panStartY_ = this.panOffsetY;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    if (this.imageScale > 1.0) {
+                      this.clampPanOffset_(this.panStartX_ + event.offsetX, this.panStartY_ + event.offsetY);
+                    }
                   })
               )
               .gesture(
@@ -961,6 +1046,7 @@ struct ComicReadPage {
             .width('100%')
             .objectFit(ImageFit.Auto)
             .scale({ x: this.imageScale, y: this.imageScale })
+            .translate({ x: this.panOffsetX, y: this.panOffsetY })
             .onError(() => {
               const newSet = new Set<string>(this.failedImages);
               newSet.add(url);
@@ -974,6 +1060,19 @@ struct ComicReadPage {
                 .onActionUpdate((event: GestureEvent) => {
                   const newScale: number = this.pinchStartScale_ * event.scale;
                   this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                  this.onScaleChange_();
+                })
+            )
+            .gesture(
+              PanGesture()
+                .onActionStart((_event: GestureEvent) => {
+                  this.panStartX_ = this.panOffsetX;
+                  this.panStartY_ = this.panOffsetY;
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  if (this.imageScale > 1.0) {
+                    this.clampPanOffset_(this.panStartX_ + event.offsetX, this.panStartY_ + event.offsetY);
+                  }
                 })
             )
             .gesture(
@@ -1138,7 +1237,7 @@ struct ComicReadPage {
         Column() {
           Text('换源').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
-        .onClick(() => { this.showMenu = false; this.onOpenToc(); })
+        .onClick(() => { this.showMenu = false; this.openChangeSourceDialog(); })
 
         Column() {
           Text(this.singlePageMode ? '单页✓' : '单页').fontSize(12)
@@ -1271,6 +1370,73 @@ struct ComicReadPage {
     const newActions: number[] = [...this.comicZoneActions];
     newActions[zone] = next;
     this.comicZoneActions = newActions;
+  }
+
+  /** 打开换源面板 */
+  private openChangeSourceDialog(): void {
+    this.sourceDlg = new CustomDialogController({
+      builder: ChangeSourceSheet({
+        controller: this.sourceDlg!,
+        bookName: this.bookName,
+        bookAuthor: '',
+        currentOriginUrl: this.originUrl,
+        cachedSources: [],
+        onReplace: (result: SearchResult) => { this.replaceSource_(result); },
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true,
+    });
+    this.sourceDlg.open();
+  }
+
+  /** 换源回调：更新书源信息，重新加载 */
+  private async replaceSource_(result: SearchResult): Promise<void> {
+    const newOriginUrl: string = result.originUrl || this.originUrl;
+    const newNoteUrl: string = result.noteUrl || this.bookUrl;
+    const sourceChanged: boolean = newOriginUrl !== this.originUrl || newNoteUrl !== this.bookUrl;
+
+    this.origin = result.origin || this.origin;
+    this.originUrl = newOriginUrl;
+    this.bookUrl = newNoteUrl;
+    this.chapterTitle = '';
+
+    if (sourceChanged) {
+      // 清空缓存
+      this.allChapters_ = [];
+      this.chapters = [];
+      this.imageUrls = [];
+      this.imagePaths = new Map<string, string>();
+      this.nextChapterContent_ = '';
+      this.nextChapterIdx_ = -1;
+      this.prevChapterContent_ = '';
+      this.prevChapterIdx_ = -1;
+      this.preloadingChapterPromises_.clear();
+      ChapterCache.chapters = [];
+      ChapterCache.bookUrl = '';
+      this.currentIndex = 0;
+      this.currentPageIndex = 0;
+      this.targetIdx_ = 0;
+
+      // 更新数据库中的书籍信息
+      try {
+        const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+        const book = await bookTable.getBookByUrl(newNoteUrl);
+        if (book) {
+          book.origin = this.origin;
+          book.originUrl = newOriginUrl;
+          book.bookUrl = newNoteUrl;
+          await bookTable.updateBook(book);
+          this.bookId_ = book.id;
+        }
+      } catch (_) { /* ignore */ }
+
+      // 重新匹配书源并加载
+      this.source_ = null;
+      this.isLoading = true;
+      this.loadContent();
+      UiUtil.showToast(this.getUIContext(), { message: '已更换书源', duration: 1500 });
+    }
   }
 
   private onRefresh(): void {
