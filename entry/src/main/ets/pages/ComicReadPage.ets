@@ -1343,8 +1343,7 @@ struct ComicReadPage {
       // 章节进度条
       if (this.totalChapters > 1) {
         Row() {
-          Text(`${this.currentIndex + 1}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-            .width(30).textAlign(TextAlign.End)
+          Text('章节').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
           Slider({ value: this.currentIndex + 1, min: 1, max: this.totalChapters, step: 1 })
             .layoutWeight(1).margin({ left: 8, right: 8 })
             .onChange((val: number) => {
@@ -1354,8 +1353,8 @@ struct ComicReadPage {
                 this.loadChapterImages(idx);
               }
             })
-          Text(`${this.totalChapters}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-            .width(30)
+          Text(`${this.currentIndex + 1}/${this.totalChapters}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(50).textAlign(TextAlign.End)
         }
         .width('100%').height(40)
         .backgroundColor(ThemeColors.surface(this.isDark))
@@ -1380,8 +1379,7 @@ struct ComicReadPage {
       // 页内进度条（图片跳转）
       if (this.imageUrls.length > 1) {
         Row() {
-          Text(`${this.currentPageIndex + 1}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-            .width(30).textAlign(TextAlign.End)
+          Text('页码').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
           Slider({ value: this.currentPageIndex + 1, min: 1, max: this.imageUrls.length, step: 1 })
             .layoutWeight(1).margin({ left: 8, right: 8 })
             .onChange((val: number) => {
@@ -1396,8 +1394,8 @@ struct ComicReadPage {
                 }
               }
             })
-          Text(`${this.imageUrls.length}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
-            .width(30)
+          Text(`${this.currentPageIndex + 1}/${this.imageUrls.length}`).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .width(50).textAlign(TextAlign.End)
         }
         .width('100%').height(40)
         .backgroundColor(ThemeColors.surface(this.isDark))
