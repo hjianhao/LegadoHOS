@@ -59,7 +59,7 @@ export function getSystemGroupDefaults(): BookGroupItem[] {
     { id: BookGroup.READING, name: '在读', order: 1, cover: '', isSystem: true, enableRefresh: true, show: true, isPrivate: false, bookSort: -1 },
     { id: BookGroup.UNREAD, name: '未读', order: 2, cover: '', isSystem: true, enableRefresh: true, show: true, isPrivate: false, bookSort: -1 },
     { id: BookGroup.FINISHED, name: '已完本', order: 3, cover: '', isSystem: true, enableRefresh: true, show: true, isPrivate: false, bookSort: -1 },
-    { id: BookGroup.LOCAL, name: '本地', order: 4, cover: '', isSystem: true, enableRefresh: false, show: false, isPrivate: false, bookSort: -1 },
+    { id: BookGroup.LOCAL, name: '本地', order: 4, cover: '', isSystem: true, enableRefresh: false, show: true, isPrivate: false, bookSort: -1 },
     { id: BookGroup.AUDIO_BOOK, name: '听书', order: 5, cover: '', isSystem: true, enableRefresh: false, show: false, isPrivate: false, bookSort: -1 },
     { id: BookGroup.MANGA, name: '漫画', order: 6, cover: '', isSystem: true, enableRefresh: false, show: false, isPrivate: false, bookSort: -1 },
   ];
@@ -78,7 +78,7 @@ export function bookMatchesSystemGroup(book: Book, groupId: number): boolean {
     case BookGroup.FINISHED:
       return book.totalChapterNum > 0 && book.durChapterIndex >= book.totalChapterNum;
     case BookGroup.LOCAL:
-      return book.type === 0; // BookType.TEXT, but we use number to avoid circular import
+      return book.origin === '本地';
     case BookGroup.AUDIO_BOOK:
       return book.isAudio;
     case BookGroup.MANGA:

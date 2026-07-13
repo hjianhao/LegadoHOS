@@ -35,6 +35,7 @@ import { UiUtil } from '../util/UiUtil';
 import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
+import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 
 @Entry
 @Component
@@ -89,6 +90,7 @@ struct ReadPage {
   @State pageW: number = 360;
   @State pageH: number = 640;
   private source_: BookSource | null = null;
+  private isLocalBook_: boolean = false;
   private targetIdx_: number = -1;
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
@@ -261,8 +263,16 @@ struct ReadPage {
         }
       } catch (_) { /* ignore */ }
 
+      // 检测是否为本地书籍（origin 为 "本地"）
+      this.isLocalBook_ = this.origin === LOCAL_BOOK_ORIGIN;
+
+      // 本地书籍：跳过 BookSource 匹配和网络目录获取，直接从 DB 读取章节
+      if (this.isLocalBook_) {
+        console.info('[ReadPage] Local book detected, skipping network source');
+      }
+
       const srcDao = new BookSourceTable(db);
-      const sources = await srcDao.getAllSources();
+      const sources = this.isLocalBook_ ? [] : await srcDao.getAllSources();
       const norm = this.originUrl.replace(/\/+$/, '');
       this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
@@ -304,7 +314,7 @@ struct ReadPage {
         }
         // 如果 DB 目录不完整（少于书籍应有章数的 80%），从网络刷新完整目录
         const expectedCount = await this.getExpectedChapterCount_(db);
-        const needsNetworkRefresh = this.source_ && (
+        const needsNetworkRefresh = !this.isLocalBook_ && this.source_ && (
           chapters.length === 0 ||
           (expectedCount > 0 && dbChapterCount > 0 && dbChapterCount < expectedCount * 0.8)
         );
@@ -418,6 +428,14 @@ struct ReadPage {
     const url = ch.url || this.bookUrl;
     console.info('[ReadPage] fetchChapterContent_: idx=', idx, 'title=', ch.title, 'url=', url?.substring(0, 80));
     let content = '';
+
+    // 本地书籍：直接从 DB 缓存读取（导入时已全量写入）
+    if (this.isLocalBook_) {
+      content = await this.readChapterCache_(idx);
+      console.info('[ReadPage] Local book content from DB:', content ? content.length : 0, 'bytes');
+      return content;
+    }
+
     if (this.source_) {
       content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
       console.info('[ReadPage] getContent returned:', content ? content.length : 0, 'bytes');
@@ -983,8 +1001,17 @@ struct ReadPage {
         return { text: text, offset: 0, chapterIndex: n };
       }
       if (!this.preloadingChapterPromises_.has(n)) {
-        const ch = this.allChapters_[n]; const src = this.source_;
-        if (ch && src) { const promise = globalSourceExecutor.getContent(src, ch.url || '', this.bookUrl); this.preloadingChapterPromises_.set(n, promise); }
+        const ch = this.allChapters_[n];
+        if (ch) {
+          let promise: Promise<string>;
+          if (this.isLocalBook_) {
+            promise = this.readChapterCache_(n);
+          } else {
+            const src = this.source_;
+            promise = src ? globalSourceExecutor.getContent(src, ch.url || '', this.bookUrl) : Promise.resolve('');
+          }
+          this.preloadingChapterPromises_.set(n, promise);
+        }
       }
       const promise = this.preloadingChapterPromises_.get(n);
       if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: content, offset: 0, chapterIndex: n } : null; }
@@ -1157,6 +1184,7 @@ struct ReadPage {
         Column() {
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
           ReadBottomMenu({
+            isLocalBook: this.isLocalBook_,
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
             onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { UiUtil.showToast(this.getUIContext(), {message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
             onBookmark: () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), {message:'书签功能开发中',duration:1500}); },

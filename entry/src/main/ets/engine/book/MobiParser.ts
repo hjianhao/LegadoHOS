@@ -47,13 +47,21 @@ export class MobiParser {
   }
 
   async parse(): Promise<{ meta: MobiMeta; chapters: BookChapter[] }> {
-    const buffer = fileFs.readSync(fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY).fd);
-    const bytes = new Uint8Array(buffer);
+    const file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
+    let bytes: Uint8Array;
+    try {
+      const stat = fileFs.statSync(this.filePath);
+      const buf = new ArrayBuffer(stat.size);
+      fileFs.readSync(file.fd, buf);
+      bytes = new Uint8Array(buf);
+    } finally {
+      fileFs.closeSync(file);
+    }
 
     if (bytes.length < PDB_HEADER_SIZE) throw new Error('Invalid MOBI: file too small');
 
     // 1. 解析 PDB Header
-    const pdbName = new TextDecoder('ascii').decode(bytes.slice(0, 32)).replace(/\0/g, '').trim();
+    const pdbName = this.readAscii(bytes, 0, 32).replace(/\0/g, '').trim();
     const numRecords = this.readU16(bytes, 76);
 
     if (numRecords < 1) throw new Error('Invalid MOBI: no records');
@@ -252,23 +260,70 @@ export class MobiParser {
 
   private decodeText(data: Uint8Array, encoding: number): string {
     if (encoding === 65001) {
-      return new TextDecoder('utf-8', { fatal: false }).decode(data);
+      // UTF-8 解码
+      return this.decodeUtf8(data);
     }
-    // CP1252 / Latin-1
-    return new TextDecoder('windows-1252', { fatal: false }).decode(data);
+    // CP1252 / Latin-1：逐字节映射
+    const chars: string[] = [];
+    for (let i = 0; i < data.length; i++) {
+      chars.push(String.fromCharCode(data[i]));
+    }
+    return chars.join('');
+  }
+
+  /** UTF-8 解码 */
+  private decodeUtf8(data: Uint8Array): string {
+    const chars: string[] = [];
+    let i = 0;
+    while (i < data.length) {
+      const b = data[i];
+      if (b < 0x80) {
+        chars.push(String.fromCharCode(b));
+        i++;
+      } else if (b < 0xC0) {
+        // 无效的起始字节，跳过
+        i++;
+      } else if (b < 0xE0) {
+        if (i + 1 < data.length) {
+          const cp = ((b & 0x1F) << 6) | (data[i + 1] & 0x3F);
+          chars.push(String.fromCharCode(cp));
+          i += 2;
+        } else { i++; }
+      } else if (b < 0xF0) {
+        if (i + 2 < data.length) {
+          const cp = ((b & 0x0F) << 12) | ((data[i + 1] & 0x3F) << 6) | (data[i + 2] & 0x3F);
+          chars.push(String.fromCharCode(cp));
+          i += 3;
+        } else { i++; }
+      } else {
+        if (i + 3 < data.length) {
+          const cp = ((b & 0x07) << 18) | ((data[i + 1] & 0x3F) << 12) | ((data[i + 2] & 0x3F) << 6) | (data[i + 3] & 0x3F);
+          // 超出 BMP，用代理对
+          const surrogate = cp - 0x10000;
+          chars.push(String.fromCharCode(0xD800 + (surrogate >> 10)));
+          chars.push(String.fromCharCode(0xDC00 + (surrogate & 0x3FF)));
+          i += 4;
+        } else { i++; }
+      }
+    }
+    return chars.join('');
   }
 
   private readU16(bytes: Uint8Array, offset: number): number {
     return bytes[offset] | (bytes[offset + 1] << 8);
   }
 
-  private readU32(bytes: Uint8Array | Uint8Array, offset: number): number {
+  private readU32(bytes: Uint8Array, offset: number): number {
     return (bytes[offset] | (bytes[offset + 1] << 8)
       | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
   }
 
   private readAscii(bytes: Uint8Array, offset: number, len: number): string {
-    return new TextDecoder('ascii').decode(bytes.slice(offset, offset + len));
+    const chars: string[] = [];
+    for (let i = offset; i < offset + len && i < bytes.length; i++) {
+      chars.push(String.fromCharCode(bytes[i]));
+    }
+    return chars.join('');
   }
 
   getMeta(): MobiMeta { return this.meta_; }

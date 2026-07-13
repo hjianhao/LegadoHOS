@@ -45,8 +45,22 @@ export class PdfParser {
   }
 
   async parse(): Promise<{ meta: PdfMeta; chapters: BookChapter[] }> {
-    const buffer = fileFs.readSync(fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY).fd);
-    const content = new TextDecoder('latin-1', { fatal: false }).decode(buffer);
+    const file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
+    let content: string;
+    try {
+      const stat = fileFs.statSync(this.filePath);
+      const buf = new ArrayBuffer(stat.size);
+      fileFs.readSync(file.fd, buf);
+      const bytes = new Uint8Array(buf);
+      // latin-1 解码：逐字节映射到 char code
+      const chars: string[] = [];
+      for (let i = 0; i < bytes.length; i++) {
+        chars.push(String.fromCharCode(bytes[i]));
+      }
+      content = chars.join('');
+    } finally {
+      fileFs.closeSync(file);
+    }
 
     // 1. 解析文件头
     if (!content.startsWith('%PDF')) {
@@ -155,6 +169,7 @@ export class PdfParser {
 
       // 提取 TJ: [(text) num (text) ...] TJ
       const tjArrayRegex = /\[([^\]]*)\]\s*TJ/g;
+      let tjArrayMatch: RegExpExecArray | null;
       while ((tjArrayMatch = tjArrayRegex.exec(btBlock)) !== null) {
         const items = tjArrayMatch[1];
         const parts = items.match(/\(([^)]*?)\)/g);

@@ -6,6 +6,7 @@ import { ThemeColors } from '../../theme/ThemeColors';
 @Component
 export struct ReadBottomMenu {
   @StorageLink('isDark') isDark: boolean = false;
+  @Prop isLocalBook: boolean = false;
   onToc?: () => void;
   onReadAloud?: () => void;
   onBookmark?: () => void;
@@ -43,18 +44,20 @@ export struct ReadBottomMenu {
         Text('🔎').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
         Text('搜索').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
       }.onClick(() => { this.onSearch?.() })
-      Column() {
-        Text('🔄').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
-        Text('换源').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
-      }.onClick(() => { this.onSource?.() })
-      Column() {
-        Text('📥').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
-        Text('缓存').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
-      }.onClick(() => { this.onCache?.() })
-      Column() {
-        Text('🔄').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
-        Text('刷新').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
-      }.onClick(() => { this.onRefresh?.() })
+      if (!this.isLocalBook) {
+        Column() {
+          Text('🔄').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          Text('换源').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
+        }.onClick(() => { this.onSource?.() })
+        Column() {
+          Text('📥').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          Text('缓存').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
+        }.onClick(() => { this.onCache?.() })
+        Column() {
+          Text('🔄').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          Text('刷新').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
+        }.onClick(() => { this.onRefresh?.() })
+      }
     }.width('100%').justifyContent(FlexAlign.SpaceEvenly)
     .padding({top: 12, bottom: 16, left: 8, right: 8})
     .backgroundColor(ThemeColors.surface(this.isDark))

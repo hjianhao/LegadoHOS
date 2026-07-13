@@ -24,6 +24,8 @@ import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookG
 import { BookSourceChapter } from '../model/BookSource';
 import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { localBookEngine, ImportFileItem } from '../engine/book/LocalBookEngine';
+import picker from '@ohos.file.picker';
 
 import { BookshelfConfigDialog } from './BookshelfConfigDialog';
 import { BookGroupManageDialog } from './BookGroupManageDialog';
@@ -69,6 +71,8 @@ export struct BookshelfPage {
   @State isSelectMode: boolean = false;
   @State selectedBookIds: number[] = [];
   @State exportBooks: Book[] = [];
+  @State isImporting: boolean = false;
+  @State importProgress: string = '';
   private cfgDlg?: CustomDialogController;
   private groupDlg?: CustomDialogController;
   private addUrlDlg?: CustomDialogController;
@@ -251,6 +255,70 @@ export struct BookshelfPage {
     }
     this.isRefreshing = true;
     await this.loadShelfData();
+  }
+
+  /**
+   * 添加本地书籍 - 打开文件选择器
+   */
+  private async addLocalBooks(): Promise<void> {
+    try {
+      const docPicker = new picker.DocumentViewPicker();
+      const options = new picker.DocumentSelectOptions();
+      options.maxSelectNumber = 20;
+      options.fileSuffixFilters = ['.txt', '.epub', '.mobi', '.azw', '.azw3', '.pdf'];
+      const uris = await docPicker.select(options);
+      if (!uris || uris.length === 0) return;
+
+      this.isImporting = true;
+      this.importProgress = `正在导入 0/${uris.length}...`;
+
+      // 获取沙箱 context
+      const context = this.getUIContext().getHostContext() as Context;
+
+      // 构造导入项列表（uri + fileName），从 URI 提取文件名
+      const items: ImportFileItem[] = [];
+      for (let i = 0; i < uris.length; i++) {
+        const uri = uris[i];
+        // picker 返回的 URI 末段通常包含文件名
+        const name = uri.split('/').pop() || `book_${i + 1}`;
+        const item: ImportFileItem = { uri: uri, fileName: name };
+        items.push(item);
+      }
+
+      const result = await localBookEngine.importBooks(items, context, (current, total, name) => {
+        this.importProgress = `正在导入 ${current}/${total}: ${name}`;
+      });
+
+      this.isImporting = false;
+      this.importProgress = '';
+
+      if (result.success > 0) {
+        UiUtil.showToast(this.getUIContext(), {
+          message: `导入完成: 成功 ${result.success} 本${result.failed > 0 ? `，失败 ${result.failed} 本` : ''}`,
+          duration: 2000
+        });
+        await this.loadBooks();
+      } else if (result.failed > 0) {
+        let firstError = '未知错误';
+        for (const detail of result.details) {
+          if (!detail.success && detail.error) {
+            firstError = detail.error;
+            break;
+          }
+        }
+        UiUtil.showToast(this.getUIContext(), {
+          message: `导入失败: ${firstError}`,
+          duration: 2000
+        });
+      }
+    } catch (e) {
+      this.isImporting = false;
+      this.importProgress = '';
+      // 用户取消选择会抛异常，不提示
+      if (e && (e as Error).message?.includes('cancel')) return;
+      console.error('[Bookshelf] addLocalBooks error:', e);
+      UiUtil.showToast(this.getUIContext(), { message: '导入失败', duration: 1500 });
+    }
   }
 
   applyFilters(): void {
@@ -689,7 +757,7 @@ export struct BookshelfPage {
       Column().width('100%').height('100%').position({ top: 0, left: 0 }).onClick(() => { this.showMenu = false; })
       Column() {
         this.mi('添加远程书籍', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
-        this.mi('添加本地书籍', () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), { message: '本地书籍导入待接入文件解析', duration: 1500 }); })
+        this.mi('添加本地书籍', () => { this.showMenu = false; this.addLocalBooks(); })
         this.mi('更新目录', () => { this.showMenu = false; this.updateTocForVisible(); })
         this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
         this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
@@ -703,6 +771,18 @@ export struct BookshelfPage {
       }
       .position({ top: 8, right: 8 }).backgroundColor(ThemeColors.surface(this.isDark))
       .borderRadius(12).shadow({ radius: 8, color: '#20000000' }).width(180)
+    }
+    // 导入进度遮罩
+    if (this.isImporting) {
+      Column() {
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).width(48).height(48)
+        Text(this.importProgress || '正在导入...')
+          .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+          .margin({ top: 12 }).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .padding(24).backgroundColor(ThemeColors.surface(this.isDark))
+      .borderRadius(12).alignItems(HorizontalAlign.Center)
+      .position({ top: '40%', left: '10%' }).width('80%')
     }
   }
   .width('100%').height('100%')
