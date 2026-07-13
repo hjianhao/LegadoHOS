@@ -6,6 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "libquickjs_bridge.so": "file:./src/main/cpp/types/libquickjs_bridge"
+    "libquickjs_bridge.so": "file:./src/main/cpp/types/libquickjs_bridge",
+    "sherpa_onnx": "file:../libs/sherpa_onnx.har"
   }
 }

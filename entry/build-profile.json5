@@ -1,6 +1,12 @@
 {
   "apiType": "stageMode",
   "buildOption": {
+    "sourceOption": {
+      "workers": [
+        "./src/main/ets/workers/JsEvalWorker.ts",
+        "./src/main/ets/workers/TtsWorker.ts"
+      ]
+    },
     "externalNativeOptions": {
       "path": "./src/main/cpp/CMakeLists.txt"
     }

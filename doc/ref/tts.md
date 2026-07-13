@@ -1055,3 +1055,1756 @@ App 保存并指定模型绝对路径
 
 [1]: https://huggingface.co/csukuangfj/kokoro-int8-multi-lang-v1_1/tree/main "csukuangfj/kokoro-int8-multi-lang-v1_1 at main"
 [2]: https://k2-fsa.github.io/sherpa/onnx/harmony-os/tts.html "On-device text-to-speech (TTS, 本地语音合成) — sherpa 1.3 documentation"
+
+
+# Kokoro加载性能优化
+**3 分多钟明显不正常。**Kokoro INT8 在现代鸿蒙手机上，即使冷启动，也不应该需要几分钟。最可能的问题不是模型本身，而是启动时反复执行了：
+
+1. 遍历 `rawfile` 中的大量资源；
+2. 把每个文件完整读入 `Uint8Array`；
+3. 再复制到应用沙箱；
+4. 创建 ONNX Runtime Session；
+5. 甚至每次开始朗读都重新创建引擎。
+
+官方 HarmonyOS 示例里的资源复制实现确实存在一个很容易踩中的性能点：`copyRawFileToSandbox()` 会先调用 `getRawFileContentSync(src)`，之后才检查沙箱中的目标文件大小。也就是说，**即使文件已经复制过，仍然会先把源文件完整读取一遍**。对于 Kokoro 的大量词典和 `espeak-ng-data` 文件，这可能造成非常慢的启动。([GitHub][1])
+
+## 第一优先级：确认慢在哪里
+
+先在初始化代码中加分段计时，不要只测整个 `new OfflineTts()`：
+
+```ts
+const now = (): number => Date.now();
+
+let t = now();
+console.info(`[TTS] init start`);
+
+const t1 = now();
+console.info(`[TTS] prepare path: ${t1 - t} ms`);
+
+copyModelResourcesIfNeeded();
+const t2 = now();
+console.info(`[TTS] copy resources: ${t2 - t1} ms`);
+
+const config = buildTtsConfig();
+const t3 = now();
+console.info(`[TTS] build config: ${t3 - t2} ms`);
+
+const tts = new OfflineTts(config, context.resourceManager);
+const t4 = now();
+console.info(`[TTS] create OfflineTts: ${t4 - t3} ms`);
+
+console.info(`[TTS] total: ${t4 - t} ms`);
+```
+
+另外记录：
+
+```ts
+console.info(`[TTS] model=${modelPath}`);
+console.info(`[TTS] voices=${voicesPath}`);
+console.info(`[TTS] dataDir=${dataDir}`);
+console.info(`[TTS] lexicon=${lexicon}`);
+```
+
+判断标准：
+
+| 耗时位置                      | 主要原因                        |
+| ------------------------- | --------------------------- |
+| 资源复制 2～3 分钟               | `rawfile` 遍历、读取和复制          |
+| `new OfflineTts()` 2～3 分钟 | ONNX Session、模型路径、存储介质或版本问题 |
+| 第一次 `generate()` 很慢       | 首次推理、线程配置、CPU性能             |
+| 每次朗读都慢                    | 重复创建 OfflineTts             |
+
+---
+
+# 最有效的优化：不要每次从 rawfile 读取模型
+
+## 正式版把模型放应用沙箱
+
+你的模型本来就准备按需下载，那么应直接放到：
+
+```text
+context.filesDir/tts/kokoro-int8-multi-lang-v1_1/
+```
+
+例如：
+
+```text
+/data/storage/el2/base/haps/entry/files/tts/kokoro-int8-multi-lang-v1_1/
+├── model.int8.onnx
+├── voices.bin
+├── tokens.txt
+├── lexicon-zh.txt
+├── lexicon-us-en.txt
+├── date-zh.fst
+├── number-zh.fst
+├── phone-zh.fst
+├── dict/
+└── espeak-ng-data/
+```
+
+初始化时全部使用绝对路径：
+
+```ts
+const root =
+  `${context.filesDir}/tts/kokoro-int8-multi-lang-v1_1`;
+
+config.model.kokoro.model =
+  `${root}/model.int8.onnx`;
+
+config.model.kokoro.voices =
+  `${root}/voices.bin`;
+
+config.model.kokoro.tokens =
+  `${root}/tokens.txt`;
+
+config.model.kokoro.lexicon = [
+  `${root}/lexicon-zh.txt`,
+  `${root}/lexicon-us-en.txt`,
+  `${root}/lexicon-gb-en.txt`
+].join(',');
+
+config.model.kokoro.dataDir =
+  `${root}/espeak-ng-data`;
+
+config.ruleFsts = [
+  `${root}/date-zh.fst`,
+  `${root}/phone-zh.fst`,
+  `${root}/number-zh.fst`
+].join(',');
+```
+
+关键是：
+
+```text
+不要调用 copyRawFileDirToSandbox()
+不要调用 getRawFileContentSync()
+不要每次遍历 rawfile
+```
+
+官方示例本质上是为了方便演示，把模型打包到应用资源中；它并不一定是正式产品的大模型加载最佳方案。官方代码会复制 `dataDir`，并在创建 `OfflineTts` 前设置模型、voices、tokens、lexicon 等路径。([GitHub][1])
+
+---
+
+# 如果暂时必须把模型放在 rawfile
+
+至少改成**先检查目标文件，再读取源文件**。
+
+官方示例当前逻辑大致是：
+
+```ts
+const data = resourceManager.getRawFileContentSync(src);
+
+// 到这里才检查目标文件
+if (fs.accessSync(filepath)) {
+  const stat = fs.statSync(filepath);
+  if (stat.size === data.length) {
+    return;
+  }
+}
+```
+
+问题是，为了知道 `data.length`，已经把整个文件读进内存了。官方源码就是这个顺序。([GitHub][1])
+
+更好的做法是建立一个模型清单：
+
+```json
+{
+  "version": "1.1-int8",
+  "files": {
+    "model.int8.onnx": {
+      "size": 114000000,
+      "sha256": "..."
+    },
+    "voices.bin": {
+      "size": 53800000,
+      "sha256": "..."
+    }
+  }
+}
+```
+
+启动时先读取一个很小的安装标记：
+
+```ts
+const marker =
+  `${context.filesDir}/tts/kokoro-int8-multi-lang-v1_1/.installed`;
+
+if (fs.accessSync(marker)) {
+  // 直接初始化，不遍历 rawfile
+  return;
+}
+```
+
+只在首次安装时复制：
+
+```ts
+async function installModelOnce(): Promise<void> {
+  if (fs.accessSync(marker)) {
+    return;
+  }
+
+  await copyAllModelFiles();
+
+  // 校验关键文件
+  validateModelFiles();
+
+  const fd = fs.openSync(
+    marker,
+    fs.OpenMode.CREATE |
+    fs.OpenMode.WRITE_ONLY |
+    fs.OpenMode.TRUNC
+  );
+  fs.writeSync(fd.fd, '1.1-int8');
+  fs.closeSync(fd.fd);
+}
+```
+
+不要在每次初始化时逐个判断几百个资源文件。
+
+## 更进一步：安装完成后只记录模型版本
+
+例如：
+
+```text
+filesDir/tts/model-registry.json
+```
+
+内容：
+
+```json
+{
+  "kokoro-int8-multi-lang-v1_1": {
+    "installed": true,
+    "version": "1.1",
+    "root": "/data/storage/.../files/tts/kokoro-int8-multi-lang-v1_1",
+    "verified": true
+  }
+}
+```
+
+只有以下情况才重新校验：
+
+* 首次安装；
+* 模型版本升级；
+* App 检测到关键文件不存在；
+* 上次安装异常中断。
+
+---
+
+# 第二优先级：OfflineTts 必须做成单例
+
+官方示例已经通过：
+
+```ts
+if (msgType == 'init-tts' && !tts) {
+  tts = initTts(context);
+}
+```
+
+确保 Worker 生命周期内只初始化一次。([GitHub][1])
+
+你的阅读器也应该采用类似结构：
+
+```ts
+class KokoroTtsManager {
+  private static instance: KokoroTtsManager;
+  private tts?: OfflineTts;
+  private initPromise?: Promise<OfflineTts>;
+
+  static getInstance(): KokoroTtsManager {
+    if (!KokoroTtsManager.instance) {
+      KokoroTtsManager.instance = new KokoroTtsManager();
+    }
+    return KokoroTtsManager.instance;
+  }
+
+  async ensureInitialized(): Promise<OfflineTts> {
+    if (this.tts) {
+      return this.tts;
+    }
+
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.initialize();
+
+    try {
+      this.tts = await this.initPromise;
+      return this.tts;
+    } finally {
+      this.initPromise = undefined;
+    }
+  }
+
+  private async initialize(): Promise<OfflineTts> {
+    // 在 Worker 中执行实际初始化
+    return createOfflineTts();
+  }
+}
+```
+
+不要在以下动作中重新创建引擎：
+
+```text
+每次点击朗读
+每次翻页
+每次切换章节
+每次暂停后恢复
+每次切换音色
+```
+
+Kokoro 的所有 speaker 都在同一个 `voices.bin` 中，切换音色只改 `sid`，不需要重新加载模型：
+
+```ts
+input.sid = selectedSpeakerId;
+```
+
+只有切换到另一套模型时，才需要释放和重建引擎。
+
+---
+
+# 第三优先级：提前异步初始化
+
+不要等用户点击朗读后才加载。
+
+比较好的时机：
+
+```text
+用户打开书籍
+    ↓
+页面渲染完成
+    ↓
+后台 Worker 初始化 Kokoro
+    ↓
+用户点击朗读时已经就绪
+```
+
+例如在书籍页面进入后：
+
+```ts
+aboutToAppear(): void {
+  this.scheduleTtsWarmup();
+}
+
+private scheduleTtsWarmup(): void {
+  setTimeout(() => {
+    KokoroTtsManager
+      .getInstance()
+      .ensureInitialized()
+      .catch((err: Error) => {
+        console.error(`[TTS] warmup failed: ${err.message}`);
+      });
+  }, 500);
+}
+```
+
+实际初始化应放在 `TaskPool` 或 `Worker`，不要阻塞 UI 线程。官方 HarmonyOS 示例也是把 `OfflineTts` 初始化和 `generateAsync()` 放在 Worker 中处理。([GitHub][1])
+
+---
+
+# 第四优先级：关闭 debug
+
+官方示例配置是：
+
+```ts
+config.model.debug = true;
+```
+
+([GitHub][1])
+
+正式版改成：
+
+```ts
+config.model.debug = false;
+```
+
+这通常不会把 3 分钟直接变成 3 秒，但可以减少日志输出和额外检查，尤其是大量日志被 DevEco Studio 捕获时。
+
+---
+
+# 第五优先级：线程数调优，但主要影响推理
+
+官方示例默认：
+
+```ts
+config.model.numThreads = 2;
+```
+
+([GitHub][1])
+
+可以测试：
+
+```ts
+config.model.numThreads = 4;
+```
+
+或者根据设备核心数：
+
+```ts
+const recommendedThreads = 4;
+config.model.numThreads = recommendedThreads;
+```
+
+建议测试：
+
+```text
+2 线程
+4 线程
+6 线程
+```
+
+不要简单设成 CPU 全部核心数。手机大小核架构下，线程过多可能导致：
+
+* 抢占 UI；
+* 功耗和温度上升；
+* 系统降频；
+* 实际速度反而下降。
+
+更重要的是：`numThreads` 主要优化**语音生成速度**，对模型文件读取和资源复制帮助不大。因此，在没有确定耗时发生在 `new OfflineTts()` 之前，不要把线程数当成首要解法。
+
+---
+
+# 第六优先级：不要重复校验 200 MB 文件的 SHA-256
+
+模型下载完成时校验一次是对的，但每次启动时重新计算：
+
+```text
+model.int8.onnx SHA-256
+voices.bin SHA-256
+全部词典 SHA-256
+```
+
+也可能耗时很久。
+
+合理策略：
+
+```text
+下载完成
+  → 完整 SHA-256 校验
+  → 写入 .installed / registry
+
+普通启动
+  → 只检查标记、版本和关键文件是否存在
+  → 不重新计算完整哈希
+```
+
+可以快速检查：
+
+```ts
+interface ExpectedFile {
+  path: string;
+  size: number;
+}
+
+function quickValidate(files: ExpectedFile[]): boolean {
+  for (const item of files) {
+    if (!fs.accessSync(item.path)) {
+      return false;
+    }
+
+    if (fs.statSync(item.path).size !== item.size) {
+      return false;
+    }
+  }
+
+  return true;
+}
+```
+
+完整 SHA-256 只在：
+
+* 下载后；
+* 用户主动执行“验证语音包”；
+* 文件大小不符；
+* 应用异常退出后发现安装未完成。
+
+---
+
+# 第七优先级：确认模型没有放在慢速外部存储
+
+模型应该放在应用内部沙箱：
+
+```text
+context.filesDir
+```
+
+不建议直接从这些位置加载：
+
+```text
+Download/
+Documents/
+用户选择的公共目录 URI
+NAS 或分布式目录
+压缩包内部
+```
+
+尤其不要每次从压缩包动态读取 `model.int8.onnx`。正确流程是：
+
+```text
+下载压缩包
+  → 解压到临时目录
+  → 校验
+  → 移动到 filesDir/tts/
+  → 删除压缩包
+  → 直接从普通文件加载
+```
+
+---
+
+# 第八优先级：做一次短文本预热
+
+模型初始化完成后，第一次推理有时仍会比后续慢。可以后台生成一个极短文本：
+
+```ts
+const warmupInput = new TtsInput();
+warmupInput.text = '你好。';
+warmupInput.sid = defaultSid;
+warmupInput.speed = 1.0;
+
+await tts.generateAsync(warmupInput);
+```
+
+生成结果丢弃。
+
+注意：
+
+* 预热放 Worker；
+* 页面稳定后执行；
+* 不要在 App 启动首屏同步执行；
+* 低电量或省电模式可以跳过。
+
+---
+
+# 推荐的加载流程
+
+```text
+App 安装
+  └─ 不带 Kokoro 大模型
+
+用户下载自然语音
+  ├─ 下载到 cacheDir
+  ├─ 解压到 .installing
+  ├─ SHA-256 校验一次
+  ├─ 原子移动到 filesDir/tts/model-id
+  └─ 写入 .installed
+
+打开阅读页面
+  ├─ 检查 .installed
+  ├─ 直接使用绝对路径
+  ├─ Worker 中 new OfflineTts
+  ├─ 保持单例
+  └─ 可选短文本预热
+
+开始朗读
+  ├─ 不重新初始化
+  ├─ 只提交文本和 sid
+  └─ 预生成后续 2～3 句
+```
+
+## 我对你这个问题的判断
+
+按概率排序：
+
+1. **每次启动都在遍历并读取 `rawfile/espeak-ng-data`**；
+2. **模型或词典反复从 rawfile 复制到沙箱**；
+3. **每次朗读重新创建 `OfflineTts`**；
+4. 每次启动重新计算整个模型包 SHA-256；
+5. 模型仍在压缩包或公共存储 URI 中；
+6. 真正的 ONNX Session 初始化异常缓慢。
+
+先把模型完整放到 `context.filesDir`，使用绝对路径，并彻底绕过 `copyRawFileDirToSandbox()`。这一项最可能把 3 分钟降到合理范围。随后保持 `OfflineTts` 单例、后台预加载、关闭 debug。线程数则放到最后调整——它更像油门，不是搬掉堵在路中央的冰箱。
+
+[1]: https://github.com/k2-fsa/sherpa-onnx/blob/master/harmony-os/SherpaOnnxTts/entry/src/main/ets/workers/NonStreamingTtsWorker.ets "sherpa-onnx/harmony-os/SherpaOnnxTts/entry/src/main/ets/workers/NonStreamingTtsWorker.ets at master · k2-fsa/sherpa-onnx · GitHub"
+
+
+# 转语音性能优化
+
+可以优化，但先给结论：**277 字耗时 174 秒，Kokoro 在这台设备/当前鸿蒙构建上很可能达不到“整段生成完再播放”的实时朗读要求。**
+
+最有效的办法不是期待把 174 秒优化到 5 秒，而是同时做两件事：
+
+1. 把推理速度尽量提高；
+2. 改成“短句生成一段、立即播放一段”，隐藏总生成时间。
+
+## 先计算真正的性能：RTF
+
+不能只看“277 字用了 174 秒”，要记录生成音频的时长。
+
+```text
+RTF = 合成耗时 ÷ 生成音频时长
+```
+
+例如这 277 字最终生成 75 秒音频：
+
+```text
+RTF = 174 ÷ 75 = 2.32
+```
+
+含义是生成 1 秒语音需要 2.32 秒，无法实时追上播放。
+
+朗读器大致要求：
+
+|       RTF | 使用体验       |
+| --------: | ---------- |
+|   `< 0.5` | 很理想，能轻松预生成 |
+| `0.5～0.9` | 可以连续朗读     |
+| `0.9～1.2` | 勉强，需较大缓冲   |
+|   `> 1.5` | 很难连续播放     |
+|     `> 2` | 建议换轻量模型    |
+
+sherpa-onnx 的一些 VITS 模型即使在树莓派 4 上，官方测试也可能出现 RTF 大于 1；增加线程可明显改善，但提升并非线性。例如某中文 VITS 模型从 1 线程的 RTF 4.275 降到 4 线程的 1.593。([K2 FSA][1])
+
+---
+
+# 第一项：确认没有只使用一个 CPU 线程
+
+Kokoro 在鸿蒙上通常通过 ONNX Runtime CPU provider 运行，不会自然使用华为手机的 NPU。sherpa-onnx 配置里一般能看到：
+
+```text
+provider = cpu
+num_threads = ...
+```
+
+官方案例也提醒，单线程 CPU 运行 Kokoro 会非常慢。([GitHub][2])
+
+检查初始化配置：
+
+```ts
+config.model.numThreads = 4;
+config.model.provider = 'cpu';
+config.model.debug = false;
+```
+
+依次实测：
+
+```text
+1、2、4、6 线程
+```
+
+不要直接认为 8 线程最快。手机是大小核架构，过多线程可能让任务跑到小核、引发发热降频，反而变慢。
+
+建议测试同一段 50 字文本：
+
+| 线程数 | 合成耗时 | 音频时长 | RTF |
+| --: | ---: | ---: | --: |
+|   1 |      |      |     |
+|   2 |      |      |     |
+|   4 |      |      |     |
+|   6 |      |      |     |
+
+如果 1、2、4、6 线程耗时几乎一样，重点检查：
+
+* `numThreads` 是否确实传入 native 层；
+* HAR 版本是否实际采用该配置；
+* 是否每次测试都重建引擎；
+* CPU 使用率是不是始终只有约一个核心；
+* 是否使用 Debug 构建。
+
+## 一定使用 Release 构建测试
+
+DevEco 的 Debug 版本、native 调试符号和大量日志可能显著影响性能。
+
+至少测试：
+
+```text
+Release HAP
+debug = false
+关闭高频 console 日志
+断开 DevEco 调试器后测试
+```
+
+尤其不要在音频回调中逐帧打印日志。
+
+---
+
+# 第二项：不要一次输入 277 字
+
+Kokoro 对长文本通常会分句处理，但把一大段文本一次交进去，会产生两个问题：
+
+* 必须等整段全部完成才拿到结果；
+* 长句的 token 序列会加大单次推理成本和内存压力。
+
+把文本切成 **15～35 个汉字一段**，每段一至两个自然句。
+
+例如原文：
+
+```text
+张明推开房门，看见桌上放着一封信。他犹豫了一会儿，
+最终还是拆开了信封。窗外的雨越来越大，房间里只剩下钟表的声音。
+```
+
+拆成：
+
+```text
+张明推开房门，看见桌上放着一封信。
+他犹豫了一会儿，最终还是拆开了信封。
+窗外的雨越来越大。
+房间里只剩下钟表的声音。
+```
+
+推荐规则：
+
+```text
+优先按：。！？；
+其次按：，：
+最低长度：10～15 字
+目标长度：20～35 字
+最大长度：45～60 字
+```
+
+不要切成每个逗号一段，否则语气会碎得像导航播报。
+
+### 这不会一定降低总耗时，但会大幅改善首句等待
+
+假设：
+
+```text
+277 字总生成时间：174 秒
+切成 10 段
+第一段生成时间：10～18 秒
+```
+
+用户无需等 174 秒才听到声音，可以第一段生成完就开始播放，同时后台生成第二段。
+
+不过，如果单个 25 字句子仍然需要 15～20 秒，而它只能播放约 6～8 秒，后台生成仍然追不上，最终还是会断音。因此切句只是隐藏延迟，**RTF 仍必须接近或低于 1**。
+
+---
+
+# 第三项：采用生产者—消费者流水线
+
+阅读器不要这样做：
+
+```text
+277 字 → 全部生成 → 播放
+```
+
+应改为：
+
+```text
+文本分句
+   ↓
+生成第 1 句
+   ↓
+立即播放第 1 句
+   ├─ 同时生成第 2 句
+   └─ 后续保持 2～4 句缓存
+```
+
+基本结构：
+
+```ts
+interface TtsSegment {
+  id: number;
+  text: string;
+  pcm?: ArrayBuffer;
+  state: 'pending' | 'generating' | 'ready' | 'playing' | 'done';
+}
+
+class TtsPipeline {
+  private segments: TtsSegment[] = [];
+  private nextGenerateIndex: number = 0;
+  private nextPlayIndex: number = 0;
+  private readonly targetReadyCount: number = 3;
+
+  async start(text: string): Promise<void> {
+    this.segments = splitForTts(text).map((item, index) => ({
+      id: index,
+      text: item,
+      state: 'pending'
+    }));
+
+    await this.fillBuffer();
+    await this.playLoop();
+  }
+
+  private async fillBuffer(): Promise<void> {
+    while (
+      this.nextGenerateIndex < this.segments.length &&
+      this.readyCount() < this.targetReadyCount
+    ) {
+      const segment = this.segments[this.nextGenerateIndex++];
+      segment.state = 'generating';
+
+      const audio = await this.generate(segment.text);
+      segment.pcm = audio;
+      segment.state = 'ready';
+    }
+  }
+
+  private readyCount(): number {
+    return this.segments.filter(item => item.state === 'ready').length;
+  }
+
+  private async playLoop(): Promise<void> {
+    while (this.nextPlayIndex < this.segments.length) {
+      const segment = this.segments[this.nextPlayIndex];
+
+      while (segment.state !== 'ready') {
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+      }
+
+      segment.state = 'playing';
+
+      // 播放期间继续补充后续句子
+      const filling = this.fillBuffer();
+      await this.playPcm(segment.pcm!);
+      await filling;
+
+      segment.state = 'done';
+      segment.pcm = undefined;
+      this.nextPlayIndex++;
+    }
+  }
+
+  private async generate(text: string): Promise<ArrayBuffer> {
+    // 调用 Worker 中的 sherpa-onnx
+    throw new Error('Not implemented');
+  }
+
+  private async playPcm(data: ArrayBuffer): Promise<void> {
+    // 写入 AudioRenderer
+    throw new Error('Not implemented');
+  }
+}
+```
+
+实际实现中，生成和播放必须处于不同执行通道，不能让 `generate()` 阻塞 AudioRenderer。
+
+---
+
+# 第四项：检查是否真的用了 INT8 模型
+
+确认路径指向：
+
+```text
+model.int8.onnx
+```
+
+而不是：
+
+```text
+model.onnx
+```
+
+同时在 sherpa-onnx debug 日志中确认实际加载的文件。验证完后再关闭 debug。
+
+但有个现实问题：**INT8 不保证在所有 ARM CPU 上都比 FP32 快很多。**
+
+速度取决于：
+
+* ONNX Runtime 是否启用了 ARM 优化；
+* 算子是否具有有效的 INT8 kernel；
+* 模型中多少算子真正被量化；
+* 线程调度和内存带宽；
+* SoC CPU 架构。
+
+因此可以在同一设备上用 30 字短句比较：
+
+```text
+model.int8.onnx
+model.onnx
+```
+
+不要只根据文件名断定 INT8 一定更快。通常 INT8 更省内存，但某些算子发生量化/反量化时，速度收益可能有限。
+
+---
+
+# 第五项：检查 CPU 使用情况
+
+合成期间观察：
+
+```text
+CPU 总占用
+各核心占用
+CPU 频率
+设备温度
+内存
+```
+
+典型判断：
+
+### 只有一个核心接近 100%
+
+说明多线程没有生效，或者主要瓶颈是单线程算子。
+
+处理方向：
+
+```ts
+config.model.numThreads = 4;
+```
+
+并检查 native 配置日志。
+
+### 多个核心较高，但速度仍慢
+
+说明模型对该 CPU 就比较重，继续调线程只能小幅改善。
+
+### 开始快，后面越来越慢
+
+很可能是发热降频。应：
+
+* 控制线程数在 2～4；
+* 不一次生成整章；
+* 维持小缓冲，不无限预生成；
+* 屏幕关闭时仍需观察系统功耗策略。
+
+### CPU 占用不高但非常慢
+
+可能包括：
+
+* Worker/TaskPool 调度问题；
+* 频繁复制巨大 PCM 数组；
+* ArkTS 与 native 间反复转换；
+* 每次句子重新创建 TTS 实例；
+* 同步写 WAV 文件；
+* 音频数据经过多次序列化。
+
+---
+
+# 第六项：避免 PCM 数据的巨大复制
+
+277 字可能生成一分钟以上的 24 kHz 音频。以单声道 Float32 计算：
+
+```text
+24000 × 4 字节 × 60 秒 ≈ 5.5 MB
+```
+
+如果经历：
+
+```text
+native vector
+→ NAPI Array
+→ Worker 消息
+→ ArkTS Array
+→ AudioRenderer
+```
+
+可能发生多次完整复制。
+
+优化方向：
+
+* 优先使用 `ArrayBuffer`；
+* 避免转换成普通 `number[]`；
+* 避免拼接多个大数组；
+* 分句后逐段传输；
+* 尽量使用可转移对象；
+* 不要先写 WAV 再重新读出播放；
+* 直接把 PCM 分块交给 AudioRenderer。
+
+不过，277 字耗时 174 秒，**主要瓶颈大概率仍是模型推理**，而不是几 MB 数据复制。数据复制一般是第二级优化。
+
+---
+
+# 第七项：不要并发创建多个 Kokoro 实例
+
+看起来可以同时生成第 2、3 句，但不建议一开始这么做：
+
+```text
+OfflineTts 实例 1 → 第 1 句
+OfflineTts 实例 2 → 第 2 句
+OfflineTts 实例 3 → 第 3 句
+```
+
+Kokoro 实例可能各自持有完整 ONNX Session 和模型内存。这会导致：
+
+* 内存大幅增加；
+* 多个实例争抢 CPU；
+* 发热更严重；
+* 线程过度订阅；
+* 最终吞吐反而下降。
+
+先用：
+
+```text
+1 个 TTS 实例
+4 个推理线程
+1 条串行生成队列
+播放与生成并行
+```
+
+只有在确认单实例没有吃满 CPU 后，才测试两个实例；通常手机端不值得。
+
+---
+
+# 第八项：调高语速只能有限改善
+
+Kokoro 的 `speed` 或 `lengthScale` 会影响输出音频长度，但不意味着推理耗时按同样比例下降。
+
+例如：
+
+```ts
+input.speed = 1.1;
+```
+
+可能稍微减少生成样本数量，但用户能接受的范围通常只有：
+
+```text
+0.9～1.25
+```
+
+无法靠把语速调快解决 2～3 倍的性能差距。
+
+---
+
+# 第九项：换更轻的模型，往往才是根本方案
+
+如果优化线程、Release、分句后，RTF 仍然大于 1.2，建议不要把 Kokoro 作为默认朗读引擎。
+
+可以采用：
+
+```text
+高品质模式：Kokoro
+流畅模式：轻量 VITS
+系统模式：鸿蒙系统 TTS
+```
+
+sherpa-onnx 官方提供多种中文 VITS 模型，包括：
+
+* `vits-melo-tts-zh_en`
+* 中文单说话人 VITS
+* AISHELL3 多说话人模型
+* 其他中文 VITS 模型
+
+官方文档也给出了 VITS 在不同线程数下的 RTF 测试，说明这类模型虽音质通常低于 Kokoro，但更适合资源有限的 CPU 设备。([K2 FSA][1])
+
+需要注意：`vits-melo-tts-zh_en` 本身并不算特别小，官方页面列出的模型约 163 MB；选择模型时要实际比较 RTF，而不是只比较包体积。([K2 FSA][1])
+
+## 更现实的产品定位
+
+| 引擎       | 用途                 |
+| -------- | ------------------ |
+| 鸿蒙系统 TTS | 默认流畅、低功耗           |
+| 轻量 VITS  | 离线增强、能连续朗读         |
+| Kokoro   | 高品质短段落、导出音频，或高性能设备 |
+
+Kokoro 很自然，但自然往往是拿算力换来的。手机 CPU 没有魔法口袋。
+
+---
+
+# 建议你马上做的测试
+
+用同一个已经初始化的 TTS 实例，分别测试以下文本长度：
+
+```text
+15 字
+30 字
+60 字
+120 字
+277 字
+```
+
+每项记录：
+
+```text
+文本字数
+预处理耗时
+generate 耗时
+音频样本数
+音频时长
+RTF
+numThreads
+```
+
+示例：
+
+```ts
+const start = Date.now();
+
+const audio = await tts.generateAsync(input);
+
+const elapsedMs = Date.now() - start;
+const audioSeconds = audio.samples.length / audio.sampleRate;
+const rtf = elapsedMs / 1000 / audioSeconds;
+
+console.info(
+  `[TTS] chars=${input.text.length}, ` +
+  `elapsed=${elapsedMs}ms, ` +
+  `audio=${audioSeconds.toFixed(2)}s, ` +
+  `RTF=${rtf.toFixed(3)}, ` +
+  `threads=${numThreads}`
+);
+```
+
+这组结果能判断：
+
+* 耗时是否基本随字数线性增加；
+* 长文本是否出现额外恶化；
+* 切句是否能降低单位成本；
+* 多线程是否有效；
+* 是否足以边生成边播放。
+
+## 最终判断标准
+
+优化后如果达到：
+
+```text
+RTF ≤ 0.8
+```
+
+Kokoro 可以作为连续朗读引擎。
+
+如果是：
+
+```text
+0.8 < RTF ≤ 1.2
+```
+
+使用 3～5 句预缓冲，有机会稳定朗读。
+
+如果仍是：
+
+```text
+RTF > 1.5
+```
+
+不要继续花大量时间微调。保留 Kokoro 作为“高品质模式”，默认改用轻量 VITS 或系统 TTS，会更靠谱。
+
+**针对你当前的 174 秒结果，优先顺序是：Release 构建 → `numThreads` 测试 2/4/6 → 20～35 字分句 → 计算 RTF → 播放与下一句生成流水线。若 RTF 仍大于 1.2，直接换轻量模型。**
+
+[1]: https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/vits.html?utm_source=chatgpt.com "vits — sherpa 1.3 documentation"
+[2]: https://github.com/k2-fsa/sherpa-onnx/issues/2236?utm_source=chatgpt.com "Can't get kokoro 1.0 with wasm onnx to run · Issue #2236"
+
+# 如何后台播放
+
+可以解决。你现在虽然创建了 `AVSession`，但 **AVSession 主要负责播控中心、锁屏控制和媒体状态管理，本身不等于后台保活**。
+
+要实现熄屏后继续：
+
+```text
+VITS/ONNX 后台生成 PCM
+        +
+AudioRenderer 持续播放
+        +
+AVSession 激活
+        +
+audioPlayback 长时任务
+```
+
+缺少长时任务时，应用进入后台或锁屏后，系统可能暂停 AudioRenderer，或者挂起负责 ONNX 推理、PCM 供给的 Worker，最终表现为播放停止。华为官方明确要求：后台或熄屏播放需要同时接入 AVSession，并申请音频播放长时任务。([华为开发者][1])
+
+## 1. 配置后台播放权限
+
+在 `entry/src/main/module.json5` 中加入：
+
+```json
+{
+  "module": {
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      }
+    ],
+
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "backgroundModes": [
+          "audioPlayback"
+        ]
+      }
+    ]
+  }
+}
+```
+
+关键是两处都需要：
+
+```text
+ohos.permission.KEEP_BACKGROUND_RUNNING
+backgroundModes: ["audioPlayback"]
+```
+
+`KEEP_BACKGROUND_RUNNING` 是系统授权的普通权限，音频播放对应的长时任务类型是 `audioPlayback`。([华为开发者][2])
+
+注意 `backgroundModes` 应当配置在真正发起长时任务的 Ability 上。
+
+## 2. 开始朗读时启动音频长时任务
+
+导入模块：
+
+```ts
+import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
+import wantAgent from '@ohos.app.ability.wantAgent';
+import common from '@ohos.app.ability.common';
+```
+
+建立管理类：
+
+```ts
+export class AudioBackgroundTask {
+  private context: common.UIAbilityContext;
+  private running: boolean = false;
+
+  constructor(context: common.UIAbilityContext) {
+    this.context = context;
+  }
+
+  async start(): Promise<void> {
+    if (this.running) {
+      return;
+    }
+
+    const wantAgentInfo: wantAgent.WantAgentInfo = {
+      wants: [
+        {
+          bundleName: this.context.abilityInfo.bundleName,
+          abilityName: this.context.abilityInfo.name
+        }
+      ],
+      operationType: wantAgent.OperationType.START_ABILITY,
+      requestCode: 1001,
+      wantAgentFlags: [
+        wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG
+      ]
+    };
+
+    const agent = await wantAgent.getWantAgent(wantAgentInfo);
+
+    await backgroundTaskManager.startBackgroundRunning(
+      this.context,
+      backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK,
+      agent
+    );
+
+    this.running = true;
+    console.info('[TTS] audio background task started');
+  }
+
+  async stop(): Promise<void> {
+    if (!this.running) {
+      return;
+    }
+
+    await backgroundTaskManager.stopBackgroundRunning(this.context);
+
+    this.running = false;
+    console.info('[TTS] audio background task stopped');
+  }
+}
+```
+
+调用顺序建议是：
+
+```ts
+await backgroundTask.start();
+await avSession.activate();
+await audioRenderer.start();
+```
+
+停止朗读时：
+
+```ts
+await audioRenderer.stop();
+await avSession.deactivate();
+await backgroundTask.stop();
+```
+
+官方 AudioRenderer PCM 播放实践同样采用 `BackgroundMode.AUDIO_PLAYBACK` 启动长时任务。([华为开发者][3])
+
+## 3. AVSession 必须保持激活
+
+创建后还要调用：
+
+```ts
+await avSession.activate();
+```
+
+不要只创建而未激活：
+
+```ts
+const avSession = await avSessionManager.createAVSession(
+  context,
+  'ReaderTtsSession',
+  'audio'
+);
+
+await avSession.activate();
+```
+
+播放状态也要同步更新：
+
+```ts
+await avSession.setAVPlaybackState({
+  state: avSessionManager.PlaybackState.PLAYBACK_STATE_PLAY,
+  speed: 1.0,
+  position: {
+    elapsedTime: currentPositionMs,
+    updateTime: Date.now()
+  }
+});
+```
+
+暂停时：
+
+```ts
+await avSession.setAVPlaybackState({
+  state: avSessionManager.PlaybackState.PLAYBACK_STATE_PAUSE,
+  speed: 1.0,
+  position: {
+    elapsedTime: currentPositionMs,
+    updateTime: Date.now()
+  }
+});
+```
+
+停止时：
+
+```ts
+await avSession.setAVPlaybackState({
+  state: avSessionManager.PlaybackState.PLAYBACK_STATE_STOP,
+  speed: 1.0,
+  position: {
+    elapsedTime: 0,
+    updateTime: Date.now()
+  }
+});
+```
+
+AVSession 应当覆盖完整朗读周期，而不是每播放一句就创建、激活、销毁一次。官方要求音视频应用作为媒体会话提供方，维持媒体信息和播放状态，并响应系统播控命令。([华为开发者][4])
+
+## 4. AudioRenderer 的用途和内容类型要配置正确
+
+阅读器 TTS 应使用语音类型：
+
+```ts
+import audio from '@ohos.multimedia.audio';
+
+const rendererOptions: audio.AudioRendererOptions = {
+  streamInfo: {
+    samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_24000,
+    channels: audio.AudioChannel.CHANNEL_1,
+    sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+    encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+  },
+  rendererInfo: {
+    content: audio.ContentType.CONTENT_TYPE_SPEECH,
+    usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+    rendererFlags: 0
+  }
+};
+```
+
+如果你当前 SDK 没有 `STREAM_USAGE_AUDIOBOOK`，可以根据 API 版本使用：
+
+```ts
+usage: audio.StreamUsage.STREAM_USAGE_MEDIA
+```
+
+尽量不要使用：
+
+```ts
+STREAM_USAGE_UNKNOWN
+STREAM_USAGE_NOTIFICATION
+STREAM_USAGE_VOICE_COMMUNICATION
+```
+
+错误的 usage 可能让系统按通知音、通话音频或临时音频处理，而不是持续媒体播放。
+
+## 5. ONNX 推理 Worker 也必须处于长时任务生命周期内
+
+你的链路不是单纯播放固定音频文件，而是：
+
+```text
+Worker 运行 VITS
+  → 产生 PCM
+  → 发送到主线程
+  → AudioRenderer 播放
+```
+
+熄屏以后可能出现两种情况：
+
+### 情况 A：AudioRenderer 被系统停止
+
+长时任务加 AVSession 通常可以解决。
+
+### 情况 B：AudioRenderer 仍在运行，但 Worker 不再生成 PCM
+
+这会导致 AudioRenderer 因没有数据而停播或静音。此时要确保：
+
+* 长时任务在开始 ONNX 推理前已经启动；
+* Worker 不依附于页面对象；
+* 页面 `onPageHide()` 中没有停止 Worker；
+* `UIAbility.onBackground()` 中没有释放 TTS；
+* 熄屏事件中没有暂停生成队列；
+* 不要因为 UI 页面销毁而销毁 AudioRenderer。
+
+错误模式：
+
+```ts
+onPageHide(): void {
+  this.ttsWorker.terminate();
+  this.audioRenderer.stop();
+}
+```
+
+阅读器进入锁屏或后台时，页面生命周期可能变化，这样会主动中断播放。
+
+更好的设计是把朗读服务放到应用级管理器：
+
+```text
+UI 页面
+   ↓ 发出开始/暂停/跳转命令
+
+ReaderAudioService
+├── AVSession
+├── 长时任务
+├── AudioRenderer
+├── VITS Worker
+├── PCM 队列
+└── 当前章节及句子位置
+```
+
+不要让它跟某个具体页面的生命周期绑定。
+
+## 6. 保证 AudioRenderer 始终有 PCM 可读
+
+VITS 是边生成边播放时，熄屏后 CPU 调度可能变慢。即使没有被完全挂起，推理速度下降也可能造成 PCM 队列断供。
+
+建议播放前缓存至少：
+
+```text
+10～20 秒 PCM
+```
+
+而不是只缓存下一句。
+
+结构建议：
+
+```text
+低水位：剩余 8 秒音频
+目标水位：剩余 20 秒
+高水位：剩余 30 秒
+```
+
+当队列低于低水位时，加快生成：
+
+```ts
+if (bufferedDurationMs < 8000) {
+  requestNextSegments();
+}
+```
+
+达到高水位时暂停预生成：
+
+```ts
+if (bufferedDurationMs > 30000) {
+  pauseGeneration();
+}
+```
+
+对于熄屏朗读，缓存 2～3 句未必足够，因为短句可能只有三四秒。
+
+## 7. 不要在句子间 stop/start AudioRenderer
+
+有些实现会这样：
+
+```text
+生成一句
+→ AudioRenderer.start()
+→ 播放一句
+→ AudioRenderer.stop()
+→ 生成下一句
+→ 再 start()
+```
+
+这很容易在熄屏状态下被系统认定为播放已经结束，后台任务也可能失去持续音频活动。
+
+正确方式是：
+
+```text
+一次创建 AudioRenderer
+一次 start()
+持续向 renderer 写入 PCM
+最后才 stop()
+```
+
+句子之间可以插入短暂静音 PCM：
+
+```ts
+function createSilence(
+  durationMs: number,
+  sampleRate: number = 24000
+): ArrayBuffer {
+  const sampleCount = Math.floor(sampleRate * durationMs / 1000);
+  return new Int16Array(sampleCount).buffer;
+}
+```
+
+例如句尾插入 150～300 ms 静音，但不要停止 renderer。
+
+## 8. 检查 AudioRenderer 的回调模式
+
+推荐使用数据请求回调持续供给 PCM，而不是在多个异步任务中随意调用 `write()`。
+
+核心原则：
+
+```text
+AudioRenderer 请求数据
+  → 从 PCM 环形缓冲区取数据
+  → 不足则补静音
+  → 后台继续生成
+```
+
+当缓存暂时为空时，不要直接结束 AudioRenderer。可以暂时返回静音，给 VITS 几百毫秒补充数据。
+
+但是不能长时间无限补静音，否则用户会听到明显停顿。应同时触发缓冲不足状态。
+
+## 9. 处理音频焦点中断
+
+即使后台播放配置正确，来电、导航、其他播放器也可能导致音频焦点中断。
+
+监听 AudioRenderer 中断事件：
+
+```ts
+audioRenderer.on('audioInterrupt', async (interruptEvent) => {
+  console.info(
+    `[TTS] interrupt force=${interruptEvent.forceType}, ` +
+    `hint=${interruptEvent.hintType}`
+  );
+
+  switch (interruptEvent.hintType) {
+    case audio.InterruptHint.INTERRUPT_HINT_PAUSE:
+      await pauseReading();
+      break;
+
+    case audio.InterruptHint.INTERRUPT_HINT_STOP:
+      await stopReading();
+      break;
+
+    case audio.InterruptHint.INTERRUPT_HINT_RESUME:
+      await resumeReading();
+      break;
+
+    case audio.InterruptHint.INTERRUPT_HINT_DUCK:
+      await audioRenderer.setVolume(0.2);
+      break;
+
+    case audio.InterruptHint.INTERRUPT_HINT_UNDUCK:
+      await audioRenderer.setVolume(1.0);
+      break;
+  }
+});
+```
+
+不要把所有 `audioInterrupt` 都当成停止。系统允许恢复时应继续播放。
+
+## 10. 建议的完整启动顺序
+
+```ts
+async function startReading(): Promise<void> {
+  // 1. 先取得后台运行资格
+  await backgroundAudioTask.start();
+
+  // 2. 激活媒体会话
+  await readerAvSession.activate();
+
+  // 3. 初始化并启动持续运行的 AudioRenderer
+  await pcmPlayer.prepare();
+  await pcmPlayer.start();
+
+  // 4. 启动 VITS Worker 和预生成队列
+  await ttsPipeline.start();
+
+  // 5. 更新播控中心状态
+  await readerAvSession.updatePlayingState();
+}
+```
+
+结束顺序反过来：
+
+```ts
+async function stopReading(): Promise<void> {
+  await ttsPipeline.stop();
+  await pcmPlayer.stop();
+
+  await readerAvSession.updateStoppedState();
+  await readerAvSession.deactivate();
+
+  await backgroundAudioTask.stop();
+}
+```
+
+不要过早调用：
+
+```ts
+stopBackgroundRunning()
+avSession.deactivate()
+```
+
+它们应该在整次朗读真正结束时调用，而不是一句话播放完成时调用。
+
+## 最可能的问题排序
+
+根据你的实现方式，最可能是：
+
+1. 只接入了 AVSession，没有调用 `startBackgroundRunning()`；
+2. `module.json5` 未声明 `backgroundModes: ["audioPlayback"]`；
+3. 熄屏后 VITS Worker 被暂停，PCM 队列耗尽；
+4. 朗读逻辑绑定页面生命周期，`onPageHide()` 主动释放；
+5. 每句话之间停止并重启 AudioRenderer；
+6. PCM 预缓存太少，熄屏降频后生成追不上播放；
+7. AudioRenderer 的 `usage/content` 配置不适合媒体朗读。
+
+**优先补齐 `KEEP_BACKGROUND_RUNNING + audioPlayback + startBackgroundRunning()`，同时保证 AVSession 激活、AudioRenderer 全程不停止，并把 VITS/PCM 队列从页面生命周期中移到应用级服务。**这通常就是熄屏继续朗读所缺的关键部分。
+
+[1]: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/avsession-background-scene?utm_source=chatgpt.com "后台播放-本地媒体会话-AVSession Kit（音视频播控服务）"
+[2]: https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/continuous-task?utm_source=chatgpt.com "长时任务(ArkTS)"
+[3]: https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-playing-pcm-audio-based-audiorenderer?utm_source=chatgpt.com "基于AudioRender播放PCM音频-音频播放系列开发实践"
+[4]: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/using-avsession-developer?utm_source=chatgpt.com "华为HarmonyOS开发者- 媒体会话提供方(ArkTS)"
+
+
+**Debug 版本也可以使用 `ohos.permission.KEEP_BACKGROUND_RUNNING`，不要求必须是 Release 包。**
+
+它属于面向普通应用开放的 `system_grant` 权限。应用在 `module.json5` 中声明后，由系统在安装时授予，不需要像用户授权权限那样弹窗申请；`backgroundTaskManager.startBackgroundRunning()` 在 Debug HAP 中同样可以调用。([华为开发者][1])
+
+配置示例：
+
+```json
+{
+  "module": {
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      }
+    ],
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "backgroundModes": [
+          "audioPlayback"
+        ]
+      }
+    ]
+  }
+}
+```
+
+但有几个容易造成“Debug 版好像申请不了”的问题。
+
+## 1. 修改 `module.json5` 后需要重新安装
+
+权限和 `backgroundModes` 是安装时读取的。只做热重载或增量部署，配置不一定完全刷新。
+
+建议：
+
+```text
+卸载旧应用
+→ Clean Project
+→ 重新编译 Debug HAP
+→ 重新安装
+```
+
+至少需要停止应用后完整重新安装一次。
+
+## 2. `backgroundModes` 必须配置在对应 Ability
+
+调用：
+
+```ts
+backgroundTaskManager.startBackgroundRunning(
+  context,
+  backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK,
+  wantAgent
+);
+```
+
+所使用的 `context` 对应哪个 `UIAbility`，哪个 Ability 就必须声明：
+
+```json
+"backgroundModes": [
+  "audioPlayback"
+]
+```
+
+仅仅声明权限、不声明后台模式，仍然会调用失败。
+
+## 3. 必须使用 `UIAbilityContext`
+
+建议从 `EntryAbility` 或页面的 UIContext 获取：
+
+```ts
+import { common } from '@kit.AbilityKit';
+
+const context =
+  getContext(this) as common.UIAbilityContext;
+```
+
+不要传普通 `Context`、Worker 上下文或已经失效的页面上下文。
+
+## 4. Debug 模式可能因调试器表现不同
+
+连接 DevEco 调试器时，系统对进程调度、日志和生命周期的表现可能与脱离调试器运行不同。因此后台播放至少测试两次：
+
+```text
+Debug HAP + 连接调试器
+Debug HAP + 断开调试器后独立运行
+```
+
+如果第二种能熄屏播放，说明不是权限问题，而可能是调试会话、断点或大量日志影响了 Worker/AudioRenderer。
+
+## 5. 检查调用错误码
+
+不要吞掉 `startBackgroundRunning()` 的异常：
+
+```ts
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+
+try {
+  await backgroundTaskManager.startBackgroundRunning(
+    context,
+    backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK,
+    wantAgent
+  );
+
+  console.info('[TTS] startBackgroundRunning success');
+} catch (error) {
+  const err = error as BusinessError;
+  console.error(
+    `[TTS] startBackgroundRunning failed: ` +
+    `code=${err.code}, message=${err.message}`
+  );
+}
+```
+
+官方接口明确要求 `KEEP_BACKGROUND_RUNNING` 权限。([华为开发者][2])
+
+## 6. 开始长时任务不等于一定能持续播放
+
+Debug 版本即使成功调用，也仍要满足音频播放的实际条件：
+
+* `AVSession` 已激活；
+* `AudioRenderer` 处于运行状态；
+* `AudioRenderer` 使用媒体或有声读物 usage；
+* PCM 持续供给，而不是长时间没有数据；
+* 没有在 `onBackground()` 或 `onPageHide()` 中停止 Worker；
+* 没有每播放一句就调用 `AudioRenderer.stop()`；
+* 长时任务没有被提前停止。
+
+建议输出状态日志：
+
+```ts
+console.info('[TTS] background task started');
+console.info(`[TTS] renderer state=${audioRenderer.state}`);
+console.info(`[TTS] avSession active=${sessionActive}`);
+```
+
+## 结论
+
+`KEEP_BACKGROUND_RUNNING`：
+
+* **Debug HAP：可以使用**
+* **Release HAP：可以使用**
+* 不需要运行时弹窗授权
+* 必须在 `module.json5` 声明
+* 必须配置对应的 `backgroundModes`
+* 修改配置后最好卸载重装
+* 调用失败时重点查看 `BusinessError.code`
+
+所以你可以直接用 Debug 版本调试熄屏朗读，不必先生成 Release 包。
+
+[1]: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/permissions-for-all?utm_source=chatgpt.com "应用权限管控-程序访问控制-安全-系统- 华为HarmonyOS ..."
+[2]: https://developer.huawei.com/consumer/en/doc/harmonyos-references/js-apis-backgroundtaskmanager?utm_source=chatgpt.com "ohos.backgroundTaskManager (Background Task Management)"

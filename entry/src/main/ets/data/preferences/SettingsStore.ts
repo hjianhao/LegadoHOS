@@ -355,6 +355,22 @@ export class SettingsStore {
   async getTtsSpeed(): Promise<number> { return await this.get('tts_speed', 1.0); }
   async setTtsSpeed(v: number): Promise<void> { await this.put('tts_speed', v); }
 
+  /** TTS 引擎类型: 'system' | 'sherpa-onnx' */
+  async getTtsEngine(): Promise<string> { return await this.get('tts_engine', 'system'); }
+  async setTtsEngine(v: string): Promise<void> { await this.put('tts_engine', v); }
+
+  /** sherpa-onnx speaker ID (0-102)，默认 50（青年男声·云希） */
+  async getTtsSherpaSid(): Promise<number> { return await this.get('tts_sherpa_sid', 50); }
+  async setTtsSherpaSid(v: number): Promise<void> { await this.put('tts_sherpa_sid', v); }
+
+  /** 离线模型类型: 'kokoro' | 'vits' */
+  async getTtsModelType(): Promise<string> { return await this.get('tts_model_type', 'kokoro'); }
+  async setTtsModelType(v: string): Promise<void> { await this.put('tts_model_type', v); }
+
+  /** 离线模型是否已下载到沙箱 */
+  async getTtsModelDownloaded(): Promise<boolean> { return await this.get('tts_model_downloaded', false); }
+  async setTtsModelDownloaded(v: boolean): Promise<void> { await this.put('tts_model_downloaded', v); }
+
   // ---- 触控区域 ----
   private readonly ZONE_KEYS_: string[] = [
     'click_tl', 'click_tc', 'click_tr',

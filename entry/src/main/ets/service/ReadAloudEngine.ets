@@ -4,6 +4,7 @@
 import { textToSpeech } from '@kit.CoreSpeechKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import audio from '@ohos.multimedia.audio';
+import { ITtsBackend, TtsSynthRequest } from './tts/ITtsBackend';
 
 export enum AloudState { IDLE = 0, PLAYING = 1, PAUSED = 2, STOPPED = 3 }
 
@@ -136,6 +137,8 @@ export class ReadAloudEngine {
   private audioRenderer_: audio.AudioRenderer | null = null;
   private state_: AloudState = AloudState.IDLE;
   private speed_: number = 1.0;
+  private backend_: ITtsBackend | null = null;
+  private currentRendererRate_: number = 0;  // 当前 AudioRenderer 的采样率
   private textQueue_: string[] = [];
   private currentTextIdx_: number = 0;
   private totalChars_: number = 0;
@@ -174,45 +177,81 @@ export class ReadAloudEngine {
   updateCallback(callback: AloudCallback): void { this.callback_ = callback; }
   setVoice(language: string, person: number, style: string): void { this.voice_ = { language, person, style }; }
 
+  /** 设置 TTS 后端（null=系统 TTS，非 null=sherpa-onnx） */
+  async setBackend(backend: ITtsBackend | null): Promise<void> {
+    if (backend === this.backend_) return;
+    if (this.backend_) {
+      try { await this.backend_.release(); } catch (_) { /* ignore */ }
+    }
+    this.backend_ = backend;
+    if (backend) {
+      await backend.init();
+    }
+    const targetRate = backend ? backend.sampleRate : 16000;
+    if (this.audioRenderer_ && this.currentRendererRate_ !== targetRate) {
+      await this.recreateAudioRenderer_(targetRate);
+    }
+  }
+
+  getBackend(): ITtsBackend | null { return this.backend_; }
+
   private setState_(s: AloudState): void {
     this.state_ = s;
     this.callback_.onStateChange?.(s);
   }
 
   async init(): Promise<void> {
-    const extraParam: Record<string, Object> = {
-      'name': 'legado_tts_' + Date.now(),
-      'style': this.voice_.style,
-      'locate': 'CN',
-    };
+    // 应用暂存的 backend（来自 setGlobalBackend，引擎创建前的调用）
+    if (!this.backend_ && pendingBackend_) {
+      const backend = pendingBackend_;
+      pendingBackend_ = null;
+      this.backend_ = backend;
+    }
+    // 确保离线后端已就绪
+    if (this.backend_ && !this.backend_.ready) {
+      console.info('[Aloud] waiting for backend init...');
+      await this.backend_.init();
+    }
 
-    this.ttsEngine_ = await new Promise<textToSpeech.TextToSpeechEngine>((resolve, reject) => {
-      textToSpeech.createEngine(
-        { language: this.voice_.language, person: this.voice_.person, online: 1, extraParams: extraParam },
-        (err: BusinessError, engine: textToSpeech.TextToSpeechEngine) => {
-          if (err) { reject(new Error('TTS: ' + err.code)); }
-          else {
-            engine.setListener({
-              onStart: () => {},
-              onData: (_reqId: string, audioData: ArrayBuffer) => {
-                this.chunkPcm_.push(audioData);
-              },
-              onComplete: () => {
-                // 合成完 → 拼接所有小块为完整 PCM
-                this.buildChunk_();
-              },
-              onStop: () => {},
-              onError: (_reqId: string, code: number) => {
-                this.callback_.onError?.('TTS error: ' + code);
-              },
-            });
-            resolve(engine);
-          }
-        });
-    });
+    // 系统 TTS 引擎（仅在无后端时需要）
+    if (!this.backend_) {
+      const extraParam: Record<string, Object> = {
+        'name': 'legado_tts_' + Date.now(),
+        'style': this.voice_.style,
+        'locate': 'CN',
+      };
 
+      this.ttsEngine_ = await new Promise<textToSpeech.TextToSpeechEngine>((resolve, reject) => {
+        textToSpeech.createEngine(
+          { language: this.voice_.language, person: this.voice_.person, online: 1, extraParams: extraParam },
+          (err: BusinessError, engine: textToSpeech.TextToSpeechEngine) => {
+            if (err) { reject(new Error('TTS: ' + err.code)); }
+            else {
+              engine.setListener({
+                onStart: () => {},
+                onData: (_reqId: string, audioData: ArrayBuffer) => {
+                  this.chunkPcm_.push(audioData);
+                },
+                onComplete: () => {
+                  // 合成完 → 拼接所有小块为完整 PCM
+                  this.buildChunk_();
+                },
+                onStop: () => {},
+                onError: (_reqId: string, code: number) => {
+                  this.callback_.onError?.('TTS error: ' + code);
+                },
+              });
+              resolve(engine);
+            }
+          });
+      });
+    }
+
+    // AudioRenderer（根据后端采样率选择）
+    const sampleRate = this.backend_ ? this.backend_.sampleRate : 16000;
+    const samplingRate = this.sampleRateToEnum_(sampleRate);
     const streamInfo: audio.AudioStreamInfo = {
-      samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
+      samplingRate: samplingRate,
       channels: audio.AudioChannel.CHANNEL_1,
       sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
       encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
@@ -225,14 +264,17 @@ export class ReadAloudEngine {
       this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
         this.writeData_(buffer);
       });
+      this.currentRendererRate_ = sampleRate;
     } catch (err) {
       throw new Error(String(err));
     }
+    console.info('[Aloud] init OK, sampleRate=' + sampleRate + ' backend=' + (this.backend_ ? this.backend_.name : 'system'));
   }
 
   async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0): Promise<void> {
     this.startChapterIdx_ = startChapter;
-    if (!this.ttsEngine_ || !this.audioRenderer_) { this.callback_.onError?.('引擎未初始化'); return; }
+    // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或离线后端）
+    if (!this.audioRenderer_ || (!this.ttsEngine_ && !this.backend_)) { this.callback_.onError?.('引擎未初始化'); return; }
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
     this.chunkPcm_ = [];
@@ -271,20 +313,78 @@ export class ReadAloudEngine {
     await this.stop();
     try { await this.audioRenderer_?.release(); } catch (_) {}
     try { await this.ttsEngine_?.shutdown(); } catch (_) {}
+    if (this.backend_) {
+      try { await this.backend_.release(); } catch (_) { /* ignore */ }
+      this.backend_ = null;
+    }
     this.audioRenderer_ = null;
     this.ttsEngine_ = null;
+    this.currentRendererRate_ = 0;
     this.setState_(AloudState.IDLE);
+  }
+
+  // ---- 音频渲染器重建（切换后端时采样率可能变化） ----
+
+  private async recreateAudioRenderer_(sampleRate: number): Promise<void> {
+    if (this.audioRenderer_) {
+      try { await this.audioRenderer_.stop(); } catch (_) {}
+      try { await this.audioRenderer_.release(); } catch (_) {}
+      this.audioRenderer_ = null;
+    }
+    const samplingRate = this.sampleRateToEnum_(sampleRate);
+    const streamInfo: audio.AudioStreamInfo = {
+      samplingRate: samplingRate,
+      channels: audio.AudioChannel.CHANNEL_1,
+      sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+      encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
+    };
+    this.audioRenderer_ = await audio.createAudioRenderer({
+      streamInfo: streamInfo,
+      rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK, rendererFlags: 0 },
+    });
+    this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
+      this.writeData_(buffer);
+    });
+    this.activeChunk_ = null;
+    this.activeOffset_ = 0;
+    this.currentRendererRate_ = sampleRate;
+    console.info('[Aloud] AudioRenderer recreated, sampleRate=' + sampleRate);
+  }
+
+  private sampleRateToEnum_(rate: number): audio.AudioSamplingRate {
+    switch (rate) {
+      case 8000:  return audio.AudioSamplingRate.SAMPLE_RATE_8000;
+      case 11025: return audio.AudioSamplingRate.SAMPLE_RATE_11025;
+      case 12000: return audio.AudioSamplingRate.SAMPLE_RATE_12000;
+      case 16000: return audio.AudioSamplingRate.SAMPLE_RATE_16000;
+      case 22050: return audio.AudioSamplingRate.SAMPLE_RATE_22050;
+      case 24000: return audio.AudioSamplingRate.SAMPLE_RATE_24000;
+      case 32000: return audio.AudioSamplingRate.SAMPLE_RATE_32000;
+      case 44100: return audio.AudioSamplingRate.SAMPLE_RATE_44100;
+      case 48000: return audio.AudioSamplingRate.SAMPLE_RATE_48000;
+      default:    return audio.AudioSamplingRate.SAMPLE_RATE_16000;
+    }
   }
 
   // ========================
 
+  /** 分句：优先按句号/问号/感叹号/分号，目标 20-40 字/段 */
   private splitText_(text: string): string[] {
     const result: string[] = []; let start = 0;
     while (start < text.length) {
-      let end = Math.min(start + 300, text.length);
+      let end = Math.min(start + 45, text.length);  // 目标 20-40 字，最长 45
       if (end < text.length) {
-        for (let i = end; i > start + 150; i--) {
-          if ('。！？\n'.includes(text[i])) { end = i + 1; break; }
+        for (let i = end; i > start + 15; i--) {  // 最低回头到 15 字
+          if ('。！？\n；;'.includes(text[i])) {
+            end = i + 1;
+            break;
+          }
+        }
+        // 没找到句末标点 → 在逗号处断
+        if (end === start + 45) {
+          for (let i = end; i > start + 20; i--) {
+            if ('，,：:'.includes(text[i])) { end = i + 1; break; }
+          }
         }
       }
       result.push(text.substring(start, end).trim());
@@ -323,9 +423,14 @@ export class ReadAloudEngine {
     this.chunkTextOffset_ = this.playedChars_ - text.length;
     this.synthPending_ = true;
     console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars');
-    const extraParam: Record<string, Object> = {}; extraParam['speed'] = this.speed_; extraParam['volume'] = 1.0; extraParam['playType'] = 0; extraParam['audioType'] = 'pcm';
-    try { this.ttsEngine_!.speak(text, { requestId: 't_' + Date.now(), extraParams: extraParam }); }
-    catch (e) { this.synthPending_ = false; this.callback_.onError?.('合成失败: ' + (e as Error).message); }
+
+    if (this.backend_) {
+      // 离线 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
+      this.synthesizeWithBackend_(text);
+    } else {
+      // 系统 TTS：speak + onData/onComplete 回调流
+      this.synthesizeWithSystem_(text);
+    }
   }
 
   /** onData 收集完 → 拼成大块，存入 pending 缓冲，预触发下一块 */
@@ -341,6 +446,45 @@ export class ReadAloudEngine {
     console.info('[Aloud] chunk ready: ' + total + ' bytes PCM');
     if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     this.speakNext_();
+  }
+
+  /** 离线后端合成：async synthesize → 直接 push 到 pendingQueue_ */
+  private async synthesizeWithBackend_(text: string): Promise<void> {
+    try {
+      const req: TtsSynthRequest = { text, speed: this.speed_ };
+      console.info('[Aloud] backend synthesize start: text.len=' + text.length + ' speed=' + this.speed_);
+      const synthStart = Date.now();
+      const result = await this.backend_!.synthesize(req);
+      const synthMs = Date.now() - synthStart;
+      const audioSec = result.pcm.byteLength / (result.sampleRate * 2);  // S16LE mono
+      const rtf = synthMs / 1000 / audioSec;
+      console.info('[Aloud] backend chunk ready: ' + result.pcm.byteLength + ' bytes PCM, ' +
+        audioSec.toFixed(1) + 's audio, synth=' + synthMs + 'ms, RTF=' + rtf.toFixed(2));
+      const pcm = new Uint8Array(result.pcm);
+      this.pendingQueue_.push(pcm);
+      this.pendingOffsetQueue_.push(this.chunkTextOffset_);
+      if (!this.firstChunkReady_) this.firstChunkReady_ = true;
+    } catch (e) {
+      this.callback_.onError?.('合成失败: ' + (e as Error).message);
+    } finally {
+      this.synthPending_ = false;
+      this.speakNext_();  // 预合成下一句
+    }
+  }
+
+  /** 系统 TTS 合成：speak + onData/onComplete 回调（原有逻辑） */
+  private synthesizeWithSystem_(text: string): void {
+    const extraParam: Record<string, Object> = {};
+    extraParam['speed'] = this.speed_;
+    extraParam['volume'] = 1.0;
+    extraParam['playType'] = 0;
+    extraParam['audioType'] = 'pcm';
+    try {
+      this.ttsEngine_!.speak(text, { requestId: 't_' + Date.now(), extraParams: extraParam });
+    } catch (e) {
+      this.synthPending_ = false;
+      this.callback_.onError?.('合成失败: ' + (e as Error).message);
+    }
   }
 
   /** writeData: 从 active 缓冲读取，耗尽时从 pending 换入 */
@@ -367,6 +511,8 @@ export class ReadAloudEngine {
 // ---- 全局引擎管理 ----
 let globalEngine_: ReadAloudEngine | null = null;
 let globalVoice_: ReadAloudVoiceConfig = TtsVoiceManager.DEFAULT_VOICE;
+/** 待应用的 backend（引擎尚未创建时暂存） */
+let pendingBackend_: ITtsBackend | null = null;
 
 export function getGlobalAloudEngine(callback: AloudCallback): ReadAloudEngine {
   if (globalEngine_) {
@@ -374,6 +520,10 @@ export function getGlobalAloudEngine(callback: AloudCallback): ReadAloudEngine {
     return globalEngine_;
   }
   globalEngine_ = new ReadAloudEngine(callback, globalVoice_);
+  // 如果面板已注册 listener，新引擎需要绑定
+  if (globalListener_) {
+    globalEngine_.updateCallback(makeCallbackForGlobal_());
+  }
   return globalEngine_;
 }
 
@@ -383,6 +533,16 @@ export function getGlobalAloudState(): AloudState {
 
 export function getGlobalEngineRef(): ReadAloudEngine | null {
   return globalEngine_;
+}
+
+/** 为全局引擎设置 TTS 后端（切换引擎类型时调用） */
+export async function setGlobalBackend(backend: ITtsBackend | null): Promise<void> {
+  if (globalEngine_) {
+    await globalEngine_.setBackend(backend);
+  } else {
+    // 引擎尚未创建，暂存 backend 等待 getGlobalAloudEngine 创建后注入
+    pendingBackend_ = backend;
+  }
 }
 
 export async function releaseGlobalAloudEngine(): Promise<void> {
