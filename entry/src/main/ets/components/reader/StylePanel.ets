@@ -1,8 +1,10 @@
 /**
- * 阅读风格设置面板 — 实时预览
+ * 阅读风格设置面板 - 实时预览
  */
 import { PageViewConfig, PageTurnAnim } from './PageView';
 import { ThemeColors } from '../../theme/ThemeColors';
+import { FontInfo } from '../../utils/FontManager';
+import router from '@ohos.router';
 
 @Component
 export struct StylePanel {
@@ -17,6 +19,8 @@ export struct StylePanel {
     chineseMode: 'original', pageMode: true,
   };
   @State activeTab: number = 0;
+  /** 字体列表（由 ReadPage 从 FontManager 获取并传入） */
+  @Prop fontList: FontInfo[] = [];
 
   onChange?: (config: PageViewConfig) => void;
   onDismiss?: () => void;
@@ -76,9 +80,26 @@ export struct StylePanel {
     }.width('100%').margin({ bottom: 6 })
     Row() {
       Text('字族').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(50)
-      Button('默认').fontSize(12).fontColor(this.cfg.fontFamily === 'HarmonyOS Sans' ? '#FFF' : ThemeColors.onSurface(this.isDark)).backgroundColor(this.cfg.fontFamily === 'HarmonyOS Sans' ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark)).borderRadius(12).height(28).padding({ left: 8, right: 8 }).margin({ left: 4 }).onClick(() => { this.cfg.fontFamily = 'HarmonyOS Sans'; this.emitChange(); })
-      Button('衬线').fontSize(12).fontColor(this.cfg.fontFamily === 'serif' ? '#FFF' : ThemeColors.onSurface(this.isDark)).backgroundColor(this.cfg.fontFamily === 'serif' ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark)).borderRadius(12).height(28).padding({ left: 8, right: 8 }).margin({ left: 4 }).onClick(() => { this.cfg.fontFamily = 'serif'; this.emitChange(); })
-      Button('等宽').fontSize(12).fontColor(this.cfg.fontFamily === 'monospace' ? '#FFF' : ThemeColors.onSurface(this.isDark)).backgroundColor(this.cfg.fontFamily === 'monospace' ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark)).borderRadius(12).height(28).padding({ left: 8, right: 8 }).margin({ left: 4 }).onClick(() => { this.cfg.fontFamily = 'monospace'; this.emitChange(); })
+      Scroll() {
+        Row() {
+          ForEach(this.fontList, (font: FontInfo) => {
+            this.fontChip(font)
+          })
+        }
+        .constraintSize({ minWidth: '100%' })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Auto)
+      .layoutWeight(1)
+    }.width('100%').margin({ bottom: 6 })
+    // 字体管理入口
+    Row() {
+      Blank().layoutWeight(1)
+      Text('字体管理 >').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+        .onClick(() => {
+          this.onDismiss?.();
+          router.pushUrl({ url: 'pages/FontManagerPage' });
+        })
     }.width('100%').margin({ bottom: 6 })
   }
 
@@ -179,6 +200,20 @@ export struct StylePanel {
     .backgroundColor(this.cfg.fontWeight === w ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(16).margin({ right: 6 })
     .onClick(() => { this.cfg.fontWeight = w; this.emitChange(); })
+  }
+
+  /** 字体选择项 - 名称使用自身字体渲染预览 */
+  @Builder fontChip(font: FontInfo) {
+    Column() {
+      Text(font.name)
+        .fontSize(13)
+        .fontFamily(font.familyName)
+        .fontColor(this.cfg.fontFamily === font.familyName ? '#FFF' : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+    }
+    .backgroundColor(this.cfg.fontFamily === font.familyName ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(12).height(28).margin({ left: 4 })
+    .onClick(() => { this.cfg.fontFamily = font.familyName; this.emitChange(); })
   }
 
   @Builder indentChip(label: string, n: number) {

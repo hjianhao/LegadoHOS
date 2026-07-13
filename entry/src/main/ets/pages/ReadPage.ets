@@ -34,6 +34,7 @@ import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
+import { FontManager, FontInfo } from '../utils/FontManager';
 
 @Entry
 @Component
@@ -76,6 +77,7 @@ struct ReadPage {
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
+  @State fontList: FontInfo[] = [];
   @State cfg: PageViewConfig = {
     animType: PageTurnAnim.SLIDE, bgColor: '#F5F0E8', textColor: '#333333', titleColor: '#999',
     fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans', lineHeight: 1.6,
@@ -118,6 +120,8 @@ struct ReadPage {
     this.tocUrl = String(p['tocUrl'] || '');
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
     if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
+    // 初始化字体管理器并注册已安装的自定义字体（在加载设置前执行）
+    this.initFonts();
     this.loadSettings();
     // 进入沉浸式模式（隐藏状态栏和导航栏）
     this.setSystemBarVisible_(false);
@@ -125,6 +129,18 @@ struct ReadPage {
     try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
     // 云端同步（异步，不阻塞主流程）
     this.syncFromCloud();
+  }
+
+  /** 初始化 FontManager 并注册已安装的自定义字体 */
+  private async initFonts(): Promise<void> {
+    try {
+      const ctx = UiUtil.getHostContext(this.getUIContext()) as common.Context;
+      await FontManager.getInstance().init(ctx);
+      FontManager.getInstance().registerAll(this.getUIContext());
+      this.fontList = FontManager.getInstance().getAllFonts();
+    } catch (e) {
+      console.warn('[ReadPage] Font init failed:', (e as Error).message);
+    }
   }
 
   /** 从云端下载进度并更新当前目标章节 */
@@ -160,6 +176,15 @@ struct ReadPage {
   onPageShow(): void {
     // 从其他页面返回时重新进入沉浸式
     this.setSystemBarVisible_(false);
+    // 刷新字体列表（从字体管理页返回时可能有变化）
+    this.fontList = FontManager.getInstance().getAllFonts();
+    // 如果当前使用的字体已被删除，回退到系统默认
+    if (this.cfg.fontFamily !== 'HarmonyOS Sans' && this.cfg.fontFamily !== 'serif' && this.cfg.fontFamily !== 'monospace') {
+      if (!FontManager.getInstance().findByFamilyName(this.cfg.fontFamily)) {
+        this.cfg.fontFamily = 'HarmonyOS Sans';
+        this.onStyleChange(this.cfg);
+      }
+    }
     if (!this.isLoading) {
       // 从目录页返回时，通过 ChapterCache 获取目标章节索引
       if (ChapterCache.targetIndex >= 0) {
@@ -187,7 +212,10 @@ struct ReadPage {
       await s.init(UiUtil.getHostContext(this.getUIContext()));
       this.pageMode = (await s.getPageMode()) !== 0;
       this.cfg.fontSize = await s.getFontSize();
-      this.cfg.fontFamily = await s.getFontFamily();
+      let fontFamily = await s.getFontFamily();
+      // 兼容旧版默认值 '默认'
+      if (fontFamily === '默认') fontFamily = 'HarmonyOS Sans';
+      this.cfg.fontFamily = fontFamily;
       this.cfg.lineHeight = await s.getLineHeight();
       this.cfg.indentSize = await s.getIndentSize();
       this.cfg.letterSpacing = await s.getLetterSpacing();
@@ -768,6 +796,7 @@ struct ReadPage {
   }
 
   private onPageTurn(ev: PageTurnEvent): void { this.pageIndex = ev.currentPage; }
+
   private onPrevChapter(): void {
     if (this.currentIndex > 0) {
       this.justLoadedChapter_ = true;
@@ -1146,6 +1175,7 @@ struct ReadPage {
           StylePanel({
             cfg: this.cfg, onChange: (c: PageViewConfig) => { this.onStyleChange(c); },
             onDismiss: () => { this.showStyle = false; },
+            fontList: this.fontList,
           })
         }.width('100%').height('100%')
       }

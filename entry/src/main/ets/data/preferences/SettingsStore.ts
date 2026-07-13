@@ -181,8 +181,12 @@ export class SettingsStore {
   async getFontSize(): Promise<number> { return await this.get('font_size', 18); }
   async setFontSize(v: number): Promise<void> { await this.put('font_size', v); }
 
-  async getFontFamily(): Promise<string> { return await this.get('font_family', '默认'); }
+  async getFontFamily(): Promise<string> { return await this.get('font_family', 'HarmonyOS Sans'); }
   async setFontFamily(v: string): Promise<void> { await this.put('font_family', v); }
+
+  /** 自定义字体元数据列表（JSON 字符串） */
+  async getCustomFonts(): Promise<string> { return await this.get('custom_fonts', '[]'); }
+  async setCustomFonts(json: string): Promise<void> { await this.put('custom_fonts', json); }
 
   async getLineHeight(): Promise<number> { return await this.get('line_height', 1.5); }
   async setLineHeight(v: number): Promise<void> { await this.put('line_height', v); }

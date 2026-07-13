@@ -157,10 +157,14 @@ export class ReadAloudEngine {
   private pendingQueue_: Uint8Array[] = [];
   private pendingOffsetQueue_: number[] = []; // 队列替代单个 pending，防止覆盖
   private synthPending_: boolean = false;
+  private synthCount_: number = 0; // 正在合成的任务数量（支持并行预合成）
+  private static readonly MAX_SYNTH_CONCURRENCY = 3; // 最大并行合成数量
   private firstChunkReady_: boolean = false;
   private chapterEnded_: boolean = false;
   private chapterEndFired_: boolean = false;
   private voice_: ReadAloudVoiceConfig;
+  // 预合成配置：熄屏后需要更多预合成来保证流畅播放
+  private static readonly PRELOAD_COUNT = 15; // 预合成15句音频（熄屏后合成慢，需要更多缓冲）
 
   constructor(callback: AloudCallback, voice?: ReadAloudVoiceConfig) {
     this.callback_ = callback;
@@ -275,6 +279,7 @@ export class ReadAloudEngine {
     this.startChapterIdx_ = startChapter;
     // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或离线后端）
     if (!this.audioRenderer_ || (!this.ttsEngine_ && !this.backend_)) { this.callback_.onError?.('引擎未初始化'); return; }
+    
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
     this.chunkPcm_ = [];
@@ -396,7 +401,11 @@ export class ReadAloudEngine {
   private pendingChapterFetch_: string = "";
   private lastChapterIdx_: number = -1;
   private speakNext_(): void {
-    if (this.state_ !== AloudState.PLAYING || this.synthPending_) return;
+    // 检查是否需要预合成：如果pendingQueue已有足够多的音频，则不再合成
+    if (this.state_ !== AloudState.PLAYING) return;
+    if (this.pendingQueue_.length >= ReadAloudEngine.PRELOAD_COUNT) return;
+    if (this.synthCount_ >= ReadAloudEngine.MAX_SYNTH_CONCURRENCY) return; // 并行合成数量限制
+    
     if (this.currentTextIdx_ >= this.textQueue_.length) {
       const provider = this.callback_.onNeedNextChapter || globalChapterProvider_;
       if (provider) {
@@ -422,7 +431,8 @@ export class ReadAloudEngine {
     this.callback_.onProgress?.(this.playbackPosition, this.totalChars_);
     this.chunkTextOffset_ = this.playedChars_ - text.length;
     this.synthPending_ = true;
-    console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars');
+    this.synthCount_++; // 增加合成任务计数
+    console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars, pending=' + this.pendingQueue_.length + ', synthCount=' + this.synthCount_);
 
     if (this.backend_) {
       // 离线 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
@@ -431,11 +441,15 @@ export class ReadAloudEngine {
       // 系统 TTS：speak + onData/onComplete 回调流
       this.synthesizeWithSystem_(text);
     }
+    
+    // 立即继续预合成下一句（并行合成）
+    this.speakNext_();
   }
 
   /** onData 收集完 → 拼成大块，存入 pending 缓冲，预触发下一块 */
   private buildChunk_(): void {
     this.synthPending_ = false;
+    this.synthCount_--; // 减少合成任务计数
     if (this.chunkPcm_.length === 0) { this.speakNext_(); return; }
     const total = this.chunkPcm_.reduce((s: number, b: ArrayBuffer) => s + b.byteLength, 0);
     const merged = new Uint8Array(total); let offset = 0;
@@ -468,6 +482,7 @@ export class ReadAloudEngine {
       this.callback_.onError?.('合成失败: ' + (e as Error).message);
     } finally {
       this.synthPending_ = false;
+      this.synthCount_--; // 减少合成任务计数
       this.speakNext_();  // 预合成下一句
     }
   }
@@ -494,10 +509,26 @@ export class ReadAloudEngine {
     while (written < bufLen) {
       if (!this.activeChunk_ || this.activeOffset_ >= this.activeChunk_.byteLength) {
         this.activeChunk_ = null; this.activeOffset_ = 0;
-        if (this.pendingQueue_.length > 0) { this.activeChunk_ = this.pendingQueue_[0]; if (this.pendingOffsetQueue_.length > 0) { const off = this.pendingOffsetQueue_[0]; console.info("[Engine] swap active: offset=" + off); this.activeChunkOffset_ = off; this.pendingOffsetQueue_.splice(0, 1); } this.pendingQueue_.splice(0, 1); this.firstChunkReady_ = false; }
+        if (this.pendingQueue_.length > 0) {
+          this.activeChunk_ = this.pendingQueue_[0];
+          if (this.pendingOffsetQueue_.length > 0) {
+            const off = this.pendingOffsetQueue_[0];
+            console.info("[Engine] swap active: offset=" + off + ", pending=" + (this.pendingQueue_.length - 1));
+            this.activeChunkOffset_ = off;
+            this.pendingOffsetQueue_.splice(0, 1);
+          }
+          this.pendingQueue_.splice(0, 1);
+          this.firstChunkReady_ = false;
+          // 从pendingQueue换入后，触发预合成，保持足够的预合成数量
+          this.speakNext_();
+        }
         if (!this.activeChunk_) {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
-          if (this.chapterEnded_ && !this.synthPending_ && this.chunkPcm_.length === 0 && !this.chapterEndFired_) { this.chapterEndFired_ = true; this.callback_.onChapterEnd?.(); return audio.AudioDataCallbackResult.INVALID; }
+          if (this.chapterEnded_ && !this.synthPending_ && this.chunkPcm_.length === 0 && !this.chapterEndFired_) {
+            this.chapterEndFired_ = true;
+            this.callback_.onChapterEnd?.();
+            return audio.AudioDataCallbackResult.INVALID;
+          }
           return audio.AudioDataCallbackResult.VALID;
         }
       }

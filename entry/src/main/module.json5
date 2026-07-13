@@ -21,7 +21,8 @@
         "usedScene": { "abilities": ["MainAbility"], "when": "always" }
       },
       { "name": "ohos.permission.RUNNING_LOCK" },
-      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING" }
+      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING" },
+      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING_SYSTEM" }
     ],
     "abilities": [
       {

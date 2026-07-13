@@ -452,6 +452,7 @@ export struct ReadAloudPanel {
       }
       // 必须使用 UIAbilityContext，普通 Context 会导致任务启动失败
       const ctx = UiUtil.getHostContext(this.getUIContext()) as common.UIAbilityContext;
+      // 申请 AUDIO_PLAYBACK 后台模式，保证音频播放不被限制
       await backgroundTaskManager.startBackgroundRunning(
         ctx, backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, this.wantAgent_);
       this.bgTaskActive_ = true;

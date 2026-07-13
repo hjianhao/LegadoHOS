@@ -21,6 +21,7 @@
     "pages/RssReadPage",
     "pages/ExploreBookPage",
     "pages/BookshelfManagePage",
-    "pages/BackupSettingsPage"
+    "pages/BackupSettingsPage",
+    "pages/FontManagerPage"
   ]
 }

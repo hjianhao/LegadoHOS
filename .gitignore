@@ -38,3 +38,6 @@
 # Agent workspace config
 CLAUDE.md
 .harmonyos-ai-workspace.manifest
+
+# ZCode workspace config
+.zcode

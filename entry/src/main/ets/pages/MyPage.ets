@@ -29,6 +29,7 @@ export struct MyPage {
         ForEach([
           { icon: '\u2699\uFE0F', title: '设置', desc: '阅读、搜索、主题等全局设置', page: 'pages/SettingsPage' },
           { icon: '\uD83D\uDCDA', title: '书源管理', desc: '管理书源、在线导入', page: 'pages/BookSourcePage' },
+          { icon: '\uD83C\uDFAF', title: '字体管理', desc: '导入、删除自定义字体', page: 'pages/FontManagerPage' },
           { icon: '\uD83D\uDCCA', title: '阅读记录', desc: '阅读时长、统计', page: 'pages/ReadRecordPage' },
           { icon: '\uD83D\uDCD6', title: '书签管理', desc: '书签、笔记', page: 'pages/BookmarkPage' },
           { icon: '\uD83C\uDF10', title: 'Web 远程管理', desc: '启动 Web 服务', page: 'pages/WebServicePage' },
