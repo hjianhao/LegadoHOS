@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><script src="epub.min.js"></script></head><body>
+<script>
+window.parseEpub = function(base64DataUrl) {
+  var book = ePub(base64DataUrl);
+  book.ready.then(function() {
+    var result = {
+      metadata: {
+        title: (book.package.metadata.title || ''),
+        author: (book.package.metadata.creator || ''),
+        description: (book.package.metadata.description || ''),
+      },
+      toc: [],
+      chapters: []
+    };
+    // 目录
+    function flatten(items) {
+      for (var i = 0; items && i < items.length; i++) {
+        result.toc.push({ label: items[i].label, href: items[i].href });
+        if (items[i].subitems) flatten(items[i].subitems);
+      }
+    }
+    try { flatten(book.navigation.toc); } catch(e) {}
+    // 章节内容（通过 spine 顺序）
+    var spineItems = book.spine ? book.spine.spineItems : [];
+    var promises = spineItems.map(function(item, idx) {
+      return item.load(book.load.bind(book)).then(function(doc) {
+        var text = doc.body ? doc.body.textContent || '' : '';
+        var title = result.toc.find(function(t) { return t.href === item.href; });
+        return { index: idx, title: title ? title.label : item.href, href: item.href, content: text };
+      }).catch(function() {
+        return { index: idx, title: item.href, href: item.href, content: '' };
+      });
+    });
+    // 封面（从 manifest 找 cover）
+    var coverData = null;
+    try {
+      var coverId = book.package.cover;
+      if (coverId) {
+        var coverItem = book.package.manifest[coverId];
+        if (coverItem) {
+          coverData = coverItem.href;
+        }
+      }
+    } catch(e) {}
+    result.coverPath = coverData || '';
+    Promise.all(promises).then(function(chapters) {
+      result.chapters = chapters;
+      window.__parseDone = true;
+      window.__parseResult = JSON.stringify(result);
+    });
+  }).catch(function(e) {
+    window.__parseError = e.message || 'parse error';
+  });
+};
+</script></body></html>

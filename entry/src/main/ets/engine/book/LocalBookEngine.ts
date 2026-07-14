@@ -5,6 +5,7 @@
  * - 通过 DocumentViewPicker 选择本地文件（txt/epub/mobi/pdf）
  * - 拷贝到应用沙箱目录（files/books/）避免 URI 失效
  * - 调用对应 Parser 解析，获取元数据 + 章节列表
+ * - EPUB：TaskPool(@Concurrent) 解压到目录，DirEpubParser 从目录解析
  * - 创建 Book 记录（origin='本地', canUpdate=false）
  * - 章节全量写入 chapters 表（content 已填充, isCached=1）
  *
@@ -18,9 +19,10 @@ import { BookTable } from '../../data/database/BookTable';
 import { ChapterTable } from '../../data/database/ChapterTable';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { TxtParser } from './TxtParser';
-import { EpubParser } from './EpubParser';
 import { MobiParser } from './MobiParser';
 import { PdfParser } from './PdfParser';
+import { DirEpubParser } from './DirEpubParser';
+import { HtmlUtil } from '../../util/HtmlUtil';
 
 /** 本地书来源标识 */
 export const LOCAL_BOOK_ORIGIN = '本地';
@@ -41,6 +43,7 @@ export interface ImportResult {
 export interface ImportFileItem {
   uri: string;
   fileName: string;
+  epubDir?: string;    // EPUB 解压目标目录（由调用方预先计算，保证与 TaskPool 一致）
 }
 
 /** 统一的本地书籍元数据 */
@@ -49,6 +52,7 @@ export interface LocalBookMeta {
   author: string;
   description: string;
   subject: string;
+  coverPath: string;     // 封面本地文件路径（空字符串表示无封面）
 }
 
 /** 批量导入结果 */
@@ -121,7 +125,8 @@ export class LocalBookEngine {
   /**
    * 导入单个本地文件
    */
-  async importBook(filePath: string, context?: Context): Promise<ImportResult> {
+  async importBook(filePath: string, context?: Context, epubDirArg?: string): Promise<ImportResult> {
+    console.info('[LocalBookEngine] importBook start:', filePath);
     try {
       const ext = this.getExtension_(filePath);
       const typeInfo = this.getFileTypeInfo_(ext);
@@ -129,8 +134,52 @@ export class LocalBookEngine {
         return { success: false, bookId: 0, bookName: '', chapterCount: 0, error: `不支持的文件格式: ${ext}` };
       }
 
-      // 调用对应 Parser 解析
-      const { meta, chapters } = await this.parseFile_(filePath, typeInfo.parser);
+		      // 调用对应 Parser 解析
+		      let meta: LocalBookMeta;
+		      let chapters: BookChapter[];
+		      let epubDirForToc = '';
+			      if (typeInfo.parser === 'epub') {
+			        // EPUB：TaskPool 已在前面完成解压，直接解析目录
+			        const epubDir = epubDirArg || (this.getSandboxDir(context) + '/epub/' + Date.now().toString(36));
+			        // 从目录解析
+			        const dirParser = new DirEpubParser(epubDir, true); // skipContent=true：内容从文件按需加载
+			        const result = await dirParser.parse();
+			        // 保存封面图片到沙箱 covers 目录
+			        let coverPath = '';
+			        if (result.meta.coverPath) {
+			          const coverSrc = epubDir + '/' + result.opfDir + result.meta.coverPath;
+			          try {
+			            if (fileFs.accessSync(coverSrc)) {
+			              const coverDir = `${this.getSandboxDir()}/covers`;
+			              if (!fileFs.accessSync(coverDir)) {
+			                fileFs.mkdirSync(coverDir, true);
+			              }
+			              const coverExt = result.meta.coverPath.replace(/^.*\.(jpg|jpeg|png|gif|webp)$/i, '.$1') || '.jpg';
+			              coverPath = `${coverDir}/${result.meta.title.replace(/[\\/:*?"<>|]/g, '_')}${coverExt}`;
+			              fileFs.copyFileSync(coverSrc, coverPath);
+			            }
+			          } catch (e) {
+			            console.warn('[LocalBookEngine] Failed to save cover:', e);
+			            coverPath = '';
+			          }
+			        }
+			        meta = {
+			          title: result.meta.title,
+			          author: result.meta.author,
+			          description: result.meta.description,
+			          subject: '',
+			          coverPath,
+			        };
+			        chapters = result.chapters;
+			        // 保存 epubDir 到 tocUrl，供阅读时按需读文件
+			        epubDirForToc = epubDir;
+			        console.info('[LocalBookEngine] epub parsed:', chapters.length, 'chapters from', epubDir);
+			      } else {
+			        const fallback = await this.parseFile_(filePath, typeInfo.parser);
+			        meta = fallback.meta;
+			        chapters = fallback.chapters;
+			      }
+      console.info('[LocalBookEngine] parsed:', meta.title, chapters.length, 'chapters');
 
       if (chapters.length === 0) {
         return { success: false, bookId: 0, bookName: meta.title || '', chapterCount: 0, error: '未解析到任何章节' };
@@ -142,63 +191,68 @@ export class LocalBookEngine {
       const chapterDao = new ChapterTable(db);
 
       const bookUrl = `local://${filePath}`;
-      // 检查是否已导入过
+      // 检查是否已导入过 — 重新导入时删除旧记录
       const existing = await bookDao.getBookByUrl(bookUrl);
       if (existing) {
-        return {
-          success: true,
-          bookId: existing.id,
-          bookName: existing.name,
-          chapterCount: existing.totalChapterNum,
-          error: '该书已导入'
-        };
+        console.info('[LocalBookEngine] already imported, re-importing:', existing.id, existing.name);
+        await chapterDao.deleteChaptersByBookId(existing.id);
+        await bookDao.deleteBook(existing.id);
       }
+      console.info('[LocalBookEngine] creating book record...');
 
       const book = createDefaultBook();
       book.name = meta.title || this.getFileName_(filePath);
       book.author = meta.author;
       book.bookUrl = bookUrl;
       book.origin = LOCAL_BOOK_ORIGIN;
-      book.originUrl = filePath;
-      book.tocUrl = '';
+	      book.originUrl = filePath;
+	      book.tocUrl = epubDirForToc;
       book.type = BookType.TEXT;
       book.totalChapterNum = chapters.length;
       book.chapterCount = chapters.length;
       book.latestChapterTitle = chapters[chapters.length - 1]?.title || '';
       book.isShelf = true;
       book.canUpdate = false;
-      book.introduce = meta.description || meta.subject;
+      book.introduce = HtmlUtil.stripHtml(meta.description || meta.subject);
       book.kind = ext.toUpperCase();
+      book.customCoverPath = meta.coverPath;
+      book.coverUrl = meta.coverPath ? 'file://' + meta.coverPath : '';
       book.wordCount = chapters.reduce((sum, ch) => sum + (ch.contentLength || 0), 0).toString();
       book.createTime = Date.now();
       book.lastOpenTime = 0;
       book.id = await bookDao.insertBook(book);
+      console.info('[LocalBookEngine] book created, id=' + book.id);
 
-      // 设置 bookId 并批量写入章节（content 全量缓存）
-      const now = Date.now();
-      const bookChapters: BookChapter[] = chapters.map((ch: BookChapter, idx: number): BookChapter => {
-        return {
-          id: 0,
-          bookId: book.id,
-          index: ch.index >= 0 ? ch.index : idx,
-          volumeIndex: ch.volumeIndex,
-          title: ch.title,
-          url: ch.url,
-          content: ch.content,
-          contentLength: ch.contentLength,
-          isRead: false,
-          isDownloaded: true,
-          isCached: true,
-          duration: 0,
-          audioUrl: '',
-          createTime: now,
-          updateTime: now,
-        };
-      });
+	      // 设置 bookId 并批量写入章节（EPUB 内容已解压到目录，DB 不存全文）
+	      const now = Date.now();
+	      const bookChapters: BookChapter[] = chapters.map((ch: BookChapter, idx: number): BookChapter => {
+	        return {
+	          id: 0,
+	          bookId: book.id,
+	          index: ch.index >= 0 ? ch.index : idx,
+	          volumeIndex: ch.volumeIndex,
+	          title: ch.title,
+	          url: ch.url,
+	          content: typeInfo.parser === 'epub' ? '' : ch.content,
+	          contentLength: ch.contentLength,
+	          isRead: false,
+	          isDownloaded: true,
+	          isCached: true,
+	          duration: 0,
+	          audioUrl: '',
+	          createTime: now,
+	          updateTime: now,
+	        };
+	      });
       await chapterDao.insertChapters(bookChapters);
+      console.info('[LocalBookEngine] chapters inserted:', bookChapters.length);
 
-      console.info(`[LocalBookEngine] Imported: ${book.name}, ${chapters.length} chapters`);
-      return {
+	      console.info(`[LocalBookEngine] Imported: ${book.name}, ${chapters.length} chapters`);
+	      // 解压到目录后删除原始文件（节省沙箱空间）
+	      if (ext === 'epub') {
+	        try { fileFs.unlinkSync(filePath); } catch (_) { /* 删除失败不影响导入结果 */ }
+	      }
+	      return {
         success: true,
         bookId: book.id,
         bookName: book.name,
@@ -224,6 +278,7 @@ export class LocalBookEngine {
     context?: Context,
     onProgress?: (current: number, total: number, name: string) => void
   ): Promise<BatchImportResult> {
+    console.info('[DBG] importBooks called, items=' + items.length);
     const details: ImportResult[] = [];
     let success = 0;
     let failed = 0;
@@ -236,7 +291,7 @@ export class LocalBookEngine {
         // 先拷贝到沙箱
         const sandboxPath = await this.copyToSandbox(uri, fileName, context);
         // 解析并导入
-        const result = await this.importBook(sandboxPath, context);
+        const result = await this.importBook(sandboxPath, context, items[i].epubDir);
         details.push(result);
         if (result.success) {
           success++;
@@ -265,54 +320,46 @@ export class LocalBookEngine {
     return book.origin === LOCAL_BOOK_ORIGIN;
   }
 
+  /** 生成 EPUB 解压目标目录（使用时间戳+随机数，避免文件名特殊字符问题） */
+  static getEpubDir(context?: Context): string {
+    const base = context?.filesDir || globalThis.getContext()?.filesDir || '';
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    return `${base}/books/epub/${id}`;
+  }
+
   // ==================== 私有方法 ====================
 
   /**
-   * 调用对应 Parser 解析文件
+   * 调用对应 Parser 解析文件（非 EPUB 格式）
    */
   private async parseFile_(
     filePath: string,
-    parser: 'txt' | 'epub' | 'mobi' | 'pdf'
+    parser: 'txt' | 'mobi' | 'pdf'
   ): Promise<{ meta: LocalBookMeta; chapters: BookChapter[] }> {
     switch (parser) {
       case 'txt': {
         const result = await TxtParser.parse(filePath);
         const title = this.getFileName_(filePath).replace(/\.[^.]+$/, '');
-        const meta: LocalBookMeta = { title: title, author: '', description: '', subject: '' };
-        return { meta: meta, chapters: result.chapters };
-      }
-      case 'epub': {
-        const epubParser = new EpubParser(filePath);
-        const result = await epubParser.parse();
-        const meta: LocalBookMeta = {
-          title: result.meta.title,
-          author: result.meta.author,
-          description: result.meta.description,
-          subject: '',
-        };
-        return { meta: meta, chapters: result.chapters };
+        const meta: LocalBookMeta = { title, author: '', description: '', subject: '', coverPath: '' };
+        return { meta, chapters: result.chapters };
       }
       case 'mobi': {
         const mobiParser = new MobiParser(filePath);
         const result = await mobiParser.parse();
         const meta: LocalBookMeta = {
-          title: result.meta.title,
-          author: result.meta.author,
-          description: result.meta.description,
-          subject: '',
+          title: result.meta.title, author: result.meta.author,
+          description: result.meta.description, subject: '', coverPath: '',
         };
-        return { meta: meta, chapters: result.chapters };
+        return { meta, chapters: result.chapters };
       }
       case 'pdf': {
         const pdfParser = new PdfParser(filePath);
         const result = await pdfParser.parse();
         const meta: LocalBookMeta = {
-          title: result.meta.title,
-          author: result.meta.author,
-          description: '',
-          subject: result.meta.subject,
+          title: result.meta.title, author: result.meta.author,
+          description: '', subject: result.meta.subject, coverPath: '',
         };
-        return { meta: meta, chapters: result.chapters };
+        return { meta, chapters: result.chapters };
       }
       default:
         throw new Error(`Unknown parser: ${parser}`);

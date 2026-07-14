@@ -48,6 +48,18 @@ export class RdbUtil {
     }
   }
 
+  static async batchInsert(
+    store: relationalStore.RdbStore,
+    table: string,
+    values: Array<relationalStore.ValuesBucket>
+  ): Promise<number> {
+    try {
+      return await store.batchInsert(table, values);
+    } catch (err) {
+      throw err;
+    }
+  }
+
   static async update(
     store: relationalStore.RdbStore,
     values: relationalStore.ValuesBucket,

@@ -9,13 +9,16 @@ export struct BookCover {
   @Prop coverHeight: number = 70;
   @State imgFailed: boolean = false;
   @State useNetwork: boolean = true;
+  @State isLocalFile: boolean = false;
 
   aboutToAppear(): void {
-    // 过滤无效封面 URL（数字、空、非 http/data 开头）
-    if (this.coverUrl && !/^(https?:\/\/|\/\/|data:)/.test(this.coverUrl)) {
+    const isNetwork = /^(https?:\/\/|\/\/|data:)/.test(this.coverUrl);
+    // 本地文件需 file:// 前缀
+    this.isLocalFile = !!(this.coverUrl && !isNetwork && this.coverUrl.startsWith('file://'));
+    if (!isNetwork && !this.isLocalFile) {
       this.coverUrl = '';
     }
-    this.useNetwork = !!this.coverUrl;
+    this.useNetwork = isNetwork;
     console.info('[BookCover] init name=' + (this.name||'').substring(0,10) + ' url=' + (this.coverUrl||'').substring(0,50));
   }
 
@@ -40,6 +43,17 @@ export struct BookCover {
           .objectFit(ImageFit.Cover)
           .onError((err: ImageError) => {
             console.warn('[BookCover] img failed url=' + (this.coverUrl||'').substring(0,50) + ' err=' + (err?.message || ''));
+            this.imgFailed = true;
+          })
+      }
+      // 本地封面
+      if (this.isLocalFile && this.coverUrl && !this.imgFailed) {
+        Image(this.coverUrl)
+          .width(this.coverWidth).height(this.coverHeight)
+          .borderRadius(6)
+          .objectFit(ImageFit.Cover)
+          .onError((err: ImageError) => {
+            console.warn('[BookCover] local img failed path=' + (this.coverUrl||'').substring(0,50));
             this.imgFailed = true;
           })
       }

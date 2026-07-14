@@ -182,6 +182,8 @@ struct ChapterListPage {
   /** 确保目录排序正确（依赖 getToc 已排序，仅做最终兜底反转） */
   ensureAscendingOrder(): void {
     if (this.chapters_.length < 3) return;
+    // 本地书按 spine 顺序排列，无需自动反转
+    if (this.origin === '本地') return;
     const cnNumMap: Record<string, number> = {
       '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
       '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
@@ -363,6 +365,7 @@ struct ChapterListPage {
                       ? FontWeight.Bold
                       : FontWeight.Normal)
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .wordBreak(WordBreak.BREAK_ALL)
                     .layoutWeight(1)
                 }
                 .width('100%').padding({ top: 10, bottom: 10, left: 16, right: 16 })

@@ -64,14 +64,36 @@ export class HtmlUtil {
 
   /**
    * 将 HTML 清洗为易读纯文本（不包含正文区域识别）
+   * 适用于 EPUB 章节等已是正文的内容
    */
+  static toPlainText(html: string): string {
+    return HtmlUtil.cleanHtmlToText(html);
+  }
+
   private static cleanHtmlToText(html: string): string {
     if (!html) return '';
     let t = html;
 
-    // 移除 <style> 和 <script>
-    t = t.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    t = t.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    // 先解码 HTML 实体（转义的 &lt;style&gt; 等必须先解码才能被识别）
+    t = t
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&ensp;/g, ' ')
+      .replace(/&emsp;/g, ' ')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x27;/g, "'")
+      .replace(/&#x2F;/g, '/')
+      .replace(/&#\d+;/g, (m: string): string =>
+        String.fromCharCode(parseInt(m.substring(2, m.length - 1)))
+      );
+
+	    // 移除 <style>、<script>、<title>（不应出现在正文中）
+	    t = t.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+	    t = t.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+	    t = t.replace(/<title[^>]*>[\s\S]*?<\/title>/gi, '');
     // 移除注释
     t = t.replace(/<!--[\s\S]*?-->/g, '');
 
@@ -113,26 +135,10 @@ export class HtmlUtil {
       t = t.replace(rx, '');
     }
 
-    // 移除剩余所有标签
-    t = t.replace(/<[^>]+>/g, '');
+	    // 移除剩余所有标签
+	    t = t.replace(/<[^>]+>/g, '');
 
-    // HTML 实体解码
-    t = t
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&ensp;/g, ' ')
-      .replace(/&emsp;/g, ' ')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&#x27;/g, "'")
-      .replace(/&#x2F;/g, '/')
-      .replace(/&#\d+;/g, (m: string): string =>
-        String.fromCharCode(parseInt(m.substring(2, m.length - 1)))
-      );
-
-    // 空白优化
+	    // 空白优化
     t = t.trim();
     t = t.split('\n').map(l => l.trim()).join('\n');
     t = t.replace(/\n{4,}/g, '\n\n\n');

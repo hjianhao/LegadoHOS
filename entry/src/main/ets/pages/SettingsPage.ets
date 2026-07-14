@@ -7,6 +7,7 @@ import { MangaImageLoader } from '../util/MangaImageLoader';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
+import { EpubEngineConfig, EpubEngineType } from '../engine/EpubEngineConfig';
 import router from '@ohos.router';
 
 interface SettingItem { icon: string; title: string; key: string; }
@@ -60,6 +61,7 @@ struct SettingsPage {
   @StorageLink('network_timeout') netTimeout: number = 60;
   @State pageMode: boolean = true;
   @State autoCacheSize: number = 10;
+  @State epubEngine: string = 'novel';
   @State comicReadMode: number = 0;
   @State comicPreloadNum: number = 3;
   @State comicCacheSize: number = 0;
@@ -84,6 +86,9 @@ struct SettingsPage {
       this.autoCacheSize = await s.getAutoCacheSize();
       this.comicReadMode = await s.getComicReadMode();
       this.comicPreloadNum = await s.getComicPreloadNum();
+      // EPUB 引擎
+      const engine = await EpubEngineConfig.getEngine();
+      this.epubEngine = engine === EpubEngineType.COMIC ? 'comic' : 'novel';
     } catch (_e) { /* ignore */ }
     // 加载漫画缓存大小
     this.loadComicCacheSize();
@@ -149,9 +154,10 @@ struct SettingsPage {
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
         { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
-        { icon: '\uD83D\uDD04', title: '备份与恢复', key: 'backup' },
-        { icon: '\u2139\uFE0F', title: '关于', key: 'about' },
-      ] as SettingItem[], (item: SettingItem) => {
+	        { icon: '\uD83D\uDD04', title: '备份与恢复', key: 'backup' },
+	        { icon: '\u2699\uFE0F', title: 'Worker测试', key: 'worker_test' },
+	        { icon: '\u2139\uFE0F', title: '关于', key: 'about' },
+	      ] as SettingItem[], (item: SettingItem) => {
         ListItem() {
           Row() {
             Text(item.icon).fontSize(22).margin({ right: 14 }).fontColor(ThemeColors.onBackground(this.isDark))
@@ -161,13 +167,15 @@ struct SettingsPage {
           }.padding(16).width('100%')
         }
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-        .onClick(() => {
-          if (item.key === 'backup') {
-            router.pushUrl({ url: 'pages/BackupSettingsPage' });
-          } else {
-            this.currentSection = item.key;
-          }
-        })
+	        .onClick(() => {
+	          if (item.key === 'backup') {
+	            router.pushUrl({ url: 'pages/BackupSettingsPage' });
+	          } else if (item.key === 'worker_test') {
+	            router.pushUrl({ url: 'pages/WorkerTestPage' });
+	          } else {
+	            this.currentSection = item.key;
+	          }
+	        })
       })
     }.width('100%')
   }
@@ -247,9 +255,28 @@ struct SettingsPage {
       }.width('100%').margin({ top: 4 })
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
-        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
-    }
+	      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
+	        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
+
+	      // EPUB 阅读引擎
+	      Text('EPUB 阅读引擎').fontSize(15).fontWeight(FontWeight.Bold)
+	        .padding({ left: 16, top: 12, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
+	      Row() {
+	        Text('小说阅读').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+	        Radio({ value: 'novel', group: 'epubEngine' })
+	          .checked(this.epubEngine === 'novel')
+	          .onChange(() => { this.setEpubEngine_('novel'); })
+	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
+	      Row() {
+	        Text('图文混排（WebView+EPUB.js）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+	        Radio({ value: 'comic', group: 'epubEngine' })
+	          .checked(this.epubEngine === 'comic')
+	          .onChange(() => { this.setEpubEngine_('comic'); })
+	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
+	      Text('图文混排引擎适合带图片/复杂排版的 EPUB，当前开发中').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+	        .padding({ left: 16, right: 16, top: 2, bottom: 12 })
+	        .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+	    }
     .width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -458,5 +485,10 @@ struct SettingsPage {
       Text('基于 legado-with-MD3 重构').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 16 })
     }
     .width('100%').alignItems(HorizontalAlign.Center)
+  }
+
+  private setEpubEngine_(val: string): void {
+    this.epubEngine = val;
+    EpubEngineConfig.setEngine(val === 'comic' ? EpubEngineType.COMIC : EpubEngineType.NOVEL);
   }
 }

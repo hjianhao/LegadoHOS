@@ -712,12 +712,13 @@ struct ComicReadPage {
     ChapterCache.bookUrl = this.bookUrl;
     UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ChapterListPage',
-      params: {
-        from: 'ComicReadPage', bookName: this.bookName, bookAuthor: '',
-        bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl,
-        durChapterIndex: this.currentIndex,
-        isManga: '1',
-      }
+	      params: {
+	        from: 'ComicReadPage', bookName: this.bookName, bookAuthor: '',
+	        bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl,
+	        origin: this.origin,
+	        durChapterIndex: this.currentIndex,
+	        isManga: '1',
+	      }
     });
   }
 

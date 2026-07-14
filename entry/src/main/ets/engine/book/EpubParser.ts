@@ -21,6 +21,7 @@ export interface EpubMeta {
   title: string;
   author: string;
   coverPath: string;
+  coverData: ArrayBuffer | null;   // 封面图片数据（解压后）
   description: string;
   language: string;
   publisher: string;
@@ -52,63 +53,173 @@ export class EpubParser {
     const opfEntry = this.zipReader.findEntry(opfPath);
     if (!opfEntry) throw new Error(`Invalid EPUB: missing ${opfPath}`);
     const opfXml = await this.zipReader.extractText(opfEntry);
-    const opfDir = opfPath.substring(0, opfPath.lastIndexOf('/') + 1);
+	    const opfDir = opfPath.substring(0, opfPath.lastIndexOf('/'));
     this.meta_ = this.parseOpfMeta(opfXml);
 
-    const manifest = this.parseManifest(opfXml);
-    const spineIds = this.parseSpine(opfXml);
+		    const manifest = this.parseManifest(opfXml);
+		    const spineItems = this.parseSpine(opfXml);
+		    // 过滤掉 linear="no" 的非正文条目
+		    const spineIds: string[] = spineItems
+		      .filter(item => !item.linearNo)
+		      .map(item => item.id);
 
-    // 3. 解析目录 (NCX 或 nav)
-    const tocId = this.getTocId(opfXml);
-    let navMap: Array<{ id: string; title: string; href: string }> = [];
+		    // 提取封面图片数据
+	    let coverData: ArrayBuffer | null = null;
+		    if (this.meta_.coverPath) {
+		      const coverFullPath = this.resolvePath(opfDir, this.meta_.coverPath);
+		      const coverEntry = this.zipReader.findEntry(coverFullPath);
+		      if (coverEntry) {
+		        coverData = await this.zipReader.extractData(coverEntry);
+		        console.info('[EPUB] cover extracted: ' + (coverData ? coverData.byteLength + ' bytes' : 'null'));
+		      } else {
+		        console.warn('[EPUB] cover entry not found: ' + coverFullPath);
+		      }
+		    } else {
+		      console.warn('[EPUB] no coverPath in OPF metadata');
+		    }
+	    this.meta_.coverData = coverData;
 
-    if (tocId && manifest[tocId]) {
-      const tocHref = this.resolvePath(opfDir, manifest[tocId]);
-      const tocEntry = this.zipReader.findEntry(tocHref);
-      if (tocEntry) {
-        const tocXml = await this.zipReader.extractText(tocEntry);
-        navMap = this.parseNcx(tocXml);
-      }
-    }
+	    // 3. 解析目录 (NCX 或 nav)
+	    let navMap: Array<{ id: string; title: string; href: string }> = [];
 
-    // 如果 NCX 没有目录，从 spine 生成
-    if (navMap.length === 0) {
-      navMap = spineIds.map((id, idx) => ({
-        id, title: `第 ${idx + 1} 章`, href: manifest[id] || '',
-      }));
-    }
+	    // 方式 A: NCX 目录 (EPUB 2)
+	    const tocId = this.getTocId(opfXml);
+	    if (tocId && manifest[tocId]) {
+	      const tocHref = this.resolvePath(opfDir, manifest[tocId]);
+	      const tocEntry = this.zipReader.findEntry(tocHref);
+	      if (tocEntry) {
+	        const tocXml = await this.zipReader.extractText(tocEntry);
+	        navMap = this.parseNcxRecursive(tocXml);
+	      }
+	    }
 
-    // 4. 按 spine 顺序提取正文
-    const now = Date.now();
-    for (let i = 0; i < spineIds.length; i++) {
-      const id = spineIds[i];
-      const href = manifest[id];
-      if (!href) continue;
+	    // 方式 B: EPUB 3 nav 文档（按 manifest 中 properties="nav" 查找）
+	    if (navMap.length === 0) {
+	      const navIdMatch = opfXml.match(/<item\s[^>]*?properties\s*=\s*["']nav["'][^>]*?\sid\s*=\s*["']([^"']+)["']/i);
+	      const navId = navIdMatch ? navIdMatch[1] : '';
+	      if (navId && manifest[navId]) {
+	        const navHref = this.resolvePath(opfDir, manifest[navId]);
+	        const navEntry = this.zipReader.findEntry(navHref);
+		  if (navEntry) {
+		            const navHtml = await this.zipReader.extractText(navEntry);
+		            const parsed = this.parseNav(navHtml);
+		            navMap = parsed.map(n => ({ id: '', title: n.title, href: n.href }));
+		          }
+	      }
+	    }
 
-      const fullPath = this.resolvePath(opfDir, href);
-      const entry = this.zipReader.findEntry(fullPath);
-      if (!entry) continue;
+	    // 兜底：从 spine 生成
+	    if (navMap.length === 0) {
+	      navMap = spineIds.map((id, idx) => ({
+	        id, title: `第 ${idx + 1} 章`, href: manifest[id] || '',
+	      }));
+	    }
 
-      const html = await this.zipReader.extractText(entry);
-      const text = HtmlUtil.stripHtml(html);
+	    // 4. 按 NCX 目录 + spine 合并提取正文
+	    //    EPUB 中，一个章节可能分布在多个 spine 文件中，
+	    //    NCX navPoint 只指向该章节的第一个 spine 文件。
+	    //    需要合并从 navPoint href 到下一个 navPoint href 之间的所有 spine 内容。
+	    const now = Date.now();
+	    if (navMap.length > 0) {
+	      // 建立 manifest href → spine 索引的映射
+	      const hrefToSpineIdx: Record<string, number> = {};
+	      for (let si = 0; si < spineIds.length; si++) {
+	        const shref = manifest[spineIds[si]];
+	        if (shref) {
+	          hrefToSpineIdx[shref] = si;
+	        }
+	      }
 
-      // 从 navMap 找标题
-      const nav = navMap.find(n => n.href === href || n.id === id);
-      const title = nav?.title || `第 ${i + 1} 章`;
+	      for (let i = 0; i < navMap.length; i++) {
+	        const nav = navMap[i];
+	        const navHref = nav.href;
 
-      this.chapters_.push({
-        id: 0, bookId: 0, index: i, volumeIndex: 0,
-        title, url: fullPath,
-        content: text,
-        contentLength: text.length,
-        isRead: false, isDownloaded: false, isCached: true,
-        duration: 0, audioUrl: '',
-        createTime: now, updateTime: now,
-      });
-    }
+	        // 找到该 navPoint 对应的 spine 起始位置
+	        let spineStart = hrefToSpineIdx[navHref];
+	        // 找到下一个 navPoint 对应的 spine 起始位置
+	        let spineEnd = spineIds.length;
+	        for (let j = i + 1; j < navMap.length; j++) {
+	          const nextIdx = hrefToSpineIdx[navMap[j].href];
+	          if (nextIdx !== undefined) {
+	            spineEnd = nextIdx;
+	            break;
+	          }
+	        }
 
-    this.zipReader.close();
-    console.info(`[EPUB] Parsed: ${this.meta_?.title}, ${this.chapters_.length} chapters`);
+	        // 合并 spine[spineStart..spineEnd) 的所有内容
+	        let combinedText = '';
+	        let lastFullPath = '';
+	        const startIdx = spineStart !== undefined ? spineStart : 0;
+	        const endIdx = spineEnd;
+	        for (let si = startIdx; si < endIdx; si++) {
+	          const shref = manifest[spineIds[si]];
+	          if (!shref) continue;
+	          const fullPath = this.resolvePath(opfDir, shref);
+	          const entry = this.zipReader.findEntry(fullPath);
+	          if (!entry) continue;
+	          lastFullPath = fullPath;
+	          const html = await this.zipReader.extractText(entry);
+	          if (html) {
+	            combinedText += HtmlUtil.toPlainText(html) + '\n';
+	          }
+	        }
+
+	        // 如果 navPoint 不在 spine 中（如封面图片），直接提取该文件
+	        if (!combinedText) {
+	          const fullPath = this.resolvePath(opfDir, navHref);
+	          const entry = this.zipReader.findEntry(fullPath);
+	          if (entry) {
+	            const html = await this.zipReader.extractText(entry);
+	            combinedText = HtmlUtil.toPlainText(html);
+	            lastFullPath = fullPath;
+	          }
+	        }
+
+	        const text = combinedText.trim();
+	        if (i < 3) {
+	          console.info('[EPUB] chapter "' + nav.title.substring(0, 20) + '" content=' + text.length + ' chars (spine ' + startIdx + '-' + endIdx + ')');
+	        }
+
+	        this.chapters_.push({
+	          id: 0, bookId: 0, index: i, volumeIndex: 0,
+	          title: nav.title, url: lastFullPath,
+	          content: text,
+	          contentLength: text.length,
+	          isRead: false, isDownloaded: false, isCached: true,
+	          duration: 0, audioUrl: '',
+	          createTime: now, updateTime: now,
+	        });
+	      }
+	    } else {
+	      // 兜底：无 NCX 时按 spine 顺序提取
+	      for (let i = 0; i < spineIds.length; i++) {
+	        const id = spineIds[i];
+	        const href = manifest[id];
+	        if (!href) continue;
+
+	        const fullPath = this.resolvePath(opfDir, href);
+	        const entry = this.zipReader.findEntry(fullPath);
+	        if (!entry) continue;
+
+	        const html = await this.zipReader.extractText(entry);
+	        const text = HtmlUtil.toPlainText(html);
+
+	        const title = `第 ${i + 1} 章`;
+
+	        this.chapters_.push({
+	          id: 0, bookId: 0, index: i, volumeIndex: 0,
+	          title, url: fullPath,
+	          content: text,
+	          contentLength: text.length,
+	          isRead: false, isDownloaded: false, isCached: true,
+	          duration: 0, audioUrl: '',
+	          createTime: now, updateTime: now,
+	        });
+	      }
+	    }
+
+	    this.zipReader.close();
+	    console.info(`[EPUB] Parsed: ${this.meta_?.title}, ${this.chapters_.length} chapters`);
 
     return { meta: this.meta_, chapters: this.chapters_ };
   }
@@ -117,7 +228,7 @@ export class EpubParser {
    * 解析 container.xml 获取 OPF 路径
    */
   private parseContainerXml(xml: string): string {
-    const match = xml.match(/href\s*=\s*["']([^"']+\.opf)["']/i);
+    const match = xml.match(/(?:full-path|href)\s*=\s*["']([^"']+\.opf)["']/i);
     return match ? match[1] : 'content.opf';
   }
 
@@ -126,7 +237,7 @@ export class EpubParser {
    */
   private parseOpfMeta(opfXml: string): EpubMeta {
     const getTag = (tag: string) => {
-      const m = opfXml.match(new RegExp(`<${tag}[^>]*>([^<]*)<\\/${tag}>`, 'i'));
+      const m = opfXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
       return m ? m[1].trim() : '';
     };
     const getAttr = (tag: string, attr: string) => {
@@ -142,15 +253,63 @@ export class EpubParser {
     const pub = getTag('dc:publisher') || getTag('publisher');
     const date = getTag('dc:date') || getTag('date');
 
-    // 从 manifest 找封面
-    const coverMatch = opfXml.match(/<item[^>]*id\s*=\s*["'](?:(?:cover)|(?:cover-image)|(?:img))["'][^>]*href\s*=\s*["']([^"']+)["']/i);
-    const coverPath = coverMatch ? coverMatch[1] : '';
+	    // 从 manifest 找封面 — 优先用 EPUB 标准 <meta name="cover"> 方式
+	    let coverPath = '';
+	    const coverMetaMatch = opfXml.match(/<meta\s+name\s*=\s*["']cover["'][^>]*?\scontent\s*=\s*["']([^"']+)["']/i);
+	    if (coverMetaMatch) {
+	      const coverId = coverMetaMatch[1];
+	      const coverHrefMatch = opfXml.match(new RegExp(
+	        `<item[^>]*?\\sid\\s*=\\s*["']${coverId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*?\\shref\\s*=\\s*["']([^"']+)["']`,
+	        'i'
+	      ));
+	      if (coverHrefMatch) {
+	        coverPath = coverHrefMatch[1];
+	      }
+	    }
+	    // 备用：按 ID 命名惯例查找
+	    if (!coverPath) {
+	      const coverIdPatterns = ['cover', 'cover-image', 'coverimg', 'coverpage', 'cover_jpg', 'cover\\.', 'img'];
+	      for (const pat of coverIdPatterns) {
+	        const coverRegex = new RegExp(
+	          `<item[^>]*?\\s(id\\s*=\\s*["'](?:${pat})["'])[^>]*?\\s(href\\s*=\\s*["']([^"']+)["'])[^>]*?\\/?\\s*>`,
+	          'i'
+	        );
+	        const m = coverRegex.exec(opfXml);
+	        if (m && m[3]) {
+	          coverPath = m[3];
+	          break;
+	        }
+	        const coverRegex2 = new RegExp(
+	          `<item[^>]*?\\s(href\\s*=\\s*["']([^"']+)["'])[^>]*?\\s(id\\s*=\\s*["'](?:${pat})["'])[^>]*?\\/?\\s*>`,
+	          'i'
+	        );
+	        const m2 = coverRegex2.exec(opfXml);
+	        if (m2 && m2[2]) {
+	          coverPath = m2[2];
+	          break;
+	        }
+	      }
+	    }
+	    // 兜底：取第一个图片条目
+	    if (!coverPath) {
+	      const imgItem = opfXml.match(/<item[^>]*?\smedia-type\s*=\s*["']image\/[^"']+["'][^>]*?\shref\s*=\s*["']([^"']+)["']/i);
+	      if (imgItem) {
+	        coverPath = imgItem[1];
+	      }
+	      if (!coverPath) {
+	        const imgItem2 = opfXml.match(/<item[^>]*?\shref\s*=\s*["']([^"']+)["'][^>]*?\smedia-type\s*=\s*["']image\/[^"']+["']/i);
+	        if (imgItem2) {
+	          coverPath = imgItem2[1];
+	        }
+	      }
+	    }
+	    console.info('[EPUB] coverPath="' + coverPath + '"');
 
-    // ISBN
+	    // ISBN
     const isbnMatch = opfXml.match(/<dc:identifier[^>]*>[\s]*(?:urn:isbn:)?(\d{10,13})/i);
     const isbn = isbnMatch ? isbnMatch[1] : '';
 
-    return { title, author, coverPath, description: desc, language: lang, publisher: pub, isbn, date };
+	    return { title, author, coverPath, coverData: null, description: desc, language: lang, publisher: pub, isbn, date };
   }
 
   /**
@@ -165,13 +324,8 @@ export class EpubParser {
       const attrs = match[1];
       const idM = attrs.match(/id\s*=\s*["']([^"']+)["']/i);
       const hrefM = attrs.match(/href\s*=\s*["']([^"']+)["']/i);
-      const mediaM = attrs.match(/media-type\s*=\s*["']([^"']+)["']/i);
-      if (idM && hrefM && mediaM) {
-        const mt = mediaM[1];
-        // 只保留文本类型的条目
-        if (mt.includes('xml') || mt.includes('html') || mt.includes('xhtml') || mt.includes('css') || mt.includes('ncx')) {
-          map[idM[1]] = hrefM[1];
-        }
+      if (idM && hrefM) {
+        map[idM[1]] = hrefM[1];
       }
     }
     return map;
@@ -180,13 +334,16 @@ export class EpubParser {
   /**
    * 解析 spine（阅读顺序）
    */
-  private parseSpine(opfXml: string): string[] {
-    const order: string[] = [];
+  private parseSpine(opfXml: string): Array<{ id: string; linearNo: boolean }> {
+    const order: Array<{ id: string; linearNo: boolean }> = [];
     const regex = /<itemref\s+([^>]*)\/?>/gi;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(opfXml)) !== null) {
       const idM = match[1].match(/idref\s*=\s*["']([^"']+)["']/i);
-      if (idM) order.push(idM[1]);
+      if (idM) {
+        const linearNo = /linear\s*=\s*["']no["']/i.test(match[1]);
+        order.push({ id: idM[1], linearNo });
+      }
     }
     return order;
   }
@@ -200,34 +357,41 @@ export class EpubParser {
   }
 
   /**
-   * 解析 NCX 目录
+   * 递归解析 NCX 目录（支持嵌套 navPoint，如 卷→回→章）
    */
-  private parseNcx(ncxXml: string): Array<{ id: string; title: string; href: string }> {
+  private parseNcxRecursive(ncxXml: string): Array<{ id: string; title: string; href: string }> {
     const navMap: Array<{ id: string; title: string; href: string }> = [];
+    this.parseNcxLevel_(ncxXml, navMap);
+    return navMap;
+  }
 
+  /** 递归处理一层 navPoint，将叶子节点展平到 navMap */
+  private parseNcxLevel_(xml: string, result: Array<{ id: string; title: string; href: string }>): void {
     const navPointRegex = /<navPoint[^>]*>([\s\S]*?)<\/navPoint>/gi;
     let npMatch: RegExpExecArray | null;
-    while ((npMatch = navPointRegex.exec(ncxXml)) !== null) {
+    while ((npMatch = navPointRegex.exec(xml)) !== null) {
       const content = npMatch[1];
+
+      // 检查是否有子 navPoint
+      const hasChildren = /<navPoint[^>]*>[\s\S]*?<\/navPoint>/i.test(content);
 
       const titleM = content.match(/<text>([^<]*)<\/text>/i);
       const srcM = content.match(/<content\s+src\s*=\s*["']([^"']+)["']/i);
       const idM = npMatch[0].match(/id\s*=\s*["']([^"']+)["']/i);
 
-      if (srcM) {
-        const href = srcM[1].split('#')[0]; // 去掉锚点
-        navMap.push({
+      if (hasChildren) {
+        // 有子节点：先递归处理子 navPoint
+        this.parseNcxLevel_(content, result);
+      } else if (srcM) {
+        // 叶子节点：添加到目录
+        const href = srcM[1].split('#')[0];
+        result.push({
           id: idM ? idM[1] : '',
           title: titleM ? titleM[1].trim() : '无标题',
           href,
         });
-
-        // 递归解析子 navPoint
-        // content 中还可能有嵌套，简化版只处理一级
       }
     }
-
-    return navMap;
   }
 
   /**

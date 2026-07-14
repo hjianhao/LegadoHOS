@@ -24,8 +24,12 @@ import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookG
 import { BookSourceChapter } from '../model/BookSource';
 import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
-import { localBookEngine, ImportFileItem } from '../engine/book/LocalBookEngine';
+import { localBookEngine, LocalBookEngine, ImportFileItem, LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
+import { EpubEngineType, EpubEngineConfig } from '../engine/EpubEngineConfig';
+import { extractZipConcurrent } from '../engine/book/ZipExtractTask';
 import picker from '@ohos.file.picker';
+import { taskpool } from '@kit.ArkTS';
+import fileFs from '@ohos.file.fs';
 
 import { BookshelfConfigDialog } from './BookshelfConfigDialog';
 import { BookGroupManageDialog } from './BookGroupManageDialog';
@@ -275,19 +279,30 @@ export struct BookshelfPage {
       // 获取沙箱 context
       const context = this.getUIContext().getHostContext() as Context;
 
-      // 构造导入项列表（uri + fileName），从 URI 提取文件名
-      const items: ImportFileItem[] = [];
-      for (let i = 0; i < uris.length; i++) {
-        const uri = uris[i];
-        // picker 返回的 URI 末段通常包含文件名
-        const name = uri.split('/').pop() || `book_${i + 1}`;
-        const item: ImportFileItem = { uri: uri, fileName: name };
-        items.push(item);
-      }
+	      // 构造导入项列表（uri + fileName），从 URI 提取文件名
+	      const items: ImportFileItem[] = [];
+	      for (let i = 0; i < uris.length; i++) {
+	        const uri = uris[i];
+		        const name = decodeURIComponent(uri.split('/').pop() || `book_${i + 1}`);
+	        items.push({ uri, fileName: name });
+	      }
 
-      const result = await localBookEngine.importBooks(items, context, (current, total, name) => {
-        this.importProgress = `正在导入 ${current}/${total}: ${name}`;
-      });
+		      // 先复制到沙箱，EPUB 再用 TaskPool 解压（避免 EAWorker + WebView 冲突）
+		      const sandboxItems: ImportFileItem[] = [];
+		      for (const item of items) {
+		        const sandboxPath = await localBookEngine.copyToSandbox(item.uri, item.fileName, context);
+		        let epubDir = '';
+		        if (/\.epub$/i.test(item.fileName)) {
+		          epubDir = LocalBookEngine.getEpubDir(context);
+		          this.importProgress = `正在解压 ${item.fileName}...`;
+		          await taskpool.execute(extractZipConcurrent, sandboxPath, epubDir);
+		        }
+		        sandboxItems.push({ uri: sandboxPath, fileName: item.fileName, epubDir });
+		      }
+
+	      const result = await localBookEngine.importBooks(sandboxItems, context, (current, total, name) => {
+	        this.importProgress = `正在导入 ${current}/${total}: ${name}`;
+	      });
 
       this.isImporting = false;
       this.importProgress = '';
@@ -414,15 +429,22 @@ export struct BookshelfPage {
     if (this.selectedBookIds.length === 0) return;
     try {
       await AppDatabase.getInstance().waitForInit();
-      const bookDao = new BookTable(AppDatabase.getInstance().rdbStore);
+      const db = AppDatabase.getInstance().rdbStore;
+      const bookDao = new BookTable(db);
+      const chapterDao = new ChapterTable(db);
       const count = this.selectedBookIds.length;
-      await bookDao.setShelfByIds(this.selectedBookIds, false);
+      // 批量删除章节和书籍记录
+      for (const id of this.selectedBookIds) {
+        await chapterDao.deleteChaptersByBookId(id);
+      }
+      await bookDao.deleteBooks(this.selectedBookIds);
       this.selectedBookIds = [];
       this.isSelectMode = false;
-      UiUtil.showToast(this.getUIContext(), { message: '已移除 ' + count + ' 本', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '已删除 ' + count + ' 本', duration: 1500 });
       this.loadBooks();
-    } catch (_e) {
-      UiUtil.showToast(this.getUIContext(), { message: '移除失败', duration: 1500 });
+    } catch (e) {
+      console.error('[Bookshelf] batch remove error:', e);
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败', duration: 1500 });
     }
   }
 
@@ -530,7 +552,22 @@ export struct BookshelfPage {
     return count > 0 ? count : 0;
   }
 
-  continueRead(book: Book): void {
+  async continueRead(book: Book): Promise<void> {
+    // EPUB 本地书：根据引擎选择阅读方式
+    if (book.origin === LOCAL_BOOK_ORIGIN && book.kind === 'EPUB') {
+      try {
+        const engine = await EpubEngineConfig.getEngine();
+        if (engine === EpubEngineType.COMIC) {
+          // 图文混排引擎（WebView + EPUB.js）
+          UiUtil.pushUrl(this.getUIContext(), {
+            url: 'pages/ReaderPage',
+            params: { bookName: book.name, bookUrl: book.bookUrl }
+          });
+          return;
+        }
+      } catch (_e) { /* 默认小说引擎 */ }
+    }
+    // 小说阅读引擎（默认）
     const targetPage = book.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
@@ -542,10 +579,37 @@ export struct BookshelfPage {
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
+      const chapterDao = new ChapterTable(db);
       const bookDao = new BookTable(db);
-      book.isShelf = false;
-      await bookDao.updateBook(book);
-      UiUtil.showToast(this.getUIContext(), { message: '已从书架移除', duration: 1500 });
+      // 1. 删除章节数据
+      await chapterDao.deleteChaptersByBookId(book.id);
+      // 2. 删除书籍记录
+      await bookDao.deleteBook(book.id);
+      // 3. 删除沙箱中的 EPUB 文件
+      if (book.originUrl) {
+        try {
+          if (fileFs.accessSync(book.originUrl)) {
+            fileFs.unlinkSync(book.originUrl);
+          }
+        } catch (_e) { /* 文件可能已被手动删除 */ }
+      }
+	      // 4. 删除封面文件
+	      if (book.customCoverPath) {
+	        try {
+	          if (fileFs.accessSync(book.customCoverPath)) {
+	            fileFs.unlinkSync(book.customCoverPath);
+	          }
+	        } catch (_e) { /* 封面可能不存在 */ }
+	      }
+	      // 5. 删除解压目录（UUID 目录，非空目录不会删除，待后续实现递归清理）
+	      if (book.tocUrl) {
+	        try {
+	          if (fileFs.accessSync(book.tocUrl)) {
+	            fileFs.rmdirSync(book.tocUrl);
+	          }
+	        } catch (_e) { /* 目录非空或已被删除 */ }
+	      }
+      UiUtil.showToast(this.getUIContext(), { message: '已删除《' + book.name + '》', duration: 1500 });
       this.loadBooks();
     } catch (e) {
       console.error('[Bookshelf] remove error:', e);
@@ -604,8 +668,8 @@ export struct BookshelfPage {
 
   confirmRemove(book: Book): void {
     UiUtil.showDialog(this.getUIContext(), {
-      title: '移除书籍',
-      message: `确定将《${book.name}》从书架移除吗？`,
+      title: '删除书籍',
+      message: `确定删除《${book.name}》及其全部数据吗？\n（章节内容、本地文件将一并清除）`,
       buttons: [
         { text: '取消', color: '#888' },
         { text: '移除', color: ThemeColors.error(this.isDark) }

@@ -57,9 +57,12 @@ export class ChapterTable {
   }
 
   async insertChapters(chapters: BookChapter[]): Promise<void> {
+    const rows: Array<relationalStore.ValuesBucket> = [];
     for (const ch of chapters) {
-      const row = this.toRow(ch);
-      await RdbUtil.insert(this.rdbStore, ChapterTable.TABLE_NAME, row);
+      rows.push(this.toRow(ch));
+    }
+    if (rows.length > 0) {
+      await RdbUtil.batchInsert(this.rdbStore, ChapterTable.TABLE_NAME, rows);
     }
   }
 

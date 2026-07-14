@@ -8,6 +8,7 @@ import { MeasureUtils } from '@kit.ArkUI';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ChapterCache } from '../util/ChapterCache';
+import { DirEpubParser } from '../engine/book/DirEpubParser';
 import { TextLayout, LayoutConfig, LayoutPage, DEFAULT_LAYOUT_CONFIG } from '../engine/book/TextLayout';
 import { convertChinese } from '../util/ChineseConverter';
 import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../components/reader/PageView';
@@ -17,6 +18,8 @@ import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
 import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
 import { HtmlUtil } from '../util/HtmlUtil';
+import fileFs from '@ohos.file.fs';
+import util from '@ohos.util';
 import relationalStore from '@ohos.data.relationalStore';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
@@ -112,26 +115,29 @@ struct ReadPage {
     }
   }
 
-  aboutToAppear(): void {
-    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
-    this.bookName = String(p['bookName'] || p['name'] || '');
-    this.bookAuthor = String(p['bookAuthor'] || p['author'] || '');
-    this.bookUrl = String(p['bookUrl'] || '');
-    this.originUrl = String(p['originUrl'] || '');
-    this.origin = String(p['origin'] || '');
-    this.tocUrl = String(p['tocUrl'] || '');
-    if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
-    if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
-    // 初始化字体管理器并注册已安装的自定义字体（在加载设置前执行）
-    this.initFonts();
-    this.loadSettings();
-    // 进入沉浸式模式（隐藏状态栏和导航栏）
-    this.setSystemBarVisible_(false);
-    // 初始化测量工具
-    try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
-    // 云端同步（异步，不阻塞主流程）
-    this.syncFromCloud();
-  }
+	  async aboutToAppear(): Promise<void> {
+	    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
+	    this.bookName = String(p['bookName'] || p['name'] || '');
+	    this.bookAuthor = String(p['bookAuthor'] || p['author'] || '');
+	    this.bookUrl = String(p['bookUrl'] || '');
+	    this.originUrl = String(p['originUrl'] || '');
+	    this.origin = String(p['origin'] || '');
+	    this.tocUrl = String(p['tocUrl'] || '');
+	    if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
+	    if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
+	    // 初始化字体管理器并注册已安装的自定义字体
+	    this.initFonts();
+	    // 先加载设置，确保首次渲染使用用户配置的样式（而非默认值再切换）
+	    await this.loadSettings();
+	    // 进入沉浸式模式（隐藏状态栏和导航栏）
+	    this.setSystemBarVisible_(false);
+	    // 初始化测量工具
+	    try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
+	    // 云端同步（异步，不阻塞主流程）
+	    this.syncFromCloud();
+	    // 设置加载完成后立即加载内容（此时 cfg 已为用户配置）
+	    this.loadContent();
+	  }
 
   /** 初始化 FontManager 并注册已安装的自定义字体 */
   private async initFonts(): Promise<void> {
@@ -203,10 +209,10 @@ struct ReadPage {
           this.loadChapter(idx);
         }
       }
-      return;
-    }
-    this.loadContent();
-  }
+	      return;
+	    }
+	    // loadContent 已在 aboutToAppear 中调用，此处不再重复执行
+	  }
 
   private async loadSettings(): Promise<void> {
     try {
@@ -266,10 +272,40 @@ struct ReadPage {
       // 检测是否为本地书籍（origin 为 "本地"）
       this.isLocalBook_ = this.origin === LOCAL_BOOK_ORIGIN;
 
-      // 本地书籍：跳过 BookSource 匹配和网络目录获取，直接从 DB 读取章节
-      if (this.isLocalBook_) {
-        console.info('[ReadPage] Local book detected, skipping network source');
-      }
+	      let chapters: BookSourceChapter[] = [];
+
+	      // 本地书籍：跳过 BookSource 匹配和网络目录获取，从解压目录或 DB 读取章节
+	      if (this.isLocalBook_) {
+	        console.info('[ReadPage] Local book detected, loading chapters from', this.tocUrl || 'DB');
+	        // 优先从解压目录解析（实时、准确）
+	        if (this.tocUrl) {
+	          try {
+	            const parser = new DirEpubParser(this.tocUrl, true);
+	            const result = await parser.parse();
+	            chapters = result.chapters.map((ch: BookChapter, idx: number): BookSourceChapter => ({
+	              index: idx,
+	              title: ch.title,
+	              url: ch.url,
+	            }));
+	            console.info('[ReadPage] Loaded chapters from extracted dir:', chapters.length);
+	          } catch (_e) { /* dir parse failed, fall through */ }
+	        }
+	        // 兜底：从 DB 读取
+	        if (chapters.length === 0 && this.bookId_ > 0) {
+	          try {
+	            const ct = new ChapterTable(db);
+	            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
+	            if (dbChapters.length > 0) {
+	              chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
+	                index: ch.index,
+	                title: ch.title,
+	                url: ch.url,
+	              }));
+	              console.info('[ReadPage] Loaded chapters from DB:', chapters.length);
+	            }
+	          } catch (_e) { /* ignore */ }
+	        }
+	      }
 
       const srcDao = new BookSourceTable(db);
       const sources = this.isLocalBook_ ? [] : await srcDao.getAllSources();
@@ -290,35 +326,31 @@ struct ReadPage {
         } catch (_) { /* ignore */ }
       }
 
-      let chapters: BookSourceChapter[] = [];
-      if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
-        chapters = ChapterCache.chapters;
-        console.info('[ReadPage] Loaded chapters from memory cache:', chapters.length);
-      } else {
-        // 尝试从数据库加载缓存的目录
-        let dbChapterCount = 0;
-        if (this.bookId_ > 0) {
-          try {
-            const ct = new ChapterTable(db);
-            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
-            if (dbChapters.length > 0) {
-              chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
-                index: ch.index,
-                title: ch.title,
-                url: ch.url,
-              }));
-              dbChapterCount = chapters.length;
-              console.info('[ReadPage] Loaded chapters from DB cache:', chapters.length);
-            }
-          } catch (_e) { /* fall through to network */ }
-        }
-        // 如果 DB 目录不完整（少于书籍应有章数的 80%），从网络刷新完整目录
-        const expectedCount = await this.getExpectedChapterCount_(db);
-        const needsNetworkRefresh = !this.isLocalBook_ && this.source_ && (
-          chapters.length === 0 ||
-          (expectedCount > 0 && dbChapterCount > 0 && dbChapterCount < expectedCount * 0.8)
-        );
-        if (needsNetworkRefresh) {
+	      if (!this.isLocalBook_) {
+	        if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
+	          chapters = ChapterCache.chapters;
+	          console.info('[ReadPage] Loaded chapters from memory cache:', chapters.length);
+	        } else {
+	          // 尝试从数据库加载缓存的目录
+	          let dbChapterCount = 0;
+	          if (this.bookId_ > 0) {
+	            try {
+	              const ct = new ChapterTable(db);
+	              const dbChapters = await ct.getChaptersByBookId(this.bookId_);
+	              if (dbChapters.length > 0) {
+	                chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
+	                  index: ch.index,
+	                  title: ch.title,
+	                  url: ch.url,
+	                }));
+	                dbChapterCount = chapters.length;
+	                console.info('[ReadPage] Loaded chapters from DB cache:', chapters.length);
+	              }
+	            } catch (_e) { /* fall through to network */ }
+	          }
+	          // 如果 DB 目录不完整，从网络刷新完整目录
+	          const expectedCount = await this.getExpectedChapterCount_(db);
+	          if (expectedCount > 0 && dbChapterCount > 0 && dbChapterCount < expectedCount * 0.8) {
           console.info('[ReadPage] DB chapters incomplete (' + dbChapterCount + '/' + expectedCount + '), fetching from network');
           const primaryTocUrl = this.tocUrl || this.bookUrl;
           const netChapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
@@ -335,6 +367,7 @@ struct ReadPage {
             await this.saveFullTocToDb_(this.bookId_, chapters);
           }
         }
+      }
       }
       if (chapters.length === 0) { this.text = '无目录'; this.isLoading = false; console.info('[ReadPage] no chapters'); return; }
       this.allChapters_ = chapters;
@@ -416,7 +449,9 @@ struct ReadPage {
     try {
       const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
       const cached = await ct.getChapterByIndex(this.bookId_, idx);
-      return cached?.content || '';
+      const result = cached?.content || '';
+      console.info('[ReadPage] readChapterCache_ idx=' + idx + ' bookId=' + this.bookId_ + ' found=' + (cached ? 'yes' : 'no') + ' len=' + result.length);
+      return result;
     } catch (_e) {
       return '';
     }
@@ -429,12 +464,40 @@ struct ReadPage {
     console.info('[ReadPage] fetchChapterContent_: idx=', idx, 'title=', ch.title, 'url=', url?.substring(0, 80));
     let content = '';
 
-    // 本地书籍：直接从 DB 缓存读取（导入时已全量写入）
-    if (this.isLocalBook_) {
-      content = await this.readChapterCache_(idx);
-      console.info('[ReadPage] Local book content from DB:', content ? content.length : 0, 'bytes');
-      return content;
-    }
+		    // 本地书籍：直接从解压目录读取（DB 不存全文，避免旧数据污染）
+		    if (this.isLocalBook_) {
+		      // 对旧导入书籍（tocUrl 为空），从 originUrl 推算解压目录
+		      let readDir = this.tocUrl;
+		      if (!readDir && this.originUrl) {
+		        const name = this.originUrl.split('/').pop() || '';
+		        const base = this.originUrl.substring(0, this.originUrl.lastIndexOf('/'));
+		        readDir = `${base}/epub/${name.replace(/[\\/:*?"<>|]/g, '_')}`;
+		      }
+		      if (readDir && ch.url) {
+		        const filePath = `${readDir}/${ch.url}`;
+	        console.info('[ReadPage] Loading from extracted file:', filePath);
+	        try {
+	          if (fileFs.accessSync(filePath)) {
+	            const stat = fileFs.statSync(filePath);
+	            const buf = new ArrayBuffer(stat.size);
+	            const fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
+	            fileFs.readSync(fd.fd, buf);
+	            fileFs.closeSync(fd);
+	            const decoder = new util.TextDecoder('utf-8', { fatal: false });
+	            const html = decoder.decodeToString(new Uint8Array(buf));
+	            content = HtmlUtil.toPlainText(html);
+	            console.info('[ReadPage] Extracted file loaded:', content.length, 'chars');
+	          }
+	        } catch (e) {
+	          console.warn('[ReadPage] Failed to load extracted file:', e);
+	        }
+	      }
+	      if (!content) {
+	        content = await this.readChapterCache_(idx);
+	      }
+	      console.info('[ReadPage] Local book content:', content ? content.length : 0, 'bytes');
+	      return content;
+	    }
 
     if (this.source_) {
       content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
@@ -777,17 +840,23 @@ struct ReadPage {
     this.scrollText = scrollText;
   }
 
+  private styleTimer_: number = -1;
+
   private onStyleChange(c: PageViewConfig): void {
     this.cfg = c;
     this.readBgColor = c.bgColor;
     this.readTextColor = c.textColor;
     this.pageMode = c.pageMode;
-    // 即时应用简繁转换
-    let text = this.text;
-    if (c.chineseMode !== 'original' && text) {
-      text = convertChinese(text, c.chineseMode);
-    }
-    this.layoutText(text);
+    // 防抖：连续调整风格时延迟排版，避免大章节频繁测量卡顿
+    if (this.styleTimer_ > 0) clearTimeout(this.styleTimer_);
+    this.styleTimer_ = setTimeout(() => {
+      this.styleTimer_ = -1;
+      let text = this.text;
+      if (c.chineseMode !== 'original' && text) {
+        text = convertChinese(text, c.chineseMode);
+      }
+      this.layoutText(text);
+    }, 200);
     // 持久化设置
     (async () => {
       try {
@@ -845,7 +914,7 @@ struct ReadPage {
   private onOpenToc(): void {
     ChapterCache.chapters = this.allChapters_;
     ChapterCache.bookUrl = this.bookUrl;
-    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, durChapterIndex: this.currentIndex, isManga: '0' } });
+    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: { from: 'ReadPage', bookName: this.bookName, bookAuthor: this.bookAuthor, bookUrl: this.bookUrl, tocUrl: this.tocUrl, originUrl: this.originUrl, origin: this.origin, durChapterIndex: this.currentIndex, isManga: '0' } });
   }
 
   private onOpenSearchContent(): void {
