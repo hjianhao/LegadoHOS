@@ -7,6 +7,10 @@ if (!Promise.withResolvers) {
   };
 }
 
+if (!Promise.try) {
+  Promise.try = (callback, ...args) => new Promise(resolve => resolve(callback(...args)));
+}
+
 if (!Map.prototype.getOrInsertComputed) {
   Object.defineProperty(Map.prototype, 'getOrInsertComputed', {
     configurable: true,
@@ -16,6 +20,39 @@ if (!Map.prototype.getOrInsertComputed) {
       return this.get(key);
     },
   });
+}
+
+if (!Uint8Array.prototype.toHex) {
+  Object.defineProperty(Uint8Array.prototype, 'toHex', {
+    configurable: true,
+    writable: true,
+    value() {
+      let result = '';
+      for (const byte of this) result += byte.toString(16).padStart(2, '0');
+      return result;
+    },
+  });
+}
+
+if (!Uint8Array.prototype.toBase64) {
+  Object.defineProperty(Uint8Array.prototype, 'toBase64', {
+    configurable: true,
+    writable: true,
+    value() {
+      let binary = '';
+      for (let offset = 0; offset < this.length; offset += 0x8000) {
+        binary += String.fromCharCode(...this.subarray(offset, offset + 0x8000));
+      }
+      return btoa(binary);
+    },
+  });
+}
+
+if (!Uint8Array.fromBase64) {
+  Uint8Array.fromBase64 = value => {
+    const binary = atob(value);
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+  };
 }
 
 /**
