@@ -1249,12 +1249,7 @@ struct ReaderPage {
   }
 
   private footerPageText_(): string {
-    const base = this.pageText || (this.currentPercent_ > 0 ? `${Math.round(this.currentPercent_ * 100)}%` : '');
-    const percent = this.currentPercent_ > 0 ? `${Math.round(this.currentPercent_ * 100)}%` : '';
-    if (base && percent && base.indexOf('%') < 0) {
-      return `${base} (${percent})`;
-    }
-    return base || percent;
+    return this.pageText || (this.currentPercent_ > 0 ? `${Math.round(this.currentPercent_ * 100)}%` : '');
   }
 
   build() {

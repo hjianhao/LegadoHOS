@@ -197,10 +197,11 @@ const applyDocumentStyle = doc => {
     `body{${bodyFontCss}font-size:${v.fontSize}px !important;font-weight:${v.weight} !important;` +
     `line-height:${v.lineHeight} !important;letter-spacing:${v.letterSpacing}px !important;` +
     `text-align:${v.textAlign} !important;box-sizing:border-box !important;` +
-    `padding:${v.pt}px 0 ${v.pb}px 0 !important;}` +
+    `padding:0 !important;}` +
     `body *{${bodyAllFontCss}box-sizing:border-box !important;font-weight:${v.weight} !important;` +
     `letter-spacing:${v.letterSpacing}px !important;}` +
-    `p{margin-top:0 !important;margin-bottom:${v.paraSpacing}px !important;text-indent:${v.indent}em;` +
+    `p,div,li,blockquote,td,th{line-height:${v.lineHeight} !important;}` +
+    `p{margin-top:0 !important;margin-bottom:${v.paraSpacing}px !important;text-indent:${v.indent}em !important;` +
     `font-weight:${v.weight} !important;letter-spacing:${v.letterSpacing}px !important;}` +
     `img,svg{max-width:100% !important;max-height:85vh !important;object-fit:contain !important;` +
     `page-break-inside:avoid !important;break-inside:avoid !important;}` +
@@ -216,6 +217,8 @@ const applyDocumentStyle = doc => {
     doc.body.style.lineHeight = String(v.lineHeight)
     doc.body.style.letterSpacing = `${v.letterSpacing}px`
     doc.body.style.boxSizing = 'border-box'
+    doc.body.style.paddingTop = '0px'
+    doc.body.style.paddingBottom = '0px'
     doc.body.style.paddingLeft = '0px'
     doc.body.style.paddingRight = '0px'
   }
@@ -235,8 +238,20 @@ const applyStyle = () => {
   if (v.animType === ANIM_SCROLL) view.renderer.setAttribute('flow', 'scrolled')
   else view.renderer.removeAttribute('flow')
   view.renderer.setAttribute('margin', '0px')
+  view.renderer.setAttribute('margin-top', `${Math.max(0, v.pt)}px`)
+  view.renderer.setAttribute('margin-bottom', `${Math.max(0, v.pb)}px`)
   view.renderer.setAttribute('gap', '0%')
   for (const item of view.renderer.getContents?.() || []) applyDocumentStyle(item.doc)
+  requestAnimationFrame(() => view?.renderer?.render?.())
+}
+
+const currentSectionPages = () => {
+  const renderer = view?.renderer
+  const bufferedPages = Number(renderer?.pages || 0)
+  if (!renderer || bufferedPages <= 2) return { page: 0, total: 0 }
+  const total = Math.max(1, bufferedPages - 2)
+  const page = Math.max(1, Math.min(total, Number(renderer.page || 1)))
+  return { page, total }
 }
 
 const frameViewportSize = () => {
@@ -421,11 +436,12 @@ const openBook = async (bookUrl, target) => {
     view.addEventListener('load', event => applyDocumentStyle(event.detail?.doc))
     view.addEventListener('relocate', event => {
       const loc = event.detail || {}
+      const sectionPages = currentSectionPages()
       emit('location', {
         cfi: loc.cfi || '', href: loc.tocItem?.href || '',
         chapterIndex: Number(loc.index ?? loc.location?.current ?? 0),
-        page: Number(loc.location?.current ?? 0) + 1,
-        totalPages: Number(loc.location?.total ?? 0),
+        page: sectionPages.page,
+        totalPages: sectionPages.total,
         percentage: Number(loc.fraction ?? 0)
       })
     })

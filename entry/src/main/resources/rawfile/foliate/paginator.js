@@ -423,7 +423,7 @@ class View {
 // NOTE: everything here assumes the so-called "negative scroll type" for RTL
 export class Paginator extends HTMLElement {
     static observedAttributes = [
-        'flow', 'gap', 'margin',
+        'flow', 'gap', 'margin', 'margin-top', 'margin-bottom',
         'max-inline-size', 'max-block-size', 'max-column-count',
     ]
     #root = this.attachShadow({ mode: 'closed' })
@@ -466,6 +466,8 @@ export class Paginator extends HTMLElement {
         #top {
             --_gap: 7%;
             --_margin: 48px;
+            --_margin-top: var(--_margin);
+            --_margin-bottom: var(--_margin);
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
             --_max-column-count: 2;
@@ -482,9 +484,9 @@ export class Paginator extends HTMLElement {
                 var(--_half-gap)
                 minmax(var(--_half-gap), 1fr);
             grid-template-rows:
-                minmax(var(--_margin), 1fr)
+                minmax(var(--_margin-top), 1fr)
                 minmax(0, var(--_max-height))
-                minmax(var(--_margin), 1fr);
+                minmax(var(--_margin-bottom), 1fr);
             &.vertical {
                 --_max-column-count-spread: var(--_max-column-count-portrait);
                 --_max-width: var(--_max-block-size);
@@ -522,9 +524,13 @@ export class Paginator extends HTMLElement {
             grid-row: 3;
             align-self: end;
         }
-        #header, #footer {
+        #header {
             display: grid;
-            height: var(--_margin);
+            height: var(--_margin-top);
+        }
+        #footer {
+            display: grid;
+            height: var(--_margin-bottom);
         }
         :is(#header, #footer) > * {
             display: flex;
@@ -632,6 +638,8 @@ export class Paginator extends HTMLElement {
                 break
             case 'gap':
             case 'margin':
+            case 'margin-top':
+            case 'margin-bottom':
             case 'max-block-size':
             case 'max-column-count':
                 this.#top.style.setProperty('--_' + name, value)
