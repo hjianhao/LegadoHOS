@@ -129,6 +129,7 @@ const PDF_AUTO_CROP_KEY = 'pdf_auto_crop';
 const PDF_DARKEN_KEY = 'pdf_darken';
 const PDF_WHITEN_KEY = 'pdf_whiten';
 const PDF_MODE_KEY = 'pdf_read_mode';
+const PDF_ORIENTATION_KEY = 'pdf_screen_orientation';
 const EPUB_BOOK_FONT: FontInfo = {
   id: 'epub_book',
   name: '书籍原始字体',
@@ -160,6 +161,7 @@ struct ReaderPage {
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
   @State pdfMode: string = 'original';
+  @State pdfOrientation: string = 'auto';
   @State pdfAutoCrop: boolean = false;
   @State pdfDarken: number = 0;
   @State pdfWhiten: number = 0;
@@ -275,6 +277,7 @@ struct ReaderPage {
     await this.flushStyleSave_();
     this.server_.stop();
     releaseGlobalAloudEngine().catch(() => {});
+    await this.applyPdfOrientation_('auto');
     this.setSystemBarVisible_(true);
   }
 
@@ -409,6 +412,7 @@ struct ReaderPage {
       trace('chapters-and-server-ready');
       await settingsPromise;
       trace('settings-ready');
+      if (this.isPdf_) await this.applyPdfOrientation_(this.pdfOrientation);
       const startTarget = await this.getStartTarget_();
       trace('progress-ready');
       const opfPath = this.isMobi_ || this.isPdf_ ? '' : this.findOpfPath_(book.tocUrl);
@@ -457,6 +461,7 @@ struct ReaderPage {
     const pdfDarkenPromise = s.get<number>(PDF_DARKEN_KEY, 0);
     const pdfWhitenPromise = s.get<number>(PDF_WHITEN_KEY, 0);
     const pdfModePromise = s.get<string>(PDF_MODE_KEY, 'original');
+    const pdfOrientationPromise = s.get<string>(PDF_ORIENTATION_KEY, 'auto');
     const actionPromises: Promise<number>[] = [];
     for (let z = 0; z < 9; z++) {
       actionPromises.push(s.getClickAction(z));
@@ -485,6 +490,7 @@ struct ReaderPage {
       pdfDarkenPromise,
       pdfWhitenPromise,
       pdfModePromise,
+      pdfOrientationPromise,
       Promise.all(actionPromises),
     ]);
 
@@ -521,6 +527,8 @@ struct ReaderPage {
     this.pdfDarken = Math.min(100, Math.max(0, await pdfDarkenPromise));
     this.pdfWhiten = Math.min(100, Math.max(0, await pdfWhitenPromise));
     this.pdfMode = await pdfModePromise === 'reflow' ? 'reflow' : 'original';
+    const orientation = await pdfOrientationPromise;
+    this.pdfOrientation = orientation === 'portrait' || orientation === 'landscape' ? orientation : 'auto';
     if (this.readFollowTheme) {
       this.readNightMode = this.isDark;
     }
@@ -1225,6 +1233,30 @@ struct ReaderPage {
     this.runJs_('window.setPdfMode && window.setPdfMode(' + JSON.stringify(normalized) + ')');
   }
 
+  private onPdfOrientationChange_(mode: string): void {
+    const normalized = mode === 'portrait' || mode === 'landscape' ? mode : 'auto';
+    if (this.pdfOrientation === normalized) return;
+    this.pdfOrientation = normalized;
+    this.applyPdfOrientation_(normalized).catch(() => {});
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(() => SettingsStore.getInstance().put(PDF_ORIENTATION_KEY, normalized))
+      .catch(() => {});
+  }
+
+  private async applyPdfOrientation_(mode: string): Promise<void> {
+    try {
+      const context = UiUtil.getHostContext(this.getUIContext());
+      if (!context) return;
+      const win: window.Window = await window.getLastWindow(context);
+      const orientation = mode === 'portrait' ? window.Orientation.PORTRAIT :
+        (mode === 'landscape' ? window.Orientation.LANDSCAPE : window.Orientation.UNSPECIFIED);
+      await win.setPreferredOrientation(orientation);
+    } catch (err) {
+      console.warn('[ReaderPage] set PDF orientation failed:', (err as Error).message);
+    }
+  }
+
   private onPdfEnhanceChange_(autoCrop: boolean, darken: number, whiten: number): void {
     this.pdfAutoCrop = autoCrop;
     this.pdfDarken = Math.min(100, Math.max(0, Math.round(darken)));
@@ -1665,12 +1697,14 @@ struct ReaderPage {
         flowMode: this.flowMode,
         showPdfEnhance: this.isPdf_,
         pdfMode: this.pdfMode,
+        pdfOrientation: this.pdfOrientation,
         pdfAutoCrop: this.pdfAutoCrop,
         pdfDarken: this.pdfDarken,
         pdfWhiten: this.pdfWhiten,
         onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
         onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),
         onPdfModeChange: (mode: string) => this.onPdfModeChange_(mode),
+        onPdfOrientationChange: (mode: string) => this.onPdfOrientationChange_(mode),
         onPdfEnhanceChange: (autoCrop: boolean, darken: number, whiten: number) =>
           this.onPdfEnhanceChange_(autoCrop, darken, whiten),
         onChange: (config: PageViewConfig) => this.onStyleChange_(config),

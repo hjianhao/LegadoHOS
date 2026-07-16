@@ -31,6 +31,7 @@ export struct StylePanel {
   @Prop flowMode: string = 'paginated';
   @Prop showPdfEnhance: boolean = false;
   @Prop pdfMode: string = 'original';
+  @Prop pdfOrientation: string = 'auto';
   @Prop pdfAutoCrop: boolean = false;
   @Prop pdfDarken: number = 0;
   @Prop pdfWhiten: number = 0;
@@ -42,6 +43,7 @@ export struct StylePanel {
   onNightModeToggle?: (night: boolean) => void;
   onFlowModeChange?: (mode: string) => void;
   onPdfModeChange?: (mode: string) => void;
+  onPdfOrientationChange?: (mode: string) => void;
   onPdfEnhanceChange?: (autoCrop: boolean, darken: number, whiten: number) => void;
 
   aboutToAppear(): void {
@@ -281,6 +283,12 @@ export struct StylePanel {
         this.pdfModeChip('原版', 'original')
         this.pdfModeChip('文字重排', 'reflow')
       }.width('100%').margin({ bottom: 10 })
+      Text('屏幕方向').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
+      Row() {
+        this.pdfOrientationChip('跟随系统', 'auto')
+        this.pdfOrientationChip('竖屏', 'portrait')
+        this.pdfOrientationChip('横屏', 'landscape')
+      }.width('100%').margin({ bottom: 10 })
       if (this.pdfMode === 'original') {
         Row() {
           Text('自动裁边').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
@@ -337,6 +345,17 @@ export struct StylePanel {
     .backgroundColor(this.pdfMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(16).margin({ right: 8 })
     .onClick(() => { this.onPdfModeChange?.(mode); })
+  }
+
+  @Builder pdfOrientationChip(label: string, mode: string) {
+    Column() {
+      Text(label).fontSize(13)
+        .fontColor(this.pdfOrientation === mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 14, right: 14 })
+    }
+    .backgroundColor(this.pdfOrientation === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(16).margin({ right: 8 })
+    .onClick(() => { this.onPdfOrientationChange?.(mode); })
   }
 
   @Builder zhChip(label: string, mode: string) {
