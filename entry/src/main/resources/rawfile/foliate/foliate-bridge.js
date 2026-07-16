@@ -1,5 +1,14 @@
 import './view.js'
 
+if (!Promise.withResolvers) {
+  Promise.withResolvers = () => {
+    let resolve
+    let reject
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+}
+
 if (!Object.groupBy) {
   Object.groupBy = (items, callback) => {
     const result = Object.create(null)
@@ -22,6 +31,7 @@ let lastHandledTapAt = 0
 let turnBusy = false
 let livePageFrame = 0
 let lastLivePageKey = ''
+let currentFormat = ''
 
 const ACTION_NONE = -1
 const ACTION_MENU = 0
@@ -510,6 +520,7 @@ function bindTap(doc) {
 
 const openBook = async (bookUrl, target, format) => {
   try {
+    currentFormat = format
     loading.style.display = 'flex'
     if (view) {
       view.close?.()
@@ -520,7 +531,10 @@ const openBook = async (bookUrl, target, format) => {
     view.addEventListener('load', event => applyDocumentStyle(event.detail?.doc))
     view.addEventListener('relocate', event => {
       const loc = event.detail || {}
-      const sectionPages = currentSectionPages()
+      const sectionPages = currentFormat === 'pdf' ? {
+        page: Number(loc.section?.current ?? 0) + 1,
+        total: Number(loc.section?.total ?? view?.book?.sections?.length ?? 0)
+      } : currentSectionPages()
       emit('location', {
         cfi: loc.cfi || '', href: loc.tocItem?.href || '',
         chapterIndex: Number(loc.section?.current ?? loc.index ?? loc.location?.current ?? 0),
@@ -540,7 +554,8 @@ const openBook = async (bookUrl, target, format) => {
     emit('metadata', {
       title: languageValue(metadata.title),
       author: contributorValue(metadata.author),
-      description: languageValue(metadata.description)
+      description: languageValue(metadata.description),
+      pageCount: Number(book?.sections?.length || 0)
     })
     emit('toc', flattenTOC(book?.toc))
     applyStyle()

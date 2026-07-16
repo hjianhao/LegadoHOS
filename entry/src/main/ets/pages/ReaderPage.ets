@@ -49,6 +49,7 @@ interface PublicationMetadataEvent {
   title?: string;
   author?: string;
   description?: string;
+  pageCount?: number;
 }
 
 interface ChapterTextEvent {
@@ -193,6 +194,7 @@ struct ReaderPage {
   private currentTotalPages_: number = 0;
   private opfDir_: string = '';
   private isMobi_: boolean = false;
+  private isPdf_: boolean = false;
   private isFoliate_: boolean = false;
   private isEpubFoliate_: boolean = false;
   private lastAloudProviderIdx_: number = -1;
@@ -349,11 +351,13 @@ struct ReaderPage {
         throw new Error('书籍不存在');
       }
       this.isMobi_ = book.kind === 'MOBI' || book.kind === 'AZW' || book.kind === 'AZW3';
+      this.isPdf_ = book.kind === 'PDF';
       this.isEpubFoliate_ = book.kind === 'EPUB' && params['epubEngine'] === 'foliate';
-      this.isFoliate_ = this.isMobi_ || this.isEpubFoliate_;
-      const publicationPath = this.isMobi_ ? book.originUrl : book.tocUrl;
+      this.isFoliate_ = this.isMobi_ || this.isPdf_ || this.isEpubFoliate_;
+      const publicationPath = this.isMobi_ || this.isPdf_ ? book.originUrl : book.tocUrl;
       if (!publicationPath || !fileFs.accessSync(publicationPath)) {
-        throw new Error(this.isMobi_ ? '本地 MOBI/AZW 文件不存在，请重新导入' : 'EPUB 解压目录不存在，请重新导入');
+        throw new Error(this.isPdf_ ? '本地 PDF 文件不存在，请重新导入' :
+          (this.isMobi_ ? '本地 MOBI/AZW 文件不存在，请重新导入' : 'EPUB 解压目录不存在，请重新导入'));
       }
 
       this.book_ = book;
@@ -365,7 +369,7 @@ struct ReaderPage {
       const settingsPromise = this.loadSettings_();
 
       this.progressText = '准备图文内容...';
-      const serverRoot = this.isMobi_ ? this.getParentPath_(publicationPath) : publicationPath;
+      const serverRoot = this.isMobi_ || this.isPdf_ ? this.getParentPath_(publicationPath) : publicationPath;
       const serverPromise = this.server_.start(serverRoot, context, 0);
       await Promise.all([chaptersPromise, serverPromise]);
       const chapters = await chaptersPromise;
@@ -378,16 +382,16 @@ struct ReaderPage {
       trace('settings-ready');
       const startTarget = await this.getStartTarget_();
       trace('progress-ready');
-      const opfPath = this.isMobi_ ? '' : this.findOpfPath_(book.tocUrl);
+      const opfPath = this.isMobi_ || this.isPdf_ ? '' : this.findOpfPath_(book.tocUrl);
       this.opfDir_ = this.getParentDir_(opfPath);
-      const bookEntry = this.isMobi_ ? this.toBookUrl_(this.getBaseName_(publicationPath)) :
+      const bookEntry = this.isMobi_ || this.isPdf_ ? this.toBookUrl_(this.getBaseName_(publicationPath)) :
         (this.isEpubFoliate_ ? '/book/' : (opfPath ? this.toBookUrl_(opfPath) : '/book/'));
       const readerTarget = this.isFoliate_ ? startTarget : this.toEpubTarget_(startTarget);
       const initialStyle = JSON.stringify(this.toWebStyle_());
       const initialActions = JSON.stringify(this.zoneActions);
       console.info(`[ReaderPage] publication server=${port} kind=${book.kind} root=${serverRoot} target=${readerTarget}`);
       const readerPath = this.isFoliate_ ? '/foliate/foliate-reader.html' : '/reader/epub-reader.html';
-      const formatParam = this.isEpubFoliate_ ? '&format=epub-dir' : '';
+      const formatParam = this.isEpubFoliate_ ? '&format=epub-dir' : (this.isPdf_ ? '&format=pdf' : '');
       const url = `http://127.0.0.1:${port}${readerPath}?book=${encodeURIComponent(bookEntry)}&target=${encodeURIComponent(readerTarget)}&style=${encodeURIComponent(initialStyle)}&actions=${encodeURIComponent(initialActions)}${formatParam}`;
       this.controller.loadUrl(url);
       trace('webview-load-started');
@@ -522,12 +526,13 @@ struct ReaderPage {
     if (saved) {
       return saved;
     }
+    if (this.isPdf_ && this.currentIndex > 0) return String(this.currentIndex);
     const chapter = this.chapters_[this.currentIndex];
     return chapter?.url || '';
   }
 
   private progressKey_(): string {
-    const engine = this.isMobi_ ? 'mobi' : (this.isEpubFoliate_ ? 'epub_foliate' : 'epub');
+    const engine = this.isPdf_ ? 'pdf' : (this.isMobi_ ? 'mobi' : (this.isEpubFoliate_ ? 'epub_foliate' : 'epub'));
     return `${engine}_progress_${this.book_?.id || 0}`;
   }
 
@@ -941,7 +946,7 @@ struct ReaderPage {
   }
 
   private async onMetadata_(meta: PublicationMetadataEvent): Promise<void> {
-    if (!this.book_ || !this.isMobi_) return;
+    if (!this.book_ || (!this.isMobi_ && !this.isPdf_)) return;
     let changed = false;
     if (meta.title && meta.title !== this.book_.name) {
       this.book_.name = meta.title;
@@ -954,6 +959,12 @@ struct ReaderPage {
     }
     if (meta.description && meta.description !== this.book_.introduce) {
       this.book_.introduce = HtmlUtil.stripHtml(meta.description);
+      changed = true;
+    }
+    if (this.isPdf_ && meta.pageCount && meta.pageCount > 0 &&
+      meta.pageCount !== this.book_.totalChapterNum) {
+      this.book_.chapterCount = meta.pageCount;
+      this.book_.totalChapterNum = meta.pageCount;
       changed = true;
     }
     if (changed) {
@@ -988,8 +999,13 @@ struct ReaderPage {
     this.currentPercent_ = typeof loc.percentage === 'number' ? loc.percentage : this.currentPercent_;
     const hrefIndex = this.findChapterIndexByHref_(this.currentHref_);
     const idx = hrefIndex >= 0 ? hrefIndex : (typeof loc.chapterIndex === 'number' ? loc.chapterIndex : this.currentIndex);
-    this.currentIndex = Math.min(Math.max(0, idx), Math.max(0, this.chapters_.length - 1));
-    this.currentTitle = this.chapters_[this.currentIndex]?.title || '';
+    if (this.isPdf_) {
+      this.currentIndex = Math.max(0, idx);
+      this.currentTitle = `第 ${this.currentIndex + 1} 页`;
+    } else {
+      this.currentIndex = Math.min(Math.max(0, idx), Math.max(0, this.chapters_.length - 1));
+      this.currentTitle = this.chapters_[this.currentIndex]?.title || '';
+    }
     console.info(`[ReaderPage] publication location href=${this.currentHref_} section=${loc.chapterIndex ?? -1} chapter=${this.currentIndex} title=${this.currentTitle}`);
     const page = typeof loc.page === 'number' ? loc.page : 0;
     const total = typeof loc.totalPages === 'number' ? loc.totalPages : 0;
@@ -1027,7 +1043,7 @@ struct ReaderPage {
         this.bookUrl_,
         this.currentIndex,
         this.currentTitle,
-        this.chapters_.length,
+        this.isPdf_ ? Math.max(1, this.book_.totalChapterNum) : this.chapters_.length,
         Math.round(this.currentPercent_ * 100000)
       );
     } catch (_e) {}
@@ -1236,7 +1252,7 @@ struct ReaderPage {
   }
 
   private goToChapterIndex_(index: number): void {
-    if (this.isMobi_ && this.tocItems.length > 0) {
+    if ((this.isMobi_ || this.isPdf_) && this.tocItems.length > 0) {
       if (index < 0 || index >= this.tocItems.length) return;
       this.currentIndex = index;
       this.currentTitle = this.tocItems[index].label;
@@ -1557,7 +1573,7 @@ struct ReaderPage {
         nightMode: this.readNightMode,
         dayBgColor: this.readBgColor,
         dayTextColor: this.readTextColor,
-        showFlowMode: true,
+        showFlowMode: !this.isPdf_,
         flowMode: this.flowMode,
         onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
         onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),

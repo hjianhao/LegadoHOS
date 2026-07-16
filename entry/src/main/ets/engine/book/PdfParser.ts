@@ -46,19 +46,25 @@ export class PdfParser {
 
   async parse(): Promise<{ meta: PdfMeta; chapters: BookChapter[] }> {
     let file: fileFs.File | null = null;
-    let content: string = '';
     try {
       file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
       const stat = fileFs.statSync(this.filePath);
-      const buf = new ArrayBuffer(stat.size);
-      fileFs.readSync(file.fd, buf);
-      const bytes = new Uint8Array(buf);
-      // latin-1 解码：逐字节映射到 char code
-      const chars: string[] = [];
-      for (let i = 0; i < bytes.length; i++) {
-        chars.push(String.fromCharCode(bytes[i]));
+      if (stat.size < 8) {
+        throw new Error('PDF 文件内容为空');
       }
-      content = chars.join('');
+      // 导入阶段只做轻量探测。完整解析、元数据与页面渲染交给 PDF.js，
+      // 避免将大型 PDF 整体读入 ArkTS 内存，也允许没有文字层的扫描版导入。
+      const headerBuffer = new ArrayBuffer(Math.min(1024, stat.size));
+      const readLength = fileFs.readSync(file.fd, headerBuffer,
+        { offset: 0, length: headerBuffer.byteLength });
+      const bytes = new Uint8Array(headerBuffer, 0, readLength);
+      let header = '';
+      for (let i = 0; i < bytes.length; i++) header += String.fromCharCode(bytes[i]);
+      const versionMatch = header.match(/%PDF-(\d+\.\d+)/);
+      if (!versionMatch) {
+        throw new Error('不是有效的 PDF 文件');
+      }
+      console.info(`[PDF] Probe version=${versionMatch[1]} size=${stat.size}`);
     } catch (err) {
       throw new Error(`Read PDF failed: ${this.filePath}: ${(err as Error).message}`);
     } finally {
@@ -71,40 +77,14 @@ export class PdfParser {
       }
     }
 
-    // 1. 解析文件头
-    if (!content.startsWith('%PDF')) {
-      console.warn('[PDF] Not a PDF file');
-      return { meta: this.meta_, chapters: this.chapters_ };
-    }
-
-    const versionMatch = content.match(/%PDF-(\d+\.\d+)/);
-    console.info(`[PDF] Version: ${versionMatch ? versionMatch[1] : 'unknown'}`);
-
-    // 2. 提取元数据
-    this.meta_.title = this.extractPdfField(content, '/Title') || this.guessTitle();
-    this.meta_.author = this.extractPdfField(content, '/Author');
-    this.meta_.subject = this.extractPdfField(content, '/Subject');
-    this.meta_.keywords = this.extractPdfField(content, '/Keywords');
-    this.meta_.creator = this.extractPdfField(content, '/Creator');
-    this.meta_.producer = this.extractPdfField(content, '/Producer');
-
-    // 3. 提取文本
-    const rawText = this.extractRawText(content);
-    const lines = rawText.split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 2); // 过滤过短的碎片
-
-    const fullText = lines.join('\n\n');
-
-    // 4. 按 PDF 页面或章节标记分章
-    this.chapters_ = this.splitIntoChapters(fullText);
-
-    // 5. 估算页数（通过 /Pages 对象或文本长度估算）
-    const pagesMatch = content.match(/\/Type\s*\/Pages[^>]*\/Count\s+(\d+)/);
-    this.meta_.pageCount = pagesMatch ? parseInt(pagesMatch[1]) : Math.ceil(fullText.length / 2000);
-
-    console.info(`[PDF] Parsed: ${this.meta_.title}, ${this.meta_.pageCount} pages, ${fullText.length} chars`);
-
+    this.meta_.title = this.guessTitle();
+    const now = Date.now();
+    this.chapters_ = [{
+      id: 0, bookId: 0, index: 0, volumeIndex: 0,
+      title: 'PDF', url: '', content: '', contentLength: 0,
+      isRead: false, isDownloaded: true, isCached: false,
+      duration: 0, audioUrl: '', createTime: now, updateTime: now,
+    }];
     return { meta: this.meta_, chapters: this.chapters_ };
   }
 

@@ -342,12 +342,13 @@ export class EpubServer {
       if (/\.xhtml$/i.test(path)) return 'application/xhtml+xml; charset=utf-8';
       if (/\.xml$/i.test(path)) return 'application/xml; charset=utf-8';
     if (/\.css$/i.test(path)) return 'text/css; charset=utf-8';
-    if (/\.js$/i.test(path)) return 'application/javascript; charset=utf-8';
+    if (/\.(?:js|mjs)$/i.test(path)) return 'application/javascript; charset=utf-8';
     if (/\.jpe?g$/i.test(path)) return 'image/jpeg';
     if (/\.png$/i.test(path)) return 'image/png';
     if (/\.webp$/i.test(path)) return 'image/webp';
     if (/\.gif$/i.test(path)) return 'image/gif';
     if (/\.svg$/i.test(path)) return 'image/svg+xml';
+    if (/\.pdf$/i.test(path)) return 'application/pdf';
     if (/\.woff2$/i.test(path)) return 'font/woff2';
     if (/\.woff$/i.test(path)) return 'font/woff';
     if (/\.ttf$/i.test(path)) return 'font/ttf';

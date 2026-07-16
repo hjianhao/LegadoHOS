@@ -553,6 +553,14 @@ export struct BookshelfPage {
   }
 
   async continueRead(book: Book): Promise<void> {
+    // PDF 使用 foliate + PDF.js 原版阅读链路。
+    if (book.origin === LOCAL_BOOK_ORIGIN && book.kind === 'PDF') {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/ReaderPage',
+        params: { bookName: book.name, bookUrl: book.bookUrl }
+      });
+      return;
+    }
     // MOBI/AZW/AZW3 本地书统一使用 foliate-js 图文引擎。
     if (book.origin === LOCAL_BOOK_ORIGIN &&
       (book.kind === 'MOBI' || book.kind === 'AZW' || book.kind === 'AZW3')) {
