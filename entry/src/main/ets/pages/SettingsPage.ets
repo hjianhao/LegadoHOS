@@ -94,7 +94,8 @@ struct SettingsPage {
       this.readFollowTheme = await s.getReadFollowTheme();
       // EPUB 引擎
       const engine = await EpubEngineConfig.getEngine();
-      this.epubEngine = engine === EpubEngineType.COMIC ? 'comic' : 'novel';
+      this.epubEngine = engine === EpubEngineType.FOLIATE ? 'foliate' :
+        (engine === EpubEngineType.EPUB_JS ? 'epub_js' : 'novel');
     } catch (_e) { /* ignore */ }
     // 加载漫画缓存大小
     this.loadComicCacheSize();
@@ -282,10 +283,16 @@ struct SettingsPage {
 	          .onChange(() => { this.setEpubEngine_('novel'); })
 	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-		        Text('图文混排').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-		        Radio({ value: 'comic', group: 'epubEngine' })
-		          .checked(this.epubEngine === 'comic')
-		          .onChange(() => { this.setEpubEngine_('comic'); })
+		        Text('图文混排1（EPUB.js）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Radio({ value: 'epub_js', group: 'epubEngine' })
+		          .checked(this.epubEngine === 'epub_js')
+		          .onChange(() => { this.setEpubEngine_('epub_js'); })
+		      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
+	      Row() {
+		        Text('图文混排2（foliate）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Radio({ value: 'foliate', group: 'epubEngine' })
+		          .checked(this.epubEngine === 'foliate')
+		          .onChange(() => { this.setEpubEngine_('foliate'); })
 		      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 		      .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 	    }
@@ -611,6 +618,8 @@ struct SettingsPage {
 
   private setEpubEngine_(val: string): void {
     this.epubEngine = val;
-    EpubEngineConfig.setEngine(val === 'comic' ? EpubEngineType.COMIC : EpubEngineType.NOVEL);
+    const type = val === 'foliate' ? EpubEngineType.FOLIATE :
+      (val === 'epub_js' ? EpubEngineType.EPUB_JS : EpubEngineType.NOVEL);
+    EpubEngineConfig.setEngine(type);
   }
 }

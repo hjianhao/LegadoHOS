@@ -566,11 +566,14 @@ export struct BookshelfPage {
     if (book.origin === LOCAL_BOOK_ORIGIN && book.kind === 'EPUB') {
       try {
         const engine = await EpubEngineConfig.getEngine();
-        if (engine === EpubEngineType.COMIC) {
-          // 图文混排引擎（WebView + EPUB.js）
+        if (engine !== EpubEngineType.NOVEL) {
           UiUtil.pushUrl(this.getUIContext(), {
             url: 'pages/ReaderPage',
-            params: { bookName: book.name, bookUrl: book.bookUrl }
+            params: {
+              bookName: book.name,
+              bookUrl: book.bookUrl,
+              epubEngine: engine === EpubEngineType.FOLIATE ? 'foliate' : 'epub_js',
+            }
           });
           return;
         }

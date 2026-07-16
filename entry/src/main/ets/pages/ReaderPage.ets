@@ -190,6 +190,8 @@ struct ReaderPage {
   private currentTotalPages_: number = 0;
   private opfDir_: string = '';
   private isMobi_: boolean = false;
+  private isFoliate_: boolean = false;
+  private isEpubFoliate_: boolean = false;
   private lastAloudProviderIdx_: number = -1;
   private chapterTextRequestId_: string = '';
   private chapterTextResolver_: ((text: string) => void) | null = null;
@@ -344,6 +346,8 @@ struct ReaderPage {
         throw new Error('书籍不存在');
       }
       this.isMobi_ = book.kind === 'MOBI' || book.kind === 'AZW' || book.kind === 'AZW3';
+      this.isEpubFoliate_ = book.kind === 'EPUB' && params['epubEngine'] === 'foliate';
+      this.isFoliate_ = this.isMobi_ || this.isEpubFoliate_;
       const publicationPath = this.isMobi_ ? book.originUrl : book.tocUrl;
       if (!publicationPath || !fileFs.accessSync(publicationPath)) {
         throw new Error(this.isMobi_ ? '本地 MOBI/AZW 文件不存在，请重新导入' : 'EPUB 解压目录不存在，请重新导入');
@@ -374,13 +378,14 @@ struct ReaderPage {
       const opfPath = this.isMobi_ ? '' : this.findOpfPath_(book.tocUrl);
       this.opfDir_ = this.getParentDir_(opfPath);
       const bookEntry = this.isMobi_ ? this.toBookUrl_(this.getBaseName_(publicationPath)) :
-        (opfPath ? this.toBookUrl_(opfPath) : '/book/');
-      const readerTarget = this.isMobi_ ? startTarget : this.toEpubTarget_(startTarget);
+        (this.isEpubFoliate_ ? '/book/' : (opfPath ? this.toBookUrl_(opfPath) : '/book/'));
+      const readerTarget = this.isFoliate_ ? startTarget : this.toEpubTarget_(startTarget);
       const initialStyle = JSON.stringify(this.toWebStyle_());
       const initialActions = JSON.stringify(this.zoneActions);
       console.info(`[ReaderPage] publication server=${port} kind=${book.kind} root=${serverRoot} target=${readerTarget}`);
-      const readerPath = this.isMobi_ ? '/foliate/foliate-reader.html' : '/reader/epub-reader.html';
-      const url = `http://127.0.0.1:${port}${readerPath}?book=${encodeURIComponent(bookEntry)}&target=${encodeURIComponent(readerTarget)}&style=${encodeURIComponent(initialStyle)}&actions=${encodeURIComponent(initialActions)}`;
+      const readerPath = this.isFoliate_ ? '/foliate/foliate-reader.html' : '/reader/epub-reader.html';
+      const formatParam = this.isEpubFoliate_ ? '&format=epub-dir' : '';
+      const url = `http://127.0.0.1:${port}${readerPath}?book=${encodeURIComponent(bookEntry)}&target=${encodeURIComponent(readerTarget)}&style=${encodeURIComponent(initialStyle)}&actions=${encodeURIComponent(initialActions)}${formatParam}`;
       this.controller.loadUrl(url);
       trace('webview-load-started');
       this.armReadyTimeout_();
@@ -516,7 +521,8 @@ struct ReaderPage {
   }
 
   private progressKey_(): string {
-    return `${this.isMobi_ ? 'mobi' : 'epub'}_progress_${this.book_?.id || 0}`;
+    const engine = this.isMobi_ ? 'mobi' : (this.isEpubFoliate_ ? 'epub_foliate' : 'epub');
+    return `${engine}_progress_${this.book_?.id || 0}`;
   }
 
   private getParentPath_(path: string): string {
@@ -1166,7 +1172,7 @@ struct ReaderPage {
   private goToChapter_(chapter: BookChapter): void {
     this.showToc = false;
     this.showMenu = false;
-    const target = this.isMobi_ ? chapter.url : this.toEpubTarget_(chapter.url);
+    const target = this.isFoliate_ ? chapter.url : this.toEpubTarget_(chapter.url);
     this.runJs_('window.goToHref && window.goToHref(' + JSON.stringify(target) + ')');
   }
 

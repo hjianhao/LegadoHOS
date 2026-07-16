@@ -5,7 +5,10 @@ import { SettingsStore } from '../data/preferences/SettingsStore';
 
 export enum EpubEngineType {
   NOVEL = 0,
+  EPUB_JS = 1,
+  /** 兼容旧代码与已保存的 comic 配置。 */
   COMIC = 1,
+  FOLIATE = 2,
 }
 
 export class EpubEngineConfig {
@@ -15,7 +18,8 @@ export class EpubEngineConfig {
     try {
       const s = SettingsStore.getInstance();
       const val: string = await s.get(EpubEngineConfig.KEY, 'novel');
-      return val === 'comic' ? EpubEngineType.COMIC : EpubEngineType.NOVEL;
+      if (val === 'foliate') return EpubEngineType.FOLIATE;
+      return val === 'comic' || val === 'epub_js' ? EpubEngineType.EPUB_JS : EpubEngineType.NOVEL;
     } catch (_e) {
       return EpubEngineType.NOVEL;
     }
@@ -24,7 +28,9 @@ export class EpubEngineConfig {
   static async setEngine(type: EpubEngineType): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
-      await s.put(EpubEngineConfig.KEY, type === EpubEngineType.COMIC ? 'comic' : 'novel');
+      const value = type === EpubEngineType.FOLIATE ? 'foliate' :
+        (type === EpubEngineType.EPUB_JS ? 'epub_js' : 'novel');
+      await s.put(EpubEngineConfig.KEY, value);
     } catch (_e) { /* */ }
   }
 }

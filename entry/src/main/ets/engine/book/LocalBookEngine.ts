@@ -264,10 +264,7 @@ export class LocalBookEngine {
       console.info('[LocalBookEngine] chapters inserted:', bookChapters.length);
 
 	      console.info(`[LocalBookEngine] Imported: ${book.name}, ${chapters.length} chapters`);
-	      // 解压到目录后删除原始文件（节省沙箱空间）
-	      if (ext === 'epub') {
-	        try { fileFs.unlinkSync(filePath); } catch (_) { /* 删除失败不影响导入结果 */ }
-	      }
+	      // EPUB 同时保留原始文件与解压目录，三个阅读引擎复用同一次导入。
 	      return {
         success: true,
         bookId: book.id,

@@ -1,5 +1,17 @@
 import './view.js'
 
+if (!Object.groupBy) {
+  Object.groupBy = (items, callback) => {
+    const result = Object.create(null)
+    let index = 0
+    for (const item of items) {
+      const key = callback(item, index++)
+      ;(result[key] ||= []).push(item)
+    }
+    return result
+  }
+}
+
 const queue = []
 const viewer = document.querySelector('#viewer')
 const loading = document.querySelector('#loading')
@@ -57,6 +69,29 @@ class RemoteFile {
   async arrayBuffer() {
     return this.slice(0, this.size).arrayBuffer()
   }
+}
+
+const encodeBookPath = path => String(path || '').split('/')
+  .filter(part => part.length > 0)
+  .map(part => encodeURIComponent(part))
+  .join('/')
+
+const openEpubDirectory = async baseUrl => {
+  const base = new URL(baseUrl || '/book/', location.href).href.replace(/\/?$/, '/')
+  const resourceUrl = path => new URL(encodeBookPath(path), base).href
+  const loadText = async path => {
+    const response = await fetch(resourceUrl(path))
+    return response.ok ? response.text() : null
+  }
+  const loadBlob = async path => {
+    const response = await fetch(resourceUrl(path))
+    return response.ok ? response.blob() : null
+  }
+  const { EPUB } = await import('./epub.js')
+  // Section sizes are only used for whole-book progress estimation. Returning
+  // an equal non-zero weight keeps navigation valid without prefetching every
+  // extracted EPUB resource just to issue HEAD requests.
+  return new EPUB({ loadText, loadBlob, getSize: () => 1 }).init()
 }
 
 const flattenTOC = (items, level = 0, result = []) => {
@@ -247,6 +282,7 @@ const applyStyle = () => {
 
 const currentSectionPages = () => {
   const renderer = view?.renderer
+  if (view?.isFixedLayout) return { page: 1, total: 1 }
   const bufferedPages = Number(renderer?.pages || 0)
   if (!renderer || bufferedPages <= 2) return { page: 0, total: 0 }
   const total = Math.max(1, bufferedPages - 2)
@@ -424,7 +460,7 @@ function bindTap(doc) {
   }, true)
 }
 
-const openBook = async (bookUrl, target) => {
+const openBook = async (bookUrl, target, format) => {
   try {
     loading.style.display = 'flex'
     if (view) {
@@ -439,16 +475,17 @@ const openBook = async (bookUrl, target) => {
       const sectionPages = currentSectionPages()
       emit('location', {
         cfi: loc.cfi || '', href: loc.tocItem?.href || '',
-        chapterIndex: Number(loc.index ?? loc.location?.current ?? 0),
+        chapterIndex: Number(loc.section?.current ?? loc.index ?? loc.location?.current ?? 0),
         page: sectionPages.page,
         totalPages: sectionPages.total,
         percentage: Number(loc.fraction ?? 0)
       })
     })
-    const remoteFile = await RemoteFile.open(bookUrl)
-    await view.open(remoteFile)
+    const publication = format === 'epub-dir' ? await openEpubDirectory(bookUrl) :
+      await RemoteFile.open(bookUrl)
+    await view.open(publication)
     const book = view.book
-    if (Number(book?.mobi?.headers?.palmdoc?.encryption || 0) !== 0)
+    if (format !== 'epub-dir' && Number(book?.mobi?.headers?.palmdoc?.encryption || 0) !== 0)
       throw new Error('暂不支持 DRM 加密的 Kindle 书籍')
     const metadata = book?.metadata || {}
     emit('metadata', {
@@ -550,4 +587,4 @@ window.pollEvents = () => queue.length ? JSON.stringify(queue.splice(0)) : 'null
 window.applyStyle(params.get('style') || '{}')
 window.setZoneActions(params.get('actions') || '[]')
 const bookUrl = params.get('book')
-if (bookUrl) openBook(bookUrl, params.get('target') || '')
+if (bookUrl) openBook(bookUrl, params.get('target') || '', params.get('format') || '')
