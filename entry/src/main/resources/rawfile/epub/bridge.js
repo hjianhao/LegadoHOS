@@ -541,7 +541,21 @@
     doc.__legadoTapBound = true;
 
     var touchStart = null;
+    var linkTouchStart = null;
     doc.addEventListener('touchstart', function (event) {
+      var link = event && event.target && event.target.closest && event.target.closest('a[href]');
+      if (link && event.touches && event.touches.length === 1) {
+        var linkTouch = event.touches[0];
+        linkTouchStart = {
+          link: link,
+          x: linkTouch.clientX,
+          y: linkTouch.clientY,
+          time: Date.now()
+        };
+        touchStart = null;
+        return;
+      }
+      linkTouchStart = null;
       if (isInteractiveTarget(event && event.target)) {
         touchStart = null;
         return;
@@ -561,7 +575,28 @@
       };
     }, { capture: true, passive: true });
 
+    doc.addEventListener('touchmove', function (event) {
+      if (!linkTouchStart) return;
+      var touch = event.touches && event.touches[0];
+      if (!touch || Math.abs(touch.clientX - linkTouchStart.x) > 18 ||
+          Math.abs(touch.clientY - linkTouchStart.y) > 18) {
+        linkTouchStart = null;
+      }
+    }, { capture: true, passive: true });
+
     doc.addEventListener('touchend', function (event) {
+      if (linkTouchStart) {
+        var linkStart = linkTouchStart;
+        linkTouchStart = null;
+        var linkEnd = event.changedTouches && event.changedTouches[0];
+        if (linkEnd && Math.abs(linkEnd.clientX - linkStart.x) <= 18 &&
+            Math.abs(linkEnd.clientY - linkStart.y) <= 18 &&
+            Date.now() - linkStart.time <= 550) {
+          try { event.preventDefault(); } catch (e) {}
+          linkStart.link.click();
+        }
+        return;
+      }
       if (!touchStart || !event.changedTouches || event.changedTouches.length < 1) return;
       if (isInteractiveTarget(event && event.target)) {
         touchStart = null;
@@ -575,6 +610,11 @@
       if (dx > 18 || dy > 18 || duration > 550) return;
       finishTap(touch.clientX, touch.clientY, doc, event);
     }, { capture: true, passive: false });
+
+    doc.addEventListener('touchcancel', function () {
+      linkTouchStart = null;
+      touchStart = null;
+    }, { capture: true, passive: true });
 
     doc.addEventListener('click', function (event) {
       if (isInteractiveTarget(event && event.target)) return;

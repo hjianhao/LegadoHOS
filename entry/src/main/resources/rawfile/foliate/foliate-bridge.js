@@ -413,7 +413,16 @@ function bindTap(doc) {
   if (!doc || doc.__legadoTapBound) return
   doc.__legadoTapBound = true
   let touchStart = null
+  let linkTouchStart = null
   doc.addEventListener('touchstart', event => {
+    const link = event.target?.closest?.('a[href]')
+    if (link && event.touches?.length === 1) {
+      const touch = event.touches[0]
+      linkTouchStart = { link, x: touch.clientX, y: touch.clientY, time: Date.now() }
+      touchStart = null
+      return
+    }
+    linkTouchStart = null
     if (isInteractiveTarget(event.target) || !event.touches || event.touches.length !== 1) {
       touchStart = null
       return
@@ -425,6 +434,12 @@ function bindTap(doc) {
     if (!isScrollMode()) stopGestureEvent(event)
   }, { capture: true, passive: true })
   doc.addEventListener('touchmove', event => {
+    if (linkTouchStart) {
+      const touch = event.touches?.[0]
+      if (!touch || Math.abs(touch.clientX - linkTouchStart.x) > 18 ||
+        Math.abs(touch.clientY - linkTouchStart.y) > 18) linkTouchStart = null
+      return
+    }
     if (!touchStart) return
     if (isScrollMode()) return
     const touch = event.touches?.[0]
@@ -434,6 +449,17 @@ function bindTap(doc) {
     stopGestureEvent(event, dx > 12 && dx > dy)
   }, { capture: true, passive: false })
   doc.addEventListener('touchend', event => {
+    if (linkTouchStart) {
+      const start = linkTouchStart
+      linkTouchStart = null
+      const touch = event.changedTouches?.[0]
+      if (touch && Math.abs(touch.clientX - start.x) <= 18 &&
+        Math.abs(touch.clientY - start.y) <= 18 && Date.now() - start.time <= 550) {
+        event.preventDefault?.()
+        start.link.click()
+      }
+      return
+    }
     if (!touchStart || !event.changedTouches || event.changedTouches.length < 1) return
     const touch = event.changedTouches[0]
     const dx = Math.abs(touch.clientX - touchStart.x)
@@ -450,6 +476,7 @@ function bindTap(doc) {
     finishTap(touch.clientX, touch.clientY, doc, event)
   }, { capture: true, passive: false })
   doc.addEventListener('touchcancel', event => {
+    linkTouchStart = null
     if (!touchStart) return
     touchStart = null
     stopGestureEvent(event)
