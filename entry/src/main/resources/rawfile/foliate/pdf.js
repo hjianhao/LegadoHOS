@@ -361,7 +361,9 @@ export const makePDF = async (file, options = {}) => {
     }
     const pdfReflowAvailable = sampledTextLength >= 24
     const useReflow = options.reflow === true && pdfReflowAvailable
-    const book = useReflow ? {} : { rendition: { layout: 'pre-paginated' } }
+    // PDF 一页就是一个独立版面。明确禁用 Foliate 的跨页 spread，避免横屏时
+    // 自动把相邻两页并排缩小；横屏应继续显示单页并按屏幕宽度放大。
+    const book = useReflow ? {} : { rendition: { layout: 'pre-paginated', spread: 'none' } }
     book.pdfReflowAvailable = pdfReflowAvailable
     book.pdfMode = useReflow ? 'reflow' : 'original'
 
