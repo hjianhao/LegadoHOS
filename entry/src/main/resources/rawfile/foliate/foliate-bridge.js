@@ -281,10 +281,12 @@ const applyStyle = () => {
   document.documentElement.style.backgroundColor = v.bg
   document.body.style.backgroundColor = v.bg
   viewer.style.backgroundColor = v.bg
-  viewer.style.paddingLeft = `${v.pl}px`
-  viewer.style.paddingRight = `${v.pr}px`
+  const fitPdfWidth = currentFormat === 'pdf' && view?.isFixedLayout
+  viewer.style.paddingLeft = fitPdfWidth ? '0px' : `${v.pl}px`
+  viewer.style.paddingRight = fitPdfWidth ? '0px' : `${v.pr}px`
   viewer.style.boxSizing = 'border-box'
   if (!view?.renderer) return
+  if (fitPdfWidth) view.renderer.setAttribute('zoom', 'fit-width')
   if (v.flowMode === 'scrolled' || v.animType === ANIM_SCROLL) view.renderer.setAttribute('flow', 'scrolled')
   else view.renderer.removeAttribute('flow')
   view.renderer.setAttribute('margin', '0px')

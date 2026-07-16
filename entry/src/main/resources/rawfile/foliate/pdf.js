@@ -82,13 +82,21 @@ const cropCanvas = (canvas, rect) => {
     output.width = canvas.width
     output.height = canvas.height
     const context = output.getContext('2d')
-    context.fillStyle = '#fff'
-    context.fillRect(0, 0, output.width, output.height)
-    const scale = Math.min(output.width / rect.width, output.height / rect.height)
-    const width = rect.width * scale
-    const height = rect.height * scale
-    context.drawImage(canvas, rect.x, rect.y, rect.width, rect.height,
-        (output.width - width) / 2, (output.height - height) / 2, width, height)
+    // 固定版式渲染器按 PDF 原页面宽高计算缩放。将裁剪框扩展成与原页面
+    // 相同的宽高比，再铺满输出画布，既不拉伸内容，也不会重新产生两侧留白。
+    const targetAspect = output.width / output.height
+    const crop = { ...rect }
+    if (crop.width / crop.height < targetAspect) {
+        const width = crop.height * targetAspect
+        crop.x = Math.max(0, Math.min(output.width - width, crop.x - (width - crop.width) / 2))
+        crop.width = width
+    } else {
+        const height = crop.width / targetAspect
+        crop.y = Math.max(0, Math.min(output.height - height, crop.y - (height - crop.height) / 2))
+        crop.height = height
+    }
+    context.drawImage(canvas, crop.x, crop.y, crop.width, crop.height,
+        0, 0, output.width, output.height)
     return output
 }
 
