@@ -283,13 +283,13 @@ struct SettingsPage {
 	          .onChange(() => { this.setEpubEngine_('novel'); })
 	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-		        Text('图文混排1（EPUB.js）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Text('图文混排1').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 		        Radio({ value: 'epub_js', group: 'epubEngine' })
 		          .checked(this.epubEngine === 'epub_js')
 		          .onChange(() => { this.setEpubEngine_('epub_js'); })
 		      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-		        Text('图文混排2（foliate）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Text('图文混排2').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 		        Radio({ value: 'foliate', group: 'epubEngine' })
 		          .checked(this.epubEngine === 'foliate')
 		          .onChange(() => { this.setEpubEngine_('foliate'); })
