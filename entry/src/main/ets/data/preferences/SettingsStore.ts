@@ -19,6 +19,7 @@ export class SettingsStore {
   private static instance: SettingsStore;
   private prefStore_: preferences.Preferences | null = null;
   private cipher_: cryptoFramework.Cipher | null = null;
+  private memoryCache_: Map<string, Object> = new Map();
 
   private constructor() {}
 
@@ -54,12 +55,16 @@ export class SettingsStore {
 
   /** 创建指定模式的 Cipher 实例 */
   private async createCipher_(mode: cryptoFramework.CryptoMode): Promise<cryptoFramework.Cipher> {
-    const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
-    const keyData = await this.getEncKeyMaterial_();
-    const symKey = await symKeyGenerator.convertKey({ data: keyData });
-    const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS7');
-    await cipher.init(mode, symKey, null);
-    return cipher;
+    try {
+      const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
+      const keyData = await this.getEncKeyMaterial_();
+      const symKey = await symKeyGenerator.convertKey({ data: keyData });
+      const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS7');
+      await cipher.init(mode, symKey, null);
+      return cipher;
+    } catch (err) {
+      throw new Error('[SettingsStore] create cipher failed: ' + (err as Error).message);
+    }
   }
 
   /** 从 preferences 获取或生成固定密钥材料 */
@@ -191,14 +196,17 @@ export class SettingsStore {
   async getLineHeight(): Promise<number> { return await this.get('line_height', 1.5); }
   async setLineHeight(v: number): Promise<void> { await this.put('line_height', v); }
 
-  async getPageMode(): Promise<number> { return await this.get('page_mode', 1); }
-  async setPageMode(v: number): Promise<void> { await this.put('page_mode', v); }
-
   async getReadBgColor(): Promise<string> { return await this.get('read_bg', '#F5F0E8'); }
   async setReadBgColor(v: string): Promise<void> { await this.put('read_bg', v); }
 
   async getReadTextColor(): Promise<string> { return await this.get('read_text', '#333333'); }
   async setReadTextColor(v: string): Promise<void> { await this.put('read_text', v); }
+
+  async getReadNightMode(): Promise<boolean> { return await this.get('read_night_mode', false); }
+  async setReadNightMode(v: boolean): Promise<void> { await this.put('read_night_mode', v); }
+
+  async getReadFollowTheme(): Promise<boolean> { return await this.get('read_follow_theme', true); }
+  async setReadFollowTheme(v: boolean): Promise<void> { await this.put('read_follow_theme', v); }
 
   async getIndentSize(): Promise<number> { return await this.get('indent_size', 2); }
   async setIndentSize(v: number): Promise<void> { await this.put('indent_size', v); }
@@ -243,6 +251,9 @@ export class SettingsStore {
   // ---- 通用 ----
   async get<T>(key: string, defaultValue: T): Promise<T> {
     try {
+      if (this.memoryCache_.has(key)) {
+        return this.memoryCache_.get(key) as T;
+      }
       const val = await this.store.get(key, JSON.stringify(defaultValue));
       return JSON.parse(val as string) as T;
     } catch (_e) {
@@ -252,7 +263,21 @@ export class SettingsStore {
 
   async put(key: string, value: Object): Promise<void> {
     try {
+      this.memoryCache_.set(key, value);
       await this.store.put(key, JSON.stringify(value));
+      await this.store.flush();
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  async putMany(values: Record<string, Object>): Promise<void> {
+    try {
+      const keys = Object.keys(values);
+      for (const key of keys) {
+        this.memoryCache_.set(key, values[key]);
+        await this.store.put(key, JSON.stringify(values[key]));
+      }
       await this.store.flush();
     } catch (err) {
       throw err;
@@ -375,6 +400,26 @@ export class SettingsStore {
   async getTtsModelDownloaded(): Promise<boolean> { return await this.get('tts_model_downloaded', false); }
   async setTtsModelDownloaded(v: boolean): Promise<void> { await this.put('tts_model_downloaded', v); }
 
+  /** Azure TTS 端点，需填写完整合成接口地址 */
+  async getTtsAzureEndpoint(): Promise<string> {
+    return await this.get('tts_azure_endpoint', 'https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1');
+  }
+  async setTtsAzureEndpoint(v: string): Promise<void> { await this.put('tts_azure_endpoint', v); }
+
+  /** Azure Speech Key（使用加密存储，失败时按既有策略降级明文） */
+  async getTtsAzureKey(): Promise<string> {
+    const encoded = await this.get('tts_azure_key', '') as string;
+    if (!encoded) return '';
+    return await this.decrypt_(encoded);
+  }
+  async setTtsAzureKey(v: string): Promise<void> {
+    const encoded = await this.encrypt_(v);
+    await this.put('tts_azure_key', encoded);
+  }
+
+  async getTtsAzureVoice(): Promise<string> { return await this.get('tts_azure_voice', 'zh-CN-XiaoxiaoNeural'); }
+  async setTtsAzureVoice(v: string): Promise<void> { await this.put('tts_azure_voice', v); }
+
   // ---- 触控区域 ----
   private readonly ZONE_KEYS_: string[] = [
     'click_tl', 'click_tc', 'click_tr',
@@ -454,6 +499,7 @@ export class SettingsStore {
   async importAll(map: Record<string, any>): Promise<void> {
     for (const [key, value] of Object.entries(map)) {
       try {
+        this.memoryCache_.set(key, value as Object);
         await this.store.put(key, JSON.stringify(value));
       } catch (_) { /* skip unwritable */ }
     }

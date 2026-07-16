@@ -8,7 +8,6 @@ import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
 import { EpubEngineConfig, EpubEngineType } from '../engine/EpubEngineConfig';
-import router from '@ohos.router';
 
 interface SettingItem { icon: string; title: string; key: string; }
 interface ReadModeOption { mode: number; label: string; }
@@ -59,15 +58,21 @@ struct SettingsPage {
   @StorageLink('proxyHost') proxyHost: string = '';
   @StorageLink('proxyPort') proxyPort: string = '';
   @StorageLink('network_timeout') netTimeout: number = 60;
-  @State pageMode: boolean = true;
   @State autoCacheSize: number = 10;
   @State epubEngine: string = 'novel';
   @State comicReadMode: number = 0;
   @State comicPreloadNum: number = 3;
   @State comicCacheSize: number = 0;
+  @State readFollowTheme: boolean = true;
+  @State ttsAzureEndpoint: string = 'https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1';
+  @State ttsAzureKey: string = '';
+  @State showTtsAzureKey: boolean = false;
 
-  aboutToAppear(): void {
-    this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
+	  aboutToAppear(): void {
+	    // 从 AppTheme 同步主题模式状态（确保 @StorageLink 获取到正确的初始值）
+	    this.isDark = AppTheme.getInstance().isDark;
+	    this.isFollowSystem = AppTheme.getInstance().isFollowSystem;
+	    this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
     this.dnsServers = AppStorage.get<string>('dnsServers') || '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
     this.dnsEnabled = AppStorage.get<boolean>('dnsEnabled') !== false;
     NetUtil.setDns(this.dnsServers, this.dnsEnabled);
@@ -76,16 +81,17 @@ struct SettingsPage {
     }
     this.syncWebViewNetwork();
     this.loadReadSettings();
+    this.loadTtsSettings();
   }
 
   private async loadReadSettings(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
-      this.pageMode = (await s.getPageMode()) !== 0;
       this.autoCacheSize = await s.getAutoCacheSize();
       this.comicReadMode = await s.getComicReadMode();
       this.comicPreloadNum = await s.getComicPreloadNum();
+      this.readFollowTheme = await s.getReadFollowTheme();
       // EPUB 引擎
       const engine = await EpubEngineConfig.getEngine();
       this.epubEngine = engine === EpubEngineType.COMIC ? 'comic' : 'novel';
@@ -94,10 +100,31 @@ struct SettingsPage {
     this.loadComicCacheSize();
   }
 
-  private async loadComicCacheSize(): Promise<void> {
+	  private async loadComicCacheSize(): Promise<void> {
     try {
       this.comicCacheSize = await MangaImageLoader.getCacheSize();
     } catch (_) { /* ignore */ }
+	  }
+
+  private async loadTtsSettings(): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      this.ttsAzureEndpoint = await s.getTtsAzureEndpoint();
+      this.ttsAzureKey = await s.getTtsAzureKey();
+    } catch (_e) { /* ignore */ }
+  }
+
+  private async saveTtsSettings(): Promise<void> {
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      await s.setTtsAzureEndpoint(this.ttsAzureEndpoint.trim());
+      await s.setTtsAzureKey(this.ttsAzureKey.trim());
+      UiUtil.showToast(this.getUIContext(), { message: '语音设置已保存', duration: 1500 });
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '保存失败: ' + (e as Error).message, duration: 1800 });
+    }
   }
 
   private formatCacheSize(bytes: number): string {
@@ -138,6 +165,8 @@ struct SettingsPage {
         Column() {}.width('100%').height('100%')
       } else if (this.currentSection === 'network') {
         this.buildNetSettings();
+      } else if (this.currentSection === 'tts') {
+        this.buildTtsSettings();
       } else if (this.currentSection === 'about') {
         this.buildAboutPage();
       }
@@ -149,8 +178,9 @@ struct SettingsPage {
   buildMainMenu() {
     List() {
       ForEach([
-        { icon: '\uD83D\uDCD6', title: '阅读设置', key: 'read' },
-        { icon: '\uD83D\uDCDA', title: '漫画设置', key: 'comic' },
+	        { icon: '\uD83D\uDCD6', title: '阅读设置', key: 'read' },
+	        { icon: '\uD83C\uDFA7', title: '语音朗读设置', key: 'tts' },
+	        { icon: '\uD83D\uDCDA', title: '漫画设置', key: 'comic' },
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
         { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
@@ -167,14 +197,14 @@ struct SettingsPage {
           }.padding(16).width('100%')
         }
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-	        .onClick(() => {
-	          if (item.key === 'backup') {
-	            router.pushUrl({ url: 'pages/BackupSettingsPage' });
-	          } else if (item.key === 'worker_test') {
-	            router.pushUrl({ url: 'pages/WorkerTestPage' });
-	          } else {
-	            this.currentSection = item.key;
-	          }
+		        .onClick(() => {
+		          if (item.key === 'backup') {
+		            this.getUIContext().getRouter().pushUrl({ url: 'pages/BackupSettingsPage' }).catch(() => {});
+		          } else if (item.key === 'worker_test') {
+		            this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkerTestPage' }).catch(() => {});
+		          } else {
+		            this.currentSection = item.key;
+		          }
 	        })
       })
     }.width('100%')
@@ -222,22 +252,6 @@ struct SettingsPage {
       Text('📖 阅读设置').fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
-      // 翻页模式
-      Row() {
-        Text('翻页模式').fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-        Toggle({ type: ToggleType.Switch, isOn: this.pageMode }).onChange(async (v: boolean) => {
-          this.pageMode = v;
-          try {
-            const s = SettingsStore.getInstance();
-            await s.init(UiUtil.getHostContext(this.getUIContext()));
-            s.setPageMode(v ? 1 : 0).catch(() => {});
-          } catch (_e) { /* ignore */ }
-        })
-      }.padding({ left: 16, right: 16, top: 8, bottom: 8 }).width('100%')
-        .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-
-      Text('关闭后使用滚动模式阅读').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark)).padding({ left: 16, right: 16, bottom: 12 })
-
       // 自动缓存章节数
       Text('自动缓存').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
       Row() {
@@ -268,16 +282,95 @@ struct SettingsPage {
 	          .onChange(() => { this.setEpubEngine_('novel'); })
 	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-	        Text('图文混排（WebView+EPUB.js）').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-	        Radio({ value: 'comic', group: 'epubEngine' })
-	          .checked(this.epubEngine === 'comic')
-	          .onChange(() => { this.setEpubEngine_('comic'); })
-	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
-	      Text('图文混排引擎适合带图片/复杂排版的 EPUB，当前开发中').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-	        .padding({ left: 16, right: 16, top: 2, bottom: 12 })
-	        .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+		        Text('图文混排').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Radio({ value: 'comic', group: 'epubEngine' })
+		          .checked(this.epubEngine === 'comic')
+		          .onChange(() => { this.setEpubEngine_('comic'); })
+		      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
+		      .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 	    }
     .width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  buildTtsSettings() {
+    Scroll() {
+      Column() {
+        Text('语音朗读设置').fontSize(16).fontWeight(FontWeight.Medium)
+          .padding({ left: 16, right: 16, top: 16, bottom: 8 })
+          .alignSelf(ItemAlign.Start)
+          .fontColor(ThemeColors.onBackground(this.isDark))
+
+        Text('微软 Azure 语音服务').fontSize(15).fontWeight(FontWeight.Bold)
+          .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+          .alignSelf(ItemAlign.Start)
+          .fontColor(ThemeColors.onBackground(this.isDark))
+
+        Text('端点').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+          .alignSelf(ItemAlign.Start)
+        Column() {
+          TextInput({ text: this.ttsAzureEndpoint, placeholder: 'https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1' })
+            .fontSize(13)
+            .height(42)
+            .width('100%')
+            .onChange((v: string) => { this.ttsAzureEndpoint = v; })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16 })
+        Text('可填写完整 TTS 合成地址；也可填写 Portal 里的 https://<region>.api.cognitive.microsoft.com，应用会自动转换')
+          .fontSize(11)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 16, right: 16, top: 4, bottom: 8 })
+
+        Text('密钥').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+          .alignSelf(ItemAlign.Start)
+        Row() {
+          TextInput({ text: this.ttsAzureKey, placeholder: 'Azure Speech Key' })
+            .fontSize(13)
+            .layoutWeight(1)
+            .type(this.showTtsAzureKey ? InputType.Normal : InputType.Password)
+            .onChange((v: string) => { this.ttsAzureKey = v; })
+          Button(this.showTtsAzureKey ? '隐藏' : '显示')
+            .fontSize(12)
+            .height(34)
+            .padding({ left: 10, right: 10 })
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .margin({ left: 8 })
+            .onClick(() => { this.showTtsAzureKey = !this.showTtsAzureKey; })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16 })
+
+        Text('微软语音的音色在阅读页朗读面板中选择，首次默认使用第一个中文音色。')
+          .fontSize(11)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+
+        Column() {
+          Button('保存微软语音设置')
+            .fontSize(14)
+            .height(44)
+            .width('100%')
+            .backgroundColor(ThemeColors.primary(this.isDark))
+            .fontColor(ThemeColors.onPrimary(this.isDark))
+            .onClick(() => { this.saveTtsSettings(); })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+
+        Text('保存后，在阅读页朗读面板的“引擎”里选择“微软语音”。文本会发送到 Azure 进行在线合成。')
+          .fontSize(12)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 16, right: 16, bottom: 16 })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .layoutWeight(1)
   }
 
   @Builder
@@ -357,13 +450,25 @@ struct SettingsPage {
       Text('\uD83C\uDFA8 主题设置').fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
-      Row() {
-        Text('跟随系统').fontSize(16).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-        Toggle({ type: ToggleType.Switch, isOn: this.isFollowSystem })
-          .onChange((v: boolean) => {
-            if (v) { AppTheme.getInstance().setFollowSystem(); this.isDark = AppTheme.getInstance().isDark; }
-            else { AppTheme.getInstance().setDarkMode(this.isDark); }
-          })
+	      Row() {
+	        Text('跟随系统').fontSize(16).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+	        Toggle({ type: ToggleType.Switch, isOn: this.isFollowSystem })
+	          .onChange((v: boolean) => {
+	            if (v) {
+	              AppTheme.getInstance().setFollowSystem();
+	              this.isDark = AppTheme.getInstance().isDark;
+	            } else {
+	              AppTheme.getInstance().setDarkMode(this.isDark);
+	            }
+	            // 确保模式保存持久化
+	            (async () => {
+	              try {
+	                const s = SettingsStore.getInstance();
+	                await s.init(UiUtil.getHostContext(this.getUIContext()));
+	                await s.setThemeMode(v ? 'system' : (AppTheme.getInstance().isDark ? 'dark' : 'light'));
+	              } catch (_e) { /* ignore */ }
+	            })();
+	          })
       }.padding({ left: 16, right: 16, top: 12, bottom: 4 }).width('100%')
 
       Row() {
@@ -380,6 +485,23 @@ struct SettingsPage {
             this.isDark = v;
           })
       }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
+
+      Row() {
+        Text('阅读界面随主题切换').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Toggle({ type: ToggleType.Switch, isOn: this.readFollowTheme })
+          .onChange((v: boolean) => {
+            this.readFollowTheme = v;
+            (async () => {
+              try {
+                const s = SettingsStore.getInstance();
+                await s.init(UiUtil.getHostContext(this.getUIContext()));
+                s.setReadFollowTheme(v).catch(() => {});
+              } catch (_e) { /* ignore */ }
+            })();
+          })
+      }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
+      Text('开启后切换应用主题时，阅读界面自动切换日间/夜间模式').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, bottom: 12 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
   }

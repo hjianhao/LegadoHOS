@@ -120,8 +120,6 @@ export class AppTheme {
   }
 
   private save_(): void {
-    try {
-      SettingsStore.getInstance().setThemeMode(this.config_.mode);
-    } catch (_e) { /* ignore */ }
+    SettingsStore.getInstance().setThemeMode(this.config_.mode).catch(() => {});
   }
 }

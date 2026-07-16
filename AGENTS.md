@@ -127,6 +127,8 @@ cd <repo-root>
 - **数据库**: 12 张 RDB 表（`ets/data/database/`）
 - **书源引擎**: `ets/engine/source/`
 
+- **临时目录**: 所有中间过程生成的临时文件放到临时目录下。`tmp`
+
 ## 参考项目
 - **Android 版 Legado（参考实现）**: `/Users/hjianhao/code/ai/legado-with-MD3`
 
@@ -221,6 +223,20 @@ cd <repo-root>
 6. mcp-harmonyos (install / launch / hilog)             ← 真机调试
 ```
 
+## 书源兼容性规则
+
+**核心原则：尽可能兼容 Android 版 Legado 的书源，优先修改我们的代码而非改源配置。**
+
+当定位到书源功能异常时，首先判断是源规则写错了还是我们的代码没有按规则实现：
+
+1. **代码问题（优先修代码）**：如果我们的代码没有按照 Android 版 Legado 的规则语义实现（如 `&&` 连接符应合并结果而非取第一个、`[class~=val]` 无引号属性选择器应支持、`coverDecodeJs` 字段应持久化到数据库等），**必须修改我们的代码**以满足规则标准，不得通过改源配置来绕过代码缺陷。
+
+2. **源规则问题（改源）**：如果源规则本身不符合 CSS/Legado 规范（如 `[class="novel_list"]` 对多 class 元素做精确匹配），可以修改源配置。
+
+3. **无法实现的情况（需确认）**：如果遇到 Android 版依赖但我们在鸿蒙端暂时无法实现的能力（如复杂的 Java 桥接函数 `java.createSymmetricCrypto` 需要完整的 JS 执行环境），**不要自行改源绕过**，应提出来进行方案确认，讨论是扩展 QuickJS 引擎能力还是用其他方式兼容。
+
+判断依据：参考 Android 版 Legado（`/Users/hjianhao/code/ai/legado-with-MD3`）的对应实现，以它的行为为标准。
+
 ## 代码安全规则
 
 **禁止使用 `git checkout` 回退文件！** 工作区中可能含有尚未 commit 的重要代码。
@@ -286,3 +302,5 @@ import { ThemeColors } from '../theme/ThemeColors';
 
 ### 5. 统一定义位置
 所有颜色统一在 `entry/src/main/ets/theme/ThemeColors.ets` 中修改，全局生效。
+
+#

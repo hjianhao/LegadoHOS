@@ -19,7 +19,7 @@ import { BookTable } from '../../data/database/BookTable';
 import { ChapterTable } from '../../data/database/ChapterTable';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { TxtParser } from './TxtParser';
-import { MobiParser } from './MobiParser';
+import { MobiProbeParser } from './MobiProbeParser';
 import { PdfParser } from './PdfParser';
 import { DirEpubParser } from './DirEpubParser';
 import { HtmlUtil } from '../../util/HtmlUtil';
@@ -76,7 +76,10 @@ export class LocalBookEngine {
    */
   private getSandboxDir(context?: Context): string {
     if (this.sandboxDir_) return this.sandboxDir_;
-    const base = context?.filesDir || globalThis.getContext()?.filesDir || '';
+    const base = context?.filesDir || '';
+    if (!base) {
+      throw new Error('Missing UIAbility context for local book storage');
+    }
     this.sandboxDir_ = `${base}/${BOOKS_DIR}`;
     // 确保目录存在
     try {
@@ -107,16 +110,29 @@ export class LocalBookEngine {
     } catch (_e) { /* not exist, continue */ }
 
     // 拷贝文件
-    const srcFile = fileFs.openSync(uri, fileFs.OpenMode.READ_ONLY);
+    let srcFile: fileFs.File | null = null;
+    let destFile: fileFs.File | null = null;
     try {
-      const destFile = fileFs.openSync(destPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
-      try {
-        await fileFs.copyFile(srcFile.fd, destFile.fd);
-      } finally {
-        fileFs.closeSync(destFile);
-      }
+      srcFile = fileFs.openSync(uri, fileFs.OpenMode.READ_ONLY);
+      destFile = fileFs.openSync(destPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+      await fileFs.copyFile(srcFile.fd, destFile.fd);
+    } catch (err) {
+      throw new Error(`Copy local book failed: ${fileName}: ${(err as Error).message}`);
     } finally {
-      fileFs.closeSync(srcFile);
+      if (destFile) {
+        try {
+          fileFs.closeSync(destFile);
+        } catch (err) {
+          console.warn('[LocalBook] close dest failed:', (err as Error).message);
+        }
+      }
+      if (srcFile) {
+        try {
+          fileFs.closeSync(srcFile);
+        } catch (err) {
+          console.warn('[LocalBook] close source failed:', (err as Error).message);
+        }
+      }
     }
 
     return destPath;
@@ -322,7 +338,10 @@ export class LocalBookEngine {
 
   /** 生成 EPUB 解压目标目录（使用时间戳+随机数，避免文件名特殊字符问题） */
   static getEpubDir(context?: Context): string {
-    const base = context?.filesDir || globalThis.getContext()?.filesDir || '';
+    const base = context?.filesDir || '';
+    if (!base) {
+      throw new Error('Missing UIAbility context for EPUB storage');
+    }
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     return `${base}/books/epub/${id}`;
   }
@@ -344,13 +363,19 @@ export class LocalBookEngine {
         return { meta, chapters: result.chapters };
       }
       case 'mobi': {
-        const mobiParser = new MobiParser(filePath);
-        const result = await mobiParser.parse();
-        const meta: LocalBookMeta = {
-          title: result.meta.title, author: result.meta.author,
-          description: result.meta.description, subject: '', coverPath: '',
+        const result = MobiProbeParser.probe(filePath);
+        const now = Date.now();
+        const chapter: BookChapter = {
+          id: 0, bookId: 0, index: 0, volumeIndex: 0,
+          title: result.title || '正文', url: '', content: '', contentLength: 0,
+          isRead: false, isDownloaded: true, isCached: false,
+          duration: 0, audioUrl: '', createTime: now, updateTime: now,
         };
-        return { meta, chapters: result.chapters };
+        const meta: LocalBookMeta = {
+          title: result.title, author: result.author,
+          description: result.description, subject: result.isKf8 ? 'KF8' : 'MOBI', coverPath: '',
+        };
+        return { meta, chapters: [chapter] };
       }
       case 'pdf': {
         const pdfParser = new PdfParser(filePath);

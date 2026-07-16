@@ -136,11 +136,26 @@ export struct ExplorePage {
           const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
           console.info('[Explore] JS evaluate result (len=' + (result ? result.length : 0) + '): ' + (result || '').substring(0, 200));
           if (result && result.trim()) {
-            const parsed = this.parseExploreJson(result);
-            if (parsed.length > 0) {
-              this.categoryCache[cacheKey] = parsed;
-              console.info('[Explore] Parsed ' + parsed.length + ' categories from JS exploreUrl');
-              return parsed;
+            // 检测 QuickJS 桥返回的异常信息（napi_bridge.cpp 将 JS 异常作为字符串返回）
+            const trimmed = result.trim();
+            if (/^(TypeError|SyntaxError|ReferenceError|RangeError|Error|URIError|EvalError):/i.test(trimmed)) {
+              console.error('[Explore] JS exception in exploreUrl:', trimmed.substring(0, 200));
+              throw new Error(trimmed);
+            }
+            // 先尝试 JSON 解析（兼容 Legado Android 的 exploreKinds 逻辑：
+            // 先 isJsonArray，再 split(&&|\n) + :: 格式）
+            const jsonParsed = this.parseExploreJson(result);
+            if (jsonParsed.length > 0) {
+              this.categoryCache[cacheKey] = jsonParsed;
+              console.info('[Explore] Parsed ' + jsonParsed.length + ' categories from JS exploreUrl (JSON)');
+              return jsonParsed;
+            }
+            // JS 结果不是 JSON 时，尝试 :: / && 文本格式解析
+            const lineParsed = this.parseExploreLines(result);
+            if (lineParsed.length > 0) {
+              this.categoryCache[cacheKey] = lineParsed;
+              console.info('[Explore] Parsed ' + lineParsed.length + ' categories from JS exploreUrl (lines)');
+              return lineParsed;
             }
           }
         }
@@ -252,13 +267,40 @@ export struct ExplorePage {
     };
   }
 
+  /**
+   * 从任何值中提取分类数组（递归搜索嵌套对象中的数组属性）
+   */
+  private extractCategoryArray_(val: Object | null): Object[] | null {
+    if (!val) return null;
+    if (Array.isArray(val)) return val as Object[];
+    if (typeof val !== 'object') return null;
+    const obj = val as Record<string, Object>;
+    // 如果顶层对象本身有 name/title/url，作为单元素数组返回
+    if (obj['name'] || obj['title'] || obj['url']) {
+      return [obj];
+    }
+    // 否则按优先级搜索嵌套数组属性
+    const arrayKeys = ['data', 'categories', 'category', 'list', 'items',
+      'result', 'results', 'books', 'dataList', 'records', 'datas'];
+    for (const key of arrayKeys) {
+      const candidate = obj[key];
+      if (Array.isArray(candidate)) return candidate as Object[];
+    }
+    // 最后：查找对象中的第一个数组值
+    for (const key of Object.keys(obj)) {
+      const candidate = obj[key];
+      if (Array.isArray(candidate)) return candidate as Object[];
+    }
+    return null;
+  }
+
   parseExploreJson(jsonStr: string): ExploreCategory[] {
     const result: ExploreCategory[] = [];
     if (!jsonStr || jsonStr.trim() === '') return result;
     try {
       const parsed: Object = JSON.parse(jsonStr) as Object;
-      if (Array.isArray(parsed)) {
-        const arr: Object[] = parsed as Object[];
+      const arr = this.extractCategoryArray_(parsed);
+      if (arr) {
         for (let i = 0; i < arr.length; i++) {
           const item: Object = arr[i];
           if (typeof item === 'object' && item !== null) {
@@ -266,13 +308,6 @@ export struct ExplorePage {
           }
         }
         return result;
-      }
-      // 单对象
-      if (typeof parsed === 'object' && parsed !== null) {
-        const single: Record<string, Object> = parsed as Record<string, Object>;
-        if (single['name'] || single['title'] || single['url']) {
-          result.push(this.buildCategory(single, '发现'));
-        }
       }
     } catch (_e) {
       console.error('[Explore] JSON parse error: ' + (_e as Error)?.message?.substring(0, 200) + ', input preview: ' + jsonStr.substring(0, 200));
@@ -413,6 +448,7 @@ export struct ExplorePage {
         jsLib: source.jsLib || '',
         script: source.script || '',
         loginUrl: source.loginUrl || '',
+        coverDecodeJs: source.coverDecodeJs || '',
       }
     });
   }
@@ -470,7 +506,7 @@ export struct ExplorePage {
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
           .onChange((v: string) => { this.searchKey = v; })
         if (this.searchKey.length > 0) {
-          Text('✕').fontSize(14).fontColor('#AAA').width(36).height(36)
+          Text('✕').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
             .textAlign(TextAlign.Center).margin({ left: 8 })
             .onClick(() => { this.searchKey = ''; })
         }
@@ -479,8 +515,8 @@ export struct ExplorePage {
       if (this.getFilteredSources().length === 0) {
         Column() {
           Text('🔍').fontSize(48).margin({ top: 80 })
-          Text('暂无可用的发现书源').fontSize(16).fontColor('#888').margin({ top: 8 })
-          Text('请在书源管理中导入带有发现URL的书源').fontSize(12).fontColor('#888').margin({ top: 4 })
+          Text('暂无可用的发现书源').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+          Text('请在书源管理中导入带有发现URL的书源').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else {
         // 书源列表
@@ -494,12 +530,12 @@ export struct ExplorePage {
                     Text(source.sourceName).fontSize(16).fontWeight(FontWeight.Medium)
                       .fontColor(ThemeColors.onBackground(this.isDark)).alignSelf(ItemAlign.Start)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(source.group || '').fontSize(11).fontColor('#888')
+                    Text(source.group || '').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                       .alignSelf(ItemAlign.Start).margin({ top: 2 })
                   }.flexShrink(1).alignItems(HorizontalAlign.Start)
 
                   Text(this.expandedSourceUrl === source.sourceUrl ? '收起' : '展开')
-                    .fontSize(12).fontColor('#0078D7')
+                    .fontSize(12).fontColor(ThemeColors.primary(this.isDark))
                     .flexShrink(0).margin({ left: 8 })
                 }
                 .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
@@ -509,11 +545,11 @@ export struct ExplorePage {
                 if (this.expandedSourceUrl === source.sourceUrl) {
                   if (this.loadingKinds) {
                     Row() {
-                      LoadingProgress().width(20).height(20).color('#0078D7')
-                      Text('加载分类...').fontSize(13).fontColor('#888').margin({ left: 8 })
+                      LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
+                      Text('加载分类...').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
                     }.padding(16)
                   } else if (this.resolvedCategories.length === 0) {
-                    Text('无分类').fontSize(13).fontColor('#888')
+                    Text('无分类').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
                       .padding({ left: 16, bottom: 12 })
                   } else {
                     this.buildKindGrid(source)

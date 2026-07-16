@@ -4,7 +4,15 @@
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
 
-export enum PageTurnAnim { NONE = 0, SLIDE = 1, COVER = 2, FADE = 3 }
+export enum PageTurnAnim {
+  NONE = 0,
+  SLIDE = 1,
+  COVER = 2,
+  /** 保留旧值兼容已保存配置。 */
+  FADE = 3,
+  SIMULATION = 3,
+  SCROLL = 4,
+}
 
 export interface PageTurnEvent {
   direction: 'prev' | 'next';
@@ -23,7 +31,6 @@ export interface PageViewConfig {
   headerContent: string; footerContent: string;
   brightness: number; zhFormat: boolean;
   chineseMode: string;
-  pageMode: boolean;
 }
 
 @Component
@@ -42,7 +49,7 @@ export struct PageView {
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
     headerContent: '', footerContent: '', brightness: 80, zhFormat: true,
-    chineseMode: 'original', pageMode: true,
+    chineseMode: 'original',
   };
 
   onPageTurn?: (event: PageTurnEvent) => void;

@@ -15,7 +15,6 @@
  *   {serverUrl}/{path}/    ← 配置的路径，备份文件直接放在这里
  */
 import { NetUtil } from '../util/NetUtil';
-import { ZipWriter } from '../util/ZipWriter';
 import { BookProgress } from '../model/BookProgress';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
@@ -128,11 +127,11 @@ export class WebDavService {
     return this.listFiles('');
   }
 
-  async uploadBackupZip(zip: ZipWriter): Promise<string> {
+  async uploadBackupFile(zipPath: string): Promise<string> {
     if (!this.config) throw new Error('WebDAV not configured');
     const fileName = getBackupFileName();
     await this.ensureDirectory('');
-    const zipBytes = zip.build();
+    const zipBytes = this.readFileBytes(zipPath);
 
     // 直接上传二进制（ArrayBuffer），不做 String.fromCharCode 转换
     // String 会被 RCP 按 UTF-8 编码，导致二进制数据损坏
@@ -140,29 +139,62 @@ export class WebDavService {
     const authVal = this.getAuthHeader()['Authorization'] || '';
 
     console.info('[WebDav] Uploading binary:', fileName, zipBytes.length, 'bytes');
-    const session = rcp.createSession({
-      requestConfiguration: {
-        transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
-      }
-    });
-    const request = new rcp.Request(
-      url,
-      'PUT' as rcp.HttpMethod,
-      {
-        'Authorization': authVal,
-        'Content-Type': 'application/zip',
-        'Overwrite': 'T',
-      } as rcp.RequestHeaders,
-      zipBytes.buffer as ArrayBuffer
-    );
-    const response = await session.fetch(request);
-    session.close();
-    console.info('[WebDav] Binary upload status:', response.statusCode);
+    let session: rcp.Session | null = null;
+    try {
+      session = rcp.createSession({
+        requestConfiguration: {
+          transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
+        }
+      });
+      const request = new rcp.Request(
+        url,
+        'PUT' as rcp.HttpMethod,
+        {
+          'Authorization': authVal,
+          'Content-Type': 'application/zip',
+          'Overwrite': 'T',
+        } as rcp.RequestHeaders,
+        zipBytes.buffer as ArrayBuffer
+      );
+      const response = await session.fetch(request);
+      console.info('[WebDav] Binary upload status:', response.statusCode);
 
-    if (response.statusCode < 200 || response.statusCode >= 400) {
-      throw new Error(`上传失败: HTTP ${response.statusCode}`);
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        throw new Error(`上传失败: HTTP ${response.statusCode}`);
+      }
+    } catch (err) {
+      throw new Error('上传失败: ' + (err as Error).message);
+    } finally {
+      if (session) {
+        try {
+          session.close();
+        } catch (err) {
+          console.warn('[WebDav] close upload session failed:', (err as Error).message);
+        }
+      }
     }
     return fileName;
+  }
+
+  private readFileBytes(path: string): Uint8Array {
+    let file: fileFs.File | null = null;
+    try {
+      const stat = fileFs.statSync(path);
+      const buf = new ArrayBuffer(stat.size);
+      file = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY);
+      fileFs.readSync(file.fd, buf);
+      return new Uint8Array(buf);
+    } catch (err) {
+      throw new Error(`读取上传文件失败: ${path}: ${(err as Error).message}`);
+    } finally {
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[WebDav] close upload file failed:', (err as Error).message);
+        }
+      }
+    }
   }
 
   /**
@@ -189,45 +221,66 @@ export class WebDavService {
 
     // 直接下载二进制数据（不能用文本方式，ZIP 文件会被损坏）
     console.info('[WebDav] Downloading backup:', url);
-    const session = rcp.createSession({
-      requestConfiguration: {
-        transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
-      }
-    });
-
-    const request = new rcp.Request(
-      url,
-      'GET' as rcp.HttpMethod,
-      { 'Authorization': authVal } as rcp.RequestHeaders,
-      ''
-    );
-
-    const response = await session.fetch(request);
-    console.info('[WebDav] Download status:', response.statusCode);
-
-    if (response.statusCode < 200 || response.statusCode >= 400) {
-      session.close();
-      throw new Error(`下载失败: HTTP ${response.statusCode}`);
-    }
-
-    if (!response.body) {
-      session.close();
-      throw new Error('下载失败: 空响应');
-    }
-
-    // 直接写二进制数据到文件
-    const tempPath = `/data/storage/el2/base/haps/entry/files/restore_${name}`;
-    try { fileFs.unlinkSync(tempPath); } catch (_) { }
-    const bodyBytes = new Uint8Array(response.body);
-    const file = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+    let session: rcp.Session | null = null;
     try {
-      fileFs.writeSync(file.fd, bodyBytes.buffer);
-      console.info('[WebDav] Downloaded:', bodyBytes.length, 'bytes to', tempPath);
+      session = rcp.createSession({
+        requestConfiguration: {
+          transfer: { timeout: { connectMs: 15000, transferMs: 60000 } }
+        }
+      });
+
+      const request = new rcp.Request(
+        url,
+        'GET' as rcp.HttpMethod,
+        { 'Authorization': authVal } as rcp.RequestHeaders,
+        ''
+      );
+
+      const response = await session.fetch(request);
+      console.info('[WebDav] Download status:', response.statusCode);
+
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        throw new Error(`下载失败: HTTP ${response.statusCode}`);
+      }
+
+      if (!response.body) {
+        throw new Error('下载失败: 空响应');
+      }
+
+      // 直接写二进制数据到文件
+      const tempPath = `/data/storage/el2/base/haps/entry/files/restore_${name}`;
+      try {
+        fileFs.unlinkSync(tempPath);
+      } catch (_e) {}
+      const bodyBytes = new Uint8Array(response.body);
+      let file: fileFs.File | null = null;
+      try {
+        file = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+        fileFs.writeSync(file.fd, bodyBytes.buffer);
+        console.info('[WebDav] Downloaded:', bodyBytes.length, 'bytes to', tempPath);
+      } catch (err) {
+        throw new Error(`写入备份文件失败: ${tempPath}: ${(err as Error).message}`);
+      } finally {
+        if (file) {
+          try {
+            fileFs.closeSync(file);
+          } catch (err) {
+            console.warn('[WebDav] close backup file failed:', (err as Error).message);
+          }
+        }
+      }
+      return tempPath;
+    } catch (err) {
+      throw new Error('下载失败: ' + (err as Error).message);
     } finally {
-      fileFs.closeSync(file);
+      if (session) {
+        try {
+          session.close();
+        } catch (err) {
+          console.warn('[WebDav] close download session failed:', (err as Error).message);
+        }
+      }
     }
-    session.close();
-    return tempPath;
   }
 
   async deleteBackup(name: string): Promise<void> {

@@ -338,8 +338,9 @@ struct ComicReadPage {
         this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT ? urls.length - 1 - targetPage : targetPage;
         this.imageUrls = urls;
         this.isLoading = false;
-        // 预加载前 N 张图片（预加载的图片完成后会自动更新 imagePaths 触发 UI 刷新）
-        this.preloadImages_(urls, this.preloadNum_);
+        // 以目标页为中心向两侧扩散预加载，确保目标页优先下载
+        this.preloadImages_(urls, this.preloadNum_, targetPage);
+        // 下一帧滚动到目标位置（等待 List 渲染新数据后再滚动）
         setTimeout(() => {
           if (this.readMode === READ_MODE_WEBTOON) {
             if (gotoLastPage) {
@@ -348,7 +349,7 @@ struct ComicReadPage {
               this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
             }
           }
-        }, 100);
+        }, 0);
       } else {
         this.imageUrls = [];
         this.loadError = '本章没有图片';
@@ -371,12 +372,29 @@ struct ComicReadPage {
     }, 500);
   }
 
-  /** 预加载前 N 张图片到本地缓存，完成后自动更新 imagePaths 触发渐进式显示 */
-  private preloadImages_(urls: string[], count: number): void {
+  /** 以目标页为中心向两侧扩散预加载图片，确保目标页优先下载 */
+  private preloadImages_(urls: string[], count: number, targetPage: number): void {
     const n: number = Math.min(count, urls.length);
-    for (let i = 0; i < n; i++) {
-      // loadImage_ 会在下载完成后更新 imagePaths，实现渐进式显示
-      this.loadImage_(urls[i]);
+    // 先加载目标页本身
+    if (targetPage >= 0 && targetPage < urls.length) {
+      this.loadImage_(urls[targetPage]);
+    }
+    // 然后以目标页为中心，向两侧交替扩散
+    let loaded = 1;
+    let offset = 1;
+    while (loaded < n) {
+      const before: number = targetPage - offset;
+      const after: number = targetPage + offset;
+      if (after >= 0 && after < urls.length) {
+        this.loadImage_(urls[after]);
+        loaded++;
+      }
+      if (loaded >= n) break;
+      if (before >= 0 && before < urls.length) {
+        this.loadImage_(urls[before]);
+        loaded++;
+      }
+      offset++;
     }
   }
 
@@ -574,7 +592,7 @@ struct ComicReadPage {
     this.saveProgress();
     this.preloadNextChapter_(idx);
     this.preloadPrevChapter_(idx);
-    this.preloadImages_(urls, this.preloadNum_);
+    this.preloadImages_(urls, this.preloadNum_, targetPage);
     // 条漫模式需要手动滚动到正确位置；翻页模式由 .index(swiperIndex) 声明式绑定处理
     setTimeout(() => {
       if (this.readMode === READ_MODE_WEBTOON) {
@@ -584,6 +602,9 @@ struct ComicReadPage {
           this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
         }
       }
+    }, 0);
+    // 延迟清除标记，防止 onReachEnd/onReachStart 连锁触发
+    setTimeout(() => {
       this.justLoadedChapter_ = false;
       this.chapterSwitching_ = false;
     }, 300);
@@ -870,6 +891,10 @@ struct ComicReadPage {
   /** 下一页（条漫模式滚动一屏，翻页/单页模式 Swiper 下一项） */
   private nextPage(): void {
     if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
+      if (this.currentPageIndex < this.imageUrls.length - 1) {
+        this.currentPageIndex++;
+        this.saveProgress();
+      }
       this.listScroller_.scrollBy(0, this.screenHeight > 0 ? this.screenHeight * 0.8 : 500);
     } else {
       if (this.currentPageIndex < this.imageUrls.length - 1) {
@@ -886,6 +911,10 @@ struct ComicReadPage {
   /** 上一页 */
   private prevPage(): void {
     if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
+      if (this.currentPageIndex > 0) {
+        this.currentPageIndex--;
+        this.saveProgress();
+      }
       this.listScroller_.scrollBy(0, this.screenHeight > 0 ? -(this.screenHeight * 0.8) : -500);
     } else {
       if (this.currentPageIndex > 0) {
@@ -1674,24 +1703,24 @@ struct ComicReadPage {
         return;
       }
 
-      // 读取本地文件
-      const srcFile: fileFs.File = fileFs.openSync(localPath, fileFs.OpenMode.READ_ONLY);
-      const stat: fileFs.Stat = fileFs.statSync(localPath);
-      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
-      fileFs.readSync(srcFile.fd, buf);
-      fileFs.closeSync(srcFile);
-
-      // 保存到相册
       const ctx = UiUtil.getHostContext(this.getUIContext());
       if (!ctx) {
         UiUtil.showToast(this.getUIContext(), { message: '无法获取上下文', duration: 1500 });
         return;
       }
+
+      const rawExt = (localPath.split('.').pop() || 'jpg').toLowerCase();
+      const ext = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(rawExt) ? rawExt : 'jpg';
+      const title = ('legado_comic_' + Date.now()).replace(/[.\\/:\*\?"'`<>\|\{\}\[\]]/g, '_');
       const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx);
-      const uri: string = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg');
-      const dstFile: fileFs.File = fileFs.openSync(uri, fileFs.OpenMode.WRITE_ONLY);
-      fileFs.writeSync(dstFile.fd, buf);
-      fileFs.closeSync(dstFile);
+      await helper.showAssetsCreationDialog(
+        ['file://' + localPath],
+        [{
+          title,
+          fileNameExtension: ext,
+          photoType: photoAccessHelper.PhotoType.IMAGE,
+        } as photoAccessHelper.PhotoCreationConfig]
+      );
 
       UiUtil.showToast(this.getUIContext(), { message: '已保存到相册', duration: 1500 });
     } catch (err) {

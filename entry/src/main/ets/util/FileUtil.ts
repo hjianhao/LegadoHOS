@@ -8,14 +8,23 @@ export class FileUtil {
    * 读取文本文件
    */
   static async readTextFile(filePath: string): Promise<string> {
-    const file = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
+    let file: fileFs.File | null = null;
     try {
+      file = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
       const stat = fileFs.statSync(filePath);
       const buf = new ArrayBuffer(stat.size);
       fileFs.readSync(file.fd, buf);
       return String.fromCharCode(...new Uint8Array(buf));
+    } catch (err) {
+      throw new Error(`Read text file failed: ${filePath}: ${(err as Error).message}`);
     } finally {
-      fileFs.closeSync(file);
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[FileUtil] close read file failed:', (err as Error).message);
+        }
+      }
     }
   }
 
@@ -23,12 +32,21 @@ export class FileUtil {
    * 写入文本文件
    */
   static async writeTextFile(filePath: string, content: string): Promise<void> {
-    const file = fileFs.openSync(filePath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+    let file: fileFs.File | null = null;
     try {
+      file = fileFs.openSync(filePath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
       const buf = new Uint8Array(content.split('').map(c => c.charCodeAt(0)));
       fileFs.writeSync(file.fd, buf);
+    } catch (err) {
+      throw new Error(`Write text file failed: ${filePath}: ${(err as Error).message}`);
     } finally {
-      fileFs.closeSync(file);
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[FileUtil] close write file failed:', (err as Error).message);
+        }
+      }
     }
   }
 

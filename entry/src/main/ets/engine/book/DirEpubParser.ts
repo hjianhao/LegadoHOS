@@ -39,13 +39,13 @@ export class DirEpubParser {
   async parse(): Promise<DirEpubResult> {
     // 1. 读 container.xml → OPF 路径
     const containerPath = this.rootDir + 'META-INF/container.xml';
-    if (!fileFs.accessSync(containerPath)) {
+    if (!this.exists_(containerPath)) {
       throw new Error('Invalid EPUB: missing META-INF/container.xml');
     }
     const containerXml = this.readTextFile_(containerPath);
     const opfRelPath = this.parseContainerXml_(containerXml);
     const opfPath = this.rootDir + opfRelPath;
-    if (!fileFs.accessSync(opfPath)) {
+    if (!this.exists_(opfPath)) {
       throw new Error('Invalid EPUB: missing OPF: ' + opfRelPath);
     }
     const opfXml = this.readTextFile_(opfPath);
@@ -61,14 +61,7 @@ export class DirEpubParser {
     if (meta.coverPath) {
       const coverFullPath = this.resolvePath_(opfDir, meta.coverPath);
       const absPath = this.rootDir + coverFullPath;
-      if (fileFs.accessSync(absPath)) {
-        const stat = fileFs.statSync(absPath);
-        const buf = new ArrayBuffer(stat.size);
-        const fd = fileFs.openSync(absPath, fileFs.OpenMode.READ_ONLY);
-        fileFs.readSync(fd.fd, buf);
-        fileFs.closeSync(fd);
-        coverData = buf;
-      }
+      coverData = this.exists_(absPath) ? this.readBinaryFile_(absPath) : null;
     }
 
     // 建立 spine 索引（用于过滤 navMap + 后续合并）
@@ -91,8 +84,8 @@ export class DirEpubParser {
       const manifestHref = manifest[tocId];
       const tocPath = this.resolvePath_(opfDir, manifestHref);
       const absPath = this.rootDir + tocPath;
-      console.info('[DirEpub] NCX resolved:', absPath, 'exists:', fileFs.accessSync(absPath));
-      if (fileFs.accessSync(absPath)) {
+      console.info('[DirEpub] NCX resolved:', absPath, 'exists:', this.exists_(absPath));
+      if (this.exists_(absPath)) {
         const tocXml = this.readTextFile_(absPath);
         navMap = this.parseNcxFlat_(tocXml);
 	      console.info('[DirEpub] NCX parsed:', navMap.length, 'entries');
@@ -115,8 +108,8 @@ export class DirEpubParser {
       if (navId && manifest[navId]) {
         const navHref = this.resolvePath_(opfDir, manifest[navId]);
         const absPath = this.rootDir + navHref;
-        console.info('[DirEpub] nav path:', absPath, 'exists:', fileFs.accessSync(absPath));
-        if (fileFs.accessSync(absPath)) {
+        console.info('[DirEpub] nav path:', absPath, 'exists:', this.exists_(absPath));
+        if (this.exists_(absPath)) {
           const navHtml = this.readTextFile_(absPath);
           const parsed = this.parseNav_(navHtml);
           navMap = parsed.map(n => ({ id: '', title: n.title, href: n.href }));
@@ -157,7 +150,7 @@ export class DirEpubParser {
 	          if (!shref) continue;
 	          const fullPath = this.resolvePath_(opfDir, shref);
 	          const absPath = this.rootDir + fullPath;
-	          if (!fileFs.accessSync(absPath)) continue;
+	          if (!this.exists_(absPath)) continue;
 	          lastFullPath = fullPath;
 	          if (!this.skipContent_) {
 	            const html = this.readTextFile_(absPath);
@@ -176,7 +169,7 @@ export class DirEpubParser {
 	        if (!combinedText && !this.skipContent_) {
 	          const fullPath = this.resolvePath_(opfDir, nav.href);
 	          const absPath = this.rootDir + fullPath;
-	          if (fileFs.accessSync(absPath)) {
+	          if (this.exists_(absPath)) {
 	            const html = this.readTextFile_(absPath);
 	            combinedText = HtmlUtil.toPlainText(html);
 	            lastFullPath = fullPath;
@@ -205,7 +198,7 @@ export class DirEpubParser {
 	        if (!href) continue;
 	        const fullPath = this.resolvePath_(opfDir, href);
 	        const absPath = this.rootDir + fullPath;
-	        if (!fileFs.accessSync(absPath)) continue;
+	        if (!this.exists_(absPath)) continue;
 	        let text = '';
 	        if (!this.skipContent_) {
 	          const html = this.readTextFile_(absPath);
@@ -228,12 +221,37 @@ export class DirEpubParser {
 
   // ==================== 内部方法 ====================
 
+  private exists_(path: string): boolean {
+    try {
+      return fileFs.accessSync(path);
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private readBinaryFile_(path: string): ArrayBuffer {
+    let fd: fileFs.File | null = null;
+    try {
+      const stat = fileFs.statSync(path);
+      const buf = new ArrayBuffer(stat.size);
+      fd = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY);
+      fileFs.readSync(fd.fd, buf);
+      return buf;
+    } catch (err) {
+      throw new Error(`Read EPUB file failed: ${path}: ${(err as Error).message}`);
+    } finally {
+      if (fd) {
+        try {
+          fileFs.closeSync(fd);
+        } catch (err) {
+          console.warn('[DirEpub] close file failed:', (err as Error).message);
+        }
+      }
+    }
+  }
+
   private readTextFile_(path: string): string {
-    const stat = fileFs.statSync(path);
-    const buf = new ArrayBuffer(stat.size);
-    const fd = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY);
-    fileFs.readSync(fd.fd, buf);
-    fileFs.closeSync(fd);
+    const buf = this.readBinaryFile_(path);
     const decoder = new util.TextDecoder('utf-8', { fatal: false });
     return decoder.decodeToString(new Uint8Array(buf));
   }

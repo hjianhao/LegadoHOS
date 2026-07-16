@@ -28,7 +28,7 @@ export interface TtsVoiceInfo {
   language: string;
   description: string;
   downloaded: boolean;
-  engine: 'system' | 'sherpa-onnx';
+  engine: 'system' | 'sherpa-onnx' | 'azure';
   /** sherpa-onnx 专用：speaker id */
   sid?: number;
 }
@@ -62,7 +62,8 @@ export interface ITtsBackend {
 
 // ---- 引擎标识 ----
 
-export type TtsEngineType = 'system' | 'sherpa-onnx';
+export type TtsEngineType = 'system' | 'sherpa-onnx' | 'azure';
 
 export const TTS_ENGINE_SYSTEM: TtsEngineType = 'system';
 export const TTS_ENGINE_SHERPA_ONNX: TtsEngineType = 'sherpa-onnx';
+export const TTS_ENGINE_AZURE: TtsEngineType = 'azure';

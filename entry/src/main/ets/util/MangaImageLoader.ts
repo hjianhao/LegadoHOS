@@ -490,18 +490,22 @@ export class MangaImageLoader {
    * 计算字符串的 MD5 hex 值
    */
   private static async md5Hex(input: string): Promise<string> {
-    const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
-    const bytes: Uint8Array = new Uint8Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      bytes[i] = input.charCodeAt(i) & 0xFF;
+    try {
+      const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
+      const bytes: Uint8Array = new Uint8Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        bytes[i] = input.charCodeAt(i) & 0xFF;
+      }
+      await md.update({ data: bytes });
+      const result = await md.digest();
+      const hex: string[] = [];
+      for (let i = 0; i < result.data.length; i++) {
+        hex.push((result.data[i] & 0xFF).toString(16).padStart(2, '0'));
+      }
+      return hex.join('');
+    } catch (err) {
+      throw new Error('[MangaImageLoader] MD5 failed: ' + (err as Error).message);
     }
-    await md.update({ data: bytes });
-    const result = await md.digest();
-    const hex: string[] = [];
-    for (let i = 0; i < result.data.length; i++) {
-      hex.push((result.data[i] & 0xFF).toString(16).padStart(2, '0'));
-    }
-    return hex.join('');
   }
 
   /**

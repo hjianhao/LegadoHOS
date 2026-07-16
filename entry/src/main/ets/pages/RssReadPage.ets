@@ -15,7 +15,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
-export struct RssReadPage {
+struct RssReadPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State title: string = '';
   @State origin: string = '';

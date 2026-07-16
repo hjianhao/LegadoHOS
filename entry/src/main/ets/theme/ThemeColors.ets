@@ -90,6 +90,16 @@ export class ThemeColors {
     return isDark ? '#5CACF2' : '#0078D7';
   }
 
+  /** 主色调上的文字/图标色 */
+  static onPrimary(_isDark: boolean): string {
+    return '#FFFFFF';
+  }
+
+  /** 弹层遮罩色 */
+  static scrim(_isDark: boolean): string {
+    return 'rgba(0,0,0,0.18)';
+  }
+
   /** 错误/警告色 */
   static error(_isDark: boolean): string {
     const s = getScheme();

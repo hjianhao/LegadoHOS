@@ -553,6 +553,15 @@ export struct BookshelfPage {
   }
 
   async continueRead(book: Book): Promise<void> {
+    // MOBI/AZW/AZW3 本地书统一使用 foliate-js 图文引擎。
+    if (book.origin === LOCAL_BOOK_ORIGIN &&
+      (book.kind === 'MOBI' || book.kind === 'AZW' || book.kind === 'AZW3')) {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/ReaderPage',
+        params: { bookName: book.name, bookUrl: book.bookUrl }
+      });
+      return;
+    }
     // EPUB 本地书：根据引擎选择阅读方式
     if (book.origin === LOCAL_BOOK_ORIGIN && book.kind === 'EPUB') {
       try {
@@ -704,7 +713,7 @@ export struct BookshelfPage {
         if (this.filteredBooks.length > 0) {
           Text(this.filteredBooks.length + '本').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
         }
-        Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor('#FFF')
+        Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .height(32).padding({ left: 10, right: 10 })
         .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(16).margin({ right: 6 })
         .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
@@ -867,7 +876,7 @@ export struct BookshelfPage {
     Row() {
       if (this.isSelectMode) {
         Text(this.isSelected(book.id) ? '✓' : '')
-          .fontSize(16).fontColor('#FFF').fontWeight(FontWeight.Bold)
+          .fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
           .width(24).height(24).textAlign(TextAlign.Center)
           .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : '#33000000')
           .borderRadius(12).margin({ right: 8 })
@@ -942,7 +951,7 @@ export struct BookshelfPage {
         }
         if (this.isSelectMode) {
           Text(this.isSelected(book.id) ? '✓' : '')
-            .fontSize(18).fontColor('#FFF').fontWeight(FontWeight.Bold)
+            .fontSize(18).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
             .width(28).height(28).textAlign(TextAlign.Center)
             .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : '#66000000')
             .borderRadius(14).position({ top: 4, left: 4 })

@@ -1,6 +1,6 @@
 # 本地书模块
 
-阅读本地 EPUB/TXT/MOBI/PDF 文件。结构分为三层：导入层、解析层、阅读引擎层。
+阅读本地 EPUB/TXT/MOBI/AZW/AZW3/PDF 文件。结构分为三层：导入层、解析层、阅读引擎层。
 
 ## 架构总览
 
@@ -13,7 +13,7 @@
        └→ LocalBookEngine.importBooks()
              ├→ [EPUB] DirEpubParser.parse() 从目录解析
              ├→ [TXT]  TxtParser.parse()
-             ├→ [MOBI] MobiParser.parse()
+             ├→ [MOBI/AZW/AZW3] MobiProbeParser.probe()（只解析头部并检查 DRM）
              └→ [PDF]  PdfParser.parse()
                    ↓
              BookTable.insertBook()      ← books 表
@@ -23,7 +23,9 @@
   ├→ 小说引擎（默认）: ReadPage（Text 组件）
   │    ├→ 目录：DirEpubParser 实时从解压目录读取（不依赖 DB 缓存）
   │    └→ 内容：从解压目录读取 HTML → HtmlUtil.toPlainText() → 分页
-  └→ 图文混排引擎（设置切换）: ReaderPage（WebView + EPUB.js）
+  └→ 图文混排引擎: ReaderPage
+       ├→ EPUB：WebView + EPUB.js
+       └→ MOBI/AZW/AZW3：WebView + foliate-js（HTTP Range 按需读取）
 ```
 
 ---
@@ -145,10 +147,9 @@ EpubEngineConfig (engine/EpubEngineConfig.ets)
 - 解析结果缓存在 `ChapterCache`（内存），供 ChapterListPage 使用
 
 **内容加载**：
-- 优先从 `tocUrl + ch.url`（解压目录 + 章节相对路径）读取 HTML 文件
-- DB 内容为空时（新导入）从文件读取
+- 从 `tocUrl + ch.url`（解压目录 + 章节相对路径）读取 HTML 文件
+- `tocUrl` 为空或章节文件缺失视为导入数据无效
 - `HtmlUtil.toPlainText()` 将 HTML 转为纯文本（自动去除 `<style>`/`<script>`/`<title>` 标签）
-- 兜底：从 DB 读取（旧导入）
 
 **阅读设置加载**：
 - `aboutToAppear()` 中 `await loadSettings()` 完成后再加载内容
@@ -242,10 +243,9 @@ ChapterListPage 的 `ensureAscendingOrder()` 对本地书（`origin='本地'`）
 | `engine/book/LocalBookEngine.ts` | 导入引擎入口 |
 | `engine/book/DirEpubParser.ts` | 目录解析器（从解压目录读取 OPF/NCX） |
 | `engine/book/ZipExtractTask.ets` | TaskPool `@Concurrent` 解压任务 |
-| `engine/book/EpubParser.ts` | **已废弃**（旧 ZIP 解析器） |
+| `engine/book/EpubParser.ts` | **已移除**（旧 ZIP 解析器） |
 | `workers/ZipExtractWorker.ts` | **已移除**（改用 TaskPool） |
 | `engine/EpubEngineConfig.ets` | 双引擎配置 |
-| `util/ZipReader.ts` | ZIP 读取器（含 `@ohos.zlib` 原生解压） |
 | `util/HtmlUtil.ts` | HTML 清洗（`toPlainText`/`stripHtml`） |
 | `pages/ReadPage.ets` | 小说阅读页 |
 | `pages/ReaderPage.ets` | 图文混排阅读页（框架） |
@@ -271,9 +271,9 @@ ChapterListPage 的 `ensureAscendingOrder()` 对本地书（`origin='本地'`）
 | 章节导入慢 | 129 个章节逐个 INSERT | 改用 `batchInsert` |
 | 多次导入不更新 | 命中"已导入"早期返回 | 改为删旧记录重新导入 |
 | 导入报"非法参数" | 解压时空缓冲区写入 | `extractAll` 跳过空条目 + `byteLength > 0` 检查 |
-| 主线程卡死 6s | 纯 JS DEFLATE 解压 227 条目 | `@ohos.zlib` 原生解压 + TaskPool 后台线程 |
+| 主线程卡死 6s | 旧 ZIP 解析器在主线程解压 227 条目 | `@ohos.zlib.decompressFile` + TaskPool 后台线程 |
 | Worker 无法启动 | EAWorker 被 WebView 占满 | 改用 TaskPool（无需 EAWorker） |
-| `zlib.decompressFile` 失败 900002 | NAPI 不支持负 windowBits；目录名含特殊字符 | 改用 `zlib.unzipFile`；UUID 目录名 |
+| `zlib.decompressFile` 失败 900002 | 目录名含特殊字符 | 使用 UUID 目录名 |
 | 100MB 书导入 ANR | `toPlainText` 处理全部 spine 内容 | `skipContent=true`，内容按需加载 |
 | 目录缺章节 | NCX 嵌套 navPoint 的非贪婪 regex 吞内层节点 | 深度计数解析 + href 去重 + spine 过滤 |
 | 目录顺序反转 | 导航未传 `origin` 参数，`ensureAscendingOrder` 误判 | 传 `origin` 参数 |
@@ -317,12 +317,14 @@ ChapterListPage 的 `ensureAscendingOrder()` 对本地书（`origin='本地'`）
 
 ### P1 - 图文混排引擎开发
 
-- [ ] **EpubServer**：实现 TCP Socket HTTP 服务器
-- [ ] **ReaderPage**：WebView 加载 `reader.html`，EPUB.js 通过 HTTP 加载 OPF
-- [ ] **双向通信**：翻页/目录/设置通过 `runJavaScript` + `WebMessagePort`
+- [x] **EpubServer**：TCP Socket HTTP 服务，支持 EPUB 目录和 MOBI/AZW Range 请求
+- [x] **ReaderPage**：EPUB.js 与 foliate-js 双引擎，复用目录、翻页、样式和进度 UI
+- [x] **双向通信**：通过事件轮询同步目录、元数据、定位、点击区域和错误
+- [ ] **MOBI/AZW 朗读**：从 foliate 当前/相邻 section 提取纯文本并接入鸿蒙 TTS
+- [ ] **MOBI/AZW 封面落盘**：首次解析后把 `getCover()` 结果写入书架封面缓存
 
 ### P2 - 清理
 
-- [ ] **移除旧代码**：`EpubParser.ts` 和 `EpubJS相关` 文件
-- [ ] **ZipReader**：保留 `extractAll` 方法
+- [x] **移除旧代码**：`EpubParser.ts` / `ZipReader.ts` / `ZipWriter.ts`
+- [ ] **EpubJS 相关文件**：图文混排引擎稳定后再清理过期桥接文件
 - [ ] **workers/ZipExtractWorker.ts**：已移除，确认 build-profile 中无残留

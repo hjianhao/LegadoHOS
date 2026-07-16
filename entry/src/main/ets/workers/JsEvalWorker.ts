@@ -11,6 +11,9 @@ import worker from '@ohos.worker';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
 
+// 静态导入 QuickJS 原生模块（Worker 中必须用静态 import 而非 requireNapi）
+import quickjsBridge from 'libquickjs_bridge.so';
+
 declare function requireNapi(name: string): object;
 
 // ============ RCP HTTP 工具 ============
@@ -46,9 +49,13 @@ function getRcpSession(): rcp.Session {
   if (workerProxyHost && workerProxyPort > 0) {
     cfg.proxy = { url: 'http://' + workerProxyHost + ':' + workerProxyPort } as rcp.WebProxy;
   }
-  rcpSession = rcp.createSession({ requestConfiguration: cfg });
-  console.info('[JsWorker] RCP session created, timeout:', workerTimeout, 'dns:', workerDnsEnabled, 'proxy:', workerProxyHost || 'none');
-  return rcpSession;
+  try {
+    rcpSession = rcp.createSession({ requestConfiguration: cfg });
+    console.info('[JsWorker] RCP session created, timeout:', workerTimeout, 'dns:', workerDnsEnabled, 'proxy:', workerProxyHost || 'none');
+    return rcpSession;
+  } catch (err) {
+    throw new Error('[JsWorker] create RCP session failed: ' + (err as Error).message);
+  }
 }
 
 async function httpRequest(url: string, method: string, headers: Record<string, string>, body?: string): Promise<string> {
@@ -73,40 +80,18 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
 
 // ============ QuickJS 桥 ============
 
-let quickjsBridge: any = null;
 let engineId: number = -1;
 let initialized: boolean = false;
 
 async function initEngine(): Promise<boolean> {
   if (initialized) return true;
 
-  // 优先使用 HarmonyOS NEXT 推荐的动态 import
-  try {
-    const native = await import('libquickjs_bridge.so');
-    quickjsBridge = native.default || native;
-    if (quickjsBridge && typeof quickjsBridge.createEngine === 'function') {
-      console.info('[JsWorker] Native module loaded via dynamic import');
-    } else {
-      console.warn('[JsWorker] Dynamic import returned invalid module');
-      return false;
-    }
-  } catch (e) {
-    console.warn('[JsWorker] Dynamic import failed:', e?.toString()?.substring(0, 100));
+  // quickjsBridge 已在模块顶部静态导入，无需 requireNapi
+  if (!quickjsBridge || typeof quickjsBridge.createEngine !== 'function') {
+    console.warn('[JsWorker] Static imported quickjsBridge is invalid');
+    return false;
   }
-
-  // 回退 requireNapi（兼容旧版本）
-  if (!quickjsBridge) {
-    try {
-      quickjsBridge = requireNapi('quickjs_bridge');
-      if (!quickjsBridge || typeof quickjsBridge.createEngine !== 'function') {
-        console.warn('[JsWorker] requireNapi returned invalid module');
-        return false;
-      }
-    } catch (_e) {
-      console.warn('[JsWorker] requireNapi(quickjs_bridge) failed');
-      return false;
-    }
-  }
+  console.info('[JsWorker] Native module loaded via static import');
 
   try {
     engineId = quickjsBridge.createEngine();
@@ -135,13 +120,9 @@ async function handleHttpRequest(
     const headers = JSON.parse(headersJson || '{}') as Record<string, string>;
     const responseText = await httpRequest(url, method, headers, body);
     const isError = responseText.startsWith('HTTP Error:');
-    if (quickjsBridge && typeof quickjsBridge.onHttpResponse === 'function') {
-      quickjsBridge.onHttpResponse(requestId, isError ? '' : responseText, isError);
-    }
+    quickjsBridge.onHttpResponse(requestId, isError ? '' : responseText, isError);
   } catch (_e) {
-    if (quickjsBridge && typeof quickjsBridge.onHttpResponse === 'function') {
-      quickjsBridge.onHttpResponse(requestId, '', true);
-    }
+    quickjsBridge.onHttpResponse(requestId, '', true);
   }
 }
 
@@ -183,7 +164,7 @@ try {
         parentPort.postMessage({ type: 'init_done', ok });
       });
     } else if (msg.type === 'destroy') {
-      if (engineId >= 0 && quickjsBridge && typeof quickjsBridge.destroyEngine === 'function') {
+      if (engineId >= 0) {
         quickjsBridge.destroyEngine(engineId);
       }
       initialized = false;

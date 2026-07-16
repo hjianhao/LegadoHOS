@@ -838,11 +838,12 @@ export class HtmlParser {
   }
 
   private matchAttrSelector(el: HtmlElement, selector: string): boolean {
-    const match = selector.match(/^\[([\w-]+)(?:([~|^$*]?=)"([^"]*)")?\]$/);
+    // 支持三种属性值格式：[attr="val"]、[attr='val']、[attr=val]（无引号）
+    const match = selector.match(/^\[([\w-]+)(?:([~|^$*]?=)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`\]]+)))?\]$/);
     if (!match) return false;
     const attrName = match[1].toLowerCase();
     const operator = match[2] || '';
-    const value = match[3] || '';
+    const value = match[3] ?? match[4] ?? match[5] ?? '';
 
     const attrVal = el.attributes[attrName];
 

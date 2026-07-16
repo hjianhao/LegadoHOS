@@ -980,11 +980,11 @@ struct SearchPage {
       if (this.isSearching || this.isLoadingMore) {
         Button(this.isSearching ? '■' : '+')
           .fontSize(20)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .width(56)
           .height(56)
           .borderRadius(28)
-          .backgroundColor(this.isSearching ? '#D64545' : this.primaryColor())
+          .backgroundColor(this.isSearching ? ThemeColors.error(this.isDark) : this.primaryColor())
           .position({ x: '80%', y: '82%' })
           .onClick(() => {
             if (this.isSearching || this.isLoadingMore) {
@@ -994,7 +994,7 @@ struct SearchPage {
       } else if (this.hasSearched && this.hasMore && this.results.length > 0) {
         Button('+')
           .fontSize(24)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .width(56)
           .height(56)
           .borderRadius(28)
@@ -1124,10 +1124,10 @@ struct SearchPage {
 
         Button(this.isSearching ? '停止' : '搜索')
           .fontSize(14)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .height(40)
           .padding({ left: 16, right: 16 })
-          .backgroundColor(this.isSearching ? '#D64545' : this.primaryColor())
+          .backgroundColor(this.isSearching ? ThemeColors.error(this.isDark) : this.primaryColor())
           .borderRadius(20)
           .margin({ left: 8 })
           .onClick(() => {
@@ -1147,7 +1147,7 @@ struct SearchPage {
     Button(label)
       .fontSize(13)
       .fontWeight(FontWeight.Medium)
-      .fontColor(selected ? '#FFFFFF' : this.textColor())
+      .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.textColor())
       .width(36)
       .height(36)
       .padding(0)
@@ -1183,7 +1183,7 @@ struct SearchPage {
   @Builder buildTinyChip(label: string, selected: boolean, action: () => void) {
     Text(label)
       .fontSize(12)
-      .fontColor(selected ? '#FFFFFF' : this.subTextColor())
+      .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.subTextColor())
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: 10, right: 10, top: 5, bottom: 5 })
@@ -1253,7 +1253,7 @@ struct SearchPage {
           ForEach(this.bookshelfHints, (book: Book) => {
             ListItem() {
               Row() {
-                BookCover({ name: book.name, coverUrl: book.coverUrl || book.customCoverPath, coverWidth: 42, coverHeight: 58 })
+                BookCover({ name: book.name, coverUrl: book.coverUrl || book.customCoverPath, coverWidth: 42, coverHeight: 58, coverDecodeJs: book.coverDecodeJs || '' })
                   .margin({ right: 12 })
                 Column() {
                   Text(book.name)
@@ -1294,7 +1294,7 @@ struct SearchPage {
                 .layoutWeight(1)
               Text('清除全部')
                 .fontSize(12)
-                .fontColor('#D64545')
+                .fontColor(ThemeColors.error(this.isDark))
                 .onClick(() => { this.showClearHistoryDialog = true; })
             }
             .width('100%')
@@ -1468,11 +1468,11 @@ struct SearchPage {
   @Builder buildBookListItem(item: SearchResult) {
     Row() {
       Stack() {
-        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 72, coverHeight: 101 })
+        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 72, coverHeight: 101, coverDecodeJs: item.coverDecodeJs || '' })
         if (this.getShelfState(item) > 0) {
           Text(this.getShelfState(item) === 1 ? '✓' : '↔')
             .fontSize(11)
-            .fontColor('#FFFFFF')
+            .fontColor(ThemeColors.onPrimary(this.isDark))
             .fontWeight(FontWeight.Bold)
             .width(22)
             .height(22)
@@ -1580,11 +1580,11 @@ struct SearchPage {
   @Builder buildGridItem(item: SearchResult) {
     Column() {
       Stack() {
-        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 96, coverHeight: 134 })
+        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 96, coverHeight: 134, coverDecodeJs: item.coverDecodeJs || '' })
         if (this.getShelfState(item) > 0) {
           Text(this.getShelfState(item) === 1 ? '✓' : '↔')
             .fontSize(10)
-            .fontColor('#FFFFFF')
+            .fontColor(ThemeColors.onPrimary(this.isDark))
             .fontWeight(FontWeight.Bold)
             .width(20)
             .height(20)
@@ -1668,7 +1668,7 @@ struct SearchPage {
       if (this.hasRelaxableFilters()) {
         Button('放宽筛选')
           .fontSize(14)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .height(38)
           .padding({ left: 18, right: 18 })
           .backgroundColor(this.primaryColor())
@@ -1788,7 +1788,7 @@ struct SearchPage {
   @Builder buildSegment(label: string, selected: boolean, action: () => void) {
     Text(label)
       .fontSize(14)
-      .fontColor(selected ? '#FFFFFF' : this.textColor())
+      .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.textColor())
       .textAlign(TextAlign.Center)
       .height(38)
       .layoutWeight(1)
@@ -1802,7 +1802,7 @@ struct SearchPage {
   @Builder buildSelectionChip(label: string, selected: boolean, action: () => void) {
     Text(label)
       .fontSize(13)
-      .fontColor(selected ? '#FFFFFF' : this.textColor())
+      .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.textColor())
       .padding({ left: 12, right: 12, top: 7, bottom: 7 })
       .backgroundColor(selected ? this.primaryColor() : this.surfaceAltColor())
       .borderRadius(16)
@@ -1893,7 +1893,7 @@ struct SearchPage {
               Row() {
                 Text(this.selectedSourceUrls.includes(source.sourceUrl) ? '✓' : '')
                   .fontSize(14)
-                  .fontColor('#FFFFFF')
+                  .fontColor(ThemeColors.onPrimary(this.isDark))
                   .fontWeight(FontWeight.Bold)
                   .width(24)
                   .height(24)
@@ -1957,10 +1957,10 @@ struct SearchPage {
           .onClick(() => { this.showClearHistoryDialog = false; })
         Button('清除')
           .fontSize(14)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .layoutWeight(1)
           .height(40)
-          .backgroundColor('#D64545')
+          .backgroundColor(ThemeColors.error(this.isDark))
           .borderRadius(20)
           .margin({ left: 10 })
           .onClick(() => { this.clearHistory(); })
@@ -1991,7 +1991,7 @@ struct SearchPage {
       if (this.matchModeExact) {
         Button('关闭精确匹配')
           .fontSize(14)
-          .fontColor('#FFFFFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .width('100%')
           .height(40)
           .backgroundColor(this.primaryColor())
@@ -2141,7 +2141,8 @@ struct SearchPage {
             name: this.previewItem.name,
             coverUrl: this.previewItem.coverUrl,
             coverWidth: 96,
-            coverHeight: 134
+            coverHeight: 134,
+            coverDecodeJs: this.previewItem.coverDecodeJs || ''
           })
             .margin({ right: 14 })
           Column() {
@@ -2197,7 +2198,7 @@ struct SearchPage {
             .onClick(() => { this.addPreviewToShelf(); })
           Button('查看详情')
             .fontSize(14)
-            .fontColor('#FFFFFF')
+            .fontColor(ThemeColors.onPrimary(this.isDark))
             .layoutWeight(1)
             .height(42)
             .backgroundColor(this.primaryColor())

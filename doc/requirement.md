@@ -115,8 +115,8 @@
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
 | R-060 | TXT 解析（TxtParser） | ✅ 完成 | 支持章节分割、编码检测、大文件分页读取 |
-| R-061 | EPUB 解析（EpubParser） | ✅ 完成 | OPF + NCX 目录解析、manifest 资源管理 |
-| R-062 | MOBI 解析（MobiParser） | ✅ 完成 | PDB 头解析、文本/图像记录提取 |
+| R-061 | EPUB 解析（DirEpubParser） | ✅ 完成 | `@ohos.zlib` 解压到目录后解析 OPF + NCX、manifest 资源 |
+| R-062 | MOBI/AZW/AZW3 图文阅读（foliate-js） | ✅ 完成 | 轻量 PDB/MOBI/EXTH 导入探测；foliate-js 解析 KF6/KF8、HUFF/CDIC、目录与图文资源；Range 随机读取；拒绝 DRM/KFX |
 | R-063 | PDF 解析（PdfParser） | ⚠️ 部分 | 元数据提取、目录结构（PDF 页面渲染待集成） |
 
 ### 2.8 书源引擎（SourceExecutor / ScriptEngine）
@@ -211,7 +211,7 @@
 | R-143 | 文件操作（FileUtil） | ✅ 完成 | 文件读写、目录管理、路径工具 |
 | R-144 | 字符串处理（StrUtil） | ✅ 完成 | 相似度计算（Levenshtein/Cosine）、格式校验 |
 | R-145 | 加密工具（CryptoUtil） | ✅ 完成 | MD5/SHA1/SHA256/Base64 |
-| R-146 | ZIP 解压（ZipReader） | ✅ 完成 | Zip 文件读取（store/deflate），流式读取，支持 EPUB/MOBI |
+| R-146 | ZIP 解压（@ohos.zlib） | ✅ 完成 | EPUB 导入、备份恢复均使用系统 zlib 解压 |
 | R-147 | 封面生成（BookCoverUtil） | ✅ 完成 | 文字封面 Canvas 生成，颜色映射 |
 | R-148 | 繁简转换（ChineseConverter） | ✅ 完成 | 简繁双向转换（OpenCC 兼容词表，260 行） |
 | R-149 | 内容缓存（ContentCache） | ✅ 完成 | 章节内容内存缓存 |

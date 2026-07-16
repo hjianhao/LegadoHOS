@@ -45,9 +45,10 @@ export class PdfParser {
   }
 
   async parse(): Promise<{ meta: PdfMeta; chapters: BookChapter[] }> {
-    const file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
-    let content: string;
+    let file: fileFs.File | null = null;
+    let content: string = '';
     try {
+      file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
       const stat = fileFs.statSync(this.filePath);
       const buf = new ArrayBuffer(stat.size);
       fileFs.readSync(file.fd, buf);
@@ -58,8 +59,16 @@ export class PdfParser {
         chars.push(String.fromCharCode(bytes[i]));
       }
       content = chars.join('');
+    } catch (err) {
+      throw new Error(`Read PDF failed: ${this.filePath}: ${(err as Error).message}`);
     } finally {
-      fileFs.closeSync(file);
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[PDF] close failed:', (err as Error).message);
+        }
+      }
     }
 
     // 1. 解析文件头

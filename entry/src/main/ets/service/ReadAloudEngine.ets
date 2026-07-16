@@ -147,10 +147,15 @@ export class ReadAloudEngine {
   private startChapterIdx_: number = 0;
   private totalPcmWritten_: number = 0;
   private callback_: AloudCallback;
-  // 每段 TTS 合成后，onData 小块拼成完整 ArrayBuffer
-  private chunkPcm_: ArrayBuffer[] = [];
-  private chunkTextOffset_: number = 0;  // 当前合成中块的文本起始偏移
+  // 每段 TTS 合成后，onData 小块按 requestId 拼成完整 ArrayBuffer
   private activeChunkOffset_: number = 0;  // 正在播放块的文本起始偏移
+  private systemRequestSeq_: number = 0;
+  private systemSessionId_: number = 0;
+  private activeSystemRequestId_: string = '';
+  private systemChunkPcm_: Map<string, ArrayBuffer[]> = new Map();
+  private systemChunkOffset_: Map<string, number> = new Map();
+  private systemChunkText_: Map<string, string> = new Map();
+  private systemChunkRetry_: Map<string, number> = new Map();
   // 双缓冲：activeChunk_ 正在播放，pendingChunk_ 预合成中
   private activeChunk_: Uint8Array | null = null;
   private activeOffset_: number = 0;
@@ -233,16 +238,17 @@ export class ReadAloudEngine {
             else {
               engine.setListener({
                 onStart: () => {},
-                onData: (_reqId: string, audioData: ArrayBuffer) => {
-                  this.chunkPcm_.push(audioData);
+                onData: (reqId: string, audioData: ArrayBuffer) => {
+                  const chunks = this.systemChunkPcm_.get(reqId);
+                  if (!chunks) return;
+                  chunks.push(audioData);
                 },
-                onComplete: () => {
-                  // 合成完 → 拼接所有小块为完整 PCM
-                  this.buildChunk_();
+                onComplete: (reqId: string) => {
+                  this.buildSystemChunk_(reqId);
                 },
                 onStop: () => {},
-                onError: (_reqId: string, code: number) => {
-                  this.callback_.onError?.('TTS error: ' + code);
+                onError: (reqId: string, code: number, errorMessage: string) => {
+                  this.handleSystemTtsError_(reqId, code, errorMessage);
                 },
               });
               resolve(engine);
@@ -282,9 +288,10 @@ export class ReadAloudEngine {
     
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
-    this.chunkPcm_ = [];
+    this.systemSessionId_++;
+    this.resetSystemSynthesisState_();
     this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
-    this.synthPending_ = false; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1; this.totalPcmWritten_ = 0;
+    this.synthPending_ = false; this.synthCount_ = 0; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1; this.totalPcmWritten_ = 0;
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
     this.currentTextIdx_ = 0; this.totalChars_ = text.length; this.playedChars_ = 0;
@@ -307,7 +314,10 @@ export class ReadAloudEngine {
   }
 
   async stop(): Promise<void> {
-    this.activeChunk_ = null; this.pendingQueue_ = []; this.pendingOffsetQueue_ = []; this.chunkPcm_ = [];
+    this.systemSessionId_++;
+    this.activeChunk_ = null; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
+    this.resetSystemSynthesisState_();
+    this.synthPending_ = false; this.synthCount_ = 0;
     this.firstChunkReady_ = false; this.chapterEndFired_ = false;
     try { await this.ttsEngine_?.stop(); } catch (_) {}
     try { await this.audioRenderer_?.stop(); await this.audioRenderer_?.flush(); } catch (_) {}
@@ -343,13 +353,25 @@ export class ReadAloudEngine {
       sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
       encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
     };
-    this.audioRenderer_ = await audio.createAudioRenderer({
-      streamInfo: streamInfo,
-      rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK, rendererFlags: 0 },
-    });
-    this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
-      this.writeData_(buffer);
-    });
+    try {
+      this.audioRenderer_ = await audio.createAudioRenderer({
+        streamInfo: streamInfo,
+        rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK, rendererFlags: 0 },
+      });
+    } catch (err) {
+      throw new Error('创建音频播放器失败: ' + (err as Error).message);
+    }
+    try {
+      this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
+        this.writeData_(buffer);
+      });
+    } catch (err) {
+      try {
+        await this.audioRenderer_.release();
+      } catch (_e) {}
+      this.audioRenderer_ = null;
+      throw new Error('注册音频写入回调失败: ' + (err as Error).message);
+    }
     this.activeChunk_ = null;
     this.activeOffset_ = 0;
     this.currentRendererRate_ = sampleRate;
@@ -404,7 +426,8 @@ export class ReadAloudEngine {
     // 检查是否需要预合成：如果pendingQueue已有足够多的音频，则不再合成
     if (this.state_ !== AloudState.PLAYING) return;
     if (this.pendingQueue_.length >= ReadAloudEngine.PRELOAD_COUNT) return;
-    if (this.synthCount_ >= ReadAloudEngine.MAX_SYNTH_CONCURRENCY) return; // 并行合成数量限制
+    const maxConcurrency = this.backend_ ? ReadAloudEngine.MAX_SYNTH_CONCURRENCY : 1;
+    if (this.synthCount_ >= maxConcurrency) return; // 系统 TTS 串行，离线后端允许并行预合成
     
     if (this.currentTextIdx_ >= this.textQueue_.length) {
       const provider = this.callback_.onNeedNextChapter || globalChapterProvider_;
@@ -429,41 +452,47 @@ export class ReadAloudEngine {
     const text = this.textQueue_[this.currentTextIdx_]; this.currentTextIdx_++;
     this.playedChars_ += text.length;
     this.callback_.onProgress?.(this.playbackPosition, this.totalChars_);
-    this.chunkTextOffset_ = this.playedChars_ - text.length;
+    const chunkOffset = this.playedChars_ - text.length;
     this.synthPending_ = true;
     this.synthCount_++; // 增加合成任务计数
     console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars, pending=' + this.pendingQueue_.length + ', synthCount=' + this.synthCount_);
 
     if (this.backend_) {
       // 离线 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
-      this.synthesizeWithBackend_(text);
+      this.synthesizeWithBackend_(text, chunkOffset);
     } else {
       // 系统 TTS：speak + onData/onComplete 回调流
-      this.synthesizeWithSystem_(text);
+      this.synthesizeWithSystem_(text, chunkOffset, 0);
     }
     
     // 立即继续预合成下一句（并行合成）
     this.speakNext_();
   }
 
-  /** onData 收集完 → 拼成大块，存入 pending 缓冲，预触发下一块 */
-  private buildChunk_(): void {
-    this.synthPending_ = false;
-    this.synthCount_--; // 减少合成任务计数
-    if (this.chunkPcm_.length === 0) { this.speakNext_(); return; }
-    const total = this.chunkPcm_.reduce((s: number, b: ArrayBuffer) => s + b.byteLength, 0);
+  /** 系统 TTS 每次 speak 都按 requestId 独立收集 PCM，避免回调串包。 */
+  private buildSystemChunk_(requestId: string): void {
+    const chunks = this.systemChunkPcm_.get(requestId);
+    const chunkOffset = this.systemChunkOffset_.get(requestId);
+    if (!chunks || chunkOffset === undefined) return;
+
+    this.cleanupSystemRequest_(requestId);
+    if (chunks.length === 0) { this.speakNext_(); return; }
+    const total = chunks.reduce((s: number, b: ArrayBuffer) => s + b.byteLength, 0);
     const merged = new Uint8Array(total); let offset = 0;
-    for (let i = 0; i < this.chunkPcm_.length; i++) { const src = new Uint8Array(this.chunkPcm_[i]); merged.set(src, offset); offset += src.byteLength; }
-    this.chunkPcm_ = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const src = new Uint8Array(chunks[i]);
+      merged.set(src, offset);
+      offset += src.byteLength;
+    }
     this.pendingQueue_.push(merged);
-    this.pendingOffsetQueue_.push(this.chunkTextOffset_);
-    console.info('[Aloud] chunk ready: ' + total + ' bytes PCM');
+    this.pendingOffsetQueue_.push(chunkOffset);
+    console.info('[Aloud] system chunk ready: ' + total + ' bytes PCM');
     if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     this.speakNext_();
   }
 
   /** 离线后端合成：async synthesize → 直接 push 到 pendingQueue_ */
-  private async synthesizeWithBackend_(text: string): Promise<void> {
+  private async synthesizeWithBackend_(text: string, chunkOffset: number): Promise<void> {
     try {
       const req: TtsSynthRequest = { text, speed: this.speed_ };
       console.info('[Aloud] backend synthesize start: text.len=' + text.length + ' speed=' + this.speed_);
@@ -476,30 +505,88 @@ export class ReadAloudEngine {
         audioSec.toFixed(1) + 's audio, synth=' + synthMs + 'ms, RTF=' + rtf.toFixed(2));
       const pcm = new Uint8Array(result.pcm);
       this.pendingQueue_.push(pcm);
-      this.pendingOffsetQueue_.push(this.chunkTextOffset_);
+      this.pendingOffsetQueue_.push(chunkOffset);
       if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     } catch (e) {
       this.callback_.onError?.('合成失败: ' + (e as Error).message);
     } finally {
-      this.synthPending_ = false;
-      this.synthCount_--; // 减少合成任务计数
-      this.speakNext_();  // 预合成下一句
+      this.synthCount_ = Math.max(0, this.synthCount_ - 1); // 减少合成任务计数
+      this.synthPending_ = this.synthCount_ > 0;
+      if (this.state_ === AloudState.PLAYING) this.speakNext_();  // 预合成下一句
     }
   }
 
   /** 系统 TTS 合成：speak + onData/onComplete 回调（原有逻辑） */
-  private synthesizeWithSystem_(text: string): void {
+  private synthesizeWithSystem_(text: string, chunkOffset: number, retryCount: number): void {
     const extraParam: Record<string, Object> = {};
     extraParam['speed'] = this.speed_;
     extraParam['volume'] = 1.0;
     extraParam['playType'] = 0;
     extraParam['audioType'] = 'pcm';
+    const requestId = 'tts_' + this.systemSessionId_ + '_' + (++this.systemRequestSeq_) + '_' + Date.now();
+    this.activeSystemRequestId_ = requestId;
+    this.systemChunkPcm_.set(requestId, []);
+    this.systemChunkOffset_.set(requestId, chunkOffset);
+    this.systemChunkText_.set(requestId, text);
+    this.systemChunkRetry_.set(requestId, retryCount);
     try {
-      this.ttsEngine_!.speak(text, { requestId: 't_' + Date.now(), extraParams: extraParam });
+      this.ttsEngine_!.speak(text, { requestId: requestId, extraParams: extraParam });
     } catch (e) {
-      this.synthPending_ = false;
-      this.callback_.onError?.('合成失败: ' + (e as Error).message);
+      this.cleanupSystemRequest_(requestId);
+      const msg = '合成失败: ' + (e as Error).message;
+      if (this.hasPlayableAudio_()) {
+        console.warn('[Aloud] ' + msg);
+        this.speakNext_();
+      } else {
+        this.callback_.onError?.(msg);
+      }
     }
+  }
+
+  private handleSystemTtsError_(requestId: string, code: number, errorMessage: string): void {
+    const text = this.systemChunkText_.get(requestId);
+    const chunkOffset = this.systemChunkOffset_.get(requestId);
+    const retryCount = this.systemChunkRetry_.get(requestId) ?? 0;
+    if (text === undefined || chunkOffset === undefined) return;
+
+    this.cleanupSystemRequest_(requestId);
+    if (code === 401 && retryCount < 1 && this.state_ === AloudState.PLAYING) {
+      console.warn('[Aloud] system TTS 401, retry request=' + requestId + ', message=' + errorMessage);
+      this.synthPending_ = true;
+      this.synthCount_++;
+      this.synthesizeWithSystem_(text, chunkOffset, retryCount + 1);
+      return;
+    }
+
+    const msg = '系统朗读合成失败: ' + code + (errorMessage ? ' ' + errorMessage : '');
+    if (this.hasPlayableAudio_()) {
+      console.warn('[Aloud] ' + msg);
+      this.speakNext_();
+    } else {
+      this.callback_.onError?.(msg);
+    }
+  }
+
+  private cleanupSystemRequest_(requestId: string): void {
+    this.systemChunkPcm_.delete(requestId);
+    this.systemChunkOffset_.delete(requestId);
+    this.systemChunkText_.delete(requestId);
+    this.systemChunkRetry_.delete(requestId);
+    if (this.activeSystemRequestId_ === requestId) this.activeSystemRequestId_ = '';
+    this.synthCount_ = Math.max(0, this.synthCount_ - 1);
+    this.synthPending_ = this.synthCount_ > 0;
+  }
+
+  private resetSystemSynthesisState_(): void {
+    this.activeSystemRequestId_ = '';
+    this.systemChunkPcm_.clear();
+    this.systemChunkOffset_.clear();
+    this.systemChunkText_.clear();
+    this.systemChunkRetry_.clear();
+  }
+
+  private hasPlayableAudio_(): boolean {
+    return this.activeChunk_ !== null || this.pendingQueue_.length > 0 || this.firstChunkReady_;
   }
 
   /** writeData: 从 active 缓冲读取，耗尽时从 pending 换入 */
@@ -524,7 +611,7 @@ export class ReadAloudEngine {
         }
         if (!this.activeChunk_) {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
-          if (this.chapterEnded_ && !this.synthPending_ && this.chunkPcm_.length === 0 && !this.chapterEndFired_) {
+          if (this.chapterEnded_ && !this.synthPending_ && this.synthCount_ === 0 && !this.chapterEndFired_) {
             this.chapterEndFired_ = true;
             this.callback_.onChapterEnd?.();
             return audio.AudioDataCallbackResult.INVALID;

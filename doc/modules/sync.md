@@ -41,8 +41,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | 备份/恢复服务 | `entry/src/main/ets/service/BackupService.ts` |
 | WebDAV 服务 | `entry/src/main/ets/service/WebDavService.ts` |
 | 设置存储 | `entry/src/main/ets/data/preferences/SettingsStore.ts` |
-| ZIP 写入器 | `entry/src/main/ets/util/ZipWriter.ts` |
-| ZIP 读取器 | `entry/src/main/ets/util/ZipReader.ts` |
+| ZIP 压缩/解压 | `@ohos.zlib.compressFile` / `@ohos.zlib.decompressFile` |
 | 备份设置页面 | `entry/src/main/ets/pages/BackupSettingsPage.ets` |
 | 设置页面入口 | `entry/src/main/ets/pages/SettingsPage.ets` |
 | Web 远程管理 | `entry/src/main/ets/engine/web/WebServer.ts` |
@@ -62,7 +61,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 备份/恢复模块是阅读 App 的"数据保险箱"。它需要同时承担：
 
 1. 完整导出书架书籍、阅读进度、书源、替换规则、RSS、书签等所有用户数据。
-2. 支持 ZIP 打包为标准备份文件，兼容 Android Legado 备份格式。
+2. 支持 ZIP 打包为当前鸿蒙备份格式。
 3. 提供本地文件备份（通过系统文件选择器保存/加载）。
 4. 提供 WebDAV 云端备份（上传/下载/列表/删除）。
 5. 支持 WebDAV 阅读进度双向同步。
@@ -79,9 +78,9 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | # | 规格 | Android 行为 | 鸿蒙当前状态 | 差距说明 |
 |---|------|--------------|--------------|----------|
 | B-001 | 导出数据类型 | 20+ 种数据：bookshelf、bookSource、replaceRule、rssSources、rssStar、rssArticles、bookmark、readRecord、searchHistory、ruleSub、txtTocRule、httpTTS、dictRule、servers(AES)、config.xml | 已实现 | 鸿蒙导出 books、bookmarks、book_groups、book_sources、replace_rules、rss_sources、rss_stars、rss_read_records、read_records、read_record_details、search_history、txt_toc_rules、book_sources_cache + settings |
-| B-002 | 备份文件格式 | ZIP 打包（兼容 GSON 序列化的 JSON 数组文件 + config.xml） | 已实现 | ZIP（STORED 模式）+ backup.json（JSON），无 config.xml |
+| B-002 | 备份文件格式 | ZIP 打包（GSON 序列化的 JSON 数组文件 + config.xml） | 已实现 | zlib ZIP + backup.json（JSON），不兼容旧备份 |
 | B-003 | 本地保存 | content URI / SAF（DocumentFile）写入 | 已实现 | `DocumentViewPicker.save()` |
-| B-004 | 本地加载 | content URI / SAF（DocumentFile）读取，支持 ZIP 解压 | 已实现 | `DocumentViewPicker.select()` → `ZipReader` 解压 |
+| B-004 | 本地加载 | content URI / SAF（DocumentFile）读取，支持 ZIP 解压 | 已实现 | `DocumentViewPicker.select()` → `@ohos.zlib.decompressFile` 解压 |
 | B-005 | 备份文件名 | `backup{yyyy-MM-dd}-{deviceName}.zip` 或 `backup.zip`（最新） | 部分实现 | `backup_{yyyy-MM-dd}.zip`，无设备名 |
 | B-006 | AES 加密 | WebDAV 密码等敏感字段使用用户本地密码的 MD5 前 16 位作为 AES 密钥加密 | 未实现 | 鸿蒙明文存储 WebDAV 密码 |
 
@@ -170,7 +169,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 }
 ```
 
-所有 JSON 文件打包为 ZIP 存档，兼容标准 ZIP 读取器。
+`backup.json` 打包为 ZIP 存档。
 
 ### 4.2 WebDAV 数据结构
 
@@ -195,18 +194,15 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | `webdav_path` | string | `"legado"` | WebDAV 路径前缀 |
 | `webdav_auto_sync` | boolean | `false` | 自动同步开关 |
 
-### 4.4 ZIP 文件格式（ZipWriter）
+### 4.4 ZIP 文件格式
 
-鸿蒙 `ZipWriter` 使用 STORED（无压缩）模式：
+鸿蒙备份 ZIP 由系统 `@ohos.zlib` 生成和解压。备份包内至少包含：
 
 ```
-Local File Header (30 + filename bytes)
-File Data (raw)
-Central Directory Header (46 + filename bytes)
-End of Central Directory Record (22 bytes)
+backup.json
 ```
 
-CRC-32 校验使用标准查表法，兼容所有 ZIP 读取器。
+恢复时会先解压到临时目录，再按系统 zlib 的输出结构查找 `backup.json`。
 
 ---
 
@@ -222,13 +218,15 @@ exportBackup()
   → 返回 BackupData 对象
 
 [本地保存]
-  → ZipWriter.addTextFile('backup.json', JSON.stringify(data))
+  → 写入临时 backup.json
+  → @ohos.zlib.compressFile() 生成临时 ZIP
   → DocumentViewPicker.save() → 用户选择路径
-  → zip.saveTo(uri)
+  → 复制临时 ZIP 到用户选择的 URI
 
 [WebDAV 上传]
-  → ZipWriter.addTextFile('backup.json', JSON.stringify(data))
-  → WebDavService.uploadBackupZip(zip)
+  → 写入临时 backup.json
+  → @ohos.zlib.compressFile() 生成临时 ZIP
+  → WebDavService.uploadBackupFile(zipPath)
     → ensureDirectory('legado')
     → PUT {url}/legado/backup_2026-07-03.zip
 ```
@@ -237,9 +235,8 @@ exportBackup()
 
 ```
 [本地]
-  → DocumentViewPicker.select() → 用户选择 ZIP/JSON
-  → 尝试直接 JSON.parse（非 ZIP 格式兜底）
-  → ZipReader 解压 → 读取 backup.json
+  → DocumentViewPicker.select() → 用户选择 ZIP
+  → @ohos.zlib.decompressFile() 解压 → 读取 backup.json
   → importBackup(backupData)
     → 逐表 INSERT（rdb.insert）
     → SettingsStore.importAll(settings)
@@ -248,7 +245,7 @@ exportBackup()
   → WebDavService.listBackups() → 列出备份
   → 用户选择备份名
   → WebDavService.downloadBackup(name) → 下载到临时文件
-  → ZipReader 解压 → 读取 backup.json → importBackup()
+  → @ohos.zlib.decompressFile() 解压 → 读取 backup.json → importBackup()
 ```
 
 ### 5.3 WebDAV 协议交互

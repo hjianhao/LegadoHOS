@@ -1,8 +1,8 @@
 /**
- * TTS Worker (.ts) - 直接使用 NAPI，不依赖 ArkTS 封装
+ * TTS Worker (.ts) - 直接使用 NAPI，不依赖 ArkTS 封装。
  *
- * sherpa_onnx HAR 的 NAPI 类型声明在 libsherpa_onnx.so 中，
- * 可以在 .ts worker 中直接 import，绕过 ArkTS 导入限制。
+ * TS Worker 不能 import ArkTS 文件，因此这里不能使用 sherpa_onnx 的
+ * OfflineTts ArkTS 封装，只能直接导入 libsherpa_onnx.so。
  */
 import worker from '@ohos.worker';
 import {
@@ -20,6 +20,18 @@ let currentSid: number = 0;
 interface TtsOutputNapi {
   samples: Float32Array;
   sampleRate: number;
+}
+
+function safePostMessage(message: Record<string, Object>, transfer?: ArrayBuffer[]): void {
+  try {
+    if (transfer) {
+      workerPort.postMessage(message, transfer);
+    } else {
+      workerPort.postMessage(message);
+    }
+  } catch (err) {
+    console.error('[TtsWorker] postMessage failed: ' + String(err));
+  }
 }
 
 workerPort.onmessage = async (e: Object): Promise<void> => {
@@ -77,10 +89,10 @@ async function handleInit(modelType: string, modelPath: string): Promise<void> {
     const sampleRate = getOfflineTtsSampleRate(ttsHandle);
     const numSpeakers = getOfflineTtsNumSpeakers(ttsHandle);
 
-    workerPort.postMessage({ type: 'inited', sampleRate: sampleRate, numSpeakers: numSpeakers });
+    safePostMessage({ type: 'inited', sampleRate: sampleRate, numSpeakers: numSpeakers });
     console.info('[TtsWorker] init OK, sampleRate=' + sampleRate + ' speakers=' + numSpeakers);
   } catch (e) {
-    workerPort.postMessage({ type: 'inited', error: String(e) });
+    safePostMessage({ type: 'inited', error: String(e) });
     console.error('[TtsWorker] init failed: ' + String(e));
   }
 }
@@ -99,12 +111,12 @@ async function handleSynthesize(id: number, text: string, sid: number, speed: nu
     const output = await offlineTtsGenerateAsync(ttsHandle, input) as TtsOutputNapi;
     const int16Pcm = float32ToInt16(output.samples);
 
-    workerPort.postMessage({
+    safePostMessage({
       type: 'result', id: id, samples: int16Pcm, sampleRate: output.sampleRate
     }, [int16Pcm]);
     console.info('[TtsWorker] synthesize done: ' + output.samples.length + ' samples');
   } catch (e) {
-    workerPort.postMessage({ type: 'result', id: id, error: String(e) });
+    safePostMessage({ type: 'result', id: id, error: String(e) });
     console.error('[TtsWorker] synthesize failed: ' + String(e));
   }
 }

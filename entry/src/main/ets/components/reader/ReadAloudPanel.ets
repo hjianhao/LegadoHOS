@@ -3,8 +3,9 @@
  */
 import { ReadAloudEngine, AloudState, ReadAloudVoice, ReadAloudVoiceConfig, TtsVoiceManager, getGlobalEngineRef, getGlobalAloudEngine, setAloudGlobalListener, setGlobalBackend } from '../../service/ReadAloudEngine';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
-import { TtsEngineType, TTS_ENGINE_SYSTEM, TTS_ENGINE_SHERPA_ONNX, TtsVoiceInfo } from '../../service/tts/ITtsBackend';
+import { TtsEngineType, TTS_ENGINE_SYSTEM, TTS_ENGINE_SHERPA_ONNX, TTS_ENGINE_AZURE, TtsVoiceInfo } from '../../service/tts/ITtsBackend';
 import { getSherpaOnnxBackend } from '../../service/tts/SherpaOnnxTtsBackend';
+import { getAzureTtsBackend } from '../../service/tts/AzureTtsBackend';
 import { TtsModelManager, CancelFlag, TtsModelType } from '../../service/tts/TtsModelManager';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, bundleManager, common } from '@kit.AbilityKit';
@@ -45,6 +46,9 @@ export struct ReadAloudPanel {
   @State isWarmingUp: boolean = false;
   @State selectedSherpaVoiceId: string = 'kokoro-50';
   @State selectedSherpaVoiceName: string = '青年男声·云希';
+  @State azureVoices: TtsVoiceInfo[] = [];
+  @State selectedAzureVoiceId: string = 'zh-CN-XiaoxiaoNeural';
+  @State selectedAzureVoiceName: string = '晓晓';
   private downloadCancelFlag_: CancelFlag = { cancelled: false };
 
   text: string = '';
@@ -122,15 +126,22 @@ export struct ReadAloudPanel {
       const settings = SettingsStore.getInstance();
       await settings.init(UiUtil.getHostContext(this.getUIContext()));
       const engine = await settings.getTtsEngine();
-      this.selectedEngine = (engine === TTS_ENGINE_SHERPA_ONNX) ? TTS_ENGINE_SHERPA_ONNX : TTS_ENGINE_SYSTEM;
+      this.selectedEngine = (engine === TTS_ENGINE_SHERPA_ONNX || engine === TTS_ENGINE_AZURE) ? engine as TtsEngineType : TTS_ENGINE_SYSTEM;
       this.selectedModelType = (await settings.getTtsModelType()) as TtsModelType;
       this.selectedSherpaVoiceId = this.selectedModelType + '-' + await settings.getTtsSherpaSid();
+      this.selectedAzureVoiceId = await settings.getTtsAzureVoice();
       // 从后端获取名称
       const backend = getSherpaOnnxBackend(UiUtil.getHostContext(this.getUIContext()), this.selectedModelType);
       const voices = await backend.listVoices();
       const preset = voices.find((v: TtsVoiceInfo) => v.id === this.selectedSherpaVoiceId);
       if (preset) {
         this.selectedSherpaVoiceName = preset.name;
+      }
+      const azureBackend = getAzureTtsBackend(UiUtil.getHostContext(this.getUIContext()));
+      this.azureVoices = await azureBackend.listVoices();
+      const azurePreset = this.azureVoices.find((v: TtsVoiceInfo) => v.id === this.selectedAzureVoiceId);
+      if (azurePreset) {
+        this.selectedAzureVoiceName = azurePreset.name;
       }
       this.modelDownloaded = await settings.getTtsModelDownloaded();
       // 检查两个模型类型的文件是否存在
@@ -148,6 +159,11 @@ export struct ReadAloudPanel {
         // 初始化后端（如果尚未创建引擎，backend 会被暂存，等引擎创建时注入）
         const ctx = UiUtil.getHostContext(this.getUIContext());
         const backend = getSherpaOnnxBackend(ctx, this.selectedModelType);
+        await setGlobalBackend(backend);
+      } else if (this.selectedEngine === TTS_ENGINE_AZURE) {
+        const ctx = UiUtil.getHostContext(this.getUIContext());
+        const backend = getAzureTtsBackend(ctx);
+        backend.setVoice(this.selectedAzureVoiceId);
         await setGlobalBackend(backend);
       }
     } catch (e) {
@@ -222,6 +238,26 @@ export struct ReadAloudPanel {
         await this.saveEnginePreference_();
         await setGlobalBackend(null);
       }
+    } else if (engine === TTS_ENGINE_AZURE) {
+      try {
+        const settings = SettingsStore.getInstance();
+        await settings.init(UiUtil.getHostContext(this.getUIContext()));
+        const endpoint = await settings.getTtsAzureEndpoint();
+        const key = await settings.getTtsAzureKey();
+        if (!endpoint.trim() || !key.trim()) {
+          throw new Error('请先在设置中填写端点和密钥');
+        }
+        const ctx = UiUtil.getHostContext(this.getUIContext());
+        const backend = getAzureTtsBackend(ctx);
+        backend.setVoice(this.selectedAzureVoiceId);
+        await setGlobalBackend(backend);
+        this.azureVoices = await backend.listVoices();
+      } catch (e) {
+        this.errorText = 'Azure TTS 配置不可用: ' + (e as Error).message;
+        this.selectedEngine = prevEngine;
+        await this.saveEnginePreference_();
+        await setGlobalBackend(null);
+      }
     } else {
       // 切换回系统 TTS
       await setGlobalBackend(null);
@@ -236,6 +272,7 @@ export struct ReadAloudPanel {
     if (this.selectedEngine === TTS_ENGINE_SHERPA_ONNX) {
       return this.selectedModelType === 'vits' ? '自然语音（流畅）' : '自然语音（高品质）';
     }
+    if (this.selectedEngine === TTS_ENGINE_AZURE) return '微软语音';
     return '系统语音';
   }
 
@@ -244,11 +281,19 @@ export struct ReadAloudPanel {
       return this.isModelDownloaded_() ? '已就绪 · 完全离线' : this.selectedModelType === 'vits' ?
         '需下载模型（约 120 MB）' : '需下载模型（约 180-220 MB）';
     }
+    if (this.selectedEngine === TTS_ENGINE_AZURE) return '在线合成 · Azure Neural TTS';
     return '无需下载 · 设备内置';
+  }
+
+  currentVoiceName_(): string {
+    if (this.selectedEngine === TTS_ENGINE_SHERPA_ONNX) return this.selectedSherpaVoiceName;
+    if (this.selectedEngine === TTS_ENGINE_AZURE) return this.selectedAzureVoiceName;
+    return this.selectedVoiceName;
   }
 
   isEngineActive_(engine: TtsEngineType, modelType: TtsModelType): boolean {
     if (engine === TTS_ENGINE_SYSTEM) return this.selectedEngine === TTS_ENGINE_SYSTEM;
+    if (engine === TTS_ENGINE_AZURE) return this.selectedEngine === TTS_ENGINE_AZURE;
     return this.selectedEngine === TTS_ENGINE_SHERPA_ONNX && this.selectedModelType === modelType;
   }
   isModelDownloaded_(): boolean {
@@ -497,6 +542,11 @@ export struct ReadAloudPanel {
           const ctx = UiUtil.getHostContext(this.getUIContext());
           const backend = getSherpaOnnxBackend(ctx, this.selectedModelType);
           await eng.setBackend(backend);  // 包含 init + warmup
+        } else if (this.selectedEngine === TTS_ENGINE_AZURE) {
+          const ctx = UiUtil.getHostContext(this.getUIContext());
+          const backend = getAzureTtsBackend(ctx);
+          backend.setVoice(this.selectedAzureVoiceId);
+          await eng.setBackend(backend);
         }
       }
 
@@ -580,6 +630,29 @@ export struct ReadAloudPanel {
     }
 
     // 如果正在播放，从当前位置重新开始（应用新音色）
+    if (this.isPlaying_() || this.isPaused) {
+      const savedOffset = this.curCharIdx_;
+      await this.stopPlay();
+      this.textOffset = savedOffset;
+      await this.startPlay();
+    }
+  }
+
+  /** 选择 Azure 音色 */
+  private async selectAzureVoice_(voice: TtsVoiceInfo): Promise<void> {
+    this.selectedAzureVoiceId = voice.id;
+    this.selectedAzureVoiceName = voice.name;
+    this.showVoiceSelect = false;
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      await settings.setTtsAzureVoice(voice.id);
+      const backend = getAzureTtsBackend(UiUtil.getHostContext(this.getUIContext()));
+      backend.setVoice(voice.id);
+    } catch (e) {
+      console.warn('[Aloud] save azure voice failed: ' + (e as Error).message);
+    }
+
     if (this.isPlaying_() || this.isPaused) {
       const savedOffset = this.curCharIdx_;
       await this.stopPlay();
@@ -725,6 +798,11 @@ export struct ReadAloudPanel {
         '系统语音', '无需下载，功耗低', TTS_ENGINE_SYSTEM, 'kokoro', false, false
       )
 
+      // 微软 Azure 语音
+      this.engineOption_(
+        '微软语音', 'Azure Neural TTS · 需网络和密钥', TTS_ENGINE_AZURE, 'kokoro', true, false
+      )
+
       // 自然语音（高品质）
       this.engineOption_(
         '自然语音（高品质）', this.modelDownloaded ? 'Kokoro · 103 音色 · 完全离线' : '需下载（约 180-220 MB）',
@@ -775,7 +853,7 @@ export struct ReadAloudPanel {
 
       if (this.isEngineActive_(engine, modelType)) {
         Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
-      } else if (engine !== TTS_ENGINE_SYSTEM && !downloaded) {
+      } else if (engine === TTS_ENGINE_SHERPA_ONNX && !downloaded) {
         Button('下载模型')
           .fontSize(11)
           .height(28)
@@ -784,7 +862,7 @@ export struct ReadAloudPanel {
           .fontColor('#FFF')
           .enabled(!downloading)
           .onClick(() => { this.downloadModelFor_(modelType as TtsModelType); })
-      } else if (engine !== TTS_ENGINE_SYSTEM && downloaded) {
+      } else if (engine === TTS_ENGINE_SHERPA_ONNX && downloaded) {
         Row() {
           Button('选择')
             .fontSize(11)
@@ -818,10 +896,61 @@ export struct ReadAloudPanel {
     .backgroundColor(this.isEngineActive_(engine, modelType) ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
     .borderRadius(8)
     .onClick(() => {
-      if (engine === TTS_ENGINE_SYSTEM || downloaded) {
+      if (engine === TTS_ENGINE_SYSTEM || engine === TTS_ENGINE_AZURE || downloaded) {
         this.selectEngine_(engine, modelType);
       }
     })
+  }
+
+  @Builder
+  azureVoiceListContent_() {
+    if (this.azureVoices.length === 0) {
+      Text('未加载微软语音音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+        .width('100%').textAlign(TextAlign.Center).padding({ top: 12, bottom: 12 })
+    } else {
+      Scroll() {
+        Column() {
+          ForEach(this.azureVoices, (voice: TtsVoiceInfo) => {
+            Row() {
+              Column() {
+                Text(voice.name)
+                  .fontSize(13)
+                  .fontColor(voice.id === this.selectedAzureVoiceId ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(voice.description)
+                  .fontSize(10)
+                  .fontColor(ThemeColors.secondaryText(this.isDark))
+                  .margin({ top: 2 })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              if (voice.id === this.selectedAzureVoiceId) {
+                Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
+              } else {
+                Button('选择')
+                  .fontSize(11)
+                  .height(28)
+                  .padding({ left: 10, right: 10 })
+                  .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+                  .fontColor(ThemeColors.onSurface(this.isDark))
+                  .onClick(() => { this.selectAzureVoice_(voice); })
+              }
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .backgroundColor(voice.id === this.selectedAzureVoiceId ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+            .borderRadius(8)
+            .onClick(() => { this.selectAzureVoice_(voice); })
+          }, (voice: TtsVoiceInfo) => voice.id)
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+      }
+      .width('100%')
+      .height(180)
+    }
   }
 
   @Builder
@@ -946,7 +1075,7 @@ export struct ReadAloudPanel {
       Row() {
         Text('音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Column() {
-          Text(this.selectedEngine === TTS_ENGINE_SHERPA_ONNX ? this.selectedSherpaVoiceName : this.selectedVoiceName)
+          Text(this.currentVoiceName_())
             .fontSize(13)
             .fontColor(ThemeColors.onSurface(this.isDark))
             .maxLines(1)
@@ -973,6 +1102,8 @@ export struct ReadAloudPanel {
       if (this.showVoiceSelect) {
         if (this.selectedEngine === TTS_ENGINE_SHERPA_ONNX) {
           this.sherpaVoiceListContent_()
+        } else if (this.selectedEngine === TTS_ENGINE_AZURE) {
+          this.azureVoiceListContent_()
         } else {
           this.voiceListContent_()
         }

@@ -239,12 +239,20 @@ export class TtsModelManager {
     const apiUrl = `${HF_API_BASE}/${hfRepo}`;
 
     console.info('[TtsModel] fetching file list: ' + apiUrl);
-    const resp = await http.createHttp().request(apiUrl, {
-      method: http.RequestMethod.GET,
-      expectDataType: http.HttpDataType.STRING,
-      connectTimeout: HTTP_TIMEOUT,
-      readTimeout: HTTP_TIMEOUT,
-    });
+    const httpRequest = http.createHttp();
+    let resp: http.HttpResponse;
+    try {
+      resp = await httpRequest.request(apiUrl, {
+        method: http.RequestMethod.GET,
+        expectDataType: http.HttpDataType.STRING,
+        connectTimeout: HTTP_TIMEOUT,
+        readTimeout: HTTP_TIMEOUT,
+      });
+    } catch (err) {
+      throw new Error('获取模型文件列表失败: ' + (err as Error).message);
+    } finally {
+      httpRequest.destroy();
+    }
 
     if (resp.responseCode !== 200) {
       throw new Error('HTTP ' + resp.responseCode);
@@ -362,8 +370,20 @@ export class TtsModelManager {
     let offset = 0;
     let chunkIndex = 0;
 
-    let file = await fs.open(savePath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
-    await fs.close(file);
+    let file: fs.File | null = null;
+    try {
+      file = await fs.open(savePath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+    } catch (err) {
+      throw new Error(`初始化下载文件失败: ${savePath}: ${(err as Error).message}`);
+    } finally {
+      if (file) {
+        try {
+          await fs.close(file);
+        } catch (err) {
+          console.warn('[TtsModel] close init file failed:', (err as Error).message);
+        }
+      }
+    }
 
     while (true) {
       const start = offset;
@@ -378,12 +398,25 @@ export class TtsModelManager {
             console.info('[TtsModel] chunk retry ' + (retry + 1));
           }
 
-          const session = rcp.createSession();
-          const req = new rcp.Request(url, 'GET' as rcp.HttpMethod, {
-            'Range': rangeHeader,
-          } as rcp.RequestHeaders, '');
-
-          const resp = await session.fetch(req);
+          let session: rcp.Session | null = null;
+          let resp: rcp.Response;
+          try {
+            session = rcp.createSession();
+            const req = new rcp.Request(url, 'GET' as rcp.HttpMethod, {
+              'Range': rangeHeader,
+            } as rcp.RequestHeaders, '');
+            resp = await session.fetch(req);
+          } catch (err) {
+            throw new Error('下载模型分片失败: ' + (err as Error).message);
+          } finally {
+            if (session) {
+              try {
+                session.close();
+              } catch (err) {
+                console.warn('[TtsModel] close chunk session failed:', (err as Error).message);
+              }
+            }
+          }
 
           if (resp.statusCode === 416) {
             console.info('[TtsModel] HTTP 416: download complete, ' + offset + ' bytes');
@@ -399,11 +432,20 @@ export class TtsModelManager {
             return;
           }
 
-          file = await fs.open(savePath, fs.OpenMode.WRITE_ONLY | fs.OpenMode.APPEND);
+          file = null;
           try {
+            file = await fs.open(savePath, fs.OpenMode.WRITE_ONLY | fs.OpenMode.APPEND);
             await fs.write(file.fd, resp.body as ArrayBuffer);
+          } catch (err) {
+            throw new Error(`写入模型分片失败: ${savePath}: ${(err as Error).message}`);
           } finally {
-            await fs.close(file);
+            if (file) {
+              try {
+                await fs.close(file);
+              } catch (err) {
+                console.warn('[TtsModel] close chunk file failed:', (err as Error).message);
+              }
+            }
           }
 
           const receivedSize = (resp.body as ArrayBuffer).byteLength;

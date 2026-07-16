@@ -1,7 +1,6 @@
 /**
  * 阅读页
  */
-import router from '@ohos.router';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ThemeColors } from '../theme/ThemeColors';
 import { MeasureUtils } from '@kit.ArkUI';
@@ -33,17 +32,24 @@ import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
 import window from '@ohos.window';
 import { WebDavService } from '../service/WebDavService';
-import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 
+interface ReadStyleSaveSnapshot {
+  config: PageViewConfig;
+  readBgColor: string;
+  readTextColor: string;
+  readNightMode: boolean;
+  readFollowTheme: boolean;
+}
+
 @Entry
 @Component
 struct ReadPage {
-  @StorageLink('isDark') isDark: boolean = false;
+  @StorageLink('isDark') @Watch('onThemeModeChange') isDark: boolean = false;
   @StorageLink('loginRequired') @Watch('onLoginRequired') loginRequired: boolean = false;
   @State bookName: string = '';
   @State bookAuthor: string = '';
@@ -51,14 +57,12 @@ struct ReadPage {
   @State originUrl: string = '';
   @State origin: string = '';
   @State tocUrl: string = '';
-  @State pageMode: boolean = true;
   @State chapters: BookSourceChapter[] = [];
   @State currentIndex: number = 0;
   @State pageIndex: number = 0;
   @State text: string = '';
   @State isLoading: boolean = true;
   @State pages: LayoutPage[] = [];
-  @State scrollText: string = '';
   // 预加载下一章，实现无缝翻页
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
@@ -67,9 +71,6 @@ struct ReadPage {
   private bookId_: number = -1;
   private cacheSize_: number = 10;
   private isCaching_: boolean = false;
-  private scroller_: Scroller = new Scroller();
-  private scrollAtTop_: boolean = true;
-  private justLoadedChapter_: boolean = false;
   private measureCharW_: number = 0;
   private measureLineH_: number = 0;
   private measureUtil_: MeasureUtils | null = null;
@@ -80,6 +81,8 @@ struct ReadPage {
   @State showAloud: boolean = false;
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
+  @State readNightMode: boolean = false;
+  @State readFollowTheme: boolean = true;
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
   @State fontList: FontInfo[] = [];
   @State cfg: PageViewConfig = {
@@ -88,12 +91,13 @@ struct ReadPage {
     letterSpacing: 0.5, paragraphSpacing: 10, textAlign: 'justify', indentSize: 2,
     paddingTop: 24, paddingBottom: 24, paddingLeft: 20, paddingRight: 20,
     showHeader: false, showFooter: true, headerContent: '', footerContent: '',
-    brightness: 80, zhFormat: true, chineseMode: 'original', pageMode: true,
+    brightness: 80, zhFormat: true, chineseMode: 'original',
   };
   @State pageW: number = 360;
   @State pageH: number = 640;
   private source_: BookSource | null = null;
   private isLocalBook_: boolean = false;
+  private isLocalEpub_: boolean = false;
   private targetIdx_: number = -1;
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
@@ -101,6 +105,9 @@ struct ReadPage {
   private aloudEngine_: ReadAloudEngine | null = null;
   private sourceDlg?: CustomDialogController;
   private loginDlg?: CustomDialogController;
+  private pendingStyleSave_: ReadStyleSaveSnapshot | null = null;
+  private styleSavePromise_: Promise<void> = Promise.resolve();
+  private styleSaveScheduled_: boolean = false;
 
   onLoginRequired(): void {
     if (this.loginRequired && !this.loginDlg) {
@@ -112,8 +119,8 @@ struct ReadPage {
       });
       this.loginDlg.open();
       AppStorage.setOrCreate<boolean>('loginRequired', false);
-    }
-  }
+	    }
+	  }
 
 	  async aboutToAppear(): Promise<void> {
 	    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
@@ -158,10 +165,10 @@ struct ReadPage {
       if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
       if (!this.bookName || !this.bookAuthor) return;
 
-      promptAction.showToast({ message: '同步进度中…', duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
       const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor);
       if (!cloud) {
-        promptAction.showToast({ message: '同步成功：无云端进度', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '同步成功：无云端进度', duration: 2000 });
         return;
       }
 
@@ -170,20 +177,21 @@ struct ReadPage {
         (cloud.durChapterIndex === this.targetIdx_ && cloud.durChapterPos > this.pageIndex)) {
         this.targetIdx_ = cloud.durChapterIndex;
         this.pageIndex = cloud.durChapterPos;
-        promptAction.showToast({ message: '同步成功：已恢复云端进度', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '同步成功：已恢复云端进度', duration: 2000 });
         console.info('[ReadPage] Cloud progress restored:', cloud.durChapterIndex, cloud.durChapterPos);
       } else {
-        promptAction.showToast({ message: '同步成功：本地进度已是最新', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '同步成功：本地进度已是最新', duration: 2000 });
       }
     } catch (e) {
       console.warn('[ReadPage] Sync from cloud failed:', (e as Error).message);
-      promptAction.showToast({ message: '同步失败：' + (e as Error).message, duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '同步失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
   onPageShow(): void {
     // 从其他页面返回时重新进入沉浸式
     this.setSystemBarVisible_(false);
+    this.reloadFollowThemeSetting();
     // 刷新字体列表（从字体管理页返回时可能有变化）
     this.fontList = FontManager.getInstance().getAllFonts();
     // 如果当前使用的字体已被删除，回退到系统默认
@@ -214,46 +222,82 @@ struct ReadPage {
 	    // loadContent 已在 aboutToAppear 中调用，此处不再重复执行
 	  }
 
-  private async loadSettings(): Promise<void> {
-    try {
-      const s = SettingsStore.getInstance();
-      await s.init(UiUtil.getHostContext(this.getUIContext()));
-      this.pageMode = (await s.getPageMode()) !== 0;
-      this.cfg.fontSize = await s.getFontSize();
-      let fontFamily = await s.getFontFamily();
-      // 兼容旧版默认值 '默认'
-      if (fontFamily === '默认') fontFamily = 'HarmonyOS Sans';
-      this.cfg.fontFamily = fontFamily;
-      this.cfg.lineHeight = await s.getLineHeight();
-      this.cfg.indentSize = await s.getIndentSize();
-      this.cfg.letterSpacing = await s.getLetterSpacing();
-      this.cfg.paragraphSpacing = await s.getParagraphSpacing();
-      this.cfg.fontWeight = await s.getFontWeight();
-      this.cfg.paddingTop = await s.getPaddingTop();
-      this.cfg.paddingBottom = await s.getPaddingBottom();
-      this.cfg.paddingLeft = await s.getPaddingLeft();
-      this.cfg.paddingRight = await s.getPaddingRight();
-      this.cfg.chineseMode = await s.getChineseMode();
-    this.cfg.zhFormat = await s.getZhFormat();
-    this.readBgColor = await s.getReadBgColor();
-    this.readTextColor = await s.getReadTextColor();
-      this.pageMode = (await s.getPageMode()) !== 0;
-      this.cfg.pageMode = this.pageMode;
-      this.cacheSize_ = await s.getAutoCacheSize();
-      // 加载自定义触控区域配置
-      const za: number[] = [];
-      for (let z = 0; z < 9; z++) za.push(await s.getClickAction(z));
-      this.zoneActions = za;
-      this.cfg.bgColor = this.readBgColor;
-      this.cfg.textColor = this.readTextColor;
-    } catch (_e) { /* ignore */ }
-  }
+	  private async loadSettings(): Promise<void> {
+	    try {
+	      const s = SettingsStore.getInstance();
+	      await s.init(UiUtil.getHostContext(this.getUIContext()));
+	      this.cfg.fontSize = await s.getFontSize();
+	      let fontFamily = await s.getFontFamily();
+	      // 兼容旧版默认值 '默认'
+	      if (fontFamily === '默认') fontFamily = 'HarmonyOS Sans';
+	      this.cfg.fontFamily = fontFamily;
+	      this.cfg.lineHeight = await s.getLineHeight();
+	      this.cfg.indentSize = await s.getIndentSize();
+	      this.cfg.letterSpacing = await s.getLetterSpacing();
+	      this.cfg.paragraphSpacing = await s.getParagraphSpacing();
+	      this.cfg.fontWeight = await s.getFontWeight();
+	      this.cfg.paddingTop = await s.getPaddingTop();
+	      this.cfg.paddingBottom = await s.getPaddingBottom();
+	      this.cfg.paddingLeft = await s.getPaddingLeft();
+	      this.cfg.paddingRight = await s.getPaddingRight();
+	      this.cfg.chineseMode = await s.getChineseMode();
+	    this.cfg.zhFormat = await s.getZhFormat();
+	    this.readBgColor = await s.getReadBgColor();
+	    this.readTextColor = await s.getReadTextColor();
+        if (this.readBgColor === ReadPage.NIGHT_BG && this.readTextColor === ReadPage.NIGHT_TEXT) {
+          this.readBgColor = '#F5F0E8';
+          this.readTextColor = '#333333';
+          s.setReadBgColor(this.readBgColor).catch(() => {});
+          s.setReadTextColor(this.readTextColor).catch(() => {});
+        }
+	    this.readNightMode = await s.getReadNightMode();
+	    this.readFollowTheme = await s.getReadFollowTheme();
+        if (this.readFollowTheme) {
+          this.readNightMode = this.isDark;
+        }
+	      this.cacheSize_ = await s.getAutoCacheSize();
+	      // 加载自定义触控区域配置
+	      const za: number[] = [];
+	      for (let z = 0; z < 9; z++) za.push(await s.getClickAction(z));
+	      this.zoneActions = za;
+	      // 加载完成后根据夜间模式和主题跟随应用颜色
+	      this.applyReadColors();
+	    } catch (_e) { /* ignore */ }
+	  }
 
-  private async loadContent(): Promise<void> {
+	  /** 夜间模式阅读背景色 */
+	  private static readonly NIGHT_BG: string = '#1A1A1A';
+	  /** 夜间模式阅读文字色 */
+	  private static readonly NIGHT_TEXT: string = '#C0C0C0';
+
+	  /**
+	   * 根据 readNightMode 和 readFollowTheme 应用阅读颜色
+	   */
+	  private applyReadColors(): void {
+	    const bg = this.readNightMode ? ReadPage.NIGHT_BG : this.readBgColor;
+	    const text = this.readNightMode ? ReadPage.NIGHT_TEXT : this.readTextColor;
+	    if (this.cfg.bgColor !== bg || this.cfg.textColor !== text) {
+	      this.cfg = {
+	        animType: this.cfg.animType, bgColor: bg, textColor: text, titleColor: this.cfg.titleColor,
+	        fontSize: this.cfg.fontSize, fontWeight: this.cfg.fontWeight, fontFamily: this.cfg.fontFamily,
+	        lineHeight: this.cfg.lineHeight, letterSpacing: this.cfg.letterSpacing,
+	        paragraphSpacing: this.cfg.paragraphSpacing, textAlign: this.cfg.textAlign,
+	        indentSize: this.cfg.indentSize, paddingTop: this.cfg.paddingTop,
+	        paddingBottom: this.cfg.paddingBottom, paddingLeft: this.cfg.paddingLeft,
+	        paddingRight: this.cfg.paddingRight, showHeader: this.cfg.showHeader,
+	        showFooter: this.cfg.showFooter, headerContent: this.cfg.headerContent,
+	        footerContent: this.cfg.footerContent, brightness: this.cfg.brightness,
+        zhFormat: this.cfg.zhFormat, chineseMode: this.cfg.chineseMode,
+	      };
+	    }
+	  }
+
+	  private async loadContent(): Promise<void> {
     this.isLoading = true;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
+      let localBookKind = '';
 
       // 书架只传 bookUrl，从 DB 补全 origin/tocUrl
       try {
@@ -266,45 +310,45 @@ struct ReadPage {
           if (!this.origin) this.origin = book.origin || '';
           if (!this.bookName) this.bookName = book.name || '';
           if (!this.bookAuthor) this.bookAuthor = book.author || '';
+          localBookKind = book.kind || '';
         }
       } catch (_) { /* ignore */ }
 
       // 检测是否为本地书籍（origin 为 "本地"）
       this.isLocalBook_ = this.origin === LOCAL_BOOK_ORIGIN;
+      this.isLocalEpub_ = this.isLocalBook_ && localBookKind.toLowerCase() === 'epub';
 
-	      let chapters: BookSourceChapter[] = [];
+		      let chapters: BookSourceChapter[] = [];
 
-	      // 本地书籍：跳过 BookSource 匹配和网络目录获取，从解压目录或 DB 读取章节
-	      if (this.isLocalBook_) {
-	        console.info('[ReadPage] Local book detected, loading chapters from', this.tocUrl || 'DB');
-	        // 优先从解压目录解析（实时、准确）
-	        if (this.tocUrl) {
-	          try {
-	            const parser = new DirEpubParser(this.tocUrl, true);
-	            const result = await parser.parse();
-	            chapters = result.chapters.map((ch: BookChapter, idx: number): BookSourceChapter => ({
-	              index: idx,
-	              title: ch.title,
-	              url: ch.url,
-	            }));
-	            console.info('[ReadPage] Loaded chapters from extracted dir:', chapters.length);
-	          } catch (_e) { /* dir parse failed, fall through */ }
-	        }
-	        // 兜底：从 DB 读取
-	        if (chapters.length === 0 && this.bookId_ > 0) {
-	          try {
-	            const ct = new ChapterTable(db);
-	            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
-	            if (dbChapters.length > 0) {
+		      // 本地书籍：跳过 BookSource 匹配和网络目录获取
+		      if (this.isLocalBook_) {
+		        console.info('[ReadPage] Local book detected, kind=', localBookKind, 'tocUrl=', this.tocUrl);
+		        if (this.isLocalEpub_) {
+		          if (!this.tocUrl) {
+		            throw new Error('EPUB 缺少解压目录');
+		          }
+		          const parser = new DirEpubParser(this.tocUrl, true);
+		          const result = await parser.parse();
+		          chapters = result.chapters.map((ch: BookChapter, idx: number): BookSourceChapter => ({
+		            index: idx,
+		            title: ch.title,
+		            url: ch.url,
+		          }));
+		          console.info('[ReadPage] Loaded EPUB chapters from extracted dir:', chapters.length);
+		        } else if (this.bookId_ > 0) {
+		          try {
+		            const ct = new ChapterTable(db);
+		            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
+		            if (dbChapters.length > 0) {
 	              chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
 	                index: ch.index,
 	                title: ch.title,
 	                url: ch.url,
 	              }));
-	              console.info('[ReadPage] Loaded chapters from DB:', chapters.length);
-	            }
-	          } catch (_e) { /* ignore */ }
-	        }
+		              console.info('[ReadPage] Loaded chapters from DB:', chapters.length);
+		            }
+		          } catch (_e) { /* ignore */ }
+		        }
 	      }
 
       const srcDao = new BookSourceTable(db);
@@ -401,11 +445,32 @@ struct ReadPage {
     }
   }
 
+  private onThemeModeChange(): void {
+    this.syncReadThemeWithApp();
+  }
+
+  private reloadFollowThemeSetting(): void {
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(async () => {
+        this.readFollowTheme = await SettingsStore.getInstance().getReadFollowTheme();
+        this.syncReadThemeWithApp();
+      })
+      .catch(() => {});
+  }
+
+  private syncReadThemeWithApp(): void {
+    if (!this.readFollowTheme || this.readNightMode === this.isDark) {
+      return;
+    }
+    this.readNightMode = this.isDark;
+    this.applyReadColors();
+  }
+
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
     this.currentIndex = idx;
-    this.pageIndex = 0;
     const ch = this.allChapters_[idx];
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
@@ -464,37 +529,46 @@ struct ReadPage {
     console.info('[ReadPage] fetchChapterContent_: idx=', idx, 'title=', ch.title, 'url=', url?.substring(0, 80));
     let content = '';
 
-		    // 本地书籍：直接从解压目录读取（DB 不存全文，避免旧数据污染）
-		    if (this.isLocalBook_) {
-		      // 对旧导入书籍（tocUrl 为空），从 originUrl 推算解压目录
-		      let readDir = this.tocUrl;
-		      if (!readDir && this.originUrl) {
-		        const name = this.originUrl.split('/').pop() || '';
-		        const base = this.originUrl.substring(0, this.originUrl.lastIndexOf('/'));
-		        readDir = `${base}/epub/${name.replace(/[\\/:*?"<>|]/g, '_')}`;
+			    // 本地书籍：EPUB 从当前解压目录读取，其他本地格式从 DB 读取
+			    if (this.isLocalBook_) {
+			      if (!this.isLocalEpub_) {
+			        content = await this.readChapterCache_(idx);
+			        console.info('[ReadPage] Local book content:', content ? content.length : 0, 'bytes');
+			        return content;
+			      }
+			      if (!this.tocUrl) {
+			        throw new Error('EPUB 缺少解压目录');
+			      }
+			      if (ch.url) {
+			        const filePath = `${this.tocUrl}/${ch.url}`;
+		        console.info('[ReadPage] Loading from extracted file:', filePath);
+		        let fd: fileFs.File | null = null;
+		        try {
+		          if (fileFs.accessSync(filePath)) {
+		            const stat = fileFs.statSync(filePath);
+		            const buf = new ArrayBuffer(stat.size);
+		            fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
+		            fileFs.readSync(fd.fd, buf);
+		            const decoder = new util.TextDecoder('utf-8', { fatal: false });
+		            const html = decoder.decodeToString(new Uint8Array(buf));
+		            content = HtmlUtil.toPlainText(html);
+		            console.info('[ReadPage] Extracted file loaded:', content.length, 'chars');
+		          }
+		        } catch (e) {
+		          console.warn('[ReadPage] Failed to load extracted file:', e);
+		        } finally {
+		          if (fd) {
+		            try {
+		              fileFs.closeSync(fd);
+		            } catch (err) {
+		              console.warn('[ReadPage] close extracted file failed:', (err as Error).message);
+		            }
+		          }
+		        }
 		      }
-		      if (readDir && ch.url) {
-		        const filePath = `${readDir}/${ch.url}`;
-	        console.info('[ReadPage] Loading from extracted file:', filePath);
-	        try {
-	          if (fileFs.accessSync(filePath)) {
-	            const stat = fileFs.statSync(filePath);
-	            const buf = new ArrayBuffer(stat.size);
-	            const fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
-	            fileFs.readSync(fd.fd, buf);
-	            fileFs.closeSync(fd);
-	            const decoder = new util.TextDecoder('utf-8', { fatal: false });
-	            const html = decoder.decodeToString(new Uint8Array(buf));
-	            content = HtmlUtil.toPlainText(html);
-	            console.info('[ReadPage] Extracted file loaded:', content.length, 'chars');
-	          }
-	        } catch (e) {
-	          console.warn('[ReadPage] Failed to load extracted file:', e);
-	        }
-	      }
-	      if (!content) {
-	        content = await this.readChapterCache_(idx);
-	      }
+			      if (!content) {
+			        throw new Error('EPUB 章节文件读取失败: ' + (ch.url || ch.title || idx.toString()));
+			      }
 	      console.info('[ReadPage] Local book content:', content ? content.length : 0, 'bytes');
 	      return content;
 	    }
@@ -517,7 +591,6 @@ struct ReadPage {
 
   private applyChapterContent_(idx: number, content: string): void {
     this.currentIndex = idx;
-    this.pageIndex = 0;
     this.text = content;
     this.layoutText(content);
     this.initAloudEngine_();
@@ -708,13 +781,14 @@ struct ReadPage {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0).catch(() => {});
+    bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageIndex).catch(() => {});
   }
 
-  async aboutToDisappear(): Promise<void> {
-    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
-    await this.saveProgressAsync_();
-    releaseGlobalAloudEngine();
+	  async aboutToDisappear(): Promise<void> {
+	    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
+	    await this.flushStyleSave_();
+	    await this.saveProgressAsync_();
+	    releaseGlobalAloudEngine();
     // 退出时恢复系统栏
     this.setSystemBarVisible_(true);
   }
@@ -745,7 +819,7 @@ struct ReadPage {
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
     console.info('[ReadPage] saveProgressAsync calling DB...');
-    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageMode ? this.pageIndex : 0); console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex); } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
+    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageIndex); console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex); } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
   }
 
   /** 离开页面时保存进度并尝试上传到云端 */
@@ -756,7 +830,7 @@ struct ReadPage {
       if (syncOn === true && WebDavService.getInstance().isConfigured()) {
         const ch = this.allChapters_[this.currentIndex];
         if (ch) {
-          promptAction.showToast({ message: '同步进度中…', duration: 2000 });
+          UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
           await WebDavService.getInstance().uploadBookProgress({
             name: this.bookName,
             author: this.bookAuthor,
@@ -767,12 +841,12 @@ struct ReadPage {
           // 更新本地 syncTime
           const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
           await bookTable.updateSyncTime(this.bookUrl, Date.now());
-          promptAction.showToast({ message: '同步成功：已上传进度', duration: 2000 });
+          UiUtil.showToast(this.getUIContext(), { message: '同步成功：已上传进度', duration: 2000 });
         }
       }
     } catch (e) {
       console.warn('[ReadPage] Upload progress failed:', (e as Error).message);
-      promptAction.showToast({ message: '同步失败：' + (e as Error).message, duration: 2000 });
+      UiUtil.showToast(this.getUIContext(), { message: '同步失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
@@ -798,17 +872,6 @@ struct ReadPage {
 
   private layoutText(text: string): void {
     text = this.normalizeReaderText_(text);
-    // 构建带缩进的滚动文本
-    let scrollText = text;
-    const indentSize = this.cfg.indentSize;
-    if (indentSize > 0) {
-      let prefix = '';
-      for (let i = 0; i < indentSize; i++) prefix += '  ';
-      scrollText = text.split('\n').map((para: string, i: number) => {
-        return i > 0 ? prefix + para : para;
-      }).join('\n');
-    }
-
     const lc: LayoutConfig = {
       fontFamily: this.cfg.fontFamily,
       fontSize: this.cfg.fontSize,
@@ -837,16 +900,15 @@ struct ReadPage {
     this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
     if (this.pageIndex >= this.pages.length) this.pageIndex = Math.max(0, this.pages.length - 1);
-    this.scrollText = scrollText;
   }
 
   private styleTimer_: number = -1;
 
-  private onStyleChange(c: PageViewConfig): void {
-    this.cfg = c;
-    this.readBgColor = c.bgColor;
-    this.readTextColor = c.textColor;
-    this.pageMode = c.pageMode;
+	  private onStyleChange(c: PageViewConfig): void {
+	    this.cfg = c;
+	    this.readBgColor = c.bgColor;
+	    this.readTextColor = c.textColor;
+    this.applyReadColors();
     // 防抖：连续调整风格时延迟排版，避免大章节频繁测量卡顿
     if (this.styleTimer_ > 0) clearTimeout(this.styleTimer_);
     this.styleTimer_ = setTimeout(() => {
@@ -855,29 +917,103 @@ struct ReadPage {
       if (c.chineseMode !== 'original' && text) {
         text = convertChinese(text, c.chineseMode);
       }
+      // 排版前先应用夜间模式颜色覆盖（排版使用 display 颜色）
+      this.applyReadColors();
       this.layoutText(text);
     }, 200);
-    // 持久化设置
+	    this.queueStyleSave_(c);
+	  }
+
+	  private queueStyleSave_(config: PageViewConfig): void {
+	    this.pendingStyleSave_ = {
+	      config: this.cloneStyleConfig_(config),
+	      readBgColor: this.readBgColor,
+	      readTextColor: this.readTextColor,
+	      readNightMode: this.readNightMode,
+	      readFollowTheme: this.readFollowTheme,
+	    };
+	    if (this.styleSaveScheduled_) return;
+	    this.styleSaveScheduled_ = true;
+	    this.styleSavePromise_ = this.drainStyleSaveQueue_();
+	  }
+
+	  private async drainStyleSaveQueue_(): Promise<void> {
+	    while (this.pendingStyleSave_) {
+	      const snapshot = this.pendingStyleSave_;
+	      this.pendingStyleSave_ = null;
+	      await this.saveStyleSnapshot_(snapshot);
+	    }
+	    this.styleSaveScheduled_ = false;
+	  }
+
+	  private async flushStyleSave_(): Promise<void> {
+	    await this.styleSavePromise_.catch(() => {});
+	    if (this.pendingStyleSave_ && !this.styleSaveScheduled_) {
+	      this.queueStyleSave_(this.pendingStyleSave_.config);
+	      await this.styleSavePromise_.catch(() => {});
+	    }
+	  }
+
+	  private async saveStyleSnapshot_(snapshot: ReadStyleSaveSnapshot): Promise<void> {
+	    try {
+	      const s = SettingsStore.getInstance();
+	      const c = snapshot.config;
+	      const values: Record<string, Object> = {};
+	      values['font_size'] = c.fontSize;
+	      values['font_family'] = c.fontFamily;
+	      values['line_height'] = c.lineHeight;
+	      values['indent_size'] = c.indentSize;
+	      values['letter_spacing'] = c.letterSpacing;
+	      values['para_spacing'] = c.paragraphSpacing;
+	      values['font_weight'] = c.fontWeight;
+	      values['padding_top'] = c.paddingTop;
+	      values['padding_bottom'] = c.paddingBottom;
+	      values['padding_left'] = c.paddingLeft;
+	      values['padding_right'] = c.paddingRight;
+	      values['read_bg'] = snapshot.readBgColor;
+	      values['read_text'] = snapshot.readTextColor;
+	      values['read_night_mode'] = snapshot.readNightMode;
+	      values['read_follow_theme'] = snapshot.readFollowTheme;
+	      values['chinese_mode'] = c.chineseMode;
+	      values['zh_format'] = c.zhFormat;
+	      try {
+	        await s.putMany(values);
+	      } catch (_e) {
+	        await s.init(UiUtil.getHostContext(this.getUIContext()));
+	        await s.putMany(values);
+	      }
+	    } catch (err) {
+	      console.warn('[ReadPage] save style failed:', (err as Error).message);
+	    }
+	  }
+
+	  private cloneStyleConfig_(c: PageViewConfig): PageViewConfig {
+	    return {
+	      animType: c.animType, bgColor: c.bgColor, textColor: c.textColor, titleColor: c.titleColor,
+	      fontSize: c.fontSize, fontWeight: c.fontWeight, fontFamily: c.fontFamily,
+	      lineHeight: c.lineHeight, letterSpacing: c.letterSpacing,
+	      paragraphSpacing: c.paragraphSpacing, textAlign: c.textAlign, indentSize: c.indentSize,
+	      paddingTop: c.paddingTop, paddingBottom: c.paddingBottom,
+	      paddingLeft: c.paddingLeft, paddingRight: c.paddingRight,
+	      showHeader: c.showHeader, showFooter: c.showFooter,
+	      headerContent: c.headerContent, footerContent: c.footerContent,
+	      brightness: c.brightness, zhFormat: c.zhFormat,
+	      chineseMode: c.chineseMode,
+	    };
+	  }
+
+  /**
+   * 日间/夜间模式切换（由 StylePanel 回调触发）
+   */
+  private onNightModeToggle(night: boolean): void {
+    this.readNightMode = night;
+    this.applyReadColors();
+    // 持久化夜间模式状态
     (async () => {
       try {
         const s = SettingsStore.getInstance();
         await s.init(UiUtil.getHostContext(this.getUIContext()));
-        s.setFontSize(c.fontSize).catch(() => {});
-        s.setFontFamily(c.fontFamily).catch(() => {});
-        s.setLineHeight(c.lineHeight).catch(() => {});
-        s.setIndentSize(c.indentSize).catch(() => {});
-        s.setLetterSpacing(c.letterSpacing).catch(() => {});
-        s.setParagraphSpacing(c.paragraphSpacing).catch(() => {});
-        s.setFontWeight(c.fontWeight).catch(() => {});
-        s.setPaddingTop(c.paddingTop).catch(() => {});
-        s.setPaddingBottom(c.paddingBottom).catch(() => {});
-        s.setPaddingLeft(c.paddingLeft).catch(() => {});
-        s.setPaddingRight(c.paddingRight).catch(() => {});
-        s.setReadBgColor(c.bgColor).catch(() => {});
-        s.setReadTextColor(c.textColor).catch(() => {});
-        s.setChineseMode(c.chineseMode).catch(() => {});
-        s.setZhFormat(c.zhFormat).catch(() => {});
-        s.setPageMode(c.pageMode ? 1 : 0).catch(() => {});
+        s.setReadNightMode(night).catch(() => {});
       } catch (_e) { /* ignore */ }
     })();
   }
@@ -886,27 +1022,21 @@ struct ReadPage {
 
   private onPrevChapter(): void {
     if (this.currentIndex > 0) {
-      this.justLoadedChapter_ = true;
       this.loadChapter(this.currentIndex - 1).then(() => {
         this.pageIndex = Math.max(0, this.pages.length - 1);
-        this.scroller_.scrollEdge(Edge.Bottom);
       });
     }
   }
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
     if (n >= this.totalChapters_) return;
+    this.pageIndex = 0; // 新章从第 1 页开始
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
-      this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-      this.justLoadedChapter_ = true;
       return;
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
-    this.loadChapter(n).then(() => {
-      this.scroller_.scrollTo({ xOffset: 0, yOffset: 0 });
-      this.justLoadedChapter_ = true;
-    });
+    this.loadChapter(n);
   }
   private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
@@ -944,7 +1074,6 @@ struct ReadPage {
     this.currentIndex = 0;
     this.pageIndex = 0;
     this.text = '';
-    this.scrollText = '';
     this.pages = [];
     this.chapters = [];
     this.allChapters_ = [];
@@ -953,8 +1082,6 @@ struct ReadPage {
     this.nextChapterIdx_ = -1;
     this.isPreloading_ = false;
     this.preloadingChapterPromises_.clear();
-    this.scrollAtTop_ = true;
-    this.justLoadedChapter_ = false;
     ChapterCache.bookUrl = '';
     ChapterCache.chapters = [];
     ChapterCache.targetIndex = -1;
@@ -1166,38 +1293,11 @@ struct ReadPage {
 
   build() {
     Stack() {
-      if (this.isLoading) {
-        Column() { LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark)) }
-        .width('100%').height('100%').justifyContent(FlexAlign.Center)
-      } else if (!this.pageMode && this.scrollText) {
-        Scroll(this.scroller_) {
-          Text(this.scrollText)
-            .fontSize(this.cfg.fontSize).fontColor(this.readTextColor)
-            .fontWeight(this.cfg.fontWeight === 0 ? FontWeight.Lighter : this.cfg.fontWeight === 2 ? FontWeight.Bold : FontWeight.Normal)
-            .fontFamily(this.cfg.fontFamily)
-            .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
-            .letterSpacing(this.cfg.letterSpacing)
-            .width('100%')
-            .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight, top: this.cfg.paddingTop, bottom: this.cfg.paddingBottom })
-        }
-        .width('100%').height('100%').backgroundColor(this.readBgColor)
-        .onClick(() => { this.showMenu = true; })
-        .onScrollEdge((side: Edge) => {
-          if (!this.justLoadedChapter_ && side === Edge.Bottom) { this.onNextChapter(); }
-        })
-        .onScrollStop(() => {
-          if (this.justLoadedChapter_) { this.justLoadedChapter_ = false; return; }
-          if (this.scroller_.currentOffset().yOffset <= 0) {
-            this.scrollAtTop_ = true;
-          }
-          if (this.scrollAtTop_ && this.currentIndex > 0 &&
-              this.scroller_.currentOffset().yOffset <= 0) {
-            this.scrollAtTop_ = false;
-            this.onPrevChapter();
-          }
-        })
-      } else if (this.pages.length > 0) {
-        PageView({
+	      if (this.isLoading) {
+	        Column() { LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark)) }
+	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+	      } else if (this.pages.length > 0) {
+	        PageView({
           pages: this.pages, chapterTitle: this.allChapters_[this.currentIndex]?.title || '',
           chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
           zoneActions: this.zoneActions,
@@ -1210,7 +1310,6 @@ struct ReadPage {
             paddingLeft: this.cfg.paddingLeft, paddingRight: this.cfg.paddingRight,
             showHeader: false, showFooter: false, headerContent: '', footerContent: '',
             brightness: this.cfg.brightness, zhFormat: this.cfg.zhFormat, chineseMode: this.cfg.chineseMode,
-            pageMode: this.cfg.pageMode,
           },
           onPageTurn: (ev: PageTurnEvent) => { this.onPageTurn(ev); },
           onPrevChapter: () => { this.onPrevChapter(); },
@@ -1244,7 +1343,7 @@ struct ReadPage {
               .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight })
           }
           .width('100%')
-          .backgroundColor(this.readBgColor)
+          .backgroundColor(this.cfg.bgColor)
         }
         .width('100%').height('100%')
         .hitTestBehavior(HitTestMode.None)
@@ -1273,6 +1372,10 @@ struct ReadPage {
             cfg: this.cfg, onChange: (c: PageViewConfig) => { this.onStyleChange(c); },
             onDismiss: () => { this.showStyle = false; },
             fontList: this.fontList,
+            nightMode: this.readNightMode,
+            dayBgColor: this.readBgColor,
+            dayTextColor: this.readTextColor,
+            onNightModeToggle: (night: boolean) => { this.onNightModeToggle(night); },
           })
         }.width('100%').height('100%')
       }
@@ -1320,7 +1423,7 @@ struct ReadPage {
         }.width('100%').height('100%')
       }
     }
-    .width('100%').height('100%').backgroundColor(this.readBgColor)
+    .width('100%').height('100%').backgroundColor(this.cfg.bgColor)
     .onAreaChange((_old: Area, n: Area) => {
       const w = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       const h = typeof n.height === 'number' ? n.height : Number(n.height) || 640;

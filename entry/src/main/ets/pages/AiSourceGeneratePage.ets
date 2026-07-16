@@ -134,23 +134,23 @@ struct AiSourceGeneratePage {
         // 输入区
         Column() {
           Text('输入小说网站首页地址')
-            .fontSize(14).fontColor('#888').alignSelf(ItemAlign.Start).margin({ bottom: 6 })
+            .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ bottom: 6 })
           TextInput({ text: this.homepageUrl, placeholder: 'https://www.example.com' })
             .fontSize(14).width('100%').type(InputType.URL)
             .onChange((v: string) => { this.homepageUrl = v; })
 
           Text('搜索关键词（用于构造搜索测试）')
-            .fontSize(14).fontColor('#888').alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
+            .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
           TextInput({ text: this.searchKeyword, placeholder: '输入书名关键词' })
             .fontSize(14).width('100%')
             .onChange((v: string) => { this.searchKeyword = v; })
 
-          Button('开始分析').fontSize(16).fontColor('#FFF').backgroundColor('#0078D7')
+          Button('开始分析').fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
             .width('100%').height(48).borderRadius(24).margin({ top: 28 })
             .onClick(() => { this.startAnalyze(); })
 
           Text('AI 将自动分析网站结构，提取 CSS 选择器规则')
-            .fontSize(11).fontColor('#AAA').margin({ top: 12 })
+            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 12 })
         }
         .padding({ left: 16, right: 16 }).width('100%').layoutWeight(1)
       } else {
@@ -165,7 +165,7 @@ struct AiSourceGeneratePage {
                     Text(this.stepLabel(r.step)).fontSize(14)
                       .fontWeight(r.status === 'running' ? FontWeight.Bold : FontWeight.Normal)
                       .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })
-                    Text(r.summary).fontSize(11).fontColor('#888').maxLines(1)
+                    Text(r.summary).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1).margin({ left: 8 })
                     Button(this.expandedStep === r.step ? '▲' : '▼').fontSize(12)
                       .backgroundColor('transparent').width(28).height(28)
@@ -174,7 +174,7 @@ struct AiSourceGeneratePage {
 
                   if (this.expandedStep === r.step && (r.status === 'done' || r.status === 'error')) {
                     Text(r.status === 'error' ? '错误: ' + r.summary : JSON.stringify(r.data, null, 2))
-                      .fontSize(10).fontColor(r.status === 'error' ? '#FF4444' : '#666').fontFamily('monospace')
+                      .fontSize(10).fontColor(r.status === 'error' ? ThemeColors.error(this.isDark) : ThemeColors.secondaryText(this.isDark)).fontFamily('monospace')
                       .width('100%').padding(8).backgroundColor(ThemeColors.surface(this.isDark))
                       .borderRadius(6).margin({ top: 6 }).maxLines(20)
                   }
@@ -188,7 +188,7 @@ struct AiSourceGeneratePage {
           // 交互日志区
           if (this.logMessages.length > 0) {
             Column() {
-              Text('交互日志').fontSize(12).fontColor('#888')
+              Text('交互日志').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                 .padding({ top: 6, bottom: 4, left: 4 }).alignSelf(ItemAlign.Start)
               List() {
                 ForEach(this.logMessages, (msg: string) => {

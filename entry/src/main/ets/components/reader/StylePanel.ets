@@ -4,7 +4,6 @@
 import { PageViewConfig, PageTurnAnim } from './PageView';
 import { ThemeColors } from '../../theme/ThemeColors';
 import { FontInfo } from '../../utils/FontManager';
-import router from '@ohos.router';
 
 @Component
 export struct StylePanel {
@@ -16,14 +15,28 @@ export struct StylePanel {
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
     headerContent: '', footerContent: '', brightness: 80, zhFormat: true,
-    chineseMode: 'original', pageMode: true,
+    chineseMode: 'original',
   };
   @State activeTab: number = 0;
   /** 字体列表（由 ReadPage 从 FontManager 获取并传入） */
   @Prop fontList: FontInfo[] = [];
+  /** 夜间模式 */
+  @Prop nightMode: boolean = false;
+  /** 日间背景色：夜间模式下仍编辑这份用户配置 */
+  @Prop dayBgColor: string = '';
+  /** 日间文字色：夜间模式下仍编辑这份用户配置 */
+  @Prop dayTextColor: string = '';
+  @State editingDayBgColor: string = '';
+  @State editingDayTextColor: string = '';
 
   onChange?: (config: PageViewConfig) => void;
   onDismiss?: () => void;
+  onNightModeToggle?: (night: boolean) => void;
+
+  aboutToAppear(): void {
+    this.editingDayBgColor = this.dayBgColor || this.cfg.bgColor;
+    this.editingDayTextColor = this.dayTextColor || this.cfg.textColor;
+  }
 
   build() {
     Column() {
@@ -98,7 +111,7 @@ export struct StylePanel {
       Text('字体管理 >').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
         .onClick(() => {
           this.onDismiss?.();
-          router.pushUrl({ url: 'pages/FontManagerPage' });
+          this.getUIContext().getRouter().pushUrl({ url: 'pages/FontManagerPage' }).catch(() => {});
         })
     }.width('100%').margin({ bottom: 6 })
   }
@@ -168,6 +181,16 @@ export struct StylePanel {
   // ===== 颜色 =====
   @Builder buildColors() {
     Column() { }.width('100%').padding(12)
+    // 日间/夜间切换
+    Row() {
+      Text('☀️').fontSize(22).fontColor(!this.nightMode ? ThemeColors.onSurface(this.isDark) : ThemeColors.secondaryText(this.isDark))
+        .onClick(() => { this.onNightModeToggle?.(false); })
+      Toggle({ type: ToggleType.Switch, isOn: this.nightMode })
+        .margin({ left: 6, right: 6 })
+        .onChange((v: boolean) => { this.onNightModeToggle?.(v); })
+      Text('🌙').fontSize(22).fontColor(this.nightMode ? ThemeColors.onSurface(this.isDark) : ThemeColors.secondaryText(this.isDark))
+        .onClick(() => { this.onNightModeToggle?.(true); })
+    }.width('100%').justifyContent(FlexAlign.Center).margin({ bottom: 14 })
     Text('背景色').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
     Row() {
       this.bgChip('#F5F0E8'); this.bgChip('#FFFFFF'); this.bgChip('#C6E2E8'); this.bgChip('#D4E8D0')
@@ -182,13 +205,13 @@ export struct StylePanel {
 
   @Builder bgChip(color: string) {
     Column().width(28).height(28).backgroundColor(color)
-      .border({ width: color === this.cfg.bgColor ? 2 : 1, color: color === this.cfg.bgColor ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
-      .onClick(() => { this.cfg.bgColor = color; this.emitChange(); })
+      .border({ width: color === this.currentDayBgColor_() ? 2 : 1, color: color === this.currentDayBgColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
+      .onClick(() => { this.editingDayBgColor = color; this.emitChange(); })
   }
   @Builder txtChip(color: string) {
     Column().width(28).height(28).backgroundColor(color)
-      .border({ width: color === this.cfg.textColor ? 2 : 1, color: color === this.cfg.textColor ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
-      .onClick(() => { this.cfg.textColor = color; this.emitChange(); })
+      .border({ width: color === this.currentDayTextColor_() ? 2 : 1, color: color === this.currentDayTextColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
+      .onClick(() => { this.editingDayTextColor = color; this.emitChange(); })
   }
 
   @Builder fwChip(label: string, w: number) {
@@ -207,13 +230,17 @@ export struct StylePanel {
     Column() {
       Text(font.name)
         .fontSize(13)
-        .fontFamily(font.familyName)
+        .fontFamily(this.fontPreviewFamily_(font))
         .fontColor(this.cfg.fontFamily === font.familyName ? '#FFF' : ThemeColors.onSurface(this.isDark))
         .padding({ top: 6, bottom: 6, left: 12, right: 12 })
     }
     .backgroundColor(this.cfg.fontFamily === font.familyName ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(12).height(28).margin({ left: 4 })
     .onClick(() => { this.cfg.fontFamily = font.familyName; this.emitChange(); })
+  }
+
+  private fontPreviewFamily_(font: FontInfo): string {
+    return font.familyName.startsWith('__') ? 'HarmonyOS Sans' : font.familyName;
   }
 
   @Builder indentChip(label: string, n: number) {
@@ -265,7 +292,43 @@ export struct StylePanel {
   // ==========
 
   emitChange(): void {
-    this.onChange?.(this.cfg);
+    this.onChange?.(this.toDayConfig_());
+  }
+
+  private currentDayBgColor_(): string {
+    return this.editingDayBgColor || this.dayBgColor || this.cfg.bgColor;
+  }
+
+  private currentDayTextColor_(): string {
+    return this.editingDayTextColor || this.dayTextColor || this.cfg.textColor;
+  }
+
+  private toDayConfig_(): PageViewConfig {
+    return {
+      animType: this.cfg.animType,
+      bgColor: this.currentDayBgColor_(),
+      textColor: this.currentDayTextColor_(),
+      titleColor: this.cfg.titleColor,
+      fontSize: this.cfg.fontSize,
+      fontWeight: this.cfg.fontWeight,
+      fontFamily: this.cfg.fontFamily,
+      lineHeight: this.cfg.lineHeight,
+      letterSpacing: this.cfg.letterSpacing,
+      paragraphSpacing: this.cfg.paragraphSpacing,
+      textAlign: this.cfg.textAlign,
+      indentSize: this.cfg.indentSize,
+      paddingTop: this.cfg.paddingTop,
+      paddingBottom: this.cfg.paddingBottom,
+      paddingLeft: this.cfg.paddingLeft,
+      paddingRight: this.cfg.paddingRight,
+      showHeader: this.cfg.showHeader,
+      showFooter: this.cfg.showFooter,
+      headerContent: this.cfg.headerContent,
+      footerContent: this.cfg.footerContent,
+      brightness: this.cfg.brightness,
+      zhFormat: this.cfg.zhFormat,
+      chineseMode: this.cfg.chineseMode,
+    };
   }
 
   toInt(v: number): number { return Math.round(v); }

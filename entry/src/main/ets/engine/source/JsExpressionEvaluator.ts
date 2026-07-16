@@ -227,8 +227,12 @@ export class JsExpressionEvaluator {
   static syncNetworkConfigToWorker(): void {
     if (!this.workerInstance) return;
     const cfg = NetUtil.getNetworkConfig();
-    this.workerInstance.postMessage({ type: 'config', config: cfg });
-    console.info('[JsEval] Network config synced to Worker: dns=', cfg.dnsEnabled, 'proxy=', cfg.proxyHost || 'none', 'timeout=', cfg.timeout);
+    try {
+      this.workerInstance.postMessage({ type: 'config', config: cfg });
+      console.info('[JsEval] Network config synced to Worker: dns=', cfg.dnsEnabled, 'proxy=', cfg.proxyHost || 'none', 'timeout=', cfg.timeout);
+    } catch (err) {
+      console.warn('[JsEval] sync network config failed:', (err as Error).message);
+    }
   }
 
   /**

@@ -2,18 +2,17 @@
  * 完整备份/恢复服务
  *
  * 从数据库和设置存储导出/导入完整数据。
- * 格式：JSON 打包为 ZIP，兼容 Legado 备份格式。
+ * 格式：backup.json 打包为 ZIP。
  */
 import { AppDatabase } from '../data/database/AppDatabase';
 import { SettingsStore } from '../data/preferences/SettingsStore';
-import { ZipWriter } from '../util/ZipWriter';
-import { ZipReader } from '../util/ZipReader';
 import { WebDavService } from './WebDavService';
 import { RdbUtil } from '../data/database/RdbUtil';
 import relationalStore from '@ohos.data.relationalStore';
 import picker from '@ohos.file.picker';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
+import zlib from '@ohos.zlib';
 
 export interface BackupData {
   version: string;
@@ -42,6 +41,8 @@ export interface ImportResult {
 }
 
 export class BackupService {
+  private static readonly TEMP_ROOT = '/data/storage/el2/base/haps/entry/files';
+
   /**
    * 导出完整备份
    */
@@ -135,9 +136,12 @@ export class BackupService {
     const name = `backup_${new Date().toISOString().slice(0, 10)}.zip`;
     const uris = await new picker.DocumentViewPicker().save({ newFileNames: [name] });
     if (!uris || uris.length === 0) return;
-    const zip = new ZipWriter();
-    zip.addTextFile('backup.json', json);
-    await zip.saveTo(uris[0]);
+    const backupFile = await BackupService.createBackupZip(json);
+    try {
+      await BackupService.copyFile(backupFile.zipPath, uris[0]);
+    } finally {
+      BackupService.removeTree(backupFile.tempDir);
+    }
   }
 
   /** 本地恢复 */
@@ -146,50 +150,29 @@ export class BackupService {
     if (!uris || uris.length === 0) return null;
     const path = uris[0];
 
-    // 尝试直接 JSON
     try {
-      const text = await BackupService.readFileText(path);
-      const data = JSON.parse(text) as BackupData;
-      if (data.books || data.bookSources) return await BackupService.importBackup(data);
-    } catch { /* try next */ }
-
-    // ZIP 格式（通过 ZipReader 读取）
-    try {
-      const reader = new ZipReader(path);
-      await reader.open();
-      const entry = reader.findEntry('backup.json');
-      if (!entry) { reader.close(); throw new Error('no backup.json'); }
-      const jsonStr = await reader.extractText(entry);
-      reader.close();
-      if (jsonStr) return await BackupService.importBackup(JSON.parse(jsonStr));
+      const jsonStr = await BackupService.readBackupJsonFromZip(path);
+      return await BackupService.importBackup(JSON.parse(jsonStr));
     } catch (err) {
       throw new Error(`备份文件格式错误: ${(err as Error).message}`);
     }
-    throw new Error('未能解析备份文件');
   }
 
   /** WebDAV 备份 */
   static async backupToWebDav(): Promise<string> {
     const data = await BackupService.exportBackup();
-    const zip = new ZipWriter();
-    zip.addTextFile('backup.json', JSON.stringify(data));
-    return await WebDavService.getInstance().uploadBackupZip(zip);
+    const backupFile = await BackupService.createBackupZip(JSON.stringify(data));
+    try {
+      return await WebDavService.getInstance().uploadBackupFile(backupFile.zipPath);
+    } finally {
+      BackupService.removeTree(backupFile.tempDir);
+    }
   }
 
   /** WebDAV 恢复 */
   static async restoreFromWebDav(name: string): Promise<ImportResult> {
     const zipPath = await WebDavService.getInstance().downloadBackup(name);
-    const reader = new ZipReader(zipPath);
-    await reader.open();
-    const entry = reader.findEntry('backup.json');
-    if (!entry) {
-      const entries = reader.entries.map(e => e.fileName);
-      console.warn('[Backup] backup.json not found, entries:', JSON.stringify(entries));
-      reader.close();
-      throw new Error('backup.json not found in backup');
-    }
-    const jsonStr = await reader.extractText(entry);
-    reader.close();
+    const jsonStr = await BackupService.readBackupJsonFromZip(zipPath);
     return await BackupService.importBackup(JSON.parse(jsonStr));
   }
 
@@ -198,30 +181,192 @@ export class BackupService {
   private static async queryAll(rdb: relationalStore.RdbStore, table: string): Promise<Record<string, Object>[]> {
     const result: Record<string, Object>[] = [];
     const rs = await RdbUtil.querySql(rdb, `SELECT * FROM ${table}`, []);
-    while (RdbUtil.next(rs)) {
-      const row: Record<string, Object> = {};
-      const colCount = rs.columnCount;
-      for (let i = 0; i < colCount; i++) {
-        const colName = rs.getColumnName(i);
-        const val = RdbUtil.stringAt(rs, i);
-        if (val !== null) row[colName] = val as Object;
+    try {
+      while (RdbUtil.next(rs)) {
+        const row: Record<string, Object> = {};
+        const colCount = rs.columnCount;
+        for (let i = 0; i < colCount; i++) {
+          const colName = rs.getColumnName(i);
+          const val = RdbUtil.stringAt(rs, i);
+          if (val !== null) row[colName] = val as Object;
+        }
+        result.push(row);
       }
-      result.push(row);
+    } catch (err) {
+      throw new Error(`Query backup table failed: ${table}: ${(err as Error).message}`);
+    } finally {
+      RdbUtil.close(rs);
     }
-    RdbUtil.close(rs);
     return result;
   }
 
+  private static async createBackupZip(json: string): Promise<{ tempDir: string; zipPath: string }> {
+    const tempDir = BackupService.createTempDir('backup_export');
+    const jsonPath = `${tempDir}/backup.json`;
+    const zipPath = `${tempDir}/backup.zip`;
+    await BackupService.writeFileText(jsonPath, json);
+    try {
+      await zlib.compressFile(jsonPath, zipPath, {});
+    } catch (err) {
+      throw new Error(`压缩备份失败: ${(err as Error).message}`);
+    }
+    return { tempDir, zipPath };
+  }
+
+  private static async readBackupJsonFromZip(zipPath: string): Promise<string> {
+    const tempDir = BackupService.createTempDir('backup_restore');
+    try {
+      try {
+        await zlib.decompressFile(zipPath, tempDir, {});
+      } catch (err) {
+        throw new Error(`解压备份失败: ${(err as Error).message}`);
+      }
+      const backupJsonPath = BackupService.findFileByName(tempDir, 'backup.json');
+      if (!backupJsonPath) {
+        throw new Error('backup.json not found in backup');
+      }
+      const jsonStr = await BackupService.readFileText(backupJsonPath);
+      if (!jsonStr) {
+        throw new Error('backup.json is empty');
+      }
+      return jsonStr;
+    } finally {
+      BackupService.removeTree(tempDir);
+    }
+  }
+
+  private static createTempDir(prefix: string): string {
+    const tempDir = `${BackupService.TEMP_ROOT}/${prefix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+    try {
+      fileFs.mkdirSync(tempDir, true);
+      return tempDir;
+    } catch (err) {
+      throw new Error(`创建备份临时目录失败: ${tempDir}: ${(err as Error).message}`);
+    }
+  }
+
+  private static findFileByName(dir: string, fileName: string): string | null {
+    let files: string[];
+    try {
+      files = fileFs.listFileSync(dir);
+    } catch (err) {
+      console.warn('[Backup] list temp dir failed:', dir, (err as Error).message);
+      return null;
+    }
+    for (const item of files) {
+      const path = `${dir}/${item}`;
+      try {
+        const stat = fileFs.statSync(path);
+        if (stat.isDirectory()) {
+          const child = BackupService.findFileByName(path, fileName);
+          if (child) return child;
+        } else if (item === fileName) {
+          return path;
+        }
+      } catch (err) {
+        console.warn('[Backup] inspect temp entry failed:', path, (err as Error).message);
+      }
+    }
+    return null;
+  }
+
+  private static removeTree(path: string): void {
+    try {
+      const stat = fileFs.statSync(path);
+      if (stat.isDirectory()) {
+        const files = fileFs.listFileSync(path);
+        for (const item of files) {
+          BackupService.removeTree(`${path}/${item}`);
+        }
+        fileFs.rmdirSync(path);
+      } else {
+        fileFs.unlinkSync(path);
+      }
+    } catch (_err) {
+      // 清理临时文件失败不影响备份/恢复结果
+    }
+  }
+
+  private static async writeFileText(path: string, text: string): Promise<void> {
+    const encoder = new util.TextEncoder();
+    const data = encoder.encodeInto(text);
+    let file: fileFs.File | null = null;
+    try {
+      file = fileFs.openSync(path, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+      fileFs.writeSync(file.fd, data.buffer as ArrayBuffer);
+    } catch (err) {
+      throw new Error(`写入文件失败: ${path}: ${(err as Error).message}`);
+    } finally {
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[Backup] close file failed:', (err as Error).message);
+        }
+      }
+    }
+  }
+
+  private static async copyFile(src: string, dst: string): Promise<void> {
+    const bytes = BackupService.readFileBytes(src);
+    let outFile: fileFs.File | null = null;
+    try {
+      outFile = fileFs.openSync(dst, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+      fileFs.writeSync(outFile.fd, bytes.buffer as ArrayBuffer);
+    } catch (err) {
+      throw new Error(`复制备份文件失败: ${dst}: ${(err as Error).message}`);
+    } finally {
+      if (outFile) {
+        try {
+          fileFs.closeSync(outFile);
+        } catch (err) {
+          console.warn('[Backup] close copy target failed:', (err as Error).message);
+        }
+      }
+    }
+  }
+
+  private static readFileBytes(path: string): Uint8Array {
+    let file: fileFs.File | null = null;
+    try {
+      const stat = fileFs.statSync(path);
+      const buf = new ArrayBuffer(stat.size);
+      file = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY);
+      fileFs.readSync(file.fd, buf);
+      return new Uint8Array(buf);
+    } catch (err) {
+      throw new Error(`读取文件失败: ${path}: ${(err as Error).message}`);
+    } finally {
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[Backup] close read file failed:', (err as Error).message);
+        }
+      }
+    }
+  }
+
   private static async readFileText(path: string): Promise<string | null> {
+    let file: fileFs.File | null = null;
     try {
       const stat = fileFs.statSync(path);
       if (stat.size > 10 * 1024 * 1024) return null;
       const buf = new ArrayBuffer(stat.size);
-      const fd = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY).fd;
-      fileFs.readSync(fd, buf);
-      fileFs.closeSync(fd);
+      file = fileFs.openSync(path, fileFs.OpenMode.READ_ONLY);
+      fileFs.readSync(file.fd, buf);
       const decoder = new util.TextDecoder('utf-8', { fatal: false });
       return decoder.decodeToString(new Uint8Array(buf));
-    } catch { return null; }
+    } catch {
+      return null;
+    } finally {
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[Backup] close text file failed:', (err as Error).message);
+        }
+      }
+    }
   }
 }

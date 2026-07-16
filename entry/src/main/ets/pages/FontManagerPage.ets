@@ -11,7 +11,6 @@ import { AppTheme } from '../theme/AppTheme';
 import { UiUtil } from '../util/UiUtil';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import picker from '@ohos.file.picker';
-import promptAction from '@ohos.promptAction';
 import common from '@ohos.app.ability.common';
 
 @Entry
@@ -180,7 +179,7 @@ struct FontManagerPage {
   }
 
   private confirmDelete(font: FontInfo): void {
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '删除字体',
       message: `确定删除 "${font.name}" 吗？`,
       buttons: [
@@ -196,7 +195,7 @@ struct FontManagerPage {
 
   private confirmBatchDelete(): void {
     const ids = Array.from(this.selectedIds);
-    promptAction.showDialog({
+    UiUtil.showDialog(this.getUIContext(), {
       title: '批量删除',
       message: `确定删除选中的 ${ids.length} 个字体吗？`,
       buttons: [
@@ -329,4 +328,3 @@ struct RenameFontDialog {
     .borderRadius(16)
   }
 }
-

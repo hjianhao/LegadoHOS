@@ -64,6 +64,9 @@ export interface Book {
   createTime: number;
   updateTime: number;
   syncTime: number;        // WebDAV 上次同步时间
+
+  /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
+  coverDecodeJs?: string;
 }
 
 /**

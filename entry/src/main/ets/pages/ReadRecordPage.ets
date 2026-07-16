@@ -3,7 +3,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
-export struct ReadRecordPage {
+struct ReadRecordPage {
   @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 

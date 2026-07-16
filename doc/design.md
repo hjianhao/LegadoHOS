@@ -127,7 +127,7 @@ ets/
 │   │   └── SearchEngine.ts
 │   ├── book/                          # 书籍格式解析
 │   │   ├── TxtParser.ts
-│   │   ├── EpubParser.ts
+│   │   ├── DirEpubParser.ts
 │   │   ├── MobiParser.ts
 │   │   ├── PdfParser.ts               # 元数据提取（渲染未集成）
 │   │   ├── ComicReader.ts             # 漫画阅读器模型
@@ -194,7 +194,6 @@ ets/
 │   ├── FileUtil.ts                    # 文件操作
 │   ├── StrUtil.ts                     # 字符串处理
 │   ├── CryptoUtil.ts                  # 加密（MD5/SHA/Base64）
-│   ├── ZipReader.ts                   # ZIP 解压
 │   ├── BookCoverUtil.ts               # 封面生成
 │   ├── ChineseConverter.ts            # 繁简转换（NEW，260 行）
 │   ├── ContentCache.ts                # 内容内存缓存（NEW）
@@ -470,7 +469,7 @@ SourceExecutor 职责链：
 ```
 engine/book/
 ├── TxtParser.ts           # TXT 解析（章节分割 + 编码检测）
-├── EpubParser.ts          # EPUB 解析（OPF + NCX）
+├── DirEpubParser.ts       # EPUB 目录解析（从 zlib 解压目录读取 OPF/NCX）
 ├── MobiParser.ts          # MOBI 解析（PDB 格式）
 ├── PdfParser.ts           # PDF 解析（元数据提取，渲染待集成）
 ├── ComicReader.ts         # 漫画阅读器（页面模式 + 缩放模式）
@@ -810,7 +809,6 @@ theme/
 | FileUtil | util/FileUtil.ts | — | 文件读写，目录操作 |
 | StrUtil | util/StrUtil.ts | — | 字符串相似度（Levenshtein/Cosine） |
 | CryptoUtil | util/CryptoUtil.ts | — | MD5/SHA1/SHA256/Base64 |
-| ZipReader | util/ZipReader.ts | — | Zip 解压（store/deflate），流式读取 |
 | BookCoverUtil | util/BookCoverUtil.ts | — | 文字封面 Canvas 生成，颜色映射 |
 | ChineseConverter | util/ChineseConverter.ts | 260 | 简繁双向转换（OpenCC 词表） |
 | ContentCache | util/ContentCache.ts | 95 | 章节内容内存缓存 |

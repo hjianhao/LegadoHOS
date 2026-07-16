@@ -27,7 +27,7 @@ interface LoadState {
 
 @Entry
 @Component
-export struct RssSortPage {
+struct RssSortPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State sourceUrl: string = '';
   @State sourceName: string = '';

@@ -47,15 +47,24 @@ export class MobiParser {
   }
 
   async parse(): Promise<{ meta: MobiMeta; chapters: BookChapter[] }> {
-    const file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
-    let bytes: Uint8Array;
+    let file: fileFs.File | null = null;
+    let bytes: Uint8Array = new Uint8Array();
     try {
+      file = fileFs.openSync(this.filePath, fileFs.OpenMode.READ_ONLY);
       const stat = fileFs.statSync(this.filePath);
       const buf = new ArrayBuffer(stat.size);
       fileFs.readSync(file.fd, buf);
       bytes = new Uint8Array(buf);
+    } catch (err) {
+      throw new Error(`Read MOBI failed: ${this.filePath}: ${(err as Error).message}`);
     } finally {
-      fileFs.closeSync(file);
+      if (file) {
+        try {
+          fileFs.closeSync(file);
+        } catch (err) {
+          console.warn('[MOBI] close failed:', (err as Error).message);
+        }
+      }
     }
 
     if (bytes.length < PDB_HEADER_SIZE) throw new Error('Invalid MOBI: file too small');

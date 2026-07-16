@@ -127,8 +127,8 @@ struct AiConfigPage {
   @Builder presetChip(p: PresetItem) {
     Text(p.label)
       .fontSize(12).padding({ top: 6, bottom: 6, left: 10, right: 10 })
-      .fontColor(this.activePreset === p.name ? '#FFF' : ThemeColors.secondaryText(this.isDark))
-      .backgroundColor(this.activePreset === p.name ? '#0078D7' : ThemeColors.outlineVariant(this.isDark))
+      .fontColor(this.activePreset === p.name ? ThemeColors.onPrimary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+      .backgroundColor(this.activePreset === p.name ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark))
       .borderRadius(14).margin({ right: 6, bottom: 6 })
       .onClick(() => { this.onPresetTap(p); })
   }
@@ -137,7 +137,7 @@ struct AiConfigPage {
     Row() {
       Text(m).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (this.model === m) { Text('✓').fontSize(13).fontColor('#0078D7').margin({ left: 8 }) }
+      if (this.model === m) { Text('✓').fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 }) }
     }.padding({ left: 8, right: 8, top: 8, bottom: 8 }).width('100%')
     .backgroundColor(this.model === m ? ThemeColors.surfaceVariant(this.isDark) : 'transparent')
     .borderRadius(6)
@@ -150,7 +150,7 @@ struct AiConfigPage {
         Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
           .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
         Text('AI 配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('保存').fontSize(13).fontColor('#FFF').backgroundColor('#0078D7')
+        Button('保存').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
           .height(32).padding({ left: 14, right: 14 }).borderRadius(16)
           .onClick(() => { this.save(); })
       }.padding({ left: 12, right: 12, top: 44 }).width('100%')

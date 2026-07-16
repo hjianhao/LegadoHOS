@@ -53,6 +53,7 @@ sourceType: json.bookSourceType ?? json.sourceType ?? 0,
 
 - `BookInfoPage.saveBookImplicitly` / `addToShelf`：根据书源 `sourceType === 2` 设置 `type: BookType.MANGA` / `isManga: true`
 - `SearchPage.addPreviewToShelf`：查询书源类型，漫画源设置 `isManga: true`
+- `BookGroup.getGroupForBook(book)`：当 `book.isManga === true` 时返回 `BookGroup.MANGA`（id=3，label="漫画"），使漫画书自动归类到书架"漫画"分组下。`BookGroup.matchFunc` 中 `MANGA` 组也通过 `book.isManga` 匹配。
 
 ## 3. 漫画正文解析
 
@@ -167,9 +168,13 @@ sourceType: json.bookSourceType ?? json.sourceType ?? 0,
 | 三章预加载 | 预加载前后各 1 章正文文本 + 图片预下载 |
 | 多章预下载 | 前后各 2 章图片静默预下载到本地缓存 |
 | 无缝翻章 | `tryUsePreloadedChapter_` 优先使用预加载内容，避免加载占位闪烁 |
-| 章节边界页 | 章首"下一章 xxx" / 章尾"已读完 xxx" |
+| 章节边界页 | 章首"下一章 xxx"+可点击"查看上一章" / 章尾"已读完 xxx"+可点击"继续阅读下一章"（末章显示"已是最后一章"） |
 | 进度保存 | 章节 index + 页内位置（`durChapterPos`） |
 | 进度恢复 | 重进章节恢复到之前浏览的图片位置 |
+
+**ChapterCache 跨页导航**：定义于 `util/ChapterCache.ts`，是一个静态类，用于在 `BookInfoPage` / `ReadPage` 与 `ChapterListPage` 之间传递章节列表，避免通过 router params 序列化大数组的性能问题。ComicReadPage 的 `onPageShow` 检测 `ChapterCache.targetIndex >= 0`，从 `ChapterListPage` 跳回时直接定位到所选章节。`ChapterCache.chapters` 在 ComicReadPage 初次加载时设置，供后续目录跳转复用。
+
+**`justLoadedChapter_` 标记**：章节切换时设为 `true`，延迟 500ms 后清除，防止条漫模式下 `onReachEnd`/`onReachStart` 因 List 渲染旧数据触发连锁切章。
 
 ### 5.5 菜单系统
 
@@ -225,6 +230,7 @@ sourceType: json.bookSourceType ?? json.sourceType ?? 0,
 | 强制刷新 | 清除当前章节缓存并重新拉取 |
 | 条漫侧边留白 | List padding 百分比（0-20%），持久化 |
 | 亮度调节 | Slider 0-100（50=默认），持久化 |
+| 色彩滤镜矩阵 | `getColorModify_()` 返回 4×5 RGBA 矩阵。brightness=50 时返回单位矩阵；brightness!=50 时 factor=0.5+b/100，offset=(factor-1.0)×0.5×255，通过 ColorFilter 应用 |
 
 ## 6. 配置项
 
@@ -235,7 +241,7 @@ sourceType: json.bookSourceType ?? json.sourceType ?? 0,
 | `getComicReadMode/setComicReadMode` | `comic_read_mode` | 0 | 阅读方向：0=条漫,1=左->右,2=右->左 |
 | `getComicSinglePageMode/setComicSinglePageMode` | `comic_single_page` | false | 单页全屏开关 |
 | `getComicPreloadNum/setComicPreloadNum` | `comic_preload_num` | 3 | 图片预加载数量 |
-| `getComicClickAction/setComicClickAction` | `comic_click_tl~br` | `[4,2,3,2,0,1,2,1,1]` | 9 宫格触控动作 |
+| `getComicClickAction/setComicClickAction` | `comic_click_tl`~`comic_click_br`（9 个独立 key） | 各 `[4,2,3,2,0,1,2,1,1]` 对应 | 9 宫格触控动作，每个区域独立存储，通过 zone 索引 (0-8) 读写 |
 | `getComicAutoReadSpeed/setComicAutoReadSpeed` | `comic_auto_read_speed` | 3 | 自动阅读速度（秒/页） |
 | `getComicBrightness/setComicBrightness` | `comic_brightness` | 50 | 亮度（0-100，50=默认） |
 | `getComicSidePadding/setComicSidePadding` | `comic_side_padding` | 0 | 条漫侧边留白百分比 |
@@ -252,15 +258,22 @@ sourceType: json.bookSourceType ?? json.sourceType ?? 0,
 | 文件 | 职责 |
 |------|------|
 | `model/BookSource.ts` | `BookSourceType` 枚举、`isImageSource` 函数、`parseBookSource` 修复 |
+| `model/Book.ts` | `BookType.MANGA=2` 枚举、`Book.isManga` 字段声明 |
+| `model/BookGroup.ts` | `BookGroup.MANGA=3` + `matchFunc` + `getGroupForBook` 按 `isManga` 归类 |
 | `engine/source/SourceExecutor.ts` | `getContent(preserveImages)` / `extractImageUrls` |
 | `util/ContentCleaner.ts` | `formatKeepImg` 图片标签保留与 URL 补全 |
 | `util/MangaImageLoader.ts` | 图片下载、缓存、解密、进度回调 |
+| `util/ChapterCache.ts` | 跨页章节列表传递与目标索引导航 |
+| `components/reader/ClickAction.ts` | 点击动作枚举（NONE/MENU/NEXT_PAGE/PREV_PAGE/NEXT_CHAPTER/PREV_CHAPTER） |
 | `pages/ComicReadPage.ets` | 漫画阅读页（UI + 交互 + 手势 + 菜单） |
 | `pages/BookInfoPage.ets` | 路由分流、`ensureMangaFlag_`、`saveBookImplicitly` |
 | `pages/BookshelfPage.ets` | `continueRead` 按 `isManga` 分流 |
+| `pages/ChapterListPage.ets` | 接收 `isManga` 参数路由章节点击到 `ComicReadPage`，`from: 'ComicReadPage'` 回退 |
 | `pages/SearchPage.ets` | `addPreviewToShelf` 传播 `isManga` |
 | `pages/SettingsPage.ets` | 漫画设置分区 |
+| `data/database/BookTable.ts` | `is_manga INTEGER` 数据库列读写 |
 | `data/preferences/SettingsStore.ts` | 漫画配置持久化 |
+| `engine/book/ComicReader.ts` | 漫画引擎模型（`ComicPageMode`/`ComicScaleMode`/`ComicChapter`/`ComicReader`），**当前无调用方**，属预留/参考代码 |
 
 ## 8. 待实现功能
 

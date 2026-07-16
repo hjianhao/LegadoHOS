@@ -3,7 +3,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
-export struct WebServicePage {
+struct WebServicePage {
   @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 

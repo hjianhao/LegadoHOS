@@ -656,5 +656,62 @@
     "searchUrl": "/api/search?type=mh&page={{page}}&pageSize=20&keyword={{key}}",
     "variableComment": "",
     "weight": 0
+  },
+  {
+    "bookSourceGroup": "AI,18加",
+    "bookSourceName": "搬山人小说网",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https:\/\/www.banshanren.com",
+    "bookUrlPattern": "https:\/\/www.banshanren.com\/novel\/.*",
+    "coverDecodeJs": "java.createSymmetricCrypto(\"AES\/CBC\/PKCS5Padding\", \"V4@.Tx+uXZn)AiH>\", \"\").decrypt(result)",
+    "customButton": false,
+    "customOrder": 62,
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": true,
+    "eventListener": false,
+    "exploreUrl": "[{\"title\": \"奇幻玄幻\", \"url\": \"\/all\/0-4-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"武侠仙侠\", \"url\": \"\/all\/0-5-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"都市言情\", \"url\": \"\/all\/0-6-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"历史军事\", \"url\": \"\/all\/0-7-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"游戏竞技\", \"url\": \"\/all\/0-8-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"科幻未来\", \"url\": \"\/all\/0-9-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"悬疑灵异\", \"url\": \"\/all\/0-10-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"同人衍生\", \"url\": \"\/all\/0-11-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"轻小说\", \"url\": \"\/all\/0-12-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"名著传记\", \"url\": \"\/all\/0-13-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"最近更新\", \"url\": \"\/all\/0-0-0-0-0-1-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}, {\"title\": \"最新上架\", \"url\": \"\/all\/0-0-0-0-0-2-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}]",
+    "header": "{\"User-Agent\": \"Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36\"}",
+    "lastUpdateTime": "1784123206817",
+    "loginUrl": "https:\/\/www.banshanren.com",
+    "respondTime": 180000,
+    "ruleBookInfo": {
+        "author": "[name=\"description\"]@content<js>\nvar m = String(result).match(\/》是(.*?)创作\/);\nresult = m ? m[1] : '';\n<\/js>",
+        "coverUrl": "[property=\"og:image\"]@content",
+        "intro": "[property=\"og:description\"]@content",
+        "kind": ".novel_tag_list a@title&&.category_list a@text##\\#",
+        "lastChapter": ".catalog_top_box .hl@text",
+        "name": "h1@text"
+    },
+    "ruleContent": {
+        "content": ".chapter_content_box p@html##\\<span.*\\>\\d+\\<\/span\\>",
+        "nextContentUrl": "text.下一章@href"
+    },
+    "ruleExplore": {
+        "author": ".info_box.1@text## ·.*",
+        "bookList": ".novel_li",
+        "bookUrl": ".title@href",
+        "coverUrl": "img@data-src",
+        "kind": ".category_list a@text",
+        "name": ".title@text",
+        "wordCount": ".info_box.1@text##.*· "
+    },
+    "ruleSearch": {
+        "author": ".info_box.1@text## ·.*",
+        "bookList": ".novel_li",
+        "bookUrl": ".title@href",
+        "coverUrl": "img@data-src",
+        "intro": ".novel_intro_box p@text",
+        "kind": ".category_list a@text",
+        "name": ".title@text##🔞",
+        "wordCount": ".info_box.1@text##.*· "
+    },
+    "ruleToc": {
+        "chapterList": "li[class~=volume_chapter] a&&ul[class~=chapter_list] a",
+        "chapterName": "text",
+        "chapterUrl": "href"
+    },
+    "searchUrl": "https:\/\/www.banshanren.com\/search\/index?keyword={{key}}&page={{page}},{\"charset\": \"UTF-8\"}",
+    "weight": 0
   }
 ]

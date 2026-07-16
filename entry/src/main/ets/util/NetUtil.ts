@@ -71,6 +71,46 @@ export class NetUtil {
     return NetUtil.httpRequest('GET', url, undefined, headers, timeout || NetUtil.getDefaultTimeout());
   }
 
+  /**
+   * 下载二进制数据（不进行文本解码，不做 gzip 解压）
+   * 用于下载图片、加密文件等二进制内容
+   */
+  static async httpGetBinary(url: string, headers?: Record<string, string>, timeout?: number): Promise<ArrayBuffer> {
+    const startMs: number = Date.now();
+    try {
+      const h = NetUtil.buildHeaders(headers);
+      const reqHeaders = h as rcp.RequestHeaders;
+      const request = new rcp.Request(url, 'GET', reqHeaders, '');
+
+      // 使用独立 session（不与主 session 共享，避免被其他请求的 session 重建取消）
+      const tf: number = timeout || NetUtil.getDefaultTimeout();
+      const cfg: rcp.Configuration = {
+        transfer: { timeout: { connectMs: tf, transferMs: tf } },
+        security: { remoteValidation: 'system' } as rcp.SecurityConfiguration,
+      };
+      const session = rcp.createSession({ requestConfiguration: cfg } as rcp.SessionConfiguration);
+
+      const response = await session.fetch(request);
+      console.info('[NetUtil] GET(binary)', url.substring(0, 80), '->', response.statusCode,
+        '(' + (Date.now() - startMs) + 'ms)');
+      if (response.statusCode < 200 || response.statusCode >= 400) {
+        throw new Error(`HTTP ${response.statusCode}`);
+      }
+      if (response.body === undefined || response.body === null) {
+        return new ArrayBuffer(0);
+      }
+      // 返回原始 ArrayBuffer（复制一份避免被 session 复用）
+      const src = new Uint8Array(response.body);
+      const copy = new Uint8Array(src.length);
+      copy.set(src);
+      return copy.buffer;
+    } catch (e) {
+      const errMsg: string = (e as Error).message || String(e);
+      console.error('[NetUtil] GET(binary)', url.substring(0, 80), 'FAILED:', errMsg);
+      throw new Error(errMsg);
+    }
+  }
+
   static async httpPost(url: string, body: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
     const h = NetUtil.buildHeaders(headers);
     if (!h['Content-Type'] && !h['content-type']) {
@@ -210,38 +250,55 @@ export class NetUtil {
   }
 
   private static async inflateBytes(bytes: Uint8Array): Promise<Uint8Array> {
-    try {
-      let outputSize: number = Math.max(bytes.length * 8, 64 * 1024);
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const zip = await zlib.createZip();
-        const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        const output = new ArrayBuffer(outputSize);
-        const strm: zlib.ZStream = {
-          nextIn: input,
-          availableIn: bytes.byteLength,
-          nextOut: output,
-          availableOut: outputSize
-        };
+    let outputSize: number = Math.max(bytes.length * 8, 64 * 1024);
+    const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let zip: zlib.Zip;
+      try {
+        zip = await zlib.createZip();
+      } catch (err) {
+        throw new Error('Create gzip/zlib inflater failed: ' + (err as Error).message);
+      }
+
+      const output = new ArrayBuffer(outputSize);
+      const strm: zlib.ZStream = {
+        nextIn: input,
+        availableIn: bytes.byteLength,
+        nextOut: output,
+        availableOut: outputSize
+      };
+      let status: zlib.ReturnStatus = zlib.ReturnStatus.OK;
+      try {
         const initStatus = await zip.inflateInit2(strm, 47);
         if (initStatus !== zlib.ReturnStatus.OK) {
-          throw new Error('inflateInit2 status ' + initStatus);
+          throw new Error('gzip/zlib init failed, status=' + initStatus);
         }
-
-        const status = await zip.inflate(strm, zlib.CompressFlushMode.FINISH);
-        await zip.inflateEnd(strm);
-        if (status === zlib.ReturnStatus.STREAM_END || status === zlib.ReturnStatus.OK) {
-          const totalOut = strm.totalOut || 0;
-          return new Uint8Array(output.slice(0, totalOut));
-        }
-        if (status === zlib.ReturnStatus.BUF_ERROR) {
-          outputSize *= 2;
-          continue;
-        }
-        throw new Error('inflate status ' + status);
+      } catch (err) {
+        throw new Error('gzip/zlib init failed: ' + (err as Error).message);
       }
-      throw new Error('inflate output buffer too small');
-    } catch (err) {
-      throw err;
+
+      try {
+        status = await zip.inflate(strm, zlib.CompressFlushMode.FINISH);
+      } catch (err) {
+        throw new Error('gzip/zlib inflate failed: ' + (err as Error).message);
+      } finally {
+        try {
+          await zip.inflateEnd(strm);
+        } catch (err) {
+          console.warn('[NetUtil] inflateEnd failed:', (err as Error).message);
+        }
+      }
+
+      if (status === zlib.ReturnStatus.STREAM_END || status === zlib.ReturnStatus.OK) {
+        const totalOut = strm.totalOut || 0;
+        return new Uint8Array(output.slice(0, totalOut));
+      }
+      if (status === zlib.ReturnStatus.BUF_ERROR) {
+        outputSize *= 2;
+        continue;
+      }
+      throw new Error('gzip/zlib inflate status=' + status + ' totalOut=' + (strm.totalOut || 0));
     }
+    throw new Error('gzip/zlib inflate output buffer too small');
   }
 }

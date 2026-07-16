@@ -461,14 +461,27 @@ export function getPolyfillScript(): string {
 	        tagName = sel;
 	      }
 
-	      // 构建正则
-	      var reStr = '<([a-zA-Z0-9]+)[^>]*';
-	      if (className) reStr += '\\sclass\\s*=\\s*"[^"]*\\b' + className + '\\b[^"]*"';
-	      if (idName) reStr += '\\sid\\s*=\\s*"[^"]*\\b' + idName + '\\b[^"]*"';
-	      reStr += '[^>]*>';
-	      try {
-	        var re = new RegExp(reStr, 'gi');
-	        var m;
+			      // 构建正则 — 同时支持双引号和单引号的 class/id 属性
+		      // 不使用 \b（在 TS 模板字符串中存在转义问题），直接用 className 字面匹配
+		      // 实际 HTML 中类名冲突（如 notag-container）概率极低
+		      var reStr = '<([a-zA-Z0-9]+)[^>]*';
+		      if (className) {
+		        reStr += '\\s(class|CLASS)\\s*=\\s*(?:';
+		        reStr += '"[^"]*' + className + '[^"]*"';
+		        reStr += "|'[^']*" + className + "[^']*'";
+		        reStr += ')';
+		      }
+		      if (idName) {
+		        reStr += '\\s(id|ID)\\s*=\\s*(?:';
+		        reStr += '"[^"]*' + idName + '[^"]*"';
+		        reStr += "|'[^']*" + idName + "[^']*'";
+		        reStr += ')';
+		      }
+		      reStr += '[^>]*>';
+		      try {
+		        console.log('[Jsoup] css=' + css + ' re=' + reStr.substring(0, 150));
+		        var re = new RegExp(reStr, 'gi');
+		        var m;
 	        while ((m = re.exec(html)) !== null) {
 	          if (tagName && m[1].toLowerCase() !== tagName.toLowerCase()) continue;
 	            (function(tagMatch, fullTag, pos) {
@@ -550,9 +563,12 @@ export function getPolyfillScript(): string {
 	    Object.defineProperty(els, 'get', {
 	      value: function(i) { return items[i] || null; }
 	    });
-	    Object.defineProperty(els, 'toArray', {
-	      value: function() { return items.slice(); }
-	    });
+		    Object.defineProperty(els, 'toArray', {
+		      value: function() { return items.slice(); }
+		    });
+		    Object.defineProperty(els, 'each', {
+		      value: function(fn) { for (var i = 0; i < items.length; i++) fn(items[i]); }
+		    });
 	    Object.defineProperty(els, 'select', {
 	      value: function(css) {
 	        // 对所有元素的 innerHTML 做 select，合并结果
@@ -568,16 +584,18 @@ export function getPolyfillScript(): string {
 	    return els;
 	  }
 
-	  if (typeof org === 'undefined') {
-	    globalThis.org = {
-	      jsoup: {
-	        Jsoup: {
-	          parse: function(html) {
-	            return {
-	              select: function(css) {
-	                var items = selectTags(html, css);
-	                return makeElements(html, items);
-	              },
+		  if (typeof org === 'undefined') {
+		    globalThis.org = {
+		      jsoup: {
+		        Jsoup: {
+		          parse: function(html) {
+		            console.log('[Jsoup] parse called, html len=' + (html ? html.length : 0));
+		            return {
+		              select: function(css) {
+		                var items = selectTags(html, css);
+		                console.log('[Jsoup] select "' + css + '" found ' + items.length + ' items');
+		                return makeElements(html, items);
+		              },
 	              text: function() { return html.replace(/<[^>]+>/g, '').trim(); },
 	              attr: function(name) {
 	                var m2 = html.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));

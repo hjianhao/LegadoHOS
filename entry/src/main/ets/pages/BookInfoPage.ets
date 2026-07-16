@@ -47,6 +47,7 @@ struct BookInfoPage {
   @State isInShelf: boolean = false;
   @State sourceHeader: string = '';
   @State sourceTocUrl: string = '';
+  @State coverDecodeJs: string = '';
   @State sourceCount: number = 1;
   @State chapterCount: number = 0;
   @State tocLoadProgress: number = 0;  // 目录加载进度：已加载的章节数
@@ -140,6 +141,7 @@ struct BookInfoPage {
         return;
       }
       this.currentSource_ = matched;  // 缓存书源对象，供路由分流判断
+      this.coverDecodeJs = matched?.coverDecodeJs || '';
       // 获取书籍详情（始终请求，确保简介等字段为最新）
       const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
       if (info.name && !this.bookName) this.bookName = info.name;
@@ -889,7 +891,8 @@ struct BookInfoPage {
                   name: this.bookName,
                   coverUrl: this.getDisplayCover(),
                   coverWidth: 112,
-                  coverHeight: 157
+                  coverHeight: 157,
+                  coverDecodeJs: this.coverDecodeJs
                 })
                   .borderRadius(8)
                   .shadow({ radius: 16, color: '#00000030', offsetX: 0, offsetY: 8 })
@@ -1210,7 +1213,7 @@ struct BookInfoPage {
   @Builder buildMenuItem(label: string, action: () => void, danger: boolean = false) {
     Text(label)
       .fontSize(14)
-      .fontColor(danger ? '#E35D5B' : this.primaryTextColor())
+      .fontColor(danger ? ThemeColors.error(this.isDark) : this.primaryTextColor())
       .width('100%')
       .padding({ left: 16, right: 16, top: 11, bottom: 11 })
       .onClick(action)

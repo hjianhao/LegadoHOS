@@ -40,6 +40,8 @@ export interface SearchResult {
   sourceOriginUrls?: string[];
   /** 所有搜索到此书的详情页 URL 列表，与 sourceOrigins 同序 */
   sourceNoteUrls?: string[];
+  /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
+  coverDecodeJs?: string;
 }
 
 /**
@@ -131,7 +133,8 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
         sourceOrigins: r.origin ? [r.origin] : [],
         sourceOriginUrls: r.originUrl ? [r.originUrl] : [],
         sourceNoteUrls: r.noteUrl ? [r.noteUrl] : [],
-        latestChapterTitle: r.latestChapterTitle || ''
+        latestChapterTitle: r.latestChapterTitle || '',
+        coverDecodeJs: r.coverDecodeJs || ''
       });
     }
   }

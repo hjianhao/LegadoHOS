@@ -33,6 +33,7 @@ struct ExploreBookPage {
   @State jsLib: string = '';
   @State script: string = '';
   @State loginUrl: string = '';
+  @State coverDecodeJs: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
   @State books: SearchResult[] = [];
@@ -60,6 +61,7 @@ struct ExploreBookPage {
       this.jsLib = String(params['jsLib'] || '');
       this.script = String(params['script'] || '');
       this.loginUrl = String(params['loginUrl'] || '');
+      this.coverDecodeJs = String(params['coverDecodeJs'] || '');
     }
     void this.loadBooks();
   }
@@ -98,7 +100,7 @@ struct ExploreBookPage {
       jsLib: this.jsLib, loginUrl: this.loginUrl,
       rawJson: this.rawJson,
       respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
-      variableComment: '', coverDecodeJs: '', loginCheckJs: '', bookUrlPattern: '',
+      variableComment: '', coverDecodeJs: this.coverDecodeJs, loginCheckJs: '', bookUrlPattern: '',
       ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
       ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
       ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',
@@ -172,37 +174,38 @@ struct ExploreBookPage {
 
       if (this.isLoading) {
         Column() {
-          LoadingProgress().color('#0078D7').margin({ top: 80 })
-          Text('加载中...').fontSize(14).fontColor('#888').margin({ top: 8 })
+          LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 80 })
+          Text('加载中...').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else if (this.errorMsg) {
         Column() {
           Text('\u26A0\uFE0F').fontSize(48).margin({ top: 80 })
-          Text(this.errorMsg).fontSize(14).fontColor('#888').margin({ top: 8 })
+          Text(this.errorMsg).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
           Button('重试').margin({ top: 12 }).fontSize(13)
-            .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
+            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(18)
             .onClick((): void => { void this.loadBooks(); })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else if (this.books.length === 0) {
         Column() {
           Text('\uD83D\uDCDA').fontSize(48).margin({ top: 80 })
-          Text('没有找到书籍').fontSize(16).fontColor('#888').margin({ top: 8 })
+          Text('没有找到书籍').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else {
         Text('找到 ' + this.books.length + ' 本书').fontSize(12)
-          .fontColor('#888').padding({ left: 16, top: 4 })
+          .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4 })
         List() {
           ForEach(this.books, (item: SearchResult) => {
             ListItem() {
               Row() {
-                BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 44, coverHeight: 62 })
+                BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 44, coverHeight: 62, coverDecodeJs: item.coverDecodeJs || '' })
                   .margin({ right: 12 })
                 Column() {
                   Text(item.name).fontSize(15).fontWeight(FontWeight.Bold)
+                    .fontColor(ThemeColors.onBackground(this.isDark))
                     .alignSelf(ItemAlign.Start).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(item.author || '未知作者').fontSize(12).fontColor('#888')
+                  Text(item.author || '未知作者').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
-                  Text(item.kind || '').fontSize(11).fontColor('#AAA')
+                  Text(item.kind || '').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(62).justifyContent(FlexAlign.Center)
               }.padding(12).width('100%')

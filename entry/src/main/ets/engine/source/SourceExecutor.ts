@@ -377,6 +377,7 @@ export class SourceExecutor {
               sourceOriginUrls: [...(existing.sourceOriginUrls || []), r.originUrl || ''],
               sourceNoteUrls: [...(existing.sourceNoteUrls || []), r.noteUrl || ''],
               latestChapterTitle: existing.latestChapterTitle || r.latestChapterTitle || '',
+              coverDecodeJs: existing.coverDecodeJs || r.coverDecodeJs || '',
             };
             mergedMap.set(key, merged);
             console.info('[SrcEx] Merged:', r.origin || r.originUrl, '→', cleanName,
@@ -410,6 +411,7 @@ export class SourceExecutor {
             sourceOriginUrls: [r.originUrl || ''],
             sourceNoteUrls: [r.noteUrl || ''],
             latestChapterTitle: r.latestChapterTitle || '',
+            coverDecodeJs: r.coverDecodeJs || '',
           });
         }
       }
@@ -2482,6 +2484,7 @@ export class SourceExecutor {
         kind: cssKind || '', wordCount: cssWordCount || '', lastUpdateTime: '', latestChapterTitle: cssLastChapter || '', introduce: cssIntro || '', helperMsg: '',
         duration: 0, searchTime: Date.now(),
         sourceCount: 1, sourceOrigins: [],
+        coverDecodeJs: source.coverDecodeJs || '',
       });
     }
 
@@ -2804,6 +2807,7 @@ export class SourceExecutor {
         sourceCount: 1,
         sourceOrigins: [],
         latestChapterTitle: '',
+        coverDecodeJs: source.coverDecodeJs || '',
       });
     }
     return results;
@@ -2953,6 +2957,71 @@ export class SourceExecutor {
   private parseContentFromRules(html: string, rules: Record<string, string>): string {
     const rule = rules['content'] || '';
     if (rule) {
+      // 内容规则可能匹配多个元素（如 .chapter_content_box p@html），
+      // 需要返回所有匹配元素的结果合并，而非只取第一个。
+      // 与 Android Legado 行为一致：内容规则返回所有匹配元素的拼接结果。
+      const trimmed = rule.trim();
+
+      // 处理 ## 正则替换后缀：分离 CSS 规则和后处理
+      let cssRule = trimmed;
+      let postProcessors: string[] = [];
+      if (trimmed.includes('##')) {
+        const parts = trimmed.split('##');
+        cssRule = parts[0].trim();
+        postProcessors = parts.slice(1);
+      }
+
+      // 处理 @js: 后缀
+      const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(cssRule);
+      cssRule = ruleBeforeJs;
+
+      if (cssRule) {
+        const parser = getHtmlParser();
+        const doc = parser.parse(html);
+        const normalized = this.normalizeCssRule(cssRule);
+        const values = parser.extractAttrAll(doc, normalized);
+        if (values && values.length > 0) {
+          let result = values.join('\n');
+
+          // 应用 ## 正则替换后处理
+          // Legado 格式: ##regex##replacement（成对），##regex（单个，替换为空）
+          // 奇数个 postProcessor 时，最后一个缺少 replacement，用空字符串补齐
+          const procPairs = postProcessors.length;
+          for (let i = 0; i < procPairs; i += 2) {
+            const pattern = postProcessors[i];
+            const replacement = (i + 1 < procPairs) ? postProcessors[i + 1] : '';
+            if (!pattern) continue;
+            // trim 等非正则关键词
+            if (pattern === 'trim' || pattern === 'Trim' || pattern === 'TRIM') {
+              result = result.trim();
+              continue;
+            }
+            try {
+              result = result.replace(new RegExp(pattern, 'g'), replacement);
+            } catch (_e) { /* ignore invalid regex */ }
+          }
+
+          // 应用 @js: 后处理
+          if (jsCode) {
+            try {
+              const ctx: JsEvalContext = { result: result, baseUrl: '' } as unknown as JsEvalContext;
+              const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
+              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+                try {
+                  const parsed = JSON.parse(evalResult);
+                  result = typeof parsed === 'string' ? parsed : String(parsed);
+                } catch (_e) {
+                  result = evalResult.replace(/^['"`]|['"`]$/g, '');
+                }
+              }
+            } catch (_e) { /* ignore JS error */ }
+          }
+
+          return this.stripHtml(result);
+        }
+      }
+
+      // 兜底：直接用 extractHtmlRuleValue（单元素）
       const value = this.extractHtmlRuleValue(html, rule);
       if (value) {
         return this.stripHtml(value);
@@ -3117,7 +3186,10 @@ export class SourceExecutor {
 
     const parser = getHtmlParser();
     const doc = parser.parse(html);
-    // ruleToc 支持 || 连接器，逐个尝试
+    // ruleToc 支持 ||、&&、%% 连接器
+    // ||: 取第一个非空结果
+    // &&: 合并所有子规则的结果（去重）
+    // %%: 按顺序逐个尝试（类似 ||）
     const { rules: tocRuleParts, connector } = splitConnectorRules(tocRule.trim());
     let items: HtmlElement[] = [];
     for (const part of tocRuleParts) {
@@ -3133,9 +3205,20 @@ export class SourceExecutor {
       const normalized = this.normalizeCssRule(cssPart);
       const found = parser.querySelectorAll(doc, normalized);
       if (found && found.length > 0) {
-        items = found;
-        console.info('[SrcEx] parseToc CSS matched: rule="' + cssPart + '" norm="' + normalized + '" count=' + items.length);
-        break;
+        console.info('[SrcEx] parseToc CSS matched: rule="' + cssPart + '" norm="' + normalized + '" count=' + found.length);
+        if (connector === '&&') {
+          // && : 合并所有子规则结果（按 href 去重）
+          for (const el of found) {
+            const href = el.attributes['href'] || '';
+            if (!href || !items.some(existing => (existing.attributes['href'] || '') === href)) {
+              items.push(el);
+            }
+          }
+        } else {
+          // || 或 %%：取第一个非空结果
+          items = found;
+          break;
+        }
       }
     }
     if (!items || items.length === 0) {

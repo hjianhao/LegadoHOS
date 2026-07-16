@@ -8,7 +8,6 @@
  *
  * 持久化：使用 PersistentStorage 跨重启持久化
  */
-import promptAction from '@ohos.promptAction';
 import { AppTheme } from '../theme/AppTheme';
 import { UiUtil } from '../util/UiUtil';
 import { BackupService } from '../service/BackupService';
@@ -79,7 +78,7 @@ struct BackupSettingsPage {
   }
 
   private showToast(msg: string): void {
-    promptAction.showToast({ message: msg, duration: 1500 });
+    UiUtil.showToast(this.getUIContext(), { message: msg, duration: 1500 });
   }
 
   private async testConnection(): Promise<void> {

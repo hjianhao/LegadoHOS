@@ -4,7 +4,7 @@
  */
 import { ThemeColors } from '../../theme/ThemeColors';
 import { NetUtil } from '../../util/NetUtil';
-import promptAction from '@ohos.promptAction';
+import { UiUtil } from '../../util/UiUtil';
 
 @CustomDialog
 export struct LoginDialog {
@@ -83,7 +83,7 @@ export struct LoginDialog {
         const token = data['key'] as string;
         AppStorage.setOrCreate<string>('gy_qttoken', token);
         this.statusText = '登录成功！';
-        promptAction.showToast({ message: '登录成功', duration: 2000 });
+        UiUtil.showToast(this.getUIContext(), { message: '登录成功', duration: 2000 });
         setTimeout(() => { this.controller.close(); }, 800);
       } else {
         this.statusText = (data['msg'] as string) || '登录失败';
