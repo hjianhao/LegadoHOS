@@ -24,6 +24,7 @@
  */
 import { BookChapter } from '../../model/BookChapter';
 import fileFs from '@ohos.file.fs';
+import { localBookTitleFromPath } from './LocalBookFileUtil';
 
 export interface PdfMeta {
   title: string;
@@ -223,8 +224,7 @@ export class PdfParser {
   }
 
   private guessTitle(): string {
-    const parts = this.filePath.split('/');
-    return parts[parts.length - 1].replace(/\.pdf$/i, '');
+    return localBookTitleFromPath(this.filePath);
   }
 
   getMeta(): PdfMeta { return this.meta_; }

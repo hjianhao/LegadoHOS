@@ -25,6 +25,7 @@ import { BookSourceChapter } from '../model/BookSource';
 import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { localBookEngine, LocalBookEngine, ImportFileItem, LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
+import { localBookTitleFromPath } from '../engine/book/LocalBookFileUtil';
 import { EpubEngineType, EpubEngineConfig } from '../engine/EpubEngineConfig';
 import { extractZipConcurrent } from '../engine/book/ZipExtractTask';
 import picker from '@ohos.file.picker';
@@ -217,6 +218,17 @@ export struct BookshelfPage {
       const db = AppDatabase.getInstance().rdbStore;
       const bookDao = new BookTable(db);
       const result = await bookDao.getAllShelfBooks();
+      const repairs: Promise<void>[] = [];
+      for (const book of result) {
+        if (book.origin !== LOCAL_BOOK_ORIGIN || book.kind !== 'PDF') continue;
+        const fileTitle = localBookTitleFromPath(book.originUrl);
+        if (!fileTitle || fileTitle === book.name) continue;
+        // PDF 内嵌 Title 经常是下载站域名或制作工具名称。本地 PDF 始终以
+        // 用户导入时的文件名为书名，并顺带修复旧版本已被覆盖的数据库记录。
+        book.name = fileTitle;
+        repairs.push(bookDao.updateBook(book));
+      }
+      if (repairs.length > 0) await Promise.all(repairs);
       this.books = result;
       this.applyFilters();
     } catch (e) {

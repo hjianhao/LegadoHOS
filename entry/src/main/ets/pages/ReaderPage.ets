@@ -25,6 +25,7 @@ import { EpubServer, EpubFontResource } from '../utils/EpubServer';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { HtmlUtil } from '../util/HtmlUtil';
 import { AloudChapterText, releaseGlobalAloudEngine, setAloudChapterProvider } from '../service/ReadAloudEngine';
+import { localBookTitleFromPath } from '../engine/book/LocalBookFileUtil';
 
 interface ReaderEvent {
   type: string;
@@ -378,6 +379,14 @@ struct ReaderPage {
       if (!publicationPath || !fileFs.accessSync(publicationPath)) {
         throw new Error(this.isPdf_ ? '本地 PDF 文件不存在，请重新导入' :
           (this.isMobi_ ? '本地 MOBI/AZW 文件不存在，请重新导入' : 'EPUB 解压目录不存在，请重新导入'));
+      }
+
+      if (this.isPdf_) {
+        const fileTitle = localBookTitleFromPath(publicationPath);
+        if (fileTitle && fileTitle !== book.name) {
+          book.name = fileTitle;
+          await bookDao.updateBook(book);
+        }
       }
 
       this.book_ = book;
@@ -990,7 +999,7 @@ struct ReaderPage {
       });
     }
     let changed = false;
-    if (meta.title && meta.title !== this.book_.name) {
+    if (!this.isPdf_ && meta.title && meta.title !== this.book_.name) {
       this.book_.name = meta.title;
       this.bookName = meta.title;
       changed = true;
