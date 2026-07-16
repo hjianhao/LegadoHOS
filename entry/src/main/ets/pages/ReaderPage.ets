@@ -65,6 +65,7 @@ interface EpubTocItem {
 
 interface WebReaderStyle {
   animType: number;
+  flowMode: string;
   backgroundColor: string;
   color: string;
   fontSize: number;
@@ -115,6 +116,7 @@ const EPUB_READ_BG_KEY = 'epub_read_bg';
 const EPUB_READ_TEXT_KEY = 'epub_read_text';
 const EPUB_READ_NIGHT_MODE_KEY = 'epub_read_night_mode';
 const EPUB_READ_FOLLOW_THEME_KEY = 'epub_read_follow_theme';
+const EPUB_FLOW_MODE_KEY = 'epub_flow_mode';
 const EPUB_BOOK_FONT: FontInfo = {
   id: 'epub_book',
   name: '书籍原始字体',
@@ -144,6 +146,7 @@ struct ReaderPage {
   @State readTextColor: string = '#333333';
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
+  @State flowMode: string = 'paginated';
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
   @State tocItems: EpubTocItem[] = [];
   @State fontList: FontInfo[] = [];
@@ -416,6 +419,7 @@ struct ReaderPage {
     const textColorPromise = s.get<string>(EPUB_READ_TEXT_KEY, '#333333');
     const nightModePromise = s.get<boolean>(EPUB_READ_NIGHT_MODE_KEY, false);
     const followThemePromise = s.get<boolean>(EPUB_READ_FOLLOW_THEME_KEY, true);
+    const flowModePromise = s.get<string>(EPUB_FLOW_MODE_KEY, 'paginated');
     const actionPromises: Promise<number>[] = [];
     for (let z = 0; z < 9; z++) {
       actionPromises.push(s.getClickAction(z));
@@ -439,6 +443,7 @@ struct ReaderPage {
       textColorPromise,
       nightModePromise,
       followThemePromise,
+      flowModePromise,
       Promise.all(actionPromises),
     ]);
 
@@ -470,6 +475,7 @@ struct ReaderPage {
     }
     this.readNightMode = await nightModePromise;
     this.readFollowTheme = await followThemePromise;
+    this.flowMode = await flowModePromise === 'scrolled' ? 'scrolled' : 'paginated';
     if (this.readFollowTheme) {
       this.readNightMode = this.isDark;
     }
@@ -1114,6 +1120,17 @@ struct ReaderPage {
       .catch(() => {});
   }
 
+  private onFlowModeChange_(mode: string): void {
+    const normalized = mode === 'scrolled' ? 'scrolled' : 'paginated';
+    if (this.flowMode === normalized) return;
+    this.flowMode = normalized;
+    this.applyStyleNow_();
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(() => SettingsStore.getInstance().put(EPUB_FLOW_MODE_KEY, normalized))
+      .catch(() => {});
+  }
+
   private applyStyleNow_(): void {
     this.runJs_('window.applyStyle && window.applyStyle(' + JSON.stringify(this.toWebStyle_()) + ')');
     this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(this.zoneActions) + ')');
@@ -1128,6 +1145,7 @@ struct ReaderPage {
     }
     return {
       animType: this.cfg.animType,
+      flowMode: this.flowMode,
       backgroundColor: this.cfg.bgColor,
       color: this.cfg.textColor,
       fontSize: this.cfg.fontSize,
@@ -1525,7 +1543,10 @@ struct ReaderPage {
         nightMode: this.readNightMode,
         dayBgColor: this.readBgColor,
         dayTextColor: this.readTextColor,
+        showFlowMode: true,
+        flowMode: this.flowMode,
         onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
+        onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),
         onChange: (config: PageViewConfig) => this.onStyleChange_(config),
         onDismiss: () => { this.showStyle = false; },
       })

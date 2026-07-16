@@ -26,12 +26,16 @@ export struct StylePanel {
   @Prop dayBgColor: string = '';
   /** 日间文字色：夜间模式下仍编辑这份用户配置 */
   @Prop dayTextColor: string = '';
+  /** 图文阅读器支持分页/滚动切换；小说阅读器暂不显示。 */
+  @Prop showFlowMode: boolean = false;
+  @Prop flowMode: string = 'paginated';
   @State editingDayBgColor: string = '';
   @State editingDayTextColor: string = '';
 
   onChange?: (config: PageViewConfig) => void;
   onDismiss?: () => void;
   onNightModeToggle?: (night: boolean) => void;
+  onFlowModeChange?: (mode: string) => void;
 
   aboutToAppear(): void {
     this.editingDayBgColor = this.dayBgColor || this.cfg.bgColor;
@@ -257,6 +261,13 @@ export struct StylePanel {
   // ===== 其他 =====
   @Builder buildOther() {
     Column() { }.width('100%').padding(12)
+    if (this.showFlowMode) {
+      Text('显示方式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
+      Row() {
+        this.flowModeChip('分页', 'paginated')
+        this.flowModeChip('滚动', 'scrolled')
+      }.width('100%').margin({ bottom: 10 })
+    }
     Row() {
       Text('中文排版').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
       Toggle({ type: ToggleType.Switch, isOn: this.cfg.zhFormat }).onChange((v: boolean) => { this.cfg.zhFormat = v; this.emitChange(); })
@@ -271,6 +282,17 @@ export struct StylePanel {
       this.zhChip('简体', 'simplified')
       this.zhChip('繁体', 'traditional')
     }.width('100%')
+  }
+
+  @Builder flowModeChip(label: string, mode: string) {
+    Column() {
+      Text(label).fontSize(13)
+        .fontColor(this.flowMode === mode ? '#FFF' : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 20, right: 20 })
+    }
+    .backgroundColor(this.flowMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(16).margin({ right: 8 })
+    .onClick(() => { this.onFlowModeChange?.(mode); })
   }
 
   @Builder zhChip(label: string, mode: string) {

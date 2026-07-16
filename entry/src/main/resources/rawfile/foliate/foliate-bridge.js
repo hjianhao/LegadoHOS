@@ -142,6 +142,7 @@ const currentStyleValues = () => {
   const useBookFont = family === BOOK_FONT_FAMILY
   return {
     animType: Number(cssValue(currentStyle.animType, ANIM_NONE)),
+    flowMode: cssValue(currentStyle.flowMode, 'paginated'),
     bg: cssValue(currentStyle.backgroundColor, '#F5F0E8'),
     color: cssValue(currentStyle.color, '#333333'),
     fontSize: Number(cssValue(currentStyle.fontSize, 18)),
@@ -270,7 +271,7 @@ const applyStyle = () => {
   viewer.style.paddingRight = `${v.pr}px`
   viewer.style.boxSizing = 'border-box'
   if (!view?.renderer) return
-  if (v.animType === ANIM_SCROLL) view.renderer.setAttribute('flow', 'scrolled')
+  if (v.flowMode === 'scrolled' || v.animType === ANIM_SCROLL) view.renderer.setAttribute('flow', 'scrolled')
   else view.renderer.removeAttribute('flow')
   view.renderer.setAttribute('margin', '0px')
   view.renderer.setAttribute('margin-top', `${Math.max(0, v.pt)}px`)
@@ -283,6 +284,11 @@ const applyStyle = () => {
 const currentSectionPages = () => {
   const renderer = view?.renderer
   if (view?.isFixedLayout) return { page: 1, total: 1 }
+  if (renderer?.getAttribute?.('flow') === 'scrolled') {
+    const total = Math.max(1, Number(renderer.pages || 1))
+    const page = Math.max(1, Math.min(total, Number(renderer.page || 0) + 1))
+    return { page, total }
+  }
   const bufferedPages = Number(renderer?.pages || 0)
   if (!renderer || bufferedPages <= 2) return { page: 0, total: 0 }
   const total = Math.max(1, bufferedPages - 2)
@@ -407,7 +413,8 @@ const finishSwipe = (start, touch, doc, event) => {
   return true
 }
 
-const isScrollMode = () => Number(cssValue(currentStyle.animType, ANIM_NONE)) === ANIM_SCROLL
+const isScrollMode = () => cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ||
+  Number(cssValue(currentStyle.animType, ANIM_NONE)) === ANIM_SCROLL
 
 function bindTap(doc) {
   if (!doc || doc.__legadoTapBound) return
@@ -538,7 +545,7 @@ const playTurnAnimation = async (direction, navigate) => {
   const mode = Number(cssValue(currentStyle.animType, ANIM_NONE))
   turnBusy = true
   try {
-    if (mode === ANIM_SCROLL) {
+    if (isScrollMode()) {
       const distance = Math.max(120, frameViewportSize().height * 0.88)
       await (direction > 0 ? view.next(distance) : view.prev(distance))
       return

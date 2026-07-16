@@ -685,14 +685,15 @@
     } catch (e3) {}
   }
 
-  function enforcePaginatedLayout() {
+  function applyFlowLayout() {
     if (!rendition) return;
+    var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
     syncLayoutSettings();
     try {
       if (rendition.spread) rendition.spread('none', 999999);
     } catch (e) {}
     try {
-      if (rendition.flow) rendition.flow('paginated');
+      if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
     } catch (e2) {}
     syncLayoutSettings();
     try {
@@ -797,7 +798,7 @@
         gap: PAGE_GAP,
         flow: 'paginated'
       });
-      enforcePaginatedLayout();
+      applyFlowLayout();
       applyRenditionTheme();
       setupContentHook();
       setupRenditionEvents();
@@ -852,7 +853,7 @@
   window.applyStyle = function (style) {
     currentStyle = parseStyle(style);
     applyRootStyle();
-    enforcePaginatedLayout();
+    applyFlowLayout();
     applyRenditionTheme();
     if (rendition) {
       try {
