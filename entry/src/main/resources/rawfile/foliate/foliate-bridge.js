@@ -627,10 +627,18 @@ window.nextPage = () => playTurnAnimation(1, () => view?.goRight?.())
 window.prevPage = () => playTurnAnimation(-1, () => view?.goLeft?.())
 window.goTo = target => target ? view?.goTo?.(target) : null
 window.goToHref = target => target ? view?.goTo?.(target) : null
+globalThis.LegadoPdfEnhance = () => ({
+  autoCrop: currentStyle.pdfAutoCrop === true,
+  darken: Number(currentStyle.pdfDarken || 0),
+  whiten: Number(currentStyle.pdfWhiten || 0)
+})
 window.applyStyle = style => {
   try { currentStyle = typeof style === 'string' ? JSON.parse(style) : (style || {}) }
   catch (_) { currentStyle = {} }
   applyStyle()
+  if (currentFormat === 'pdf') {
+    for (const item of view?.renderer?.getContents?.() || []) item.doc?.__legadoPdfRefresh?.()
+  }
 }
 window.setZoneActions = actions => {
   try { zoneActions = typeof actions === 'string' ? JSON.parse(actions) : actions }

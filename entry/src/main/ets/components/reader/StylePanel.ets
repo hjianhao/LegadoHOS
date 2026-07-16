@@ -29,6 +29,10 @@ export struct StylePanel {
   /** 图文阅读器支持分页/滚动切换；小说阅读器暂不显示。 */
   @Prop showFlowMode: boolean = false;
   @Prop flowMode: string = 'paginated';
+  @Prop showPdfEnhance: boolean = false;
+  @Prop pdfAutoCrop: boolean = false;
+  @Prop pdfDarken: number = 0;
+  @Prop pdfWhiten: number = 0;
   @State editingDayBgColor: string = '';
   @State editingDayTextColor: string = '';
 
@@ -36,6 +40,7 @@ export struct StylePanel {
   onDismiss?: () => void;
   onNightModeToggle?: (night: boolean) => void;
   onFlowModeChange?: (mode: string) => void;
+  onPdfEnhanceChange?: (autoCrop: boolean, darken: number, whiten: number) => void;
 
   aboutToAppear(): void {
     this.editingDayBgColor = this.dayBgColor || this.cfg.bgColor;
@@ -266,6 +271,25 @@ export struct StylePanel {
       Row() {
         this.flowModeChip('分页', 'paginated')
         this.flowModeChip('滚动', 'scrolled')
+      }.width('100%').margin({ bottom: 10 })
+    }
+    if (this.showPdfEnhance) {
+      Row() {
+        Text('自动裁边').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.pdfAutoCrop })
+          .onChange((v: boolean) => { this.onPdfEnhanceChange?.(v, this.pdfDarken, this.pdfWhiten); })
+      }.width('100%').margin({ bottom: 8 })
+      Row() {
+        Text('内容加黑').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
+        Slider({ value: this.pdfDarken, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
+          .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, v, this.pdfWhiten); })
+        Text(String(this.pdfDarken)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
+      }.width('100%').margin({ bottom: 8 })
+      Row() {
+        Text('背景漂白').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
+        Slider({ value: this.pdfWhiten, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
+          .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, this.pdfDarken, v); })
+        Text(String(this.pdfWhiten)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
       }.width('100%').margin({ bottom: 10 })
     }
     Row() {

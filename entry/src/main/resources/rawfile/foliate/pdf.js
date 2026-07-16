@@ -12,7 +12,98 @@ const textLayerBuilderCSS = await fetchText(pdfjsPath('text_layer_builder.css'))
 // https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v5.5.207/web/annotation_layer_builder.css
 const annotationLayerBuilderCSS = await fetchText(pdfjsPath('annotation_layer_builder.css'))
 
+const clampByte = value => Math.max(0, Math.min(255, Math.round(value)))
+
+const enhanceOptions = () => {
+    const value = globalThis.LegadoPdfEnhance?.() ?? {}
+    return {
+        autoCrop: value.autoCrop === true,
+        darken: Math.max(0, Math.min(100, Number(value.darken) || 0)),
+        whiten: Math.max(0, Math.min(100, Number(value.whiten) || 0)),
+    }
+}
+
+const detectContentRect = canvas => {
+    const maxSide = 360
+    const scale = Math.min(1, maxSide / Math.max(canvas.width, canvas.height))
+    const width = Math.max(1, Math.round(canvas.width * scale))
+    const height = Math.max(1, Math.round(canvas.height * scale))
+    const sample = document.createElement('canvas')
+    sample.width = width
+    sample.height = height
+    const context = sample.getContext('2d', { willReadFrequently: true })
+    context.drawImage(canvas, 0, 0, width, height)
+    const pixels = context.getImageData(0, 0, width, height).data
+    const border = []
+    const borderSize = Math.max(2, Math.round(Math.min(width, height) * 0.025))
+    for (let y = 0; y < height; y += 2) for (let x = 0; x < width; x += 2) {
+        if (x >= borderSize && x < width - borderSize && y >= borderSize && y < height - borderSize) continue
+        const i = (y * width + x) * 4
+        border.push(pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114)
+    }
+    border.sort((a, b) => a - b)
+    const background = border[Math.floor(border.length * .72)] ?? 255
+    const threshold = Math.max(80, Math.min(245, background - 14))
+    let left = width, top = height, right = -1, bottom = -1, count = 0
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4
+        const luminance = pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114
+        if (luminance >= threshold) continue
+        left = Math.min(left, x); right = Math.max(right, x)
+        top = Math.min(top, y); bottom = Math.max(bottom, y)
+        count++
+    }
+    if (right < left || bottom < top || count < width * height * .001) return null
+    const pad = Math.max(2, Math.round(Math.min(width, height) * .018))
+    left = Math.max(0, left - pad); top = Math.max(0, top - pad)
+    right = Math.min(width - 1, right + pad); bottom = Math.min(height - 1, bottom + pad)
+    if ((right - left + 1) * (bottom - top + 1) > width * height * .97) return null
+    return {
+        x: Math.round(left / scale), y: Math.round(top / scale),
+        width: Math.max(1, Math.round((right - left + 1) / scale)),
+        height: Math.max(1, Math.round((bottom - top + 1) / scale)),
+    }
+}
+
+const cropCanvas = (canvas, rect) => {
+    if (!rect) return canvas
+    const output = document.createElement('canvas')
+    output.width = canvas.width
+    output.height = canvas.height
+    const context = output.getContext('2d')
+    context.fillStyle = '#fff'
+    context.fillRect(0, 0, output.width, output.height)
+    const scale = Math.min(output.width / rect.width, output.height / rect.height)
+    const width = rect.width * scale
+    const height = rect.height * scale
+    context.drawImage(canvas, rect.x, rect.y, rect.width, rect.height,
+        (output.width - width) / 2, (output.height - height) / 2, width, height)
+    return output
+}
+
+const adjustCanvas = (canvas, darken, whiten) => {
+    if (darken <= 0 && whiten <= 0) return canvas
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    const image = context.getImageData(0, 0, canvas.width, canvas.height)
+    const pixels = image.data
+    const contrast = 1 + darken / 100 * 1.35
+    const whitenStrength = whiten / 100
+    for (let i = 0; i < pixels.length; i += 4) {
+        const luminance = pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114
+        const backgroundWeight = Math.max(0, Math.min(1, (luminance - 72) / 183)) * whitenStrength
+        for (let c = 0; c < 3; c++) {
+            const lifted = pixels[i + c] + (255 - pixels[i + c]) * backgroundWeight
+            pixels[i + c] = clampByte((lifted - 128) * contrast + 128)
+        }
+    }
+    context.putImageData(image, 0, 0)
+    return canvas
+}
+
 const render = async (page, doc, zoom) => {
+    const renderToken = (doc.__legadoPdfRenderToken ?? 0) + 1
+    doc.__legadoPdfRenderToken = renderToken
+    doc.__legadoPdfRefresh = () => render(page, doc, zoom)
     const scale = zoom * devicePixelRatio
     doc.documentElement.style.transform = `scale(${1 / devicePixelRatio})`
     doc.documentElement.style.transformOrigin = 'top left'
@@ -26,9 +117,14 @@ const render = async (page, doc, zoom) => {
     canvas.width = viewport.width
     const canvasContext = canvas.getContext('2d')
     await page.render({ canvasContext, viewport }).promise
-    doc.querySelector('#canvas').replaceChildren(doc.adoptNode(canvas))
+    if (doc.__legadoPdfRenderToken !== renderToken) return
+    const options = enhanceOptions()
+    const cropped = options.autoCrop ? cropCanvas(canvas, detectContentRect(canvas)) : canvas
+    const enhanced = adjustCanvas(cropped, options.darken, options.whiten)
+    doc.querySelector('#canvas').replaceChildren(doc.adoptNode(enhanced))
 
     const container = doc.querySelector('.textLayer')
+    container.style.display = options.autoCrop ? 'none' : ''
     const textLayer = new pdfjsLib.TextLayer({
         textContentSource: await page.streamTextContent(),
         container, viewport,
@@ -57,6 +153,7 @@ const render = async (page, doc, zoom) => {
     container.onpointerup = () => container.classList.remove('selecting')
 
     const div = doc.querySelector('.annotationLayer')
+    div.style.display = options.autoCrop ? 'none' : ''
     const linkService = {
         goToDestination: () => {},
         getDestinationHash: dest => JSON.stringify(dest),

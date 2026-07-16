@@ -67,6 +67,9 @@ interface EpubTocItem {
 interface WebReaderStyle {
   animType: number;
   flowMode: string;
+  pdfAutoCrop: boolean;
+  pdfDarken: number;
+  pdfWhiten: number;
   backgroundColor: string;
   color: string;
   fontSize: number;
@@ -118,6 +121,9 @@ const EPUB_READ_TEXT_KEY = 'epub_read_text';
 const EPUB_READ_NIGHT_MODE_KEY = 'epub_read_night_mode';
 const EPUB_READ_FOLLOW_THEME_KEY = 'epub_read_follow_theme';
 const EPUB_FLOW_MODE_KEY = 'epub_flow_mode';
+const PDF_AUTO_CROP_KEY = 'pdf_auto_crop';
+const PDF_DARKEN_KEY = 'pdf_darken';
+const PDF_WHITEN_KEY = 'pdf_whiten';
 const EPUB_BOOK_FONT: FontInfo = {
   id: 'epub_book',
   name: '书籍原始字体',
@@ -148,6 +154,9 @@ struct ReaderPage {
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
+  @State pdfAutoCrop: boolean = false;
+  @State pdfDarken: number = 0;
+  @State pdfWhiten: number = 0;
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
   @State tocItems: EpubTocItem[] = [];
   @State fontList: FontInfo[] = [];
@@ -204,6 +213,7 @@ struct ReaderPage {
   private pendingStyleSave_: EpubStyleSaveSnapshot | null = null;
   private styleSavePromise_: Promise<void> = Promise.resolve();
   private styleSaveScheduled_: boolean = false;
+  private pdfEnhanceTimer_: number = -1;
 
   private static readonly NIGHT_BG: string = '#1A1A1A';
   private static readonly NIGHT_TEXT: string = '#C0C0C0';
@@ -250,6 +260,11 @@ struct ReaderPage {
     if (this.styleTimer_ > 0) clearTimeout(this.styleTimer_);
     if (this.saveTimer_ > 0) clearTimeout(this.saveTimer_);
     if (this.readyTimer_ > 0) clearTimeout(this.readyTimer_);
+    if (this.pdfEnhanceTimer_ > 0) {
+      clearTimeout(this.pdfEnhanceTimer_);
+      this.pdfEnhanceTimer_ = -1;
+      await this.savePdfEnhance_();
+    }
     this.finishChapterTextRequest_('');
     await this.flushStyleSave_();
     this.server_.stop();
@@ -424,6 +439,9 @@ struct ReaderPage {
     const nightModePromise = s.get<boolean>(EPUB_READ_NIGHT_MODE_KEY, false);
     const followThemePromise = s.get<boolean>(EPUB_READ_FOLLOW_THEME_KEY, true);
     const flowModePromise = s.get<string>(EPUB_FLOW_MODE_KEY, 'paginated');
+    const pdfAutoCropPromise = s.get<boolean>(PDF_AUTO_CROP_KEY, false);
+    const pdfDarkenPromise = s.get<number>(PDF_DARKEN_KEY, 0);
+    const pdfWhitenPromise = s.get<number>(PDF_WHITEN_KEY, 0);
     const actionPromises: Promise<number>[] = [];
     for (let z = 0; z < 9; z++) {
       actionPromises.push(s.getClickAction(z));
@@ -448,6 +466,9 @@ struct ReaderPage {
       nightModePromise,
       followThemePromise,
       flowModePromise,
+      pdfAutoCropPromise,
+      pdfDarkenPromise,
+      pdfWhitenPromise,
       Promise.all(actionPromises),
     ]);
 
@@ -480,6 +501,9 @@ struct ReaderPage {
     this.readNightMode = await nightModePromise;
     this.readFollowTheme = await followThemePromise;
     this.flowMode = await flowModePromise === 'scrolled' ? 'scrolled' : 'paginated';
+    this.pdfAutoCrop = await pdfAutoCropPromise;
+    this.pdfDarken = Math.min(100, Math.max(0, await pdfDarkenPromise));
+    this.pdfWhiten = Math.min(100, Math.max(0, await pdfWhitenPromise));
     if (this.readFollowTheme) {
       this.readNightMode = this.isDark;
     }
@@ -1161,6 +1185,26 @@ struct ReaderPage {
       .catch(() => {});
   }
 
+  private onPdfEnhanceChange_(autoCrop: boolean, darken: number, whiten: number): void {
+    this.pdfAutoCrop = autoCrop;
+    this.pdfDarken = Math.min(100, Math.max(0, Math.round(darken)));
+    this.pdfWhiten = Math.min(100, Math.max(0, Math.round(whiten)));
+    if (this.pdfEnhanceTimer_ > 0) clearTimeout(this.pdfEnhanceTimer_);
+    this.pdfEnhanceTimer_ = setTimeout(() => {
+      this.pdfEnhanceTimer_ = -1;
+      this.applyStyleNow_();
+      this.savePdfEnhance_().catch(() => {});
+    }, 160);
+  }
+
+  private async savePdfEnhance_(): Promise<void> {
+    const values: Record<string, Object> = {};
+    values[PDF_AUTO_CROP_KEY] = this.pdfAutoCrop;
+    values[PDF_DARKEN_KEY] = this.pdfDarken;
+    values[PDF_WHITEN_KEY] = this.pdfWhiten;
+    await SettingsStore.getInstance().putMany(values);
+  }
+
   private applyStyleNow_(): void {
     this.runJs_('window.applyStyle && window.applyStyle(' + JSON.stringify(this.toWebStyle_()) + ')');
     this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(this.zoneActions) + ')');
@@ -1176,6 +1220,9 @@ struct ReaderPage {
     return {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
+      pdfAutoCrop: this.pdfAutoCrop,
+      pdfDarken: this.pdfDarken,
+      pdfWhiten: this.pdfWhiten,
       backgroundColor: this.cfg.bgColor,
       color: this.cfg.textColor,
       fontSize: this.cfg.fontSize,
@@ -1575,8 +1622,14 @@ struct ReaderPage {
         dayTextColor: this.readTextColor,
         showFlowMode: !this.isPdf_,
         flowMode: this.flowMode,
+        showPdfEnhance: this.isPdf_,
+        pdfAutoCrop: this.pdfAutoCrop,
+        pdfDarken: this.pdfDarken,
+        pdfWhiten: this.pdfWhiten,
         onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
         onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),
+        onPdfEnhanceChange: (autoCrop: boolean, darken: number, whiten: number) =>
+          this.onPdfEnhanceChange_(autoCrop, darken, whiten),
         onChange: (config: PageViewConfig) => this.onStyleChange_(config),
         onDismiss: () => { this.showStyle = false; },
       })
