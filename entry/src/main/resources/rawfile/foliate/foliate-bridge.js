@@ -20,6 +20,8 @@ let currentStyle = {}
 let zoneActions = [1, 1, 1, 3, 3, 3, 2, 2, 2]
 let lastHandledTapAt = 0
 let turnBusy = false
+let livePageFrame = 0
+let lastLivePageKey = ''
 
 const ACTION_NONE = -1
 const ACTION_MENU = 0
@@ -296,6 +298,18 @@ const currentSectionPages = () => {
   return { page, total }
 }
 
+const emitLivePage = () => {
+  if (!isScrollMode() || livePageFrame) return
+  livePageFrame = requestAnimationFrame(() => {
+    livePageFrame = 0
+    const sectionPages = currentSectionPages()
+    const key = `${sectionPages.page}/${sectionPages.total}`
+    if (key === lastLivePageKey) return
+    lastLivePageKey = key
+    emit('page', { page: sectionPages.page, totalPages: sectionPages.total })
+  })
+}
+
 const frameViewportSize = () => {
   const rect = viewer?.getBoundingClientRect?.()
   if (rect?.width > 0 && rect?.height > 0)
@@ -518,6 +532,7 @@ const openBook = async (bookUrl, target, format) => {
     const publication = format === 'epub-dir' ? await openEpubDirectory(bookUrl) :
       await RemoteFile.open(bookUrl)
     await view.open(publication)
+    view.renderer?.addEventListener?.('scroll', emitLivePage)
     const book = view.book
     if (format !== 'epub-dir' && Number(book?.mobi?.headers?.palmdoc?.encryption || 0) !== 0)
       throw new Error('暂不支持 DRM 加密的 Kindle 书籍')

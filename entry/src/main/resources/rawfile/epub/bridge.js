@@ -23,6 +23,8 @@
   var ACTION_PREV_PAGE = 2;
   var BOOK_FONT_FAMILY = '__book__';
   var PAGE_GAP = 0;
+  var livePageFrame = 0;
+  var lastLivePageKey = '';
 
   function emit(type, data) {
     eventQueue.push({ type: type, data: data || {}, time: Date.now() });
@@ -744,6 +746,28 @@
         percentage: safePercent(location)
       });
     });
+
+    var manager = rendition.manager;
+    if (manager && manager.on && !manager.__legadoLivePageBound) {
+      manager.__legadoLivePageBound = true;
+      manager.on('scroll', function () {
+        if (cssValue(currentStyle.flowMode, 'paginated') !== 'scrolled' || livePageFrame) return;
+        livePageFrame = requestAnimationFrame(function () {
+          livePageFrame = 0;
+          var container = manager.container;
+          var height = Number(container && container.clientHeight || 0);
+          var scrollHeight = Number(container && container.scrollHeight || 0);
+          if (height <= 0 || scrollHeight <= 0) return;
+          var total = Math.max(1, Math.ceil(scrollHeight / height));
+          var top = Number(container.scrollTop || 0);
+          var page = Math.max(1, Math.min(total, Math.floor((top + height / 2) / height) + 1));
+          var key = page + '/' + total;
+          if (key === lastLivePageKey) return;
+          lastLivePageKey = key;
+          emit('page', { page: page, totalPages: total });
+        });
+      });
+    }
   }
 
   function emitBookInfo() {

@@ -872,13 +872,18 @@ struct ReaderPage {
   }
 
   private handleReaderEvent_(evt: ReaderEvent): void {
-    console.info(`[ReaderPage] publication event=${evt.type}`);
+    if (evt.type !== 'page') {
+      console.info(`[ReaderPage] publication event=${evt.type}`);
+    }
     switch (evt.type) {
       case 'ready':
         this.onWebReady_();
         break;
       case 'location':
         this.onLocation_(evt.data as LocationEvent);
+        break;
+      case 'page':
+        this.onLivePage_(evt.data as LocationEvent);
         break;
       case 'toc':
         this.onToc_(evt.data as Object[]);
@@ -992,6 +997,15 @@ struct ReaderPage {
     this.currentTotalPages_ = total;
     this.pageText = total > 0 ? `${page}/${total}` : '';
     this.scheduleSaveProgress_();
+  }
+
+  private onLivePage_(loc: LocationEvent): void {
+    const page = typeof loc.page === 'number' ? loc.page : 0;
+    const total = typeof loc.totalPages === 'number' ? loc.totalPages : 0;
+    if (page === this.currentPage_ && total === this.currentTotalPages_) return;
+    this.currentPage_ = page;
+    this.currentTotalPages_ = total;
+    this.pageText = total > 0 ? `${page}/${total}` : '';
   }
 
   private scheduleSaveProgress_(): void {
