@@ -38,6 +38,11 @@ import { LoginDialog } from '../components/reader/LoginDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 
+interface ReadableEpubChapter {
+  index: number;
+  content: string;
+}
+
 interface ReadStyleSaveSnapshot {
   config: PageViewConfig;
   readBgColor: string;
@@ -470,6 +475,7 @@ struct ReadPage {
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
     this.isLoading = true;
+    const previousIndex = this.currentIndex;
     this.currentIndex = idx;
     const ch = this.allChapters_[idx];
 
@@ -488,11 +494,27 @@ struct ReadPage {
 	    }
 
     try {
-      const content = await this.fetchChapterContent_(idx);
+      let loadedIdx = idx;
+      let content = await this.fetchChapterContent_(idx);
+      if ((!content || content.length <= 50) && this.isLocalEpub_) {
+        const direction = idx < previousIndex ? -1 : 1;
+        const readable = await this.findReadableLocalEpubChapter_(idx + direction, direction);
+        if (readable) {
+          loadedIdx = readable.index;
+          content = readable.content;
+          console.info('[ReadPage] Skipped image-only EPUB chapter:', idx, '->', loadedIdx);
+        }
+      }
       if (content && content.length > 50) {
-        this.applyChapterContent_(idx, content);
+        this.applyChapterContent_(loadedIdx, content);
+      } else if (this.isLocalEpub_ && previousIndex !== idx && this.text.length > 50) {
+        // 向前/向后已经没有可读文本章节时，保留当前页，避免用错误提示覆盖正文。
+        this.currentIndex = previousIndex;
+        this.isLoading = false;
+        return;
       } else {
-        this.text = content || '加载失败';
+        this.text = this.isLocalEpub_ ? '当前章节没有可提取的文本，请在设置中切换为“图文混排”引擎' :
+          (content || '加载失败');
         this.layoutText(this.text);
       }
     } catch (e) {
@@ -500,13 +522,29 @@ struct ReadPage {
     }
     this.isLoading = false;
     // 持久化缓存到数据库
-    this.saveToDbCache_(idx, this.text);
+    this.saveToDbCache_(this.currentIndex, this.text);
     // 保存阅读进度
     this.saveProgress();
     // 无缝翻页：预加载下一章
-    this.preloadNextChapter_(idx);
+    this.preloadNextChapter_(this.currentIndex);
     // 自动缓存前后 ±n 章
-    this.cacheSurrounding_(idx);
+    this.cacheSurrounding_(this.currentIndex);
+  }
+
+  private async findReadableLocalEpubChapter_(startIdx: number, direction: number): Promise<ReadableEpubChapter | null> {
+    const step = direction < 0 ? -1 : 1;
+    for (let idx = startIdx; idx >= 0 && idx < this.allChapters_.length; idx += step) {
+      let content = await this.readChapterCache_(idx);
+      if (!content || content.length <= 50) {
+        try {
+          content = await this.fetchChapterContent_(idx);
+        } catch (_e) {
+          content = '';
+        }
+      }
+      if (content && content.length > 50) return { index: idx, content };
+    }
+    return null;
   }
 
   private async readChapterCache_(idx: number): Promise<string> {
@@ -567,7 +605,7 @@ struct ReadPage {
 		        }
 		      }
 			      if (!content) {
-			        throw new Error('EPUB 章节文件读取失败: ' + (ch.url || ch.title || idx.toString()));
+			        console.info('[ReadPage] EPUB chapter contains no extractable text:', ch.url || ch.title || idx.toString());
 			      }
 	      console.info('[ReadPage] Local book content:', content ? content.length : 0, 'bytes');
 	      return content;
