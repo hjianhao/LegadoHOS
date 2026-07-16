@@ -1,6 +1,17 @@
 const pdfjsPath = path => new URL(`vendor/pdfjs/${path}`, import.meta.url).toString()
 
-import './vendor/pdfjs/pdf.mjs'
+if (!Map.prototype.getOrInsertComputed) {
+    Object.defineProperty(Map.prototype, 'getOrInsertComputed', {
+        configurable: true,
+        writable: true,
+        value(key, callback) {
+            if (!this.has(key)) this.set(key, callback(key))
+            return this.get(key)
+        },
+    })
+}
+
+await import('./vendor/pdfjs/pdf.mjs')
 const pdfjsLib = globalThis.pdfjsLib
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsPath('pdf.worker.mjs')
 

@@ -910,7 +910,9 @@ struct ReaderPage {
 
   private handleReaderEvent_(evt: ReaderEvent): void {
     if (evt.type !== 'page') {
-      console.info(`[ReaderPage] publication event=${evt.type}`);
+      const errorMessage = evt.type === 'error' ?
+        ` message=${((evt.data as Record<string, Object>)?.['message'] as string) || ''}` : '';
+      console.info(`[ReaderPage] publication event=${evt.type}${errorMessage}`);
     }
     switch (evt.type) {
       case 'ready':
