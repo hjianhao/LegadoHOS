@@ -311,7 +311,9 @@ const currentSectionPages = () => {
 }
 
 const emitLivePage = () => {
-  if (!isScrollMode() || livePageFrame) return
+  // PDF 页脚表示 PDF 文档页（如 19/480），不能被当前 HTML/画布内部
+  // 的屏幕分页（如 2/2）覆盖。PDF 页码统一由 relocate/location 上报。
+  if (currentFormat === 'pdf' || !isScrollMode() || livePageFrame) return
   livePageFrame = requestAnimationFrame(() => {
     livePageFrame = 0
     const sectionPages = currentSectionPages()

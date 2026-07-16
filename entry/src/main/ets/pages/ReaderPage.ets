@@ -1058,6 +1058,8 @@ struct ReaderPage {
   }
 
   private onLivePage_(loc: LocationEvent): void {
+    // PDF 使用文档页码，忽略 foliate 内部画布/重排页面的临时屏幕页码。
+    if (this.isPdf_) return;
     const page = typeof loc.page === 'number' ? loc.page : 0;
     const total = typeof loc.totalPages === 'number' ? loc.totalPages : 0;
     if (page === this.currentPage_ && total === this.currentTotalPages_) return;
