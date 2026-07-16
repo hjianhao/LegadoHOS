@@ -209,7 +209,72 @@ const makeTOCItem = item => ({
     subitems: item.items.length ? item.items.map(makeTOCItem) : null,
 })
 
-export const makePDF = async file => {
+const escapeHTML = value => String(value)
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+
+const textContentToParagraphs = content => {
+    const lines = []
+    let line = null
+    const flush = () => {
+        if (line?.text.trim()) lines.push({ ...line, text: line.text.trim() })
+        line = null
+    }
+    for (const item of content.items ?? []) {
+        if (typeof item?.str !== 'string' || !item.str.trim()) continue
+        const x = Number(item.transform?.[4] ?? 0)
+        const y = Number(item.transform?.[5] ?? 0)
+        const height = Math.max(1, Math.abs(Number(item.height ?? item.transform?.[3] ?? 0)))
+        if (line && Math.abs(y - line.y) > Math.max(2, height * .65)) flush()
+        if (!line) line = { text: '', x, y, end: x, height }
+        const text = item.str
+        const needsSpace = line.text && !/[-‐‑—\s]$/.test(line.text) &&
+            !/^[，。！？；：、,.!?;:）】》]/.test(text) &&
+            !/[\u3400-\u9fff]$/.test(line.text) && !/^[\u3400-\u9fff]/.test(text)
+        line.text += (needsSpace ? ' ' : '') + text
+        line.x = Math.min(line.x, x)
+        line.end = Math.max(line.end, x + Math.max(0, Number(item.width ?? 0)))
+        line.height = Math.max(line.height, height)
+        if (item.hasEOL) flush()
+    }
+    flush()
+    if (!lines.length) return []
+
+    const sortedWidths = lines.map(value => value.end - value.x).sort((a, b) => a - b)
+    const sortedStarts = lines.map(value => value.x).sort((a, b) => a - b)
+    const typicalWidth = sortedWidths[Math.floor(sortedWidths.length / 2)] || 1
+    const typicalStart = sortedStarts[Math.floor(sortedStarts.length / 2)] || 0
+    const paragraphs = []
+    let paragraph = ''
+    for (let i = 0; i < lines.length; i++) {
+        const current = lines[i]
+        const previous = lines[i - 1]
+        const indented = current.x > typicalStart + current.height * 1.1
+        const previousShort = previous && previous.end - previous.x < typicalWidth * .68
+        if (paragraph && (indented || previousShort)) {
+            paragraphs.push(paragraph)
+            paragraph = ''
+        }
+        if (paragraph.endsWith('-') || paragraph.endsWith('‐') || paragraph.endsWith('‑'))
+            paragraph = paragraph.slice(0, -1) + current.text
+        else {
+            const cjkJoin = /[\u3400-\u9fff]$/.test(paragraph) || /^[\u3400-\u9fff]/.test(current.text)
+            paragraph += (paragraph && !cjkJoin ? ' ' : '') + current.text
+        }
+    }
+    if (paragraph) paragraphs.push(paragraph)
+    return paragraphs
+}
+
+const renderReflowPage = (paragraphs, pageNumber) => URL.createObjectURL(new Blob([`
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+    <body><article aria-label="第 ${pageNumber} 页">
+    ${paragraphs.map(text => `<p>${escapeHTML(text)}</p>`).join('')}
+    </article></body></html>
+`], { type: 'text/html' }))
+
+export const makePDF = async (file, options = {}) => {
     const transport = new pdfjsLib.PDFDataRangeTransport(file.size, [])
     transport.requestDataRange = (begin, end) => {
         file.slice(begin, end).arrayBuffer().then(chunk => {
@@ -223,7 +288,26 @@ export const makePDF = async file => {
         isEvalSupported: false,
     }).promise
 
-    const book = { rendition: { layout: 'pre-paginated' } }
+    const textCache = new Map()
+    const getPageParagraphs = async index => {
+        if (textCache.has(index)) return textCache.get(index)
+        const content = await (await pdf.getPage(index + 1)).getTextContent()
+        const paragraphs = textContentToParagraphs(content)
+        textCache.set(index, paragraphs)
+        return paragraphs
+    }
+    let sampledTextLength = 0
+    for (let i = 0; i < Math.min(pdf.numPages, 5); i++) {
+        try {
+            sampledTextLength += (await getPageParagraphs(i)).join('').replace(/\s/g, '').length
+        } catch (_) {}
+        if (sampledTextLength >= 24) break
+    }
+    const pdfReflowAvailable = sampledTextLength >= 24
+    const useReflow = options.reflow === true && pdfReflowAvailable
+    const book = useReflow ? {} : { rendition: { layout: 'pre-paginated' } }
+    book.pdfReflowAvailable = pdfReflowAvailable
+    book.pdfMode = useReflow ? 'reflow' : 'original'
 
     const { metadata, info } = await pdf.getMetadata() ?? {}
     // TODO: for better results, parse `metadata.getRaw()`
@@ -252,7 +336,9 @@ export const makePDF = async file => {
         load: async () => {
             const cached = cache.get(i)
             if (cached) return cached
-            const url = await renderPage(await pdf.getPage(i + 1))
+            const url = useReflow
+                ? renderReflowPage(await getPageParagraphs(i), i + 1)
+                : await renderPage(await pdf.getPage(i + 1))
             cache.set(i, url)
             return url
         },
@@ -269,6 +355,7 @@ export const makePDF = async file => {
     }
     book.splitTOCHref = async href => {
         const parsed = JSON.parse(href)
+        if (typeof parsed === 'number') return [parsed, null]
         const dest = typeof parsed === 'string'
             ? await pdf.getDestination(parsed) : parsed
         const index = await pdf.getPageIndex(dest[0])
@@ -276,6 +363,9 @@ export const makePDF = async file => {
     }
     book.getTOCFragment = doc => doc.documentElement
     book.getCover = async () => renderPage(await pdf.getPage(1), true)
-    book.destroy = () => pdf.destroy()
+    book.destroy = () => {
+        for (const value of cache.values()) URL.revokeObjectURL(typeof value === 'string' ? value : value.src)
+        return pdf.destroy()
+    }
     return book
 }

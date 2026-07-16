@@ -32,6 +32,8 @@ let turnBusy = false
 let livePageFrame = 0
 let lastLivePageKey = ''
 let currentFormat = ''
+let lastLocationCfi = ''
+let openSequence = 0
 
 const ACTION_NONE = -1
 const ACTION_MENU = 0
@@ -519,11 +521,13 @@ function bindTap(doc) {
 }
 
 const openBook = async (bookUrl, target, format) => {
+  const sequence = ++openSequence
   try {
     currentFormat = format
     loading.style.display = 'flex'
     if (view) {
       view.close?.()
+      view.book?.destroy?.()
       view.remove()
     }
     view = document.createElement('foliate-view')
@@ -531,6 +535,7 @@ const openBook = async (bookUrl, target, format) => {
     view.addEventListener('load', event => applyDocumentStyle(event.detail?.doc))
     view.addEventListener('relocate', event => {
       const loc = event.detail || {}
+      lastLocationCfi = loc.cfi || ''
       const sectionPages = currentFormat === 'pdf' ? {
         page: Number(loc.section?.current ?? 0) + 1,
         total: Number(loc.section?.total ?? view?.book?.sections?.length ?? 0)
@@ -543,8 +548,19 @@ const openBook = async (bookUrl, target, format) => {
         percentage: Number(loc.fraction ?? 0)
       })
     })
-    const publication = format === 'epub-dir' ? await openEpubDirectory(bookUrl) :
-      await RemoteFile.open(bookUrl)
+    let publication
+    if (format === 'epub-dir') publication = await openEpubDirectory(bookUrl)
+    else {
+      const remoteFile = await RemoteFile.open(bookUrl)
+      if (format === 'pdf') {
+        const { makePDF } = await import('./pdf.js')
+        publication = await makePDF(remoteFile, { reflow: currentStyle.pdfMode === 'reflow' })
+      } else publication = remoteFile
+    }
+    if (sequence !== openSequence) {
+      publication?.destroy?.()
+      return
+    }
     await view.open(publication)
     view.renderer?.addEventListener?.('scroll', emitLivePage)
     const book = view.book
@@ -555,7 +571,9 @@ const openBook = async (bookUrl, target, format) => {
       title: languageValue(metadata.title),
       author: contributorValue(metadata.author),
       description: languageValue(metadata.description),
-      pageCount: Number(book?.sections?.length || 0)
+      pageCount: Number(book?.sections?.length || 0),
+      pdfReflowAvailable: book?.pdfReflowAvailable,
+      pdfMode: book?.pdfMode
     })
     emit('toc', flattenTOC(book?.toc))
     applyStyle()
@@ -627,6 +645,11 @@ window.nextPage = () => playTurnAnimation(1, () => view?.goRight?.())
 window.prevPage = () => playTurnAnimation(-1, () => view?.goLeft?.())
 window.goTo = target => target ? view?.goTo?.(target) : null
 window.goToHref = target => target ? view?.goTo?.(target) : null
+window.setPdfMode = mode => {
+  if (currentFormat !== 'pdf' || !bookUrl) return
+  currentStyle.pdfMode = mode === 'reflow' ? 'reflow' : 'original'
+  openBook(bookUrl, lastLocationCfi, 'pdf')
+}
 globalThis.LegadoPdfEnhance = () => ({
   autoCrop: currentStyle.pdfAutoCrop === true,
   darken: Number(currentStyle.pdfDarken || 0),

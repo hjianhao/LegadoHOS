@@ -50,6 +50,8 @@ interface PublicationMetadataEvent {
   author?: string;
   description?: string;
   pageCount?: number;
+  pdfReflowAvailable?: boolean;
+  pdfMode?: string;
 }
 
 interface ChapterTextEvent {
@@ -67,6 +69,7 @@ interface EpubTocItem {
 interface WebReaderStyle {
   animType: number;
   flowMode: string;
+  pdfMode: string;
   pdfAutoCrop: boolean;
   pdfDarken: number;
   pdfWhiten: number;
@@ -124,6 +127,7 @@ const EPUB_FLOW_MODE_KEY = 'epub_flow_mode';
 const PDF_AUTO_CROP_KEY = 'pdf_auto_crop';
 const PDF_DARKEN_KEY = 'pdf_darken';
 const PDF_WHITEN_KEY = 'pdf_whiten';
+const PDF_MODE_KEY = 'pdf_read_mode';
 const EPUB_BOOK_FONT: FontInfo = {
   id: 'epub_book',
   name: '书籍原始字体',
@@ -154,6 +158,7 @@ struct ReaderPage {
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
+  @State pdfMode: string = 'original';
   @State pdfAutoCrop: boolean = false;
   @State pdfDarken: number = 0;
   @State pdfWhiten: number = 0;
@@ -442,6 +447,7 @@ struct ReaderPage {
     const pdfAutoCropPromise = s.get<boolean>(PDF_AUTO_CROP_KEY, false);
     const pdfDarkenPromise = s.get<number>(PDF_DARKEN_KEY, 0);
     const pdfWhitenPromise = s.get<number>(PDF_WHITEN_KEY, 0);
+    const pdfModePromise = s.get<string>(PDF_MODE_KEY, 'original');
     const actionPromises: Promise<number>[] = [];
     for (let z = 0; z < 9; z++) {
       actionPromises.push(s.getClickAction(z));
@@ -469,6 +475,7 @@ struct ReaderPage {
       pdfAutoCropPromise,
       pdfDarkenPromise,
       pdfWhitenPromise,
+      pdfModePromise,
       Promise.all(actionPromises),
     ]);
 
@@ -504,6 +511,7 @@ struct ReaderPage {
     this.pdfAutoCrop = await pdfAutoCropPromise;
     this.pdfDarken = Math.min(100, Math.max(0, await pdfDarkenPromise));
     this.pdfWhiten = Math.min(100, Math.max(0, await pdfWhitenPromise));
+    this.pdfMode = await pdfModePromise === 'reflow' ? 'reflow' : 'original';
     if (this.readFollowTheme) {
       this.readNightMode = this.isDark;
     }
@@ -971,6 +979,14 @@ struct ReaderPage {
 
   private async onMetadata_(meta: PublicationMetadataEvent): Promise<void> {
     if (!this.book_ || (!this.isMobi_ && !this.isPdf_)) return;
+    if (this.isPdf_ && this.pdfMode === 'reflow' && meta.pdfReflowAvailable === false) {
+      this.pdfMode = 'original';
+      await SettingsStore.getInstance().put(PDF_MODE_KEY, 'original');
+      UiUtil.showToast(this.getUIContext(), {
+        message: '该 PDF 没有可重排文字，已切回原版',
+        duration: 1800,
+      });
+    }
     let changed = false;
     if (meta.title && meta.title !== this.book_.name) {
       this.book_.name = meta.title;
@@ -1185,6 +1201,17 @@ struct ReaderPage {
       .catch(() => {});
   }
 
+  private onPdfModeChange_(mode: string): void {
+    const normalized = mode === 'reflow' ? 'reflow' : 'original';
+    if (this.pdfMode === normalized) return;
+    this.pdfMode = normalized;
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(() => SettingsStore.getInstance().put(PDF_MODE_KEY, normalized))
+      .catch(() => {});
+    this.runJs_('window.setPdfMode && window.setPdfMode(' + JSON.stringify(normalized) + ')');
+  }
+
   private onPdfEnhanceChange_(autoCrop: boolean, darken: number, whiten: number): void {
     this.pdfAutoCrop = autoCrop;
     this.pdfDarken = Math.min(100, Math.max(0, Math.round(darken)));
@@ -1220,6 +1247,7 @@ struct ReaderPage {
     return {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
+      pdfMode: this.pdfMode,
       pdfAutoCrop: this.pdfAutoCrop,
       pdfDarken: this.pdfDarken,
       pdfWhiten: this.pdfWhiten,
@@ -1620,14 +1648,16 @@ struct ReaderPage {
         nightMode: this.readNightMode,
         dayBgColor: this.readBgColor,
         dayTextColor: this.readTextColor,
-        showFlowMode: !this.isPdf_,
+        showFlowMode: !this.isPdf_ || this.pdfMode === 'reflow',
         flowMode: this.flowMode,
         showPdfEnhance: this.isPdf_,
+        pdfMode: this.pdfMode,
         pdfAutoCrop: this.pdfAutoCrop,
         pdfDarken: this.pdfDarken,
         pdfWhiten: this.pdfWhiten,
         onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
         onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),
+        onPdfModeChange: (mode: string) => this.onPdfModeChange_(mode),
         onPdfEnhanceChange: (autoCrop: boolean, darken: number, whiten: number) =>
           this.onPdfEnhanceChange_(autoCrop, darken, whiten),
         onChange: (config: PageViewConfig) => this.onStyleChange_(config),

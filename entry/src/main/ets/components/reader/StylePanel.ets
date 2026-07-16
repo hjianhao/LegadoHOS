@@ -30,6 +30,7 @@ export struct StylePanel {
   @Prop showFlowMode: boolean = false;
   @Prop flowMode: string = 'paginated';
   @Prop showPdfEnhance: boolean = false;
+  @Prop pdfMode: string = 'original';
   @Prop pdfAutoCrop: boolean = false;
   @Prop pdfDarken: number = 0;
   @Prop pdfWhiten: number = 0;
@@ -40,6 +41,7 @@ export struct StylePanel {
   onDismiss?: () => void;
   onNightModeToggle?: (night: boolean) => void;
   onFlowModeChange?: (mode: string) => void;
+  onPdfModeChange?: (mode: string) => void;
   onPdfEnhanceChange?: (autoCrop: boolean, darken: number, whiten: number) => void;
 
   aboutToAppear(): void {
@@ -274,23 +276,30 @@ export struct StylePanel {
       }.width('100%').margin({ bottom: 10 })
     }
     if (this.showPdfEnhance) {
+      Text('PDF 阅读模式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
       Row() {
-        Text('自动裁边').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.pdfAutoCrop })
-          .onChange((v: boolean) => { this.onPdfEnhanceChange?.(v, this.pdfDarken, this.pdfWhiten); })
-      }.width('100%').margin({ bottom: 8 })
-      Row() {
-        Text('内容加黑').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
-        Slider({ value: this.pdfDarken, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
-          .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, v, this.pdfWhiten); })
-        Text(String(this.pdfDarken)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
-      }.width('100%').margin({ bottom: 8 })
-      Row() {
-        Text('背景漂白').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
-        Slider({ value: this.pdfWhiten, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
-          .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, this.pdfDarken, v); })
-        Text(String(this.pdfWhiten)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
+        this.pdfModeChip('原版', 'original')
+        this.pdfModeChip('文字重排', 'reflow')
       }.width('100%').margin({ bottom: 10 })
+      if (this.pdfMode === 'original') {
+        Row() {
+          Text('自动裁边').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.pdfAutoCrop })
+            .onChange((v: boolean) => { this.onPdfEnhanceChange?.(v, this.pdfDarken, this.pdfWhiten); })
+        }.width('100%').margin({ bottom: 8 })
+        Row() {
+          Text('内容加黑').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
+          Slider({ value: this.pdfDarken, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
+            .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, v, this.pdfWhiten); })
+          Text(String(this.pdfDarken)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
+        }.width('100%').margin({ bottom: 8 })
+        Row() {
+          Text('背景漂白').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(64)
+          Slider({ value: this.pdfWhiten, min: 0, max: 100, step: 5 }).layoutWeight(1).margin({ left: 4, right: 4 })
+            .onChange((v: number) => { this.onPdfEnhanceChange?.(this.pdfAutoCrop, this.pdfDarken, v); })
+          Text(String(this.pdfWhiten)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
+        }.width('100%').margin({ bottom: 10 })
+      }
     }
     Row() {
       Text('中文排版').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
@@ -317,6 +326,17 @@ export struct StylePanel {
     .backgroundColor(this.flowMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(16).margin({ right: 8 })
     .onClick(() => { this.onFlowModeChange?.(mode); })
+  }
+
+  @Builder pdfModeChip(label: string, mode: string) {
+    Column() {
+      Text(label).fontSize(13)
+        .fontColor(this.pdfMode === mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 20, right: 20 })
+    }
+    .backgroundColor(this.pdfMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(16).margin({ right: 8 })
+    .onClick(() => { this.onPdfModeChange?.(mode); })
   }
 
   @Builder zhChip(label: string, mode: string) {
