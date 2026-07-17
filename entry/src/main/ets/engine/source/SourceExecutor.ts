@@ -544,7 +544,51 @@ export class SourceExecutor {
     }
   }
 
-  private async searchSingle(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
+  /**
+   * 执行书源自带的动态换线动作并持久化结果。
+   * 只对明确声明了 url() 动作的书源生效，避免把站点专用逻辑写进网络层。
+   */
+  private async switchDynamicSourceLine(source: BookSource, baseUrl: string): Promise<boolean> {
+    if (!this.engineInitialized || !source.loginUrl || !/function\s+url\s*\(/.test(source.loginUrl)) {
+      return false;
+    }
+    try {
+      console.warn('[SrcEx] Current line failed, executing source url() action for', source.sourceName);
+      const vars = await JsExpressionEvaluator.evaluate(
+        `${source.loginUrl}\nurl();\nsource.getVariable();`,
+        { source: source, jsLib: source.jsLib || '', baseUrl: baseUrl }
+      );
+      if (!vars || !vars.trim() || vars === '{}' || vars.startsWith('SyntaxError')) return false;
+
+      const previous = source.variableComment || '';
+      source.variableComment = vars;
+      if (source.isExploreRequest && /^https?:\/\//.test(source.ruleSearchUrl)) {
+        try {
+          const parsedVars = JSON.parse(vars) as Record<string, Object>;
+          const refreshedBase = String(parsedVars['url'] || '').replace(/\/+$/, '');
+          if (/^https?:\/\//.test(refreshedBase)) {
+            source.ruleSearchUrl = source.ruleSearchUrl.replace(/^https?:\/\/[^/]+/, refreshedBase);
+            console.info('[SrcEx] Rewrote explore request to refreshed line:',
+              source.ruleSearchUrl.substring(0, 120));
+          }
+        } catch (_e) { /* 变量不是 JSON 时仅保留搜索模板的动态求值 */ }
+      }
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      await dao.updateVariable(source.id, source.sourceUrl, vars);
+      console.info('[SrcEx] Dynamic source line updated for', source.sourceName,
+        'vars=' + vars.substring(0, 120));
+      return vars !== previous;
+    } catch (e) {
+      console.warn('[SrcEx] Dynamic source line switch failed for', source.sourceName,
+        ':', (e as Error).message);
+      return false;
+    }
+  }
+
+  private async searchSingle(
+    keyword: string, source: BookSource, page: number = 1, allowLineRetry: boolean = true
+  ): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     let baseUrl = getBaseUrl(source.sourceUrl);
 
@@ -731,6 +775,13 @@ export class SourceExecutor {
       return httpResults;
     } catch (err) {
       const msg = (err as Error).message;
+      if (allowLineRetry && /(SSL connect error|Internal error|connection reset|1007900035)/i.test(msg)) {
+        const switched = await this.switchDynamicSourceLine(source, baseUrl);
+        if (switched) {
+          console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName);
+          return await this.searchSingle(keyword, source, page, false);
+        }
+      }
       if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
         this.lastBlockedUrl = url;
         console.info('[SrcEx] HTTP block/error detected, trying WebView for', source.sourceName, ':', msg);

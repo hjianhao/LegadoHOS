@@ -3,6 +3,7 @@
  * 替代 @ohos.net.http，修复 DNS 无法解析问题
  */
 import rcp from '@hms.collaboration.rcp';
+import http from '@ohos.net.http';
 import util from '@ohos.util';
 import zlib from '@ohos.zlib';
 
@@ -218,6 +219,46 @@ export class NetUtil {
     }
   }
 
+  /**
+   * 部分 Cloudflare 节点会直接重置 RCP 的 TLS 握手。
+   * 连接层失败时改用系统 HTTP 栈，避免单一 TLS 实现导致整条书源线路不可用。
+   */
+  private static async systemHttpRequest(
+    method: string,
+    requestUrl: string,
+    body: string,
+    headers: Record<string, string>,
+    timeout: number
+  ): Promise<string> {
+    const request = http.createHttp();
+    try {
+      const response = await request.request(requestUrl, {
+        method: method.toUpperCase() as http.RequestMethod,
+        header: headers,
+        extraData: body,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: timeout,
+        readTimeout: timeout,
+      });
+      console.info('[NetUtil] System HTTP', method, requestUrl, '→', response.responseCode);
+      if (response.responseCode < 200 || response.responseCode >= 400) {
+        const errorText = await NetUtil.httpResultToText(response.result, requestUrl);
+        throw new Error(`HTTP ${response.responseCode}: ${errorText.substring(0, 200)}`);
+      }
+      return await NetUtil.httpResultToText(response.result, requestUrl);
+    } finally {
+      request.destroy();
+    }
+  }
+
+  private static async httpResultToText(result: string | Object | ArrayBuffer, url: string): Promise<string> {
+    if (typeof result === 'string') return result;
+    if (result instanceof ArrayBuffer) {
+      return await NetUtil.decodeBody(new Uint8Array(result), url);
+    }
+    return JSON.stringify(result);
+  }
+
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
     const startMs: number = Date.now();
     const requestUrl = NetUtil.normalizeUrl(url);
@@ -249,6 +290,14 @@ export class NetUtil {
           continue;
         }
         break;
+      }
+    }
+    if (NetUtil.isTransientConnectionError(lastError) && !NetUtil.proxyHost) {
+      try {
+        console.warn('[NetUtil] RCP connection failed, falling back to system HTTP:', lastError);
+        return await NetUtil.systemHttpRequest(method, requestUrl, body || '', NetUtil.buildHeaders(headers), timeout);
+      } catch (fallbackError) {
+        lastError = (fallbackError as Error).message || String(fallbackError);
       }
     }
     const elapsedMs: number = Date.now() - startMs;

@@ -10,6 +10,7 @@
 import worker from '@ohos.worker';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
+import http from '@ohos.net.http';
 
 // 静态导入 QuickJS 原生模块（Worker 中必须用静态 import 而非 requireNapi）
 import quickjsBridge from 'libquickjs_bridge.so';
@@ -26,6 +27,37 @@ let workerProxyPort: number = 0;
 let workerTimeout: number = 60000;
 let rcpSession: rcp.Session | null = null;
 let rcpConfigVersion: number = 0;
+
+function isTransientConnectionError(message: string): boolean {
+  return /(SSL connect error|connection reset|connection refused|socket|network is unreachable|1007900035|osErr\s*104)/i.test(message);
+}
+
+async function systemHttpRequest(
+  url: string, method: string, headers: Record<string, string>, body?: string
+): Promise<string> {
+  const request = http.createHttp();
+  try {
+    const response = await request.request(url, {
+      method: method.toUpperCase() as http.RequestMethod,
+      header: headers,
+      extraData: body || '',
+      expectDataType: http.HttpDataType.ARRAY_BUFFER,
+      connectTimeout: workerTimeout,
+      readTimeout: workerTimeout,
+    });
+    if (response.responseCode < 200 || response.responseCode >= 400) {
+      throw new Error('HTTP ' + response.responseCode);
+    }
+    if (typeof response.result === 'string') return response.result;
+    if (response.result instanceof ArrayBuffer) {
+      return util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>)
+        .decodeToString(new Uint8Array(response.result));
+    }
+    return JSON.stringify(response.result);
+  } finally {
+    request.destroy();
+  }
+}
 
 function getRcpSession(): rcp.Session {
   // 配置变更时重建 session
@@ -71,7 +103,15 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
     }
     const reqHeaders = headers as rcp.RequestHeaders;
     const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
-    const response = await getRcpSession().fetch(request);
+    let response: rcp.Response;
+    try {
+      response = await getRcpSession().fetch(request);
+    } catch (rcpError) {
+      const message = (rcpError as Error).message || String(rcpError);
+      if (!isTransientConnectionError(message) || workerProxyHost) throw rcpError;
+      console.warn('[JsWorker] RCP connection failed, falling back to system HTTP:', message);
+      return await systemHttpRequest(url, method, headers, body);
+    }
     if (response.body === undefined || response.body === null) return '';
     const uint8 = new Uint8Array(response.body);
     const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
