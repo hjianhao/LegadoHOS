@@ -37,15 +37,29 @@ export struct ImportSourceDialog {
 
   private async loadPreview(json: string): Promise<void> {
     this.isLoading = true; this.statusText = '解析中...';
+    // DocumentViewPicker / 剪贴板导入的 UTF-8 文本可能保留 BOM，JSON.parse 不接受它。
+    const normalizedJson = json.replace(/^\uFEFF/, '').trim();
+    try {
+      JSON.parse(normalizedJson);
+    } catch (e) {
+      const message = (e as Error).message || String(e);
+      console.error('[ImportSource] invalid JSON: ' + message + ', first100=' + normalizedJson.substring(0, 100));
+      UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误: '+message.substring(0,80),duration:2500});
+      this.statusText = 'JSON格式错误';
+      this.isLoading = false;
+      return;
+    }
     try {
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      this.items = await dao.importSourcesPreview(json);
+      this.items = await dao.importSourcesPreview(normalizedJson);
       this.statusText = `${this.items.length} 条书源`;
       console.info('[ImportSource] preview done: ' + this.items.length + ' items');
     } catch (e) {
       console.error('[ImportSource] loadPreview error: ' + e);
-      UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误: '+String(e).substring(0,80),duration:2000}); }
+      UiUtil.showToast(this.getUIContext(), {message:'书源解析失败: '+String(e).substring(0,80),duration:2500});
+      this.statusText = '书源解析失败';
+    }
     this.isLoading = false;
   }
 
