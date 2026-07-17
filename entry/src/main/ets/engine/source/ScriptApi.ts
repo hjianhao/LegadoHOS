@@ -466,13 +466,13 @@ export function getPolyfillScript(): string {
 		      // 实际 HTML 中类名冲突（如 notag-container）概率极低
 		      var reStr = '<([a-zA-Z0-9]+)[^>]*';
 		      if (className) {
-		        reStr += '\\s(class|CLASS)\\s*=\\s*(?:';
+		        reStr += '\\\\s(class|CLASS)\\\\s*=\\\\s*(?:';
 		        reStr += '"[^"]*' + className + '[^"]*"';
 		        reStr += "|'[^']*" + className + "[^']*'";
 		        reStr += ')';
 		      }
 		      if (idName) {
-		        reStr += '\\s(id|ID)\\s*=\\s*(?:';
+		        reStr += '\\\\s(id|ID)\\\\s*=\\\\s*(?:';
 		        reStr += '"[^"]*' + idName + '[^"]*"';
 		        reStr += "|'[^']*" + idName + "[^']*'";
 		        reStr += ')';
@@ -493,28 +493,54 @@ export function getPolyfillScript(): string {
 	    return items;
 	  }
 
+	  // 获取当前元素的完整 innerHTML，正确处理 div 等同名标签嵌套。
+	  // 旧实现直接查找第一个 </tag>，会把 tag-container 截断到第一个子 div。
+	  function getInnerHtml(html, tagMatch, fullTag, pos) {
+	    var contentStart = pos + fullTag.length;
+	    var lowerHtml = html.toLowerCase();
+	    var lowerTag = tagMatch.toLowerCase();
+	    var openToken = '<' + lowerTag;
+	    var closeToken = '</' + lowerTag + '>';
+	    var cursor = contentStart;
+	    var depth = 1;
+	    while (cursor < html.length) {
+	      var nextOpen = lowerHtml.indexOf(openToken, cursor);
+	      var nextClose = lowerHtml.indexOf(closeToken, cursor);
+	      if (nextClose < 0) return html.substring(contentStart);
+	      // 避免把 <divider> 误判为 <div>。
+	      var validOpen = nextOpen >= 0;
+	      if (validOpen) {
+	        var boundary = lowerHtml.charAt(nextOpen + openToken.length);
+	        validOpen = boundary === '>' || boundary === '/' || boundary === ' ' || boundary === '\\t' || boundary === '\\r' || boundary === '\\n';
+	      }
+	      if (validOpen && nextOpen < nextClose) {
+	        var openEnd = lowerHtml.indexOf('>', nextOpen + openToken.length);
+	        if (openEnd < 0) return html.substring(contentStart);
+	        if (lowerHtml.charAt(openEnd - 1) !== '/') depth++;
+	        cursor = openEnd + 1;
+	      } else {
+	        depth--;
+	        if (depth === 0) return html.substring(contentStart, nextClose);
+	        cursor = nextClose + closeToken.length;
+	      }
+	    }
+	    return html.substring(contentStart);
+	  }
+
 	  // 创建一个 Element 对象，支持 .select/.attr/.text/.html
 	  function makeElement(html, tagMatch, fullTag, pos) {
 	    return {
 	      attr: function(name) {
-	        var am = fullTag.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+	        var am = fullTag.match(new RegExp(name + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
 	        if (am) return am[1];
-	        var am2 = fullTag.match(new RegExp(name + "\\s*=\\s*'([^']*)'", 'i'));
+	        var am2 = fullTag.match(new RegExp(name + "\\\\s*=\\\\s*'([^']*)'", 'i'));
 	        return am2 ? am2[1] : '';
 	      },
 	      text: function() {
-	        var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
-	        if (closeIdx > 0) {
-	          return html.substring(pos + fullTag.length, closeIdx).replace(/<[^>]+>/g, '').trim();
-	        }
-	        return '';
+	        return getInnerHtml(html, tagMatch, fullTag, pos).replace(/<[^>]+>/g, '').trim();
 	      },
 	      html: function() {
-	        var closeIdx = html.indexOf('</' + tagMatch + '>', pos + fullTag.length);
-	        if (closeIdx > 0) {
-	          return html.substring(pos + fullTag.length, closeIdx);
-	        }
-	        return '';
+	        return getInnerHtml(html, tagMatch, fullTag, pos);
 	      },
 	      // 链式 select：在当前元素的 innerHTML 中查找
 	      select: function(css) {
@@ -598,7 +624,7 @@ export function getPolyfillScript(): string {
 		              },
 	              text: function() { return html.replace(/<[^>]+>/g, '').trim(); },
 	              attr: function(name) {
-	                var m2 = html.match(new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i'));
+	                var m2 = html.match(new RegExp(name + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
 	                return m2 ? m2[1] : '';
 	              }
 	            };
