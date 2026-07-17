@@ -608,11 +608,11 @@ export class SourceExecutor {
 
     const { url, method, body, charset, webView } = buildUrl(searchUrlTemplate, keyword, page, baseUrl);
 
-    // 禁漫天堂网站改版：/search/photos?search_query=xxx 重定向到 /error/invalid_search
-    // 正确的搜索路径是 /albums?search_query=xxx，且返回静态 HTML（无需 WebView）
+    // 禁漫天堂普通搜索改版后使用 /albums；发现分类仍使用 /search/photos，
+    // 后者的 search_query 是标签筛选条件，改写会丢失分类语义并返回通用列表。
     let finalUrl = url;
     let finalWebView = webView;
-    if (url.includes('/search/photos?search_query=')) {
+    if (!source.isExploreRequest && url.includes('/search/photos?search_query=')) {
       const fixedUrl = url.replace('/search/photos?search_query=', '/albums?search_query=');
       // 移除禁漫搜索 URL 中多余的参数（search-type, main_tag）
       const fixedClean = fixedUrl.replace(/[&?]search-type=photos/g, '').replace(/[&?]main_tag=0/g, '');

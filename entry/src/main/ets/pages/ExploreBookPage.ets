@@ -70,6 +70,7 @@ struct ExploreBookPage {
     return {
       id: 0, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
       sourceType: 0, group: '', enabled: true, weight: 0, customOrder: 0,
+      isExploreRequest: true,
       ruleSearchUrl: catUrl,
       ruleSearchList: this.ruleExploreList,
       ruleSearchName: this.ruleExploreName,

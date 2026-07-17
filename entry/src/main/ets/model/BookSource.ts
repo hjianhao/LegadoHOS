@@ -69,6 +69,7 @@ export interface BookSource {
 
   // --- 发现规则 ---
   ruleExplores: string;            // 发现页规则 JSON
+  isExploreRequest?: boolean;      // 发现分类合成请求标记（不持久化）
 
   // --- 评论规则 ---
   ruleReview: string;
