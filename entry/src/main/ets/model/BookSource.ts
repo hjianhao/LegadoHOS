@@ -350,7 +350,8 @@ export function parseBookSource(json: any): BookSource {
     reviewQuoteUrl: json.reviewQuoteUrl || '',
     rawJson: json.rawJson || '',
     createTime: json.createTime || 0,
-    updateTime: json.updateTime || 0,
+    // Android Legado 以 lastUpdateTime 判断导入源是否需要更新。
+    updateTime: json.lastUpdateTime ?? json.updateTime ?? 0,
     isAiGenerated: json.isAiGenerated || false,
   };
 }

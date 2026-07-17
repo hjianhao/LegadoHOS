@@ -232,6 +232,7 @@ export class AppDatabase {
           // ruleExplore.bookList 是发现页内的书籍 CSS 选择器，不是发现分类。
           // 分类由 exploreUrl 提供；这里只保留旧版 HOS 的 ruleExplores 兼容字段。
           'rule_explores': toStr(obj['ruleExplores'] || ''),
+          'update_time': Number(obj['lastUpdateTime'] ?? obj['updateTime'] ?? 0) || 0,
           'header': toStr(obj['header'] || ''),
         };
         const pred = new relationalStore.RdbPredicates('book_sources');

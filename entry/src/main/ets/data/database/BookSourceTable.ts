@@ -150,7 +150,7 @@ export class BookSourceTable {
       const rawJson = JSON.stringify(s); // 保存原始 JSON 用于后续重新解析
       const source = parseBookSource(s);
       setSourceRawJson(source, rawJson);
-      const existing = await this.getSourcesForImport(source.sourceUrl, source.sourceName);
+      const existing = await this.getSourcesByUrl(source.sourceUrl);
       if (existing.length > 0) {
         const canonical = existing[0];
         source.id = canonical.id;
@@ -203,9 +203,18 @@ export class BookSourceTable {
     for (let i = 0; i < arr.length; i++) {
       const src = parseBookSource(arr[i]);
       const raw = JSON.stringify(arr[i]);
-      const existing = await this.getSourcesForImport(src.sourceUrl, src.sourceName);
-      const status = existing.length > 0 ? 'update' : 'new';
-      result.push({ name: src.sourceName, url: src.sourceUrl, status, source: src, rawJson: raw, checked: true });
+      const existing = await this.getSourcesByUrl(src.sourceUrl);
+      const canonical = existing.length > 0 ? existing[0] : null;
+      const status: 'new' | 'update' | 'existing' = !canonical ? 'new' :
+        canonical.updateTime < src.updateTime ? 'update' : 'existing';
+      result.push({
+        name: src.sourceName,
+        url: src.sourceUrl,
+        status: status,
+        source: src,
+        rawJson: raw,
+        checked: status !== 'existing',
+      });
     }
     return result;
   }
@@ -215,13 +224,17 @@ export class BookSourceTable {
     for (const item of items) {
       if (!item.checked) continue;
       const src = item.source;
-      const existing = await this.getSourcesForImport(src.sourceUrl, src.sourceName);
+      const existing = await this.getSourcesByUrl(src.sourceUrl);
       const canonical = existing.length > 0 ? existing[0] : null;
       if (canonical && keepName) src.sourceName = canonical.sourceName;
       if (canonical && keepGroup) src.group = canonical.group;
-      else if (!keepGroup) src.group = customGroup || src.group;
-      if (canonical && keepEnabled) src.enabled = canonical.enabled;
-      setSourceRawJson(src, item.rawJson);
+      if (customGroup) src.group = customGroup;
+      if (canonical && keepEnabled) {
+        src.enabled = canonical.enabled;
+        src.enabledExplore = canonical.enabledExplore;
+      }
+      if (canonical) src.customOrder = canonical.customOrder;
+      setSourceRawJson(src, this.patchImportedRawJson(item.rawJson, src, canonical !== null && keepEnabled));
       if (canonical) {
         src.id = canonical.id;
         src.variableComment = src.variableComment || this.pickVariable(existing);
@@ -329,33 +342,23 @@ export class BookSourceTable {
     return this.toSources(rs);
   }
 
-  /**
-   * 更新导入先按 URL 匹配，并将同名的旧 URL 记录一并纳入合并范围。
-   * 书源换线路时 bookSourceUrl 本身也会变化，仅按新 URL 无法更新旧记录。
-   */
-  private async getSourcesForImport(url: string, name: string): Promise<BookSource[]> {
-    const byUrl = await this.getSourcesByUrl(url);
-    if (!name) return byUrl;
-    const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
-    predicates.equalTo('source_name', name);
-    predicates.orderByAsc('id');
-    const byName = this.toSources(await RdbUtil.query(this.rdbStore, predicates, []));
-    const merged: BookSource[] = [];
-    const ids = new Set<number>();
-    for (const source of [...byUrl, ...byName]) {
-      if (ids.has(source.id)) continue;
-      ids.add(source.id);
-      merged.push(source);
-    }
-    merged.sort((a: BookSource, b: BookSource) => a.id - b.id);
-    return merged;
-  }
-
   private pickVariable(sources: BookSource[]): string {
     for (const source of sources) {
       if (source.variableComment) return source.variableComment;
     }
     return '';
+  }
+
+  /** enabledExplore 未独立建列，保留启用状态时同步写回 raw_json。 */
+  private patchImportedRawJson(rawJson: string, source: BookSource, patchEnabled: boolean): string {
+    if (!patchEnabled) return rawJson;
+    try {
+      const raw = JSON.parse(rawJson) as Record<string, Object>;
+      raw['enabledExplore'] = source.enabledExplore;
+      return JSON.stringify(raw);
+    } catch (_e) {
+      return rawJson;
+    }
   }
 
   private async deleteDuplicateSources(sources: BookSource[], canonicalId: number, sourceUrl: string): Promise<void> {
