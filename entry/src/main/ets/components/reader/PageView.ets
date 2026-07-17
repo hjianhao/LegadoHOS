@@ -174,7 +174,7 @@ export struct PageView {
     if (page.formattedText) return page.formattedText;
     // 回退逻辑（旧数据兼容）
     if (page.lines.length === 0) return '';
-    const paraBreakLines = Math.round(this.config.paragraphSpacing / Math.max(1, this.config.fontSize * 0.25));
+    const paraBreakLines = Math.max(0, Math.round(this.config.paragraphSpacing / 10));
     let text = '';
     for (let i = 0; i < page.lines.length; i++) {
       const line = page.lines[i];

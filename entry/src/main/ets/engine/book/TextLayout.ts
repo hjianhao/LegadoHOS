@@ -88,7 +88,8 @@ export class TextLayout {
   static formatText(text: string, config: LayoutConfig): string {
     if (!text) return '';
     const parts = text.split('\n');
-    const paraBreakLines = Math.round(config.paragraphSpacing / Math.max(1, config.fontSize * 0.25));
+    // 与 Android 版 Legado 语义对齐：paragraphSpacing 每 10sp 对应一个行高的段距
+    const paraBreakLines = Math.max(0, Math.round(config.paragraphSpacing / 10));
     const result: string[] = [];
 
     for (let i = 0; i < parts.length; i++) {
@@ -125,6 +126,12 @@ export class TextLayout {
     const len = formatted.length;
 
     while (offset < len) {
+      // 跳过页面开头的段间距空行，避免下一页顶部出现空白行
+      while (offset < len && formatted[offset] === '\n') {
+        offset++;
+      }
+      if (offset >= len) break;
+
       const end = this.findPageEnd_(formatted, offset, len, innerW, innerH, config, measure);
       if (end <= offset) {
         pages.push({
@@ -135,13 +142,37 @@ export class TextLayout {
         offset++;
         continue;
       }
-      const pageText = formatted.substring(offset, end);
+
+      // 折叠跨页段间距：页尾和页头的连续空行都不显示，
+      // 让段距只出现在页面内部，不在分页处造成顶部或底部空白
+      let pageEnd = end;
+      while (pageEnd > offset && formatted[pageEnd - 1] === '\n') {
+        pageEnd--;
+      }
+
+      if (pageEnd <= offset) {
+        // 这一页全是空行，直接跳过
+        let nextStart = end;
+        while (nextStart < len && formatted[nextStart] === '\n') {
+          nextStart++;
+        }
+        offset = nextStart;
+        continue;
+      }
+
+      const pageText = formatted.substring(offset, pageEnd);
       pages.push({
         lines: [],
-        startOffset: offset, endOffset: end,
+        startOffset: offset, endOffset: pageEnd,
         formattedText: pageText,
       });
-      offset = end;
+
+      // 下一页从空行后的第一个非空字符开始
+      let nextStart = end;
+      while (nextStart < len && formatted[nextStart] === '\n') {
+        nextStart++;
+      }
+      offset = nextStart;
     }
     return pages;
   }

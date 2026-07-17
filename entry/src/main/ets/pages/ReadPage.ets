@@ -933,9 +933,9 @@ struct ReadPage {
       pxToVp: (px: number): number => this.getUIContext().px2vp(px),
     };
     const footerH = this.cfg.showFooter ? this.footerH_() : 0;
-    // 精确定位模式：pageHeight 已包含 paddingBottom（页脚在其上方叠加），
-    // TextLayout 内部会减去 paddingTop/paddingBottom，无需再额外减 footerH
-    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, this.pageH, this.measureUtil_ || undefined);
+    // 页脚叠加在正文区域上方，需从可用于排版的高度中扣除
+    const layoutH = Math.max(this.pageH * 0.5, this.pageH - footerH);
+    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, layoutH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
     if (this.pageIndex >= this.pages.length) this.pageIndex = Math.max(0, this.pages.length - 1);
   }
