@@ -189,33 +189,55 @@ export class NetUtil {
     }
   }
 
+  /** 丢弃发生连接错误的会话，避免后续请求继续复用异常连接。 */
+  private static resetSession(): void {
+    if (NetUtil.session_) {
+      try { NetUtil.session_.close(); } catch (_) { /* ignore */ }
+    }
+    NetUtil.session_ = null;
+    NetUtil.sessionTimeout_ = 0;
+  }
+
+  /** 仅重试 TLS/连接重置等瞬时网络错误，不重试 HTTP 状态码错误。 */
+  private static isTransientConnectionError(message: string): boolean {
+    return /(SSL connect error|connection reset|connection refused|socket|network is unreachable|1007900035|osErr\s*104)/i.test(message);
+  }
+
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
     const startMs: number = Date.now();
-    try {
-      const h = NetUtil.buildHeaders(headers);
-      const reqHeaders = h as rcp.RequestHeaders;
-      const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
-      const session = NetUtil.getSession(timeout);
-      const response = await session.fetch(request);
-      console.info('[NetUtil]', method, url, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
-      if (response.statusCode < 200 || response.statusCode >= 400) {
-        let errorText = '';
-        if (response.body !== undefined && response.body !== null) {
-          const errorBytes = new Uint8Array(response.body);
-          errorText = await NetUtil.decodeBody(errorBytes, url);
+    let lastError: string = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const h = NetUtil.buildHeaders(headers);
+        const reqHeaders = h as rcp.RequestHeaders;
+        const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
+        const session = NetUtil.getSession(timeout);
+        const response = await session.fetch(request);
+        console.info('[NetUtil]', method, url, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
+        if (response.statusCode < 200 || response.statusCode >= 400) {
+          let errorText = '';
+          if (response.body !== undefined && response.body !== null) {
+            const errorBytes = new Uint8Array(response.body);
+            errorText = await NetUtil.decodeBody(errorBytes, url);
+          }
+          throw new Error(`HTTP ${response.statusCode}: ${errorText.substring(0, 200)}`);
         }
-        throw new Error(`HTTP ${response.statusCode}: ${errorText.substring(0, 200)}`);
+        if (response.body === undefined || response.body === null) return '';
+        const uint8 = new Uint8Array(response.body);
+        return await NetUtil.decodeBody(uint8, url);
+      } catch (e) {
+        lastError = (e as Error).message || String(e);
+        if (attempt === 0 && NetUtil.isTransientConnectionError(lastError)) {
+          console.warn('[NetUtil] Transient connection error, rebuilding session and retrying:', lastError);
+          NetUtil.resetSession();
+          continue;
+        }
+        break;
       }
-      if (response.body === undefined || response.body === null) return '';
-      const uint8 = new Uint8Array(response.body);
-      const text = await NetUtil.decodeBody(uint8, url);
-      return text;
-    } catch (e) {
-      const elapsedMs: number = Date.now() - startMs;
-      const errMsg: string = (e as Error).message || String(e);
-      console.error('[NetUtil]', method, url, 'FAILED (' + elapsedMs + 'ms):', errMsg);
-      throw new Error(errMsg);
     }
+    const elapsedMs: number = Date.now() - startMs;
+    console.error('[NetUtil]', method, url, 'FAILED (' + elapsedMs + 'ms):', lastError);
+    throw new Error(lastError);
   }
 
   private static buildHeaders(headers?: Record<string, string>): Record<string, string> {
