@@ -172,31 +172,31 @@ export struct ExplorePage {
       } catch (e) {
         console.error('[Explore] JS exploreUrl evaluation failed: ' + JSON.stringify(e));
       }
-      // JS 执行失败，fallback 到 ruleExplores JSON 解析
-      if (source.ruleExplores) {
-        const parsed = this.parseExploreJson(source.ruleExplores);
-        if (parsed.length > 0) {
-          this.categoryCache[cacheKey] = parsed;
-          return parsed;
-        }
+      // JS 执行失败，fallback 到旧版 HOS 的分类字段
+      const legacyParsed = this.parseLegacyExploreCategories(source.ruleExplores);
+      if (legacyParsed.length > 0) {
+        this.categoryCache[cacheKey] = legacyParsed;
+        return legacyParsed;
       }
       const result: ExploreCategory[] = [];
       this.categoryCache[cacheKey] = result;
       return result;
     }
 
-    // 3. fallback: 尝试 ruleExplores（文本行 :: 或 JSON）
-    if (source.ruleExplores) {
-      const lineParsed = this.parseExploreLines(source.ruleExplores);
+    // 3. Legado 标准文本分类：分类名::URL（优先使用 exploreUrl）
+    if (exploreUrl && !exploreUrl.startsWith('http')) {
+      const lineParsed = this.parseExploreLines(exploreUrl);
       if (lineParsed.length > 0) {
         this.categoryCache[cacheKey] = lineParsed;
         return lineParsed;
       }
-      const jsonParsed = this.parseExploreJson(source.ruleExplores);
-      if (jsonParsed.length > 0) {
-        this.categoryCache[cacheKey] = jsonParsed;
-        return jsonParsed;
-      }
+    }
+
+    // 兼容旧版 HOS 的 ruleExplores 分类字段，但拒绝把 CSS 选择器当分类。
+    const legacyParsed = this.parseLegacyExploreCategories(source.ruleExplores);
+    if (legacyParsed.length > 0) {
+      this.categoryCache[cacheKey] = legacyParsed;
+      return legacyParsed;
     }
 
     if (!exploreUrl) {
@@ -224,13 +224,11 @@ export struct ExplorePage {
       } catch (e) {
         console.error('[Explore] HTTP get failed: ' + JSON.stringify(e));
       }
-      // HTTP 失败，fallback 到 ruleExplores
-      if (source.ruleExplores) {
-        const parsed = this.parseExploreJson(source.ruleExplores);
-        if (parsed.length > 0) {
-          this.categoryCache[cacheKey] = parsed;
-          return parsed;
-        }
+      // HTTP 失败，fallback 到旧版 HOS 的分类字段
+      const fallbackParsed = this.parseLegacyExploreCategories(source.ruleExplores);
+      if (fallbackParsed.length > 0) {
+        this.categoryCache[cacheKey] = fallbackParsed;
+        return fallbackParsed;
       }
     }
 
@@ -323,6 +321,22 @@ export struct ExplorePage {
       console.error('[Explore] JSON parse error: ' + (_e as Error)?.message?.substring(0, 200) + ', input preview: ' + jsonStr.substring(0, 200));
     }
     return result;
+  }
+
+  /**
+   * ruleExplores 是旧版 HOS 的兼容字段。只有 JSON 分类或包含 :: 的文本
+   * 才能作为发现分类，避免把 ruleExplore.bookList 的 CSS 选择器显示到界面。
+   */
+  private parseLegacyExploreCategories(text: string): ExploreCategory[] {
+    if (!text || !text.trim()) return [];
+    const trimmed = text.trim();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      return this.parseExploreJson(text);
+    }
+    if (text.includes('::')) {
+      return this.parseExploreLines(text);
+    }
+    return [];
   }
 
   parseExploreLines(text: string): ExploreCategory[] {

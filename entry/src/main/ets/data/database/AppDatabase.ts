@@ -179,7 +179,6 @@ export class AppDatabase {
         const bi: Record<string, Object> = (obj['ruleBookInfo'] || {}) as Record<string, Object>;
         const rtc: Record<string, Object> = (obj['ruleToc'] || {}) as Record<string, Object>;
         const rc: Record<string, Object> = (obj['ruleContent'] || {}) as Record<string, Object>;
-        const re: Record<string, Object> = (obj['ruleExplore'] || {}) as Record<string, Object>;
         const row: relationalStore.ValuesBucket = {
           'id': id,
           'rule_search_url': toStr(obj['ruleSearchUrl'] || rs2['searchUrl'] || obj['searchUrl'] || ''),
@@ -230,7 +229,9 @@ export class AppDatabase {
             if (url === 'http://www.xtangsanshu.com') url = 'http://www.xtangsanshu.info';
             return url;
           })(),
-          'rule_explores': toStr(obj['ruleExplores'] || re['bookList'] || obj['exploreUrl'] || ''),
+          // ruleExplore.bookList 是发现页内的书籍 CSS 选择器，不是发现分类。
+          // 分类由 exploreUrl 提供；这里只保留旧版 HOS 的 ruleExplores 兼容字段。
+          'rule_explores': toStr(obj['ruleExplores'] || ''),
           'header': toStr(obj['header'] || ''),
         };
         const pred = new relationalStore.RdbPredicates('book_sources');
