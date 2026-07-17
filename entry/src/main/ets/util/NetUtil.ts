@@ -78,9 +78,10 @@ export class NetUtil {
   static async httpGetBinary(url: string, headers?: Record<string, string>, timeout?: number): Promise<ArrayBuffer> {
     const startMs: number = Date.now();
     try {
+      const requestUrl = NetUtil.normalizeUrl(url);
       const h = NetUtil.buildHeaders(headers);
       const reqHeaders = h as rcp.RequestHeaders;
-      const request = new rcp.Request(url, 'GET', reqHeaders, '');
+      const request = new rcp.Request(requestUrl, 'GET', reqHeaders, '');
 
       // 使用独立 session（不与主 session 共享，避免被其他请求的 session 重建取消）
       const tf: number = timeout || NetUtil.getDefaultTimeout();
@@ -91,7 +92,7 @@ export class NetUtil {
       const session = rcp.createSession({ requestConfiguration: cfg } as rcp.SessionConfiguration);
 
       const response = await session.fetch(request);
-      console.info('[NetUtil] GET(binary)', url.substring(0, 80), '->', response.statusCode,
+      console.info('[NetUtil] GET(binary)', requestUrl.substring(0, 80), '->', response.statusCode,
         '(' + (Date.now() - startMs) + 'ms)');
       if (response.statusCode < 200 || response.statusCode >= 400) {
         throw new Error(`HTTP ${response.statusCode}`);
@@ -106,7 +107,7 @@ export class NetUtil {
       return copy.buffer;
     } catch (e) {
       const errMsg: string = (e as Error).message || String(e);
-      console.error('[NetUtil] GET(binary)', url.substring(0, 80), 'FAILED:', errMsg);
+      console.error('[NetUtil] GET(binary)', NetUtil.normalizeUrl(url).substring(0, 80), 'FAILED:', errMsg);
       throw new Error(errMsg);
     }
   }
@@ -203,28 +204,43 @@ export class NetUtil {
     return /(SSL connect error|connection reset|connection refused|socket|network is unreachable|1007900035|osErr\s*104)/i.test(message);
   }
 
+  /**
+   * RCP 不会像 OkHttp HttpUrl 一样自动编码 URL 中的非 ASCII 字符。
+   * 使用标准 URL 规范化，编码中文查询参数并保留已有的百分号编码。
+   */
+  private static normalizeUrl(rawUrl: string): string {
+    try {
+      return rawUrl
+        .replace(/[^\x00-\x7F]+/g, (part: string): string => encodeURIComponent(part))
+        .replace(/ /g, '%20');
+    } catch (_e) {
+      return rawUrl;
+    }
+  }
+
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
     const startMs: number = Date.now();
+    const requestUrl = NetUtil.normalizeUrl(url);
     let lastError: string = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const h = NetUtil.buildHeaders(headers);
         const reqHeaders = h as rcp.RequestHeaders;
-        const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
+        const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
         const session = NetUtil.getSession(timeout);
         const response = await session.fetch(request);
-        console.info('[NetUtil]', method, url, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
+        console.info('[NetUtil]', method, requestUrl, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
         if (response.statusCode < 200 || response.statusCode >= 400) {
           let errorText = '';
           if (response.body !== undefined && response.body !== null) {
             const errorBytes = new Uint8Array(response.body);
-            errorText = await NetUtil.decodeBody(errorBytes, url);
+            errorText = await NetUtil.decodeBody(errorBytes, requestUrl);
           }
           throw new Error(`HTTP ${response.statusCode}: ${errorText.substring(0, 200)}`);
         }
         if (response.body === undefined || response.body === null) return '';
         const uint8 = new Uint8Array(response.body);
-        return await NetUtil.decodeBody(uint8, url);
+        return await NetUtil.decodeBody(uint8, requestUrl);
       } catch (e) {
         lastError = (e as Error).message || String(e);
         if (attempt === 0 && NetUtil.isTransientConnectionError(lastError)) {
@@ -236,7 +252,7 @@ export class NetUtil {
       }
     }
     const elapsedMs: number = Date.now() - startMs;
-    console.error('[NetUtil]', method, url, 'FAILED (' + elapsedMs + 'ms):', lastError);
+    console.error('[NetUtil]', method, requestUrl, 'FAILED (' + elapsedMs + 'ms):', lastError);
     throw new Error(lastError);
   }
 

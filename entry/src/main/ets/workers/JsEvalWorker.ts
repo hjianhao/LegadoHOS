@@ -60,6 +60,9 @@ function getRcpSession(): rcp.Session {
 
 async function httpRequest(url: string, method: string, headers: Record<string, string>, body?: string): Promise<string> {
   try {
+    try {
+      url = url.replace(/[^\x00-\x7F]+/g, (part: string): string => encodeURIComponent(part)).replace(/ /g, '%20');
+    } catch (_e) { /* 保留原 URL 交由 RCP 报错 */ }
     if (!headers['User-Agent']) {
       headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
     }
