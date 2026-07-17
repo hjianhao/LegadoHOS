@@ -133,7 +133,10 @@ struct ExploreBookPage {
         return;
       }
       if (!catUrl.startsWith('http') && this.sourceUrl) {
-        const baseUrl: string = this.sourceUrl.replace(/(https?:\/\/[^\/]+).*/, '$1');
+        // Android 版允许在 bookSourceUrl 后附加 `##...` 作为同域书源的唯一标识。
+        // 该标识只参与书源身份判断，不能进入实际请求地址。
+        const cleanSourceUrl: string = this.sourceUrl.replace(/##.*$/, '').replace(/\/+$/, '');
+        const baseUrl: string = cleanSourceUrl.replace(/(https?:\/\/[^\/]+).*/, '$1');
         catUrl = baseUrl + (catUrl.startsWith('/') ? '' : '/') + catUrl;
       }
       catUrl = catUrl.replace(/\{\{page\}\}/g, '1');

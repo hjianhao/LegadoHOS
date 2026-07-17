@@ -327,8 +327,8 @@
     "enabled": true,
     "enabledCookieJar": true,
     "enabledExplore": true,
-    "exploreUrl": "玄幻::/fenlei/1_{{page}}.html\n修真::/fenlei/2_{{page}}.html\n都市::/fenlei/3_{{page}}.html\n穿越::/fenlei/4_{{page}}.html\n网游::/fenlei/5_{{page}}.html\n科幻::/fenlei/6_{{page}}.html\n其他::/fenlei/7_{{page}}.html",
-    "lastUpdateTime": 1751014905388,
+    "exploreUrl": "玄幻::http://www.xbiqugu.la/fenlei/1_{{page}}.html\n修真::http://www.xbiqugu.la/fenlei/2_{{page}}.html\n都市::http://www.xbiqugu.la/fenlei/3_{{page}}.html\n穿越::http://www.xbiqugu.la/fenlei/4_{{page}}.html\n网游::http://www.xbiqugu.la/fenlei/5_{{page}}.html\n科幻::http://www.xbiqugu.la/fenlei/6_{{page}}.html\n其他::http://www.xbiqugu.la/fenlei/7_{{page}}.html",
+    "lastUpdateTime": 1784260800000,
     "respondTime": 7849,
     "ruleBookInfo": {
       "author": ".block_txt2@p.1@text##作者：",
