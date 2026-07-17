@@ -1421,7 +1421,7 @@ export class SourceExecutor {
               return m ? m[0] : '';
             })(),
           };
-          const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
+          const evalResult = await JsExpressionEvaluator.evaluate(jsCode, ctx);
           if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
             let content = evalResult;
             try {
@@ -1935,7 +1935,7 @@ export class SourceExecutor {
           } catch (_je) { /* fallback */ }
         }
         if (chapters.length === 0) {
-          chapters = this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
+          chapters = await this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
         }
         // 去重：只按 URL 去重（与安卓 Legado 一致，BookChapter.equals 只比较 url）
         const seen = new Set<string>();
@@ -2000,7 +2000,7 @@ export class SourceExecutor {
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
-              altChapters = this.parseTocFromRules(altResp, tocRules, resolvedTocUrl, source);
+              altChapters = await this.parseTocFromRules(altResp, tocRules, resolvedTocUrl, source);
             }
             if (altChapters.length > 0) {
               console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', resolvedTocUrl.substring(0, 60));
@@ -2044,7 +2044,7 @@ export class SourceExecutor {
               tocUrlItem: source.ruleTocUrlItem || '',
             };
             if (retryTocRules.toc) {
-              let retryChapters = this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
+              let retryChapters = await this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
               if (retryChapters.length > 0) {
                 console.info('[SrcEx] getToc retry OK:', retryChapters.length, 'chapters');
                 return retryChapters;
@@ -2066,7 +2066,7 @@ export class SourceExecutor {
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
             };
-            const wvChapters = this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
+            const wvChapters = await this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
               console.info('[SrcEx] getToc WebView OK:', wvChapters.length, 'chapters');
               return wvChapters;
@@ -3180,7 +3180,7 @@ export class SourceExecutor {
   /**
    * 从规则解析目录列表
    */
-  private parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string, source?: BookSource): BookSourceChapter[] {
+  private async parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string, source?: BookSource): Promise<BookSourceChapter[]> {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
 
@@ -3229,8 +3229,8 @@ export class SourceExecutor {
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
-    return items.map((item: HtmlElement, index: number): BookSourceChapter => {
-      const parseField = (rule: string): string => {
+    return Promise.all(items.map(async (item: HtmlElement, index: number): Promise<BookSourceChapter> => {
+      const parseField = async (rule: string): Promise<string> => {
         if (!rule) return '';
         // 剥离 ## 后缀 post-processing（例如 $.serialName##正文卷. ）
         let postProcessors: string[] = [];
@@ -3273,7 +3273,7 @@ export class SourceExecutor {
         }
         // 应用 @js: 后处理（通过 JsExpressionEvaluator.processJsResult）
         if (jsPostProcess && result) {
-          const processed = JsExpressionEvaluator.processJsResult(jsPostProcess, result, { source: source });
+          const processed = await JsExpressionEvaluator.processJsResultAsync(jsPostProcess, result, { source: source });
           if (processed) result = processed;
         }
         // 应用 ## 后缀 post-processing（Legado 格式：##regex##replacement，成对处理）
@@ -3326,31 +3326,36 @@ export class SourceExecutor {
       };
 
       // 用 resolveFieldRule 支持 || && 操作符
-      const resolveTocField = (rule: string): string => {
+      const resolveTocField = async (rule: string): Promise<string> => {
         if (!rule) return '';
-        return resolveFieldRule(rule, (subRule: string) => parseField(subRule));
+        const { rules: fieldRules, connector: fieldConnector } = splitConnectorRules(rule.trim());
+        const values: string[] = [];
+        for (const fieldRule of fieldRules) {
+          const value = await parseField(fieldRule);
+          if (value) values.push(value);
+          if (value && fieldConnector !== '&&') break;
+        }
+        if (fieldConnector === '&&') return mergeAll(values);
+        return firstNonEmpty(values);
       };
 
-      let title = resolveTocField(titleRule);
+      let title = await resolveTocField(titleRule);
       if (title) {
         if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
       } else {
         title = HtmlUtil.stripHtml(item.text || '').trim();
       }
+      let chapterUrl = await resolveTocField(urlItemRule) || '';
+      if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
+      if (chapterUrl && !chapterUrl.startsWith('http://') && !chapterUrl.startsWith('https://')) {
+        chapterUrl = this.resolvePageUrl(chapterUrl, tocUrl);
+      }
       return {
         title: title || `第${index + 1}章`,
-        url: (() => {
-          let u = resolveTocField(urlItemRule) || '';
-          if (index === 0) console.info('[SrcEx] Chapter0 url len=' + u.length + ':', u.substring(0, 300));
-          // 解析相对 URL（相对于当前页面的 URL）
-          if (u && !u.startsWith('http://') && !u.startsWith('https://')) {
-            u = this.resolvePageUrl(u, tocUrl);
-          }
-          return u;
-        })(),
+        url: chapterUrl,
         index: index,
       };
-    });
+    }));
   }
 
   /**

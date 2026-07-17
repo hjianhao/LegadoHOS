@@ -13,6 +13,7 @@ import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
 import { getPolyfillScript, getAjaxPolyfill } from './ScriptApi';
 import { NetUtil } from '../../util/NetUtil';
+import { isNativeLoaded } from '../../napi/quickjs_bridge';
 
 // Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
 let cachedPolyfill_: string | null = null;
@@ -252,12 +253,13 @@ export class JsExpressionEvaluator {
     const fullScript = `${setupCode}\n${safeCode}`;
     const hasAjax = /java\.ajax\s*\(/.test(fullScript);
 
-    // 有 java.ajax() 时必须用 Worker，否则阻塞 UI
-    if (hasAjax && !this.workerReady) {
-      console.info('[JsEval] Init Worker for java.ajax()...');
+    // 有 java.ajax() 时必须用 Worker；主线程原生桥不可用时也必须用 Worker，
+    // 否则 mock bridge 只会返回 null，导致 @js: 规则静默失效。
+    if (!this.workerReady && (hasAjax || !isNativeLoaded())) {
+      console.info('[JsEval] Init Worker for JS evaluation...');
       const worker = await this.getWorker();
       if (!worker) {
-        console.warn('[JsEval] Worker unavailable, skipping java.ajax()');
+        console.warn('[JsEval] Worker unavailable, skipping JS evaluation');
         return '';
       }
     }
@@ -341,6 +343,28 @@ export class JsExpressionEvaluator {
     // 执行 JS 代码，注入 result 和上下文变量
     const combinedCtx: JsEvalContext = { ...(ctx || {}), result: value };
     const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, combinedCtx);
+    if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+      try {
+        const parsed = JSON.parse(evalResult);
+        return typeof parsed === 'string' ? parsed : String(parsed);
+      } catch (_e) {
+        return evalResult.replace(/^['"`]|['"`]$/g, '');
+      }
+    }
+    return value;
+  }
+
+  /** 异步执行规则的 @js: 后处理，支持 Worker QuickJS 降级。 */
+  static async processJsResultAsync(rule: string, value: string, ctx?: JsEvalContext): Promise<string> {
+    if (!rule || !value) return value;
+    const jsIdx = rule.indexOf('@js:');
+    if (jsIdx < 0 || (jsIdx > 0 && rule[jsIdx - 1] === '@')) return value;
+
+    const jsCode = rule.substring(jsIdx + 4).trim();
+    if (!jsCode) return value;
+
+    const combinedCtx: JsEvalContext = { ...(ctx || {}), result: value };
+    const evalResult = await JsExpressionEvaluator.evaluate(jsCode, combinedCtx);
     if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
       try {
         const parsed = JSON.parse(evalResult);
