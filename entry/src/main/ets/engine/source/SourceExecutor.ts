@@ -1122,8 +1122,15 @@ export class SourceExecutor {
       const extractField = (rule: string): string => {
         if (!rule) return '';
         return resolveFieldRule(rule, (subRule: string) => {
-          const normalized = this.normalizeCssRule(subRule);
-          return parser.extractAttr(doc, normalized);
+          // @js: 是字段提取后的处理器，不能作为 CSS/正则替换文本交给 HtmlParser。
+          const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(subRule);
+          const normalized = this.normalizeCssRule(ruleBeforeJs);
+          const value = parser.extractAttr(doc, normalized);
+          if (!jsCode || !value) return value;
+          return JsExpressionEvaluator.processJsResult(subRule, value, {
+            source: source,
+            baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
+          });
         });
       };
 
@@ -1131,7 +1138,8 @@ export class SourceExecutor {
         name: extractField(source.ruleBookInfoName) || '',
         author: extractField(source.ruleBookInfoAuthor) || '',
         coverUrl: extractField(source.ruleBookInfoCover) || '',
-        introduce: extractField(source.ruleBookInfoIntroduce) || '',
+        // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
+        introduce: HtmlUtil.toPlainText(extractField(source.ruleBookInfoIntroduce) || ''),
         kind: extractField(source.ruleBookInfoKind) || '',
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
@@ -2684,7 +2692,7 @@ export class SourceExecutor {
       if (isOnlyOne) {
         // OnlyOne: 取第一个匹配，用替换模板构造结果，丢弃未匹配部分
         const pattern = pairs[0];
-        const replacement = pairs[1];
+        const replacement = pairs.length > 1 ? pairs[1] : '';
         if (pattern) {
           try {
             const regex = new RegExp(pattern);
@@ -2700,9 +2708,9 @@ export class SourceExecutor {
         }
       } else {
         // 净化: 循环替换，保留未匹配部分
-        for (let i = 0; i + 1 < pairs.length; i += 2) {
+        for (let i = 0; i < pairs.length; i += 2) {
           const pattern = pairs[i];
-          const replacement = pairs[i + 1];
+          const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
           try {
             result = result.replace(new RegExp(pattern, 'g'), replacement);
           } catch(_e) {
@@ -3338,21 +3346,16 @@ export class SourceExecutor {
           if (processed) result = processed;
         }
         // 应用 ## 后缀 post-processing（Legado 格式：##regex##replacement，成对处理）
-        for (let pi = 0; pi + 1 < postProcessors.length; pi += 2) {
+        for (let pi = 0; pi < postProcessors.length; pi += 2) {
           const pattern = postProcessors[pi];
-          const replacement = postProcessors[pi + 1];
+          const replacement = pi + 1 < postProcessors.length ? postProcessors[pi + 1] : '';
           if (pattern === 'trim' || pattern === 'Trim' || pattern === 'TRIM') {
             result = result.trim();
             continue;
           }
           try {
-            // $1 $2 等反向引用替换
-            const regex = new RegExp(pattern);
-            const match = result.match(regex);
-            if (match) {
-              let replaced = replacement.replace(/\$(\d+)/g, (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
-              result = replaced;
-            }
+            // Android Legado 的普通 ## 替换保留未匹配部分，并支持 $1 等反向引用。
+            result = result.replace(new RegExp(pattern, 'g'), replacement);
           } catch (_e) { /* 忽略无效正则 */ }
         }
         // 单个 postProcessor（如 ##trim）

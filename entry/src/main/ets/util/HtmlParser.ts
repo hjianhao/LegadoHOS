@@ -295,9 +295,10 @@ export class HtmlParser {
     const pairs = isOnlyOne ? postProcessors.slice(0, -1) : postProcessors;
     if (isOnlyOne) {
       // OnlyOne: 取第一个匹配，用替换模板构造结果，丢弃未匹配部分
-      for (let i = 0; i + 1 < pairs.length; i += 2) {
+      for (let i = 0; i < pairs.length; i += 2) {
         const pattern = pairs[i];
-        const replacement = pairs[i + 1];
+        // Android Legado 允许省略 replacement，此时按空字符串替换。
+        const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
         if (!pattern) continue;
         try {
           const regex = new RegExp(pattern);
@@ -314,9 +315,9 @@ export class HtmlParser {
       }
     } else {
       // 净化: 循环替换，保留未匹配部分
-      for (let i = 0; i + 1 < pairs.length; i += 2) {
+      for (let i = 0; i < pairs.length; i += 2) {
         const pattern = pairs[i];
-        const replacement = pairs[i + 1];
+        const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
         if (!pattern) continue;
         try {
           result = result.replace(new RegExp(pattern, 'g'), replacement);
