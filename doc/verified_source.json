@@ -109,57 +109,61 @@
     "weight": 0
   },
   {
-    "bookSourceComment": "",
     "bookSourceGroup": "🎉 精选",
     "bookSourceName": "🎉 狗狗书籍",
     "bookSourceType": 0,
     "bookSourceUrl": "http://www.qiushu.info",
+    "bookSourceComment": "原站 qiushu.info 已失效，实际请求使用八零小说兼容线路",
     "customOrder": 19,
     "enabled": true,
     "enabledCookieJar": true,
     "enabledExplore": true,
-    "exploreUrl": "总榜::/top/allvisit.html\n月榜::/top/monthvisit.html\n周榜::/top/weekvisit.html\n日榜::/top/dayvisit.html\n总推::/top/allvote.html\n月推::/top/monthvote.html\n周推::/top/weekvote.html\n日推::/top/dayvote.html\n入库::/top/postdate.html\n站推::/top/toptime.html\n收藏::/top/goodnum.html\n字数::/top/size.html\n近更::/top/lastupdate.html\n新书::/top/goodnew.html\n仙侠::/ls/3-{{page}}.html\n科幻::/ls/9-{{page}}.html\n惊悚::/ls/10-{{page}}.html\n奇幻::/ls/13-{{page}}.html\n异界::/ls/1-{{page}}.html\n神话::/ls/14-{{page}}.html\n魔法::/ls/2-{{page}}.html\n玄幻::/ls/12-{{page}}.html\n历史::/ls/6-{{page}}.html\n武侠::/ls/15-{{page}}.html\n游戏::/ls/16-{{page}}.html\n谍战::/ls/23-{{page}}.html\n军事::/ls/7-{{page}}.html\n竞技::/ls/8-{{page}}.html\n官场::/ls/21-{{page}}.html\n言情::/ls/24-{{page}}.html\n校园::/ls/19-{{page}}.html\n宫廷::/ls/18-{{page}}.html\n耽美::/ls/5-{{page}}.html\n都市::/ls/4-{{page}}.html\n穿越::/ls/17-{{page}}.html\n同人::/ls/11-{{page}}.html\n短篇::/ls/25-{{page}}.html",
-    "lastUpdateTime": 1734351598102,
+    "exploreUrl": "最近更新::http://www.80ge.info/top/lastupdate/{{page}}.html\n最新入库::http://www.80ge.info/top/postdate/{{page}}.html\n总排行榜::http://www.80ge.info/top/allvisit/{{page}}.html\n月排行榜::http://www.80ge.info/top/monthvisit/{{page}}.html\n周排行榜::http://www.80ge.info/top/weekvisit/{{page}}.html\n日排行榜::http://www.80ge.info/top/dayvisit/{{page}}.html\n总推荐榜::http://www.80ge.info/top/allvote/{{page}}.html\n月推荐榜::http://www.80ge.info/top/monthvote/{{page}}.html\n周推荐榜::http://www.80ge.info/top/weekvote/{{page}}.html\n日推荐榜::http://www.80ge.info/top/dayvote/{{page}}.html\n总收藏榜::http://www.80ge.info/top/goodnum/{{page}}.html\n字数排行::http://www.80ge.info/top/size/{{page}}.html\n奇幻修真::http://www.80ge.info/sort3/{{page}}.html\n奇幻魔法::http://www.80ge.info/sort13/{{page}}.html\n异术超能::http://www.80ge.info/sort1/{{page}}.html\n东方传奇::http://www.80ge.info/sort12/{{page}}.html\n王朝争霸::http://www.80ge.info/sort14/{{page}}.html\n江湖武侠::http://www.80ge.info/sort15/{{page}}.html\n未来幻想::http://www.80ge.info/sort9/{{page}}.html\n灵异鬼怪::http://www.80ge.info/sort10/{{page}}.html\n探险揭秘::http://www.80ge.info/sort22/{{page}}.html\n历史传记::http://www.80ge.info/sort6/{{page}}.html\n特种军旅::http://www.80ge.info/sort7/{{page}}.html\n虚拟网游::http://www.80ge.info/sort16/{{page}}.html\n竞技体育::http://www.80ge.info/sort8/{{page}}.html\n魔幻女强::http://www.80ge.info/sort2/{{page}}.html\n都市婚姻::http://www.80ge.info/sort4/{{page}}.html\n百合之恋::http://www.80ge.info/sort5/{{page}}.html\n同人美文::http://www.80ge.info/sort11/{{page}}.html\n穿越架空::http://www.80ge.info/sort17/{{page}}.html\n王室贵族::http://www.80ge.info/sort18/{{page}}.html\n魔法校园::http://www.80ge.info/sort19/{{page}}.html\n乡土布衣::http://www.80ge.info/sort20/{{page}}.html\n官职商战::http://www.80ge.info/sort21/{{page}}.html\n间谍暗战::http://www.80ge.info/sort23/{{page}}.html\n唯美言情::http://www.80ge.info/sort24/{{page}}.html\n诗歌文集::http://www.80ge.info/sort25/{{page}}.html",
+    "lastUpdateTime": 1784263500000,
     "respondTime": 9695,
     "ruleBookInfo": {
-      "author": ".author@text##.*\\/",
-      "coverUrl": ".book_cover@img@src##img##www",
-      "intro": ".intro@p!0:-1:-2:-3@text##(^|[。！？]+[”」）】]?)##$1<br>@js:result.replace(/【展开】|【收起】/g,\"\")",
-      "kind": ".nowplace@ownText&&id.view_new@text##.*>\\s|\\s>|.*时间.|\\s..:.*",
-      "lastChapter": ".book_con_list[0]@a.0@text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
-      "name": ".book_cover@a@text##最新章节"
+      "author": ".soft_info_r@a.0@text",
+      "coverUrl": ".soft_info_r@img@src",
+      "intro": "id.mainSoftIntro@text##(^|[。！？]+[”」）】]?)##$1<br>@js:result.replace(/.*推荐给你的朋友！|八零电子书.*|【展开】.*|更多.*TXT.*/g,\"\")",
+      "kind": ".soft_info_r@li.6@strong@text&&.soft_info_r@li.7@textNodes##\\s..:.*",
+      "lastChapter": ".soft_info_r@li.9@textNodes##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
+      "name": "id.soft_info_para@h1@text##TXT.*",
+      "tocUrl": ".soft_info_r@a.-1@href"
     },
     "ruleContent": {
-      "content": "id.content@html",
-      "replaceRegex": "##<br\\s*\\/?>|\n\\s*\n##\n|###<[^>]+>|&nbsp;|read_di\\(\\);|最新网址|txt下载|手机阅读|www\\.qiushu\\.info|m\\.qiushu\\.info|记住本站网址##"
+      "content": "id.nr1@text",
+      "nextContentUrl": "id.pt_next@href",
+      "replaceRegex": "##求书网.*"
     },
     "ruleExplore": {
-      "author": ".top_author@text||.t2@a@text",
-      "bookList": ".toplists@dl||.read_list@li",
-      "bookUrl": "dt@a.1@href||.t1@a@href",
-      "coverUrl": "a.0@href##.+\\D((\\d+)\\d{3})\\D##http://www.qiushu.info/$2/$1/$1s.jpg###",
-      "intro": ".t3@text",
-      "kind": ".top_sort@text&&.top_fullflag@text&&.top_lastupdate@text&&.text@text&&.rl@text##.*时间.",
-      "lastChapter": "a.1@text||.tl@a@text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
-      "name": "strong@text||.t1@a@text##《|》|最新章节"
+      "author": "a.1@text",
+      "bookList": "id.list_art_2013",
+      "bookUrl": "a.0@href",
+      "coverUrl": "img@src",
+      "intro": ".book_jj@text",
+      "kind": "span.0@text&&em@text",
+      "lastChapter": "b@text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
+      "name": "a.0@text##TXT.*",
+      "wordCount": ""
     },
     "ruleSearch": {
-      "author": ".t2@text##\\s更新.*",
-      "bookList": ".read_list@li",
-      "bookUrl": ".t1@a@href",
+      "author": "a.2@text",
+      "bookList": ".storelistbt5",
+      "bookUrl": "a.1@href",
       "checkKeyWord": "",
       "coverUrl": "img@src",
-      "intro": ".t3@text",
-      "kind": ".text@text&&.rl@text##.*时间.",
-      "lastChapter": ".tl@a@text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
-      "name": ".t1@a@text##《|》|最新章节"
+      "intro": "p.1@text",
+      "kind": "p.0@textNodes&&span.1@text&&p.2@text##.*更新.|最新.*|.*：|\\s",
+      "lastChapter": "p.2@text##.*最新章节.|正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
+      "name": "a.1@text##\\《|\\》.*",
+      "wordCount": ""
     },
     "ruleToc": {
-      "chapterList": ".book_con_list@li@a",
+      "chapterList": "id.yulan@li@a",
       "chapterName": "text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加架字修Kk].*?[】）\\)]",
-      "chapterUrl": "href"
+      "chapterUrl": "href##www\\.qiushu\\.info\\/t##wap\\.80ge\\.info"
     },
-    "searchUrl": "/search.php,{\n  \"method\": \"post\",\n  \"body\": \"searchkey={{key}}\"\n}",
+    "searchUrl": "http://www.80ge.info/modules/article/search.php,{\n  \"method\": \"post\",\n  \"body\": \"searchkey={{key}}&searchtype=articlename\"\n}",
     "weight": 0
   },
   {
