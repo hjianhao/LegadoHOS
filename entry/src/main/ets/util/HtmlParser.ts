@@ -9,6 +9,7 @@
  *
  * 非完整 HTML/CSS 规范实现，仅覆盖书源规则常见的模式。
  */
+import { toJsRegexReplacement } from '../engine/source/RuleAnalyzer';
 
 // ============= 模型 =============
 
@@ -320,7 +321,7 @@ export class HtmlParser {
         const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
         if (!pattern) continue;
         try {
-          result = result.replace(new RegExp(pattern, 'g'), replacement);
+          result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
         } catch (e) {
           console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
         }

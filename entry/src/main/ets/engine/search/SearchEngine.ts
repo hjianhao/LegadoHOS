@@ -8,6 +8,7 @@
  */
 
 import { BookSource } from '../../model/BookSource';
+import { toJsRegexReplacement } from '../source/RuleAnalyzer';
 import { SearchResult } from '../../model/SearchResult';
 import { NetUtil } from '../../util/NetUtil';
 
@@ -441,7 +442,7 @@ function extractHtmlField(html: string, selector: string): string {
   if (replacePattern && val) {
     const parts = replacePattern.split('##');
     if (parts.length >= 2) {
-      try { val = val.replace(new RegExp(parts[0], 'g'), parts.slice(1).join('##')); }
+      try { val = val.replace(new RegExp(parts[0], 'g'), toJsRegexReplacement(parts.slice(1).join('##'))); }
       catch (_e) { /* ignore */ }
     }
   }

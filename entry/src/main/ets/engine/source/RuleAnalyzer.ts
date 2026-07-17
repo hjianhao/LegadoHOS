@@ -358,3 +358,23 @@ export function interleaveLists(lists: string[][]): string[] {
   }
   return result;
 }
+
+/**
+ * 将 Android/Kotlin Regex.replace 的 replacement 转成 JavaScript replacement。
+ * Kotlin 中反斜杠会转义 replacement 的下一个字符，例如 `wap\\.example` 输出
+ * `wap.example`；JavaScript 会原样保留该反斜杠，需要在 replace 前转换。
+ */
+export function toJsRegexReplacement(replacement: string): string {
+  let result = '';
+  for (let i = 0; i < replacement.length; i++) {
+    const ch = replacement[i];
+    if (ch === '\\' && i + 1 < replacement.length) {
+      const next = replacement[++i];
+      // JS replacement 中 $$ 表示字面量 $，避免 Kotlin 的 \$ 被当成捕获组引用。
+      result += next === '$' ? '$$' : next;
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}

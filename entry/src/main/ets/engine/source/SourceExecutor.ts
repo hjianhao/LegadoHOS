@@ -10,7 +10,7 @@ import { globalScriptEngine } from './ScriptEngine';
 import { JsExpressionEvaluator, JsEvalContext } from './JsExpressionEvaluator';
 import { getPolyfillScript, getAjaxPolyfill, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
-import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists } from './RuleAnalyzer';
+import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists, toJsRegexReplacement } from './RuleAnalyzer';
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { ContentCleaner } from '../../util/ContentCleaner';
@@ -1327,6 +1327,11 @@ export class SourceExecutor {
   async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false): Promise<string> {
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
     console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
+
+    // 兼容修复前已缓存的 Java replacement URL（如 http://wap\.80ge\.info/...）。
+    if (contentUrl && /^https?:\/\//i.test(contentUrl)) {
+      contentUrl = contentUrl.replace(/\\([./])/g, '$1');
+    }
 
     // 安全解析 {{baseUrl.match(...)}} 模板
     if (bookUrl && contentUrl && contentUrl.includes('{{')) {
@@ -2712,7 +2717,7 @@ export class SourceExecutor {
           const pattern = pairs[i];
           const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
           try {
-            result = result.replace(new RegExp(pattern, 'g'), replacement);
+            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
           } catch(_e) {
             console.warn('[SrcEx] ## regex error: ' + pattern);
           }
@@ -3066,7 +3071,7 @@ export class SourceExecutor {
               continue;
             }
             try {
-              result = result.replace(new RegExp(pattern, 'g'), replacement);
+              result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
             } catch (_e) { /* ignore invalid regex */ }
           }
 
@@ -3135,7 +3140,7 @@ export class SourceExecutor {
       const replacement = i + 1 < rules.length ? rules[i + 1] : '';
       if (!pattern) continue;
       try {
-        result = result.replace(new RegExp(pattern, 'g'), replacement);
+        result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
       } catch (_e) {
         /* ignore invalid replacement rule */
       }
@@ -3355,7 +3360,7 @@ export class SourceExecutor {
           }
           try {
             // Android Legado 的普通 ## 替换保留未匹配部分，并支持 $1 等反向引用。
-            result = result.replace(new RegExp(pattern, 'g'), replacement);
+            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
           } catch (_e) { /* 忽略无效正则 */ }
         }
         // 单个 postProcessor（如 ##trim）
