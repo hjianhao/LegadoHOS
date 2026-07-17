@@ -150,12 +150,13 @@ export class BookSourceTable {
       const rawJson = JSON.stringify(s); // 保存原始 JSON 用于后续重新解析
       const source = parseBookSource(s);
       setSourceRawJson(source, rawJson);
-      // 去重
-      const exists = await this.getSourceByUrl(source.sourceUrl);
-      if (exists) {
-        source.id = exists.id;
-        source.variableComment = source.variableComment || exists.variableComment;
+      const existing = await this.getSourcesForImport(source.sourceUrl, source.sourceName);
+      if (existing.length > 0) {
+        const canonical = existing[0];
+        source.id = canonical.id;
+        source.variableComment = source.variableComment || this.pickVariable(existing);
         await this.updateSource(source);
+        await this.deleteDuplicateSources(existing, canonical.id, source.sourceUrl);
       } else {
         await this.insertSource(source);
       }
@@ -202,8 +203,8 @@ export class BookSourceTable {
     for (let i = 0; i < arr.length; i++) {
       const src = parseBookSource(arr[i]);
       const raw = JSON.stringify(arr[i]);
-      const exist = await this.getSourceByUrl(src.sourceUrl);
-      const status = exist ? 'update' : 'new';
+      const existing = await this.getSourcesForImport(src.sourceUrl, src.sourceName);
+      const status = existing.length > 0 ? 'update' : 'new';
       result.push({ name: src.sourceName, url: src.sourceUrl, status, source: src, rawJson: raw, checked: true });
     }
     return result;
@@ -214,15 +215,18 @@ export class BookSourceTable {
     for (const item of items) {
       if (!item.checked) continue;
       const src = item.source;
-      if (keepName) { const exist = await this.getSourceByUrl(src.sourceUrl); if (exist) src.sourceName = exist.sourceName; }
-      if (!keepGroup) src.group = customGroup || src.group;
-      if (keepEnabled) { const exist = await this.getSourceByUrl(src.sourceUrl); if (exist) src.enabled = exist.enabled; }
+      const existing = await this.getSourcesForImport(src.sourceUrl, src.sourceName);
+      const canonical = existing.length > 0 ? existing[0] : null;
+      if (canonical && keepName) src.sourceName = canonical.sourceName;
+      if (canonical && keepGroup) src.group = canonical.group;
+      else if (!keepGroup) src.group = customGroup || src.group;
+      if (canonical && keepEnabled) src.enabled = canonical.enabled;
       setSourceRawJson(src, item.rawJson);
-      const exist = await this.getSourceByUrl(src.sourceUrl);
-      if (exist) {
-        src.id = exist.id;
-        src.variableComment = src.variableComment || exist.variableComment;
+      if (canonical) {
+        src.id = canonical.id;
+        src.variableComment = src.variableComment || this.pickVariable(existing);
         await this.updateSource(src);
+        await this.deleteDuplicateSources(existing, canonical.id, src.sourceUrl);
       }
       else { await this.insertSource(src); }
       count++;
@@ -312,11 +316,58 @@ export class BookSourceTable {
   }
 
   async getSourceByUrl(url: string): Promise<BookSource | null> {
+    const sources = await this.getSourcesByUrl(url);
+    return sources.length > 0 ? sources[0] : null;
+  }
+
+  /** 返回同 URL 的全部记录，最早创建的记录作为更新时的主记录。 */
+  async getSourcesByUrl(url: string): Promise<BookSource[]> {
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('source_url', url);
+    predicates.orderByAsc('id');
     const rs = await RdbUtil.query(this.rdbStore, predicates, []);
-    const sources = this.toSources(rs);
-    return sources.length > 0 ? sources[0] : null;
+    return this.toSources(rs);
+  }
+
+  /**
+   * 更新导入先按 URL 匹配，并将同名的旧 URL 记录一并纳入合并范围。
+   * 书源换线路时 bookSourceUrl 本身也会变化，仅按新 URL 无法更新旧记录。
+   */
+  private async getSourcesForImport(url: string, name: string): Promise<BookSource[]> {
+    const byUrl = await this.getSourcesByUrl(url);
+    if (!name) return byUrl;
+    const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
+    predicates.equalTo('source_name', name);
+    predicates.orderByAsc('id');
+    const byName = this.toSources(await RdbUtil.query(this.rdbStore, predicates, []));
+    const merged: BookSource[] = [];
+    const ids = new Set<number>();
+    for (const source of [...byUrl, ...byName]) {
+      if (ids.has(source.id)) continue;
+      ids.add(source.id);
+      merged.push(source);
+    }
+    merged.sort((a: BookSource, b: BookSource) => a.id - b.id);
+    return merged;
+  }
+
+  private pickVariable(sources: BookSource[]): string {
+    for (const source of sources) {
+      if (source.variableComment) return source.variableComment;
+    }
+    return '';
+  }
+
+  private async deleteDuplicateSources(sources: BookSource[], canonicalId: number, sourceUrl: string): Promise<void> {
+    let removed = 0;
+    for (const source of sources) {
+      if (source.id === canonicalId) continue;
+      await this.deleteSource(source.id);
+      removed++;
+    }
+    if (removed > 0) {
+      console.info('[BookSourceTable] Removed', removed, 'duplicate source records for', sourceUrl);
+    }
   }
 
   /** 持久化 source.getVariable()/setVariable() 对应的书源变量。 */
@@ -448,6 +499,7 @@ export class BookSourceTable {
         try {
           const parsed = JSON.parse(rawJson);
           const fixed = parseBookSource(parsed);
+          this.restoreRawOnlyFields(source, fixed);
           // 恢复 jsLib（聚合书源的核心脚本）
           if (fixed.jsLib) source.jsLib = fixed.jsLib;
           // 恢复 loginUrl（禁漫天堂等源依赖 loginUrl 初始化书源变量）
@@ -507,6 +559,72 @@ export class BookSourceTable {
     }
     RdbUtil.close(rs);
     return sources;
+  }
+
+  /**
+   * 数据库未拆列的 Legado 扩展字段以 raw_json 为准恢复。
+   * 必须包含 false/0/空字符串，更新导入才能真正清除旧配置而不是继续沿用默认值。
+   */
+  private restoreRawOnlyFields(source: BookSource, raw: BookSource): void {
+    source.ruleSearchCheckKeyWord = raw.ruleSearchCheckKeyWord;
+    source.ruleSearchLastChapter = raw.ruleSearchLastChapter;
+    source.ruleBookInfoLastChapter = raw.ruleBookInfoLastChapter;
+    source.ruleBookInfoCanReName = raw.ruleBookInfoCanReName;
+    source.ruleBookInfoDownloadUrls = raw.ruleBookInfoDownloadUrls;
+    source.ruleBookInfoRelatedBooks = raw.ruleBookInfoRelatedBooks;
+    source.ruleTocPreUpdateJs = raw.ruleTocPreUpdateJs;
+    source.ruleTocFormatJs = raw.ruleTocFormatJs;
+    source.ruleTocIsVolume = raw.ruleTocIsVolume;
+    source.ruleTocIsVip = raw.ruleTocIsVip;
+    source.ruleTocIsPay = raw.ruleTocIsPay;
+    source.ruleTocUpdateTime = raw.ruleTocUpdateTime;
+    source.ruleTocNextTocUrl = raw.ruleTocNextTocUrl;
+    source.ruleBookContentSubContent = raw.ruleBookContentSubContent;
+    source.ruleBookContentTitle = raw.ruleBookContentTitle;
+    source.ruleBookContentWebJs = raw.ruleBookContentWebJs;
+    source.ruleBookContentSourceRegex = raw.ruleBookContentSourceRegex;
+    source.ruleBookContentImageStyle = raw.ruleBookContentImageStyle;
+    source.ruleBookContentImageDecode = raw.ruleBookContentImageDecode;
+    source.ruleBookContentPayAction = raw.ruleBookContentPayAction;
+    source.ruleBookContentCallBackJs = raw.ruleBookContentCallBackJs;
+    source.respondTime = raw.respondTime;
+    source.concurrentRate = raw.concurrentRate;
+    source.bookSourceComment = raw.bookSourceComment;
+    source.loginUrl = raw.loginUrl;
+    source.loginCheckJs = raw.loginCheckJs;
+    source.jsLib = raw.jsLib;
+    source.bookUrlPattern = raw.bookUrlPattern;
+    source.respond = raw.respond;
+    source.ruleExploreScreen = raw.ruleExploreScreen;
+    source.ruleExploreList = raw.ruleExploreList;
+    source.ruleExploreName = raw.ruleExploreName;
+    source.ruleExploreAuthor = raw.ruleExploreAuthor;
+    source.ruleExploreCover = raw.ruleExploreCover;
+    source.ruleExploreKind = raw.ruleExploreKind;
+    source.ruleExploreWordCount = raw.ruleExploreWordCount;
+    source.ruleExploreLastChapter = raw.ruleExploreLastChapter;
+    source.ruleExploreLastUpdateTime = raw.ruleExploreLastUpdateTime;
+    source.ruleExploreNoteUrl = raw.ruleExploreNoteUrl;
+    source.ruleExploreIntroduce = raw.ruleExploreIntroduce;
+    source.exploreUrl = raw.exploreUrl;
+    source.loginUi = raw.loginUi;
+    source.eventListener = raw.eventListener;
+    source.customButton = raw.customButton;
+    source.homepageModules = raw.homepageModules;
+    source.enabledCookieJar = raw.enabledCookieJar;
+    source.enabledExplore = raw.enabledExplore;
+    source.exploreScreen = raw.exploreScreen;
+    source.review = raw.review;
+    source.reviewUrl = raw.reviewUrl;
+    source.reviewAvatar = raw.reviewAvatar;
+    source.reviewContent = raw.reviewContent;
+    source.reviewPostTime = raw.reviewPostTime;
+    source.reviewQuoteUrl = raw.reviewQuoteUrl;
+    source.ruleReviewUrl = raw.ruleReviewUrl;
+    source.ruleReviewAvatar = raw.ruleReviewAvatar;
+    source.ruleReviewContent = raw.ruleReviewContent;
+    source.ruleReviewPostTime = raw.ruleReviewPostTime;
+    source.ruleReviewQuoteUrl = raw.ruleReviewQuoteUrl;
   }
 
   private toRow(source: BookSource): relationalStore.ValuesBucket {
