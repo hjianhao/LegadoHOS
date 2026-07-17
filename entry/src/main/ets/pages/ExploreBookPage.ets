@@ -14,6 +14,7 @@ import { UiUtil } from '../util/UiUtil';
 @Entry
 @Component
 struct ExploreBookPage {
+  @State sourceId: number = 0;
   @State sourceName: string = '';
   @State sourceUrl: string = '';
   @State categoryName: string = '';
@@ -34,6 +35,7 @@ struct ExploreBookPage {
   @State script: string = '';
   @State loginUrl: string = '';
   @State coverDecodeJs: string = '';
+  @State variableComment: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
   @State books: SearchResult[] = [];
@@ -43,6 +45,7 @@ struct ExploreBookPage {
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
+      this.sourceId = Number(params['sourceId'] || 0);
       this.sourceName = String(params['sourceName'] || '');
       this.sourceUrl = String(params['sourceUrl'] || '');
       this.categoryName = String(params['categoryName'] || '');
@@ -62,13 +65,14 @@ struct ExploreBookPage {
       this.script = String(params['script'] || '');
       this.loginUrl = String(params['loginUrl'] || '');
       this.coverDecodeJs = String(params['coverDecodeJs'] || '');
+      this.variableComment = String(params['variableComment'] || '');
     }
     void this.loadBooks();
   }
 
   private makeSource(catUrl: string): BookSource {
     return {
-      id: 0, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
+      id: this.sourceId, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
       sourceType: 0, group: '', enabled: true, weight: 0, customOrder: 0,
       isExploreRequest: true,
       ruleSearchUrl: catUrl,
@@ -101,7 +105,7 @@ struct ExploreBookPage {
       jsLib: this.jsLib, loginUrl: this.loginUrl,
       rawJson: this.rawJson,
       respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
-      variableComment: '', coverDecodeJs: this.coverDecodeJs, loginCheckJs: '', bookUrlPattern: '',
+      variableComment: this.variableComment, coverDecodeJs: this.coverDecodeJs, loginCheckJs: '', bookUrlPattern: '',
       ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
       ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
       ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',

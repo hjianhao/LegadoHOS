@@ -46,7 +46,8 @@ export const BookSourceTableCreate = `
     rule_review TEXT DEFAULT '',
     script TEXT DEFAULT '',
     header TEXT DEFAULT '',
-      raw_json TEXT DEFAULT '',
+    variable_comment TEXT DEFAULT '',
+    raw_json TEXT DEFAULT '',
       rule_book_info_toc_url TEXT DEFAULT '',
       cover_decode_js TEXT DEFAULT '',
       is_ai_generated INTEGER DEFAULT 0,
@@ -153,6 +154,7 @@ export class BookSourceTable {
       const exists = await this.getSourceByUrl(source.sourceUrl);
       if (exists) {
         source.id = exists.id;
+        source.variableComment = source.variableComment || exists.variableComment;
         await this.updateSource(source);
       } else {
         await this.insertSource(source);
@@ -217,7 +219,11 @@ export class BookSourceTable {
       if (keepEnabled) { const exist = await this.getSourceByUrl(src.sourceUrl); if (exist) src.enabled = exist.enabled; }
       setSourceRawJson(src, item.rawJson);
       const exist = await this.getSourceByUrl(src.sourceUrl);
-      if (exist) { src.id = exist.id; await this.updateSource(src); }
+      if (exist) {
+        src.id = exist.id;
+        src.variableComment = src.variableComment || exist.variableComment;
+        await this.updateSource(src);
+      }
       else { await this.insertSource(src); }
       count++;
     }
@@ -313,6 +319,17 @@ export class BookSourceTable {
     return sources.length > 0 ? sources[0] : null;
   }
 
+  /** 持久化 source.getVariable()/setVariable() 对应的书源变量。 */
+  async updateVariable(id: number, sourceUrl: string, variable: string): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
+    if (id > 0) predicates.equalTo('id', id);
+    else predicates.equalTo('source_url', sourceUrl);
+    await RdbUtil.update(this.rdbStore, {
+      'variable_comment': variable,
+      'update_time': Date.now(),
+    }, predicates);
+  }
+
   private toSources(rs: relationalStore.ResultSet): BookSource[] {
     const sources: BookSource[] = [];
     while (RdbUtil.next(rs)) {
@@ -383,7 +400,7 @@ export class BookSourceTable {
         respondTime: 0,
         concurrentRate: '',
         bookSourceComment: '',
-        variableComment: '',
+        variableComment: RdbUtil.string(rs, 'variable_comment') || '',
         coverDecodeJs: RdbUtil.string(rs, 'cover_decode_js') || '',
         loginUrl: '',
         loginCheckJs: '',
@@ -436,6 +453,8 @@ export class BookSourceTable {
           // 恢复 loginUrl（禁漫天堂等源依赖 loginUrl 初始化书源变量）
           if (fixed.loginUrl) source.loginUrl = fixed.loginUrl;
           if (fixed.loginCheckJs) source.loginCheckJs = fixed.loginCheckJs;
+          if (fixed.loginUi) source.loginUi = fixed.loginUi;
+          source.customButton = fixed.customButton;
           // 恢复 exploreUrl
           if (fixed.exploreUrl && !source.exploreUrl) {
             source.exploreUrl = fixed.exploreUrl;
@@ -530,6 +549,7 @@ export class BookSourceTable {
       'rule_review': source.ruleReview,
       'script': source.script,
       'header': source.header,
+      'variable_comment': source.variableComment || '',
       'raw_json': (source as any).rawJson || '',
       'rule_book_info_toc_url': source.ruleBookInfoTocUrl,
       'cover_decode_js': source.coverDecodeJs || '',

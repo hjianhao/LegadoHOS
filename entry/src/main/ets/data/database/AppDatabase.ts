@@ -149,6 +149,7 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN sync_time INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN cover_decode_js TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN variable_comment TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
 
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }

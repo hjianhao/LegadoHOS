@@ -30,6 +30,11 @@ interface ExploreCategory {
   wrapBefore: boolean;
 }
 
+interface SourceLoginAction {
+  name: string;
+  action: string;
+}
+
 @Component
 export struct ExplorePage {
   @StorageLink('isDark') isDark: boolean = false;
@@ -40,6 +45,8 @@ export struct ExplorePage {
   @State categoryCache: Record<string, ExploreCategory[]> = {};
   @State resolvedCategories: ExploreCategory[] = [];
   @State resolvedFoundSource: BookSource | null = null;
+  @State actionSourceUrl: string = '';
+  @State sourceActionBusy: boolean = false;
 
   aboutToAppear(): void {
     void this.loadExploreSources();
@@ -96,11 +103,13 @@ export struct ExplorePage {
    * 3. JS 脚本 (<js>...</js> 或 @js:...) — 通过 JsExpressionEvaluator 执行
    * 4. HTTP URL — 请求后解析 JSON 或文本
    */
-  async loadCategories(source: BookSource): Promise<ExploreCategory[]> {
+  async loadCategories(source: BookSource, forceReload: boolean = false): Promise<ExploreCategory[]> {
     const cacheKey = source.sourceUrl;
-    if (this.categoryCache[cacheKey]) {
+    if (!forceReload && this.categoryCache[cacheKey]) {
       return this.categoryCache[cacheKey];
     }
+
+    await this.ensureSourceVariable(source);
 
     let exploreUrl = source.exploreUrl || '';
     console.info('[Explore] loadCategories for ' + source.sourceName + ', exploreUrl=' + exploreUrl.substring(0, 120));
@@ -131,7 +140,8 @@ export struct ExplorePage {
           const ctx: JsEvalContext = {
             source: source,
             jsLib: source.jsLib || '',
-            baseUrl: baseUrl
+            baseUrl: baseUrl,
+            variableBlob: source.variableComment || '',
           };
           const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
           console.info('[Explore] JS evaluate result (len=' + (result ? result.length : 0) + '): ' + (result || '').substring(0, 200));
@@ -385,13 +395,107 @@ export struct ExplorePage {
     return this.categoryCache[sourceUrl] || [];
   }
 
+  private async persistSourceVariable(source: BookSource, variable: string): Promise<void> {
+    source.variableComment = variable;
+    const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+    await dao.updateVariable(source.id, source.sourceUrl, variable);
+  }
+
+  /** 首次使用时执行 loginUrl，取得并持久化 source.getVariable()。 */
+  private async ensureSourceVariable(source: BookSource): Promise<void> {
+    if (!source.loginUrl || source.variableComment) return;
+    const result = await JsExpressionEvaluator.evaluate(
+      source.loginUrl + '\nsource.getVariable();',
+      {
+        source: source,
+        jsLib: source.jsLib || '',
+        baseUrl: this.getBaseUrl_(source.sourceUrl),
+        variableBlob: '',
+      }
+    );
+    if (result && result.trim() && result !== 'null' && result !== 'undefined') {
+      await this.persistSourceVariable(source, result.trim());
+      console.info('[Explore] Initialized and persisted source variables for ' + source.sourceName);
+    }
+  }
+
+  getSourceLoginActions(source: BookSource): SourceLoginAction[] {
+    if (!source.loginUi) return [];
+    try {
+      const parsed = JSON.parse(source.loginUi) as Array<Record<string, Object>>;
+      if (!Array.isArray(parsed)) return [];
+      const actions: SourceLoginAction[] = [];
+      for (const item of parsed) {
+        const type = String(item['type'] || '');
+        const action = String(item['action'] || '').trim();
+        if (type === 'button' && action) {
+          actions.push({ name: String(item['name'] || '执行'), action: action });
+        }
+      }
+      return actions;
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  getCurrentSourceLine(source: BookSource): string {
+    if (!source.variableComment) return '';
+    try {
+      const variable = JSON.parse(source.variableComment) as Record<string, Object>;
+      return String(variable['url'] || '');
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  private withoutCategoryCache(sourceUrl: string): Record<string, ExploreCategory[]> {
+    const next: Record<string, ExploreCategory[]> = {};
+    for (const key of Object.keys(this.categoryCache)) {
+      if (key !== sourceUrl) next[key] = this.categoryCache[key];
+    }
+    return next;
+  }
+
+  async runSourceLoginAction(source: BookSource, action: SourceLoginAction): Promise<void> {
+    if (this.sourceActionBusy || !source.loginUrl) return;
+    this.sourceActionBusy = true;
+    try {
+      const result = await JsExpressionEvaluator.evaluate(
+        source.loginUrl + '\n' + action.action + '\nsource.getVariable();',
+        {
+          source: source,
+          jsLib: source.jsLib || '',
+          baseUrl: this.getBaseUrl_(source.sourceUrl),
+          variableBlob: source.variableComment || '',
+        }
+      );
+      if (!result || !result.trim() || result === 'null' || result === 'undefined') {
+        throw new Error('脚本没有返回书源变量');
+      }
+      await this.persistSourceVariable(source, result.trim());
+      this.categoryCache = this.withoutCategoryCache(source.sourceUrl);
+      this.loadingKinds = true;
+      this.resolvedCategories = await this.loadCategories(source, true);
+      const line = this.getCurrentSourceLine(source);
+      promptAction.showToast({ message: action.name + '完成' + (line ? '：' + line : '') });
+    } catch (e) {
+      console.error('[Explore] Source action failed: ' + (e as Error).message);
+      promptAction.showToast({ message: action.name + '失败：' + (e as Error).message });
+    } finally {
+      this.loadingKinds = false;
+      this.sourceActionBusy = false;
+    }
+  }
+
   toggleExpand(sourceUrl: string): void {
     if (this.expandedSourceUrl === sourceUrl) {
       this.expandedSourceUrl = '';
+      this.actionSourceUrl = '';
       this.resolvedCategories = [];
       this.resolvedFoundSource = null;
     } else {
       this.expandedSourceUrl = sourceUrl;
+      this.actionSourceUrl = '';
       this.loadingKinds = true;
       // 找到源并加载分类
       for (const src of this.exploreSources) {
@@ -428,6 +532,7 @@ export struct ExplorePage {
     UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/ExploreBookPage',
       params: {
+        sourceId: source.id,
         sourceName: source.sourceName,
         sourceUrl: source.sourceUrl,
         ruleExploreList: source.ruleExploreList || source.ruleSearchList || '',
@@ -449,6 +554,7 @@ export struct ExplorePage {
         script: source.script || '',
         loginUrl: source.loginUrl || '',
         coverDecodeJs: source.coverDecodeJs || '',
+        variableComment: source.variableComment || '',
       }
     });
   }
@@ -543,6 +649,25 @@ export struct ExplorePage {
 
                 // 展开：加载中 / 分类网格
                 if (this.expandedSourceUrl === source.sourceUrl) {
+                  if (this.getSourceLoginActions(source).length > 0) {
+                    Row() {
+                      Text(this.actionSourceUrl === source.sourceUrl ? '收起线路与发现设置' : '线路与发现设置')
+                        .fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+                      if (this.getCurrentSourceLine(source)) {
+                        Text(this.getCurrentSourceLine(source)).fontSize(11)
+                          .fontColor(ThemeColors.secondaryText(this.isDark))
+                          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .layoutWeight(1).textAlign(TextAlign.End).margin({ left: 8 })
+                      }
+                    }
+                    .width('100%').padding({ left: 16, right: 16, bottom: 10 })
+                    .onClick((): void => {
+                      this.actionSourceUrl = this.actionSourceUrl === source.sourceUrl ? '' : source.sourceUrl;
+                    })
+                    if (this.actionSourceUrl === source.sourceUrl) {
+                      this.buildSourceActions(source)
+                    }
+                  }
                   if (this.loadingKinds) {
                     Row() {
                       LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
@@ -592,5 +717,23 @@ export struct ExplorePage {
       })
       Row().height(8)
     }
+  }
+
+  @Builder
+  buildSourceActions(source: BookSource) {
+    Flex({ wrap: FlexWrap.Wrap }) {
+      ForEach(this.getSourceLoginActions(source), (item: SourceLoginAction) => {
+        Text(item.name)
+          .fontSize(12)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .textAlign(TextAlign.Center)
+          .width('31%').height(38).padding({ left: 4, right: 4 })
+          .margin({ left: '1%', right: '1%', bottom: 8 })
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .borderRadius(8)
+          .opacity(this.sourceActionBusy ? 0.5 : 1)
+          .onClick((): void => { void this.runSourceLoginAction(source, item); })
+      })
+    }.width('100%').padding({ left: 12, right: 12, bottom: 4 })
   }
 }

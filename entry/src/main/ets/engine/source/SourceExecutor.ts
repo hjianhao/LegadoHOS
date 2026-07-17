@@ -17,6 +17,8 @@ import { ContentCleaner } from '../../util/ContentCleaner';
 import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
 import { CryptoUtil } from '../../util/CryptoUtil';
 import { WebViewFetcher } from '../web/WebViewFetcher';
+import { AppDatabase } from '../../data/database/AppDatabase';
+import { BookSourceTable } from '../../data/database/BookSourceTable';
 
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
@@ -523,6 +525,14 @@ export class SourceExecutor {
       );
       if (vars && vars.trim() && vars !== '{}' && !vars.startsWith('SyntaxError')) {
         source.variableComment = vars;
+        try {
+          await AppDatabase.getInstance().waitForInit();
+          const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+          await dao.updateVariable(source.id, source.sourceUrl, vars);
+        } catch (persistError) {
+          console.warn('[SrcEx] Failed to persist source variables for', source.sourceName,
+            ':', (persistError as Error).message);
+        }
         console.info('[SrcEx] loginUrl initialized variables for', source.sourceName,
           'vars=' + vars.substring(0, 100));
       } else {
