@@ -285,6 +285,11 @@ export class EpubServer {
   private buildResponse_(request: string, response: EpubHttpResponse): ArrayBuffer {
     const req = this.parseRequest_(request);
     const isHead = req?.method === 'HEAD';
+    // 阅读器脚本随应用更新，禁止 ArkWeb 复用上一版本 bridge.js；书籍图片等资源仍允许短期缓存。
+    const requestPath = req?.path || '';
+    const isReaderAsset = requestPath === '/' || requestPath.startsWith('/reader') ||
+      requestPath.startsWith('/foliate');
+    const cacheControl = isReaderAsset ? 'no-store' : 'max-age=3600';
     const headers =
       `HTTP/1.1 ${response.status} ${this.statusText_(response.status)}\r\n` +
       `Content-Type: ${response.mime}\r\n` +
@@ -296,7 +301,7 @@ export class EpubServer {
       (response.extraHeaders && response.extraHeaders.length > 0 ? response.extraHeaders.join('\r\n') + '\r\n' : '') +
       `Content-Security-Policy: default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' blob: data:; font-src 'self' blob: data:; connect-src 'self'; object-src 'none'; frame-src blob:;\r\n` +
       `X-Content-Type-Options: nosniff\r\n` +
-      `Cache-Control: max-age=3600\r\n` +
+      `Cache-Control: ${cacheControl}\r\n` +
       `Connection: close\r\n\r\n`;
     const header = this.stringToBytes_(headers);
     if (isHead) {

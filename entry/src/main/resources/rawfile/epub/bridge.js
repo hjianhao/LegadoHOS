@@ -597,6 +597,32 @@
     lastHandledTapAt = Date.now();
   }
 
+  /**
+   * EPUB.js 的正文渲染在 iframe 中，滑动必须绑定到对应 contents.document。
+   * 统一物理方向：右滑上一页，左滑下一页；斜向或短距离移动交还给滚动/选择。
+   */
+  function finishSwipe(start, touch, doc, event) {
+    if (!start || !touch || hasSelection(doc)) return false;
+    var dx = touch.clientX - start.x;
+    var dy = touch.clientY - start.y;
+    var absX = Math.abs(dx);
+    var absY = Math.abs(dy);
+    var duration = Date.now() - start.time;
+    var viewport = frameViewportSize();
+    var minDistance = Math.max(40, Number(viewport.width || 0) * 0.08);
+    var isHorizontalSwipe = absX >= minDistance && absX > absY * 1.25 && duration <= 1200;
+    if (!isHorizontalSwipe) return false;
+
+    preventTapDefault(event);
+    lastHandledTapAt = Date.now();
+    if (dx > 0) {
+      window.prevPage();
+    } else {
+      window.nextPage();
+    }
+    return true;
+  }
+
   function bindTap(doc) {
     if (!doc || doc.__legadoTapBound) return;
     doc.__legadoTapBound = true;
@@ -637,13 +663,23 @@
     }, { capture: true, passive: true });
 
     doc.addEventListener('touchmove', function (event) {
-      if (!linkTouchStart) return;
-      var touch = event.touches && event.touches[0];
-      if (!touch || Math.abs(touch.clientX - linkTouchStart.x) > 18 ||
-          Math.abs(touch.clientY - linkTouchStart.y) > 18) {
-        linkTouchStart = null;
+      if (linkTouchStart) {
+        var linkTouch = event.touches && event.touches[0];
+        if (!linkTouch || Math.abs(linkTouch.clientX - linkTouchStart.x) > 18 ||
+            Math.abs(linkTouch.clientY - linkTouchStart.y) > 18) {
+          linkTouchStart = null;
+        }
+        return;
       }
-    }, { capture: true, passive: true });
+      if (!touchStart) return;
+      var touch = event.touches && event.touches[0];
+      if (!touch) return;
+      var absX = Math.abs(touch.clientX - touchStart.x);
+      var absY = Math.abs(touch.clientY - touchStart.y);
+      if (absX > 12 && absX > absY) {
+        preventTapDefault(event);
+      }
+    }, { capture: true, passive: false });
 
     doc.addEventListener('touchend', function (event) {
       if (linkTouchStart) {
@@ -664,10 +700,12 @@
         return;
       }
       var touch = event.changedTouches[0];
+      var start = touchStart;
       var dx = Math.abs(touch.clientX - touchStart.x);
       var dy = Math.abs(touch.clientY - touchStart.y);
       var duration = Date.now() - touchStart.time;
       touchStart = null;
+      if (finishSwipe(start, touch, doc, event)) return;
       if (dx > 18 || dy > 18 || duration > 550) return;
       finishTap(touch.clientX, touch.clientY, doc, event);
     }, { capture: true, passive: false });
