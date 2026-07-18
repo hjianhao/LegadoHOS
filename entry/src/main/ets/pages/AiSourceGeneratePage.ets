@@ -111,9 +111,9 @@ struct AiSourceGeneratePage {
 
   statusIcon(status: string): string {
     switch (status) {
-      case 'running': return '⏳';
-      case 'done': return '✅';
-      case 'error': return '❌';
+      case 'running': return '进行中';
+      case 'done': return '完成';
+      case 'error': return '失败';
       default: return '⬜';
     }
   }
@@ -122,34 +122,34 @@ struct AiSourceGeneratePage {
     Column() {
       // 顶栏
       Row() {
-        Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
-          .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('AI 生成书源').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('⚙️').fontSize(20)
-          .backgroundColor('transparent').width(36).height(36)
+        Button($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
+          .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
+        Text($r('app.string.ui_1ef00e7d2f')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button($r('app.string.ui_d7d7ce790b')).fontSize(13)
+          .backgroundColor(ThemeColors.transparent()).width(40).height(40)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
       }.padding({ left: 12, right: 12, top: 44 }).width('100%')
 
       if (!this.isAnalyzing && this.steps.length === 0) {
         // 输入区
         Column() {
-          Text('输入小说网站首页地址')
+          Text($r('app.string.ui_735c63bd30'))
             .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ bottom: 6 })
-          TextInput({ text: this.homepageUrl, placeholder: 'https://www.example.com' })
+          TextInput({ text: this.homepageUrl, placeholder: $r('app.string.ui_740e739790') })
             .fontSize(14).width('100%').type(InputType.URL)
             .onChange((v: string) => { this.homepageUrl = v; })
 
-          Text('搜索关键词（用于构造搜索测试）')
+          Text($r('app.string.ui_0f19d1f0d6'))
             .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
-          TextInput({ text: this.searchKeyword, placeholder: '输入书名关键词' })
+          TextInput({ text: this.searchKeyword, placeholder: $r('app.string.ui_1ffe87e82f') })
             .fontSize(14).width('100%')
             .onChange((v: string) => { this.searchKeyword = v; })
 
-          Button('开始分析').fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
+          Button($r('app.string.ui_4769da8dd6')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
             .width('100%').height(48).borderRadius(24).margin({ top: 28 })
             .onClick(() => { this.startAnalyze(); })
 
-          Text('AI 将自动分析网站结构，提取 CSS 选择器规则')
+          Text($r('app.string.ui_c46ddaba9a'))
             .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 12 })
         }
         .padding({ left: 16, right: 16 }).width('100%').layoutWeight(1)
@@ -168,7 +168,7 @@ struct AiSourceGeneratePage {
                     Text(r.summary).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1).margin({ left: 8 })
                     Button(this.expandedStep === r.step ? '▲' : '▼').fontSize(12)
-                      .backgroundColor('transparent').width(28).height(28)
+                      .backgroundColor(ThemeColors.transparent()).width(40).height(40)
                       .onClick(() => { this.expandedStep = this.expandedStep === r.step ? -1 : r.step; })
                   }.width('100%')
 
@@ -188,7 +188,7 @@ struct AiSourceGeneratePage {
           // 交互日志区
           if (this.logMessages.length > 0) {
             Column() {
-              Text('交互日志').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+              Text($r('app.string.ui_480e589572')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                 .padding({ top: 6, bottom: 4, left: 4 }).alignSelf(ItemAlign.Start)
               List() {
                 ForEach(this.logMessages, (msg: string) => {
@@ -206,12 +206,12 @@ struct AiSourceGeneratePage {
 
           if (!this.isAnalyzing && this.steps.length > 0) {
             if (this.steps.some(s => s.status === 'error')) {
-              Button('🔄 重新分析').fontSize(15).fontColor('#FFF').backgroundColor('#FF6600')
+              Button($r('app.string.ui_6e1dce9241')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.warning(this.isDark))
                 .width('100%').height(44).borderRadius(22)
                 .margin({ top: 12, left: 16, right: 16 })
                 .onClick(() => { this.startAnalyze(); })
             }
-            Button('保存并编辑').fontSize(15).fontColor('#FFF').backgroundColor('#28A745')
+            Button($r('app.string.ui_fcf0c4061c')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.success(this.isDark))
               .width('100%').height(44).borderRadius(22).margin({ top: 8, bottom: 12, left: 16, right: 16 })
               .onClick(() => { this.navigateToEdit(); })
           }

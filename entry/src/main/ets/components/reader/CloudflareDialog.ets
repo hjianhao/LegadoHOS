@@ -26,13 +26,13 @@ export struct CloudflareDialog {
         Text(this.pageTitle).fontSize(15).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         if (!this.hasError) {
-          Button('验证完成').fontSize(13).fontColor('#FFF')
-            .height(32).padding({ left: 12, right: 12 })
+          Button($r('app.string.ui_94eb3aea29')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
+            .height(40).padding({ left: 12, right: 12 })
             .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(16)
             .onClick(() => { this.extractAndClose(); })
         }
-        Button('关闭').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
-          .height(32).padding({ left: 8, right: 8 })
+        Button($r('app.string.common_close')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
+          .height(40).padding({ left: 8, right: 8 })
           .backgroundColor(Color.Transparent)
           .onClick(() => { this.doClose(); })
       }
@@ -43,10 +43,10 @@ export struct CloudflareDialog {
       Stack() {
         if (this.hasError) {
           Column() {
-            Text('😞').fontSize(48).margin({ top: 60 })
-            Text('页面无法访问').fontSize(16).fontWeight(FontWeight.Medium)
+            Text($r('app.string.ui_bf341e957f')).fontSize(48).margin({ top: 60 })
+            Text($r('app.string.ui_e1a2e746b7')).fontSize(16).fontWeight(FontWeight.Medium)
               .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
-            Text('服务器返回了错误，该页面可能已失效').fontSize(13)
+            Text($r('app.string.ui_82153b1e69')).fontSize(13)
               .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
             Text(this.url).fontSize(11)
               .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })

@@ -138,7 +138,7 @@ export struct ImportSourceDialog {
   private selectNew(): void { for (const i of this.items) i.checked = i.status === 'new'; this.items = [...this.items]; }
   private selectUpdate(): void { for (const i of this.items) i.checked = i.status === 'update'; this.items = [...this.items]; }
 
-  private statusColor(s: string): string { return s==='new'?'#4CAF50':s==='update'?'#FF9800':'#AAA'; }
+  private statusColor(s: string): string { return s==='new'?ThemeColors.success(this.isDark):s==='update'?ThemeColors.warning(this.isDark):ThemeColors.secondaryText(this.isDark); }
   private statusLabel(s: string): string { return s==='new'?'新增':s==='update'?'更新':'已有'; }
 
   build() {
@@ -151,9 +151,9 @@ export struct ImportSourceDialog {
         ).fontSize(18).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         Row() {
           if (this.importMode !== 'menu' && this.items.length === 0) {
-            Button('← 返回').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).backgroundColor('transparent').margin({right:8}).onClick(()=>{this.resetMode()})
+            Button($r('app.string.ui_4968e7f610')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(ThemeColors.transparent()).margin({right:8}).onClick(()=>{this.resetMode()})
           }
-          Button('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor('transparent').width(36).height(36).onClick(()=>{this.controller.close()})
+          Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(ThemeColors.transparent()).width(40).height(40).accessibilityText($r('app.string.common_close')).onClick(()=>{this.controller.close()})
         }
       }.padding({left:16,right:8,top:16,bottom:8}).width('100%')
 
@@ -163,59 +163,59 @@ export struct ImportSourceDialog {
       } else if (this.items.length > 0) {
         // 快捷操作
         Row() {
-          Text('全选').fontSize(12).fontColor(ThemeColors.primary(this.isDark)).onClick(()=>{this.selectAll(true)}).margin({right:12})
-          Text('全不选').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).onClick(()=>{this.selectAll(false)}).margin({right:12})
-          Text('选新增').fontSize(12).fontColor('#4CAF50').onClick(()=>{this.selectNew()}).margin({right:12})
-          Text('选更新').fontSize(12).fontColor('#FF9800').onClick(()=>{this.selectUpdate()})
+          Text($r('app.string.common_select_all')).fontSize(12).fontColor(ThemeColors.primary(this.isDark)).onClick(()=>{this.selectAll(true)}).margin({right:12})
+          Text($r('app.string.common_select_none')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).onClick(()=>{this.selectAll(false)}).margin({right:12})
+          Text($r('app.string.ui_812421bd66')).fontSize(12).fontColor(ThemeColors.success(this.isDark)).onClick(()=>{this.selectNew()}).margin({right:12})
+          Text($r('app.string.ui_2aa8da7c5f')).fontSize(12).fontColor(ThemeColors.warning(this.isDark)).onClick(()=>{this.selectUpdate()})
         }.padding({left:16,right:16,top:4,bottom:4}).width('100%')
 
         // 预览列表
-        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor(ThemeColors.primary(this.isDark)).margin({right:8}).onChange((v:boolean)=>{item.checked=v;this.items=[...this.items]});Text(item.name).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.statusLabel(item.status)).fontSize(10).fontColor('#FFF').backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:ThemeColors.outlineVariant(this.isDark)})})}.layoutWeight(1).width('100%')
+        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor(ThemeColors.primary(this.isDark)).margin({right:8}).onChange((v:boolean)=>{item.checked=v;this.items=[...this.items]});Text(item.name).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.statusLabel(item.status)).fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:ThemeColors.outlineVariant(this.isDark)})})}.layoutWeight(1).width('100%')
 
         // 选项
         Column() {
-          Row(){Text('选项').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).fontWeight(FontWeight.Medium).margin({bottom:4})}.width('100%')
-          Row(){Text('保留原名').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepName}).onChange((v)=>{this.keepName=v})}.width('100%').margin({bottom:4})
-          Row(){Text('保留分组').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepGroup}).onChange((v)=>{this.keepGroup=v})}.width('100%').margin({bottom:4})
-          Row(){Text('保留启用').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepEnabled}).onChange((v)=>{this.keepEnabled=v})}.width('100%').margin({bottom:8})
-          TextInput({placeholder:'自定义分组名',text:this.customGroup}).height(36).backgroundColor(this.isDark?'#333':'#F0F0F0').borderRadius(8).padding({left:12}).fontSize(13).width('100%').margin({bottom:4}).onChange((v:string)=>{this.customGroup=v})
+          Row(){Text($r('app.string.ui_221ee0cc94')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).fontWeight(FontWeight.Medium).margin({bottom:4})}.width('100%')
+          Row(){Text($r('app.string.ui_8aa8476aa8')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepName}).onChange((v)=>{this.keepName=v})}.width('100%').margin({bottom:4})
+          Row(){Text($r('app.string.ui_d2570e2bf1')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepGroup}).onChange((v)=>{this.keepGroup=v})}.width('100%').margin({bottom:4})
+          Row(){Text($r('app.string.ui_75598fec28')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepEnabled}).onChange((v)=>{this.keepEnabled=v})}.width('100%').margin({bottom:8})
+          TextInput({placeholder: $r('app.string.ui_bd736410f9'),text:this.customGroup}).height(40).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark)).borderRadius(8).padding({left:12}).fontSize(13).width('100%').margin({bottom:4}).onChange((v:string)=>{this.customGroup=v})
         }.padding({left:16,right:16,top:8}).width('100%')
 
         // 导入按钮
         Row() {
           Text('已选 ' + this.items.filter(i=>i.checked).length + '/' + this.items.length).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
-          Button('导入选中').fontSize(14).height(40).padding({left:24,right:24}).backgroundColor(ThemeColors.primary(this.isDark)).fontColor('#FFF').borderRadius(20).onClick(()=>{this.doImport()})
+          Button($r('app.string.ui_17a2c45c82')).fontSize(14).height(40).padding({left:24,right:24}).backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(20).onClick(()=>{this.doImport()})
         }.padding({left:16,right:16,top:8,bottom:16}).width('100%')
       } else if (this.importMode === 'url') {
         // URL 输入模式
         Column() {
-          Text('请输入书源 JSON 文件的下载链接').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
-          TextInput({placeholder:'https://example.com/sources.json',text:this.importUrl})
-            .height(44).backgroundColor(this.isDark?'#333':'#F5F5F5').borderRadius(8).padding({left:12}).fontSize(14).width('100%')
+          Text($r('app.string.ui_873b2f22c0')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
+          TextInput({placeholder: $r('app.string.ui_a47dc3912c'),text:this.importUrl})
+            .height(44).backgroundColor(this.isDark?ThemeColors.onSurface(this.isDark):ThemeColors.surfaceVariant(this.isDark)).borderRadius(8).padding({left:12}).fontSize(14).width('100%')
             .margin({bottom:8}).onChange((v:string)=>{this.importUrl=v})
           Row() {
-            Button('取消').fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
-            Button('下载并导入').fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.primary(this.isDark)).fontColor('#FFF').borderRadius(8).margin({left:6}).onClick(()=>{this.doUrlImport(this.importUrl)})
+            Button($r('app.string.common_cancel')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
+            Button($r('app.string.ui_5fc350fb8d')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).margin({left:6}).onClick(()=>{this.doUrlImport(this.importUrl)})
           }.width('100%')
         }.padding(16).width('100%')
       } else if (this.importMode === 'json') {
         // JSON 粘贴模式
         Column() {
-          Text('请粘贴书源的 JSON 内容').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
-          TextArea({placeholder:'[{"bookSourceName":"...","bookSourceUrl":"...", ...}]',text:this.jsonText})
-            .height(160).backgroundColor(this.isDark?'#333':'#F5F5F5').borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
+          Text($r('app.string.ui_c5faeb98cd')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
+          TextArea({placeholder: $r('app.string.ui_9e6ca0bcd0'),text:this.jsonText})
+            .height(160).backgroundColor(this.isDark?ThemeColors.onSurface(this.isDark):ThemeColors.surfaceVariant(this.isDark)).borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
             .margin({bottom:8}).onChange((v:string)=>{this.jsonText=v})
           Row() {
-            Button('取消').fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
-            Button('解析并导入').fontSize(14).height(40).layoutWeight(1).backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8).margin({left:6}).onClick(()=>{this.doJsonImport(this.jsonText)})
+            Button($r('app.string.common_cancel')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
+            Button($r('app.string.ui_1503a5a605')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.warning(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).margin({left:6}).onClick(()=>{this.doJsonImport(this.jsonText)})
           }.width('100%')
         }.padding(16).width('100%')
       } else {
         // 初始状态：选择导入方式
         Column() {
-          Button('📁 选择本地文件').fontSize(15).height(44).width('100%').backgroundColor('#4CAF50').fontColor('#FFF').borderRadius(8).margin({bottom:10}).onClick(()=>{this.doFileImport()})
-          Button('📋 粘贴 JSON 内容').fontSize(15).height(44).width('100%').backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8).margin({bottom:10}).onClick(()=>{this.importMode = 'json'})
-          Button('🌐 从URL导入').fontSize(15).height(44).width('100%').backgroundColor(ThemeColors.primary(this.isDark)).fontColor('#FFF').borderRadius(8).onClick(()=>{this.importMode = 'url'})
+          Button($r('app.string.ui_95462abb0d')).fontSize(15).height(44).width('100%').backgroundColor(ThemeColors.success(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).margin({bottom:10}).onClick(()=>{this.doFileImport()})
+          Button($r('app.string.ui_5e71071b34')).fontSize(15).height(44).width('100%').backgroundColor(ThemeColors.warning(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).margin({bottom:10}).onClick(()=>{this.importMode = 'json'})
+          Button($r('app.string.ui_a27b2f6612')).fontSize(15).height(44).width('100%').backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).onClick(()=>{this.importMode = 'url'})
         }.padding(16).width('100%')
       }
     }.width('100%').backgroundColor(ThemeColors.background(this.isDark)).borderRadius({topLeft:16,topRight:16})

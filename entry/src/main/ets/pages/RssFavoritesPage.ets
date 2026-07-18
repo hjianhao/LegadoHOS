@@ -170,22 +170,22 @@ export struct RssFavoritesPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
-          .onClick(() => UiUtil.back(this.getUIContext()))
-        Text('收藏文章').fontSize(18).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_8179643cdc')).fontSize(22).fontColor(ThemeColors.primary(this.isDark))
+          .accessibilityText($r('app.string.common_back')).onClick(() => UiUtil.back(this.getUIContext()))
+        Text($r('app.string.ui_9868ed9c8a')).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
           Text(this.currentGroup || '全部分组').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => this.groupActionDialog())
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })
 
       // ===== 搜索栏 =====
-      Search({ placeholder: '搜索收藏...', value: this.searchKey })
+      Search({ placeholder: $r('app.string.ui_b0e5fe94d9'), value: this.searchKey })
         .onSubmit((val) => this.search(val))
         .onChange((val) => { if (!val) this.search(''); })
         .width('100%').padding({ left: 12, right: 12, bottom: 8 })
@@ -196,8 +196,8 @@ export struct RssFavoritesPage {
           Text(`已选 ${this.selectedIds.size} 项`).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           Blank()
           Button({ type: ButtonType.Normal }) {
-            Text('删除').fontSize(13).fontColor(ThemeColors.error(this.isDark))
-          }.backgroundColor('transparent')
+            Text($r('app.string.common_delete')).fontSize(13).fontColor(ThemeColors.error(this.isDark))
+          }.backgroundColor(ThemeColors.transparent())
           .onClick(() => this.deleteSelected())
         }
         .width('100%').padding({ left: 12, right: 12, bottom: 4 })
@@ -208,7 +208,7 @@ export struct RssFavoritesPage {
         LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.items.length === 0) {
         Column() {
-          Text('暂无收藏').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_8a99d5db9e')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       } else {
@@ -242,9 +242,9 @@ export struct RssFavoritesPage {
                 .margin({ left: 8 })
 
                 Button({ type: ButtonType.Normal }) {
-                  Text('阅读').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+                  Text($r('app.string.ui_aac0ef6c1c')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
                 }
-                .backgroundColor('transparent')
+                .backgroundColor(ThemeColors.transparent())
                 .onClick(() => this.openRead(star))
               }
               .padding(12)
@@ -269,14 +269,14 @@ export struct RssFavoritesPage {
       Row() {
         if (this.selectedIds.size > 0) {
           Button({ type: ButtonType.Normal }) {
-            Text('取消选择').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            Text($r('app.string.ui_f02e943954')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
-          .backgroundColor('transparent').onClick(() => this.clearSelection())
+          .backgroundColor(ThemeColors.transparent()).onClick(() => this.clearSelection())
           Blank()
           Button({ type: ButtonType.Normal }) {
-            Text('全选').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            Text($r('app.string.common_select_all')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
-          .backgroundColor('transparent').onClick(() => this.selectAll())
+          .backgroundColor(ThemeColors.transparent()).onClick(() => this.selectAll())
         }
       }
       .padding({ left: 16, right: 16, bottom: 12 })

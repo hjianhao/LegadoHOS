@@ -45,38 +45,38 @@ struct FontManagerPage {
     Column() {
       // 顶部导航栏
       Row() {
-        Text('字体管理').fontSize(18).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_4831ec355a')).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
 
         if (this.isSelectMode) {
           // 批量模式下显示全选和删除
-          Button('全选').fontSize(13)
+          Button($r('app.string.common_select_all')).fontSize(13)
             .fontColor(ThemeColors.primary(this.isDark))
-            .backgroundColor('transparent')
+            .backgroundColor(ThemeColors.transparent())
             .onClick(() => {
               const allSelected = this.fontList.length === this.selectedIds.size;
               this.selectedIds = allSelected ? new Set() : new Set(this.fontList.map(f => f.id));
             })
-          Button('删除').fontSize(13)
+          Button($r('app.string.common_delete')).fontSize(13)
             .fontColor(this.selectedIds.size > 0 ? ThemeColors.error(this.isDark) : ThemeColors.secondaryText(this.isDark))
-            .backgroundColor('transparent')
+            .backgroundColor(ThemeColors.transparent())
             .margin({ left: 12 })
             .onClick(() => {
               if (this.selectedIds.size === 0) return;
               this.confirmBatchDelete();
             })
-          Button('取消').fontSize(13)
+          Button($r('app.string.common_cancel')).fontSize(13)
             .fontColor(ThemeColors.secondaryText(this.isDark))
-            .backgroundColor('transparent')
+            .backgroundColor(ThemeColors.transparent())
             .margin({ left: 12 })
             .onClick(() => {
               this.isSelectMode = false;
               this.selectedIds = new Set();
             })
         } else {
-          Button('导入').fontSize(13)
+          Button($r('app.string.common_import')).fontSize(13)
             .fontColor(ThemeColors.primary(this.isDark))
-            .backgroundColor('transparent')
+            .backgroundColor(ThemeColors.transparent())
             .onClick(() => { this.importFont(); })
         }
       }
@@ -86,9 +86,9 @@ struct FontManagerPage {
       // 字体列表
       if (this.fontList.length === 0) {
         Column() {
-          Text('🔤').fontSize(48).margin({ bottom: 12 })
-          Text('暂无自定义字体').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('点击右上角"导入"添加字体').fontSize(12)
+          Text($r('app.string.ui_4c106ddba7')).fontSize(48).margin({ bottom: 12 })
+          Text($r('app.string.ui_524f9b3e07')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_ce206202aa')).fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
@@ -115,11 +115,11 @@ struct FontManagerPage {
       if (this.isSelectMode) {
         Row() {
           if (this.selectedIds.has(font.id)) {
-            Text('✓').fontSize(16).fontColor('#FFF')
+            Text($r('app.string.ui_698a879938')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark))
           }
         }
         .width(24).height(24).borderRadius(12)
-        .backgroundColor(this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : 'transparent')
+        .backgroundColor(this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.transparent())
         .border({ width: 1.5, color: this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
         .margin({ right: 12 })
         .onClick(() => { this.toggleSelect(font.id); })
@@ -132,7 +132,7 @@ struct FontManagerPage {
           .fontColor(ThemeColors.onBackground(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        Text('日出江花红似火')
+        Text($r('app.string.ui_4ab1cac229'))
           .fontSize(18)
           .fontFamily(font.familyName)
           .fontColor(ThemeColors.secondaryText(this.isDark))
@@ -143,14 +143,14 @@ struct FontManagerPage {
 
       // 非选择模式下显示操作按钮
       if (!this.isSelectMode) {
-        Button('重命名').fontSize(12)
+        Button($r('app.string.ui_1cd80fd7a8')).fontSize(12)
           .fontColor(ThemeColors.primary(this.isDark))
-          .backgroundColor('transparent')
+          .backgroundColor(ThemeColors.transparent())
           .margin({ left: 4 })
           .onClick(() => { this.openRenameDialog(font); })
-        Button('删除').fontSize(12)
+        Button($r('app.string.common_delete')).fontSize(12)
           .fontColor(ThemeColors.error(this.isDark))
-          .backgroundColor('transparent')
+          .backgroundColor(ThemeColors.transparent())
           .margin({ left: 4 })
           .onClick(() => { this.confirmDelete(font); })
       }
@@ -300,22 +300,22 @@ struct RenameFontDialog {
 
   build() {
     Column() {
-      Text('重命名字体').fontSize(18).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_ba525dae9b')).fontSize(18).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 20, bottom: 16 })
 
-      TextInput({ placeholder: '输入新名称', text: this.newName })
+      TextInput({ placeholder: $r('app.string.ui_7c6286bb83'), text: this.newName })
         .width('100%').height(44).margin({ bottom: 16 })
         .backgroundColor(ThemeColors.surface(this.isDark))
         .borderRadius(8).fontSize(15)
         .onChange((v: string) => { this.newName = v; })
 
       Row() {
-        Button('取消').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
+        Button($r('app.string.common_cancel')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
           .height(40).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
           .onClick(() => { this.controller.close(); })
 
-        Button('确定').fontSize(14).fontColor('#FFF')
+        Button($r('app.string.common_confirm')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .height(40).layoutWeight(1).margin({ left: 12 })
           .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
           .onClick(() => {

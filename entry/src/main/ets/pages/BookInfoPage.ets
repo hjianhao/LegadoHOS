@@ -236,8 +236,8 @@ struct BookInfoPage {
       title: '确认删除',
       message: '从书架中移除 "' + this.bookName + '"？',
       buttons: [
-        { text: '取消', color: '#888' },
-        { text: '删除', color: '#FF5722' }
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '删除', color: ThemeColors.error(this.isDark) }
       ]
     }).then((res: Object) => {
       if ((res as Record<string, Object>)['index'] === 1) this.doDelete();
@@ -276,8 +276,8 @@ struct BookInfoPage {
       title: '清除缓存',
       message: '清除《' + this.bookName + '》已缓存的章节内容？目录和阅读进度会保留。',
       buttons: [
-        { text: '取消', color: '#888' },
-        { text: '清除', color: '#FF9800' }
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '清除', color: ThemeColors.warning(this.isDark) }
       ]
     }).then((res: Object) => {
       if ((res as Record<string, Object>)['index'] === 1) this.doClearCache();
@@ -1138,8 +1138,8 @@ struct BookInfoPage {
         .linearGradient({
           direction: GradientDirection.Bottom,
           colors: [
-            [this.isDark ? '#263238AA' : '#DDE6E8AA', 0.0],
-            [this.isDark ? '#121212E6' : '#FFFFFFD9', 0.56],
+            [ThemeColors.heroGradientStart(this.isDark), 0.0],
+            [ThemeColors.heroGradientEnd(this.isDark), 0.56],
             [this.surfaceColor(), 0.74],
             [this.surfaceColor(), 1.0],
           ]
@@ -1148,18 +1148,18 @@ struct BookInfoPage {
       Column() {
         // 透明顶栏：返回 + 分享 + 更多，滚动顶部保持轻量
         Row() {
-          Button() { Text('‹').fontSize(30).fontColor(this.primaryTextColor()) }
+          Button() { Text($r('app.string.ui_0dccf90917')).fontSize(30).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
             .onClick((): void => { UiUtil.back(this.getUIContext()); })
           Blank()
-          Button() { Text('↗').fontSize(20).fontColor(this.primaryTextColor()) }
+          Button() { Text($r('app.string.ui_6564582d82')).fontSize(20).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
             .onClick(() => {
               UiUtil.showToast(this.getUIContext(), { message: '分享功能待完善', duration: 1200 });
             })
-          Button() { Text('⋮').fontSize(24).fontColor(this.primaryTextColor()) }
+          Button() { Text($r('app.string.ui_b7ed67990b')).fontSize(24).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
-            .onClick(() => { this.showMoreMenu = !this.showMoreMenu; })
+            .accessibilityText($r('app.string.ui_77836d3a99')).onClick(() => { this.showMoreMenu = !this.showMoreMenu; })
         }
         .width('100%')
         .height(88)
@@ -1180,7 +1180,7 @@ struct BookInfoPage {
                   coverDecodeJs: this.coverDecodeJs
                 })
                   .borderRadius(8)
-                  .shadow({ radius: 16, color: '#00000030', offsetX: 0, offsetY: 8 })
+                  .shadow({ radius: 16, color: ThemeColors.shadow(this.isDark), offsetX: 0, offsetY: 8 })
                   .onClick(() => { this.showCoverSheet(); })
                   .margin({ right: 16 })
 
@@ -1195,7 +1195,7 @@ struct BookInfoPage {
                     .onClick(() => { this.titleExpanded = !this.titleExpanded; })
 
                   Row() {
-                    Text('作').fontSize(11).fontColor(this.secondaryTextColor())
+                    Text($r('app.string.ui_e8555020c4')).fontSize(11).fontColor(this.secondaryTextColor())
                       .width(18).height(18).textAlign(TextAlign.Center)
                     Text(this.bookAuthor || '未知作者')
                       .fontSize(16)
@@ -1209,7 +1209,7 @@ struct BookInfoPage {
                   .margin({ top: 8 })
 
                   Row() {
-                    Text('网').fontSize(11).fontColor(this.primaryColor())
+                    Text($r('app.string.ui_4ad9435ac1')).fontSize(11).fontColor(this.primaryColor())
                       .width(18).height(18).textAlign(TextAlign.Center)
                     Text(this.origin || '未知书源')
                       .fontSize(13)
@@ -1250,7 +1250,7 @@ struct BookInfoPage {
             .linearGradient({
               direction: GradientDirection.Bottom,
               colors: [
-                ['#00000000', 0.0],
+                [ThemeColors.transparent(), 0.0],
                 [this.surfaceTranslucentColor(), 0.74],
                 [this.surfaceColor(), 1.0],
               ]
@@ -1276,8 +1276,8 @@ struct BookInfoPage {
       Stack({ alignContent: Alignment.BottomEnd }) {
         Button() {
           Row() {
-            Text('书').fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.fabTextColor())
-            Text('阅读').fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.fabTextColor())
+            Text($r('app.string.ui_fe04274cef')).fontSize(15).fontWeight(FontWeight.Bold).fontColor(this.fabTextColor())
+            Text($r('app.string.ui_aac0ef6c1c')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.fabTextColor())
               .margin({ left: 8 })
           }
         }
@@ -1285,7 +1285,7 @@ struct BookInfoPage {
         .padding({ left: 18, right: 22 })
         .borderRadius(27)
         .backgroundColor(this.fabColor())
-        .shadow({ radius: 18, color: '#00000030', offsetX: 0, offsetY: 8 })
+        .shadow({ radius: 18, color: ThemeColors.shadow(this.isDark), offsetX: 0, offsetY: 8 })
         .margin({ right: 16, bottom: 16 })
         .onClick((): void => { this.startRead(); })
       }
@@ -1415,7 +1415,7 @@ struct BookInfoPage {
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryColor())
-        Text('|')
+        Text($r('app.string.ui_3eb416223e'))
           .fontSize(13)
           .fontColor(this.tertiaryTextColor())
           .margin({ left: 8, right: 8 })
@@ -1433,7 +1433,7 @@ struct BookInfoPage {
       .margin({ top: 8 })
 
       if (this.chapterCount === 0 && !this.isRefreshing) {
-        Text('目录加载失败或书源暂无目录')
+        Text($r('app.string.ui_31bfcf117e'))
           .fontSize(12)
           .fontColor(ThemeColors.error(this.isDark))
           .width('100%')
@@ -1508,7 +1508,7 @@ struct BookInfoPage {
     .padding({ top: 8, bottom: 8 })
     .borderRadius(16)
     .backgroundColor(ThemeColors.surface(this.isDark))
-    .shadow({ radius: 20, color: '#00000026', offsetX: 0, offsetY: 8 })
+    .shadow({ radius: 20, color: ThemeColors.shadow(this.isDark), offsetX: 0, offsetY: 8 })
     .position({ x: 'calc(100% - 166vp)', y: 82 })
     .zIndex(30)
   }
@@ -1561,7 +1561,7 @@ struct BookInfoPage {
   }
 
   private getCoverColor(): string {
-    const cs = ['#455A64','#5C6BC0','#26A69A','#EC407A','#AB47BC','#42A5F5','#66BB6A','#FF7043'];
+    const cs = ThemeColors.coverPlaceholderPalette();
     return this.bookName ? cs[this.bookName.charCodeAt(0) % cs.length] : cs[0];
   }
 
@@ -1570,7 +1570,7 @@ struct BookInfoPage {
   }
 
   private surfaceTranslucentColor(): string {
-    return this.isDark ? '#121212CC' : '#FFFFFFD9';
+    return ThemeColors.surfaceTranslucent(this.isDark);
   }
 
   private containerColor(): string {

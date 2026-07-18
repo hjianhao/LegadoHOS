@@ -40,6 +40,7 @@ import { BookshelfExportDialog } from './BookshelfExportDialog';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 
 @Component
 export struct BookshelfPage {
@@ -86,6 +87,7 @@ export struct BookshelfPage {
   private sortLabels: string[] = ['最后阅读', '书名', '更新时间', '手动排序'];
   private firstLoadRetryCount: number = 0;
   private isLoadingShelf: boolean = false;
+  private bookDataSource_: ArrayDataSource<Book> = new ArrayDataSource<Book>();
 
   aboutToAppear(): void {
     GlobalConfig.getInstance().syncToAppStorage();
@@ -368,6 +370,7 @@ export struct BookshelfPage {
       return this.sortOrder === 1 ? -cmp : cmp;
     });
     this.filteredBooks = result;
+    this.bookDataSource_.reset(result);
   }
 
   onTabChange(index: number): void {
@@ -653,8 +656,8 @@ export struct BookshelfPage {
       title: '清除缓存',
       message: `清除《${book.name}》已缓存的章节内容？目录和阅读进度会保留。`,
       buttons: [
-        { text: '取消', color: '#888' },
-        { text: '清除', color: '#FF9800' }
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '清除', color: ThemeColors.warning(this.isDark) }
       ]
     }).then((result) => {
       if (result.index === 1) this.clearBookCache(book);
@@ -678,9 +681,9 @@ export struct BookshelfPage {
       message: '作者: ' + (book.author || '未知'),
       buttons: [
         { text: '详情', color: ThemeColors.primary(this.isDark) },
-        { text: '清除缓存', color: '#FF9800' },
-        { text: '删除', color: '#FF5722' },
-        { text: '取消', color: '#888' }
+        { text: '清除缓存', color: ThemeColors.warning(this.isDark) },
+        { text: '删除', color: ThemeColors.error(this.isDark) },
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) }
       ]
     }).then((res: Object) => {
       const idx = (res as Record<string, Object>)['index'] as number;
@@ -703,7 +706,7 @@ export struct BookshelfPage {
       title: '删除书籍',
       message: `确定删除《${book.name}》及其全部数据吗？\n（章节内容、本地文件将一并清除）`,
       buttons: [
-        { text: '取消', color: '#888' },
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
         { text: '移除', color: ThemeColors.error(this.isDark) }
       ]
     }).then((result) => {
@@ -731,32 +734,32 @@ export struct BookshelfPage {
     Column().width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark)) {
       // 顶部栏
       Row() {
-        Text('\uD83D\uDCDA 书架').fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.ui_f7d77d7da3')).fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
         if (this.filteredBooks.length > 0) {
           Text(this.filteredBooks.length + '本').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
         }
-        Button('\uD83D\uDD0D 搜书').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
-          .height(32).padding({ left: 10, right: 10 })
+        Button($r('app.string.ui_32ffb8c287')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
+          .height(40).padding({ left: 10, right: 10 })
         .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(16).margin({ right: 6 })
         .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/SearchPage' }); })
         Button() {
           Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor(ThemeColors.onBackground(this.isDark))
-        }.width(36).height(36).backgroundColor('transparent')
+        }.width(40).height(40).backgroundColor(ThemeColors.transparent())
         .onClick(() => { this.onLayoutToggle(); })
         Button() {
           Text(this.sortLabels[this.sortMode]).fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
-        }.height(28).padding({ left: 8, right: 8 })
+        }.height(40).padding({ left: 8, right: 8 })
         .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(14).margin({ left: 4 })
         .onClick(() => { this.onSortToggle(); })
-        Button() { Text('⋮').fontSize(22).fontColor(ThemeColors.onBackground(this.isDark)) }.width(36).height(36).backgroundColor('transparent').onClick(() => { this.showMenu = !this.showMenu; })
+        Button() { Text($r('app.string.ui_b7ed67990b')).fontSize(22).fontColor(ThemeColors.onBackground(this.isDark)) }.width(40).height(40).backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.ui_77836d3a99')).onClick(() => { this.showMenu = !this.showMenu; })
       }.padding({ left: 16, right: 12, top: 12 }).width('100%')
 
       // 搜索栏
-      TextInput({ placeholder: '搜索书名或作者...', text: this.searchText })
+      TextInput({ placeholder: $r('app.string.ui_f9faaeaa8e'), text: this.searchText })
         .width('calc(100% - 32)').height(36).margin({ left: 16, right: 16, top: 8 })
         .padding({ left: 12 }).backgroundColor(ThemeColors.surface(this.isDark))
-        .borderRadius(18).fontSize(14).placeholderColor('#999')
+        .borderRadius(18).fontSize(14).placeholderColor(ThemeColors.secondaryText(this.isDark))
         .onChange((value: string) => { this.onSearchChange(value); })
 
       // 分类标签 (groupStyle: 0=show, 1=hide)
@@ -788,14 +791,14 @@ export struct BookshelfPage {
         Row() {
           Text('已选 ' + this.selectedBookIds.length + ' / ' + this.filteredBooks.length)
             .fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
-          Button('全选').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
-            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+          Button($r('app.string.common_select_all')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            .height(40).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.selectAllVisible(); })
-          Button('导出').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
-            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+          Button($r('app.string.common_export')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            .height(40).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.openExportDialog(this.currentTargetBooks()); })
-          Button('移除').fontSize(13).fontColor(ThemeColors.error(this.isDark))
-            .height(30).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
+          Button($r('app.string.ui_2f752c005e')).fontSize(13).fontColor(ThemeColors.error(this.isDark))
+            .height(40).backgroundColor(Color.Transparent).padding({ left: 8, right: 8 })
             .onClick(() => { this.removeSelectedFromShelf(); })
         }.width('100%').height(40).padding({ left: 16, right: 12 })
         .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
@@ -811,37 +814,37 @@ export struct BookshelfPage {
           if (this.filteredBooks.length === 0) {
             Scroll() {
               Column() {
-                Text('\uD83D\uDCDA').fontSize(64).margin({ top: 100 }).fontColor(ThemeColors.onBackground(this.isDark))
+                Text($r('app.string.ui_a2cd7e5079')).fontSize(18).margin({ top: 100 }).fontColor(ThemeColors.secondaryText(this.isDark))
                 if (this.searchText) {
-                  Text('没有匹配的书籍').fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
-                  Text('试试其他关键词').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
+                  Text($r('app.string.ui_9065e08914')).fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
+                  Text($r('app.string.ui_228b298850')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
                 } else if (this.activeTabIndex > 0) {
-                  Text('当前分组没有书籍').fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
-                  Text('去搜索添加书籍吧').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
+                  Text($r('app.string.ui_a14ef60f5d')).fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
+                  Text($r('app.string.ui_81e9ebaa90')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
                 } else {
-                  Text('书架是空的').fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
-                  Text('去搜索添加书籍吧').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
+                  Text($r('app.string.ui_6543d688f9')).fontSize(16).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
+                  Text($r('app.string.ui_81e9ebaa90')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
                 }
               }.width('100%').height('100%').alignItems(HorizontalAlign.Center)
             }.width('100%').height('100%')
           } else if (this.layoutMode === 0) {
             List() {
-              ForEach(this.filteredBooks, (book: Book) => {
+              LazyForEach(this.bookDataSource_, (book: Book) => {
                 ListItem() {
                   this.buildListItem(book)
                 }.border({ width: { bottom: this.showDivider ? 1 : 0 }, color: ThemeColors.outlineVariant(this.isDark) })
                 .onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
                 .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
-              })
+              }, (book: Book): string => String(book.id))
             }.width('100%').margin({ top: 4 })
           } else {
             Grid() {
-              ForEach(this.filteredBooks, (book: Book) => {
+              LazyForEach(this.bookDataSource_, (book: Book) => {
                 GridItem() {
                   this.buildGridItem(book)
                 }.onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
                 .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
-              })
+              }, (book: Book): string => String(book.id))
             }.columnsTemplate(new Array(Math.max(1, this.gridColumns)).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
             .padding({ left: 16, right: 16, top: 8 })
           }
@@ -858,7 +861,7 @@ export struct BookshelfPage {
         this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
         this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
         this.mi('添加URL', () => { this.showMenu = false; this.addUrlDlg?.open(); })
-        this.mi('🤖 AI 智能导入', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiImportBookPage' }); })
+        this.mi('AI 智能导入', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiImportBookPage' }); })
         this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
         this.mi('书架管理', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookshelfManagePage' }); })
         this.mi('缓存/导出', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookCachePage' }); })
@@ -867,7 +870,7 @@ export struct BookshelfPage {
         this.mi('日志', () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), { message: '日志面板待接入', duration: 1500 }); })
       }
       .position({ top: 8, right: 8 }).backgroundColor(ThemeColors.surface(this.isDark))
-      .borderRadius(12).shadow({ radius: 8, color: '#20000000' }).width(180)
+      .borderRadius(12).shadow({ radius: 8, color: ThemeColors.shadow(this.isDark) }).width(180)
     }
     // 导入进度遮罩
     if (this.isImporting) {
@@ -902,19 +905,19 @@ export struct BookshelfPage {
         Text(this.isSelected(book.id) ? '✓' : '')
           .fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
           .width(24).height(24).textAlign(TextAlign.Center)
-          .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : '#33000000')
+          .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : ThemeColors.strongScrim(this.isDark))
           .borderRadius(12).margin({ right: 8 })
       }
       BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: this.coverWidth, coverHeight: Math.round(this.coverWidth * 1.375) })
         .margin({ right: 12 })
-        .shadow({ radius: this.coverShadow ? 6 : 0, color: '#22000000', offsetY: 2 })
+        .shadow({ radius: this.coverShadow ? 6 : 0, color: ThemeColors.shadow(this.isDark), offsetY: 2 })
       Column() {
         Row() {
           Text(book.name).fontSize(15).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
             .maxLines(this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           if (this.showUnread && this.getNewChaptersCount(book) > 0) {
             Text('+' + this.getNewChaptersCount(book))
-              .fontSize(10).fontColor('#FFF').fontWeight(FontWeight.Bold)
+              .fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
               .padding({ left: 4, right: 4, top: 1, bottom: 1 })
               .backgroundColor(ThemeColors.error(this.isDark)).borderRadius(8).margin({ left: 4 })
           }
@@ -954,9 +957,9 @@ export struct BookshelfPage {
         }.width('100%').margin({ top: 2 })
       }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(72).justifyContent(FlexAlign.Center)
       if (!this.isSelectMode) {
-        Button() { Text('✕').fontSize(14).fontColor(ThemeColors.error(this.isDark)) }
-          .width(36).height(36).backgroundColor('transparent')
-          .onClick(() => { this.confirmRemove(book); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.error(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.confirmRemove(book); })
       }
     }.padding({ left: 12, right: 4 }).width('100%')
   }
@@ -966,10 +969,10 @@ export struct BookshelfPage {
     Column() {
       Stack() {
         BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: this.coverWidth * 1.5, coverHeight: Math.round(this.coverWidth * 1.5 * 1.4) })
-          .shadow({ radius: this.coverShadow ? 6 : 0, color: '#22000000', offsetY: 2 })
+          .shadow({ radius: this.coverShadow ? 6 : 0, color: ThemeColors.shadow(this.isDark), offsetY: 2 })
         if (this.showUnread && this.getNewChaptersCount(book) > 0) {
           Text('+' + this.getNewChaptersCount(book))
-            .fontSize(10).fontColor('#FFF').fontWeight(FontWeight.Bold)
+            .fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
             .backgroundColor(ThemeColors.error(this.isDark)).borderRadius(8).position({ top: 4, right: 4 })
         }
@@ -977,7 +980,7 @@ export struct BookshelfPage {
           Text(this.isSelected(book.id) ? '✓' : '')
             .fontSize(18).fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
             .width(28).height(28).textAlign(TextAlign.Center)
-            .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : '#66000000')
+            .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : ThemeColors.strongScrim(this.isDark))
             .borderRadius(14).position({ top: 4, left: 4 })
         }
       }.width('100%').height(172)

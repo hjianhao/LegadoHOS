@@ -15,11 +15,11 @@ export struct BookItem {
         Column() {
           Text(this.book.name?.charAt(0) || '?')
             .fontSize(32)
-            .fontColor('#FFF')
+            .fontColor(ThemeColors.onPrimary(this.isDark))
         }
         .width('100%')
         .aspectRatio(0.72)  // 宽高比例约 5:7
-        .backgroundColor('#455A64')
+        .backgroundColor(ThemeColors.coverPlaceholder(this.book.name?.charCodeAt(0) || 0))
         .borderRadius(8)
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
@@ -38,7 +38,7 @@ export struct BookItem {
       // 作者
       Text(this.book.author)
         .fontSize(11)
-        .fontColor('#888')
+        .fontColor(ThemeColors.secondaryText(this.isDark))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
@@ -64,11 +64,11 @@ export struct BookListItem {
       Column() {
         Text(this.book.name?.charAt(0) || '?')
           .fontSize(22)
-          .fontColor('#FFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
       }
       .width(50)
       .height(70)
-      .backgroundColor('#455A64')
+      .backgroundColor(ThemeColors.coverPlaceholder(this.book.name?.charCodeAt(0) || 0))
       .borderRadius(6)
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
@@ -86,20 +86,20 @@ export struct BookListItem {
 
         Text(this.book.author)
           .fontSize(13)
-          .fontColor('#888')
+          .fontColor(ThemeColors.secondaryText(this.isDark))
           .alignSelf(ItemAlign.Start)
           .margin({ top: 2 })
 
         Text(`已读 ${(this.book.durChapterProgress * 100).toFixed(1)}%`)
           .fontSize(12)
-          .fontColor('#666')
+          .fontColor(ThemeColors.secondaryText(this.isDark))
           .alignSelf(ItemAlign.Start)
           .margin({ top: 4 })
 
         if (this.book.durChapterTitle) {
           Text(this.book.durChapterTitle)
             .fontSize(11)
-            .fontColor('#888')
+            .fontColor(ThemeColors.secondaryText(this.isDark))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .alignSelf(ItemAlign.Start)
@@ -111,9 +111,9 @@ export struct BookListItem {
       .height(70)
       .justifyContent(FlexAlign.Center)
 
-      Text('>')
+      Text($r('app.string.ui_091385be99'))
         .fontSize(18)
-        .fontColor('#888')
+        .fontColor(ThemeColors.secondaryText(this.isDark))
     }
     .width('100%')
     .padding({ top: 8, bottom: 8 })

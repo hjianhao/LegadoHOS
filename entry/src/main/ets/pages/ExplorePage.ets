@@ -645,38 +645,38 @@ export struct ExplorePage {
     Column() {
       // 顶部标题
       Row() {
-        Text('发现').fontSize(20).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_523e40a074')).fontSize(20).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
       }.width('100%').padding({ left: 16, top: 12, bottom: 8 })
 
       // 搜索框 — 过滤当前显示的发现源
       Row() {
-        TextInput({ placeholder: '筛选发现源...' })
+        TextInput({ placeholder: $r('app.string.ui_6966e1dc8e') })
           .height(44).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
           .onChange((v: string) => { this.searchKey = v; })
         if (this.searchKey.length > 0) {
-          Button('✕').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)
-            .backgroundColor(Color.Transparent).margin({ left: 4 }).accessibilityText('清空筛选条件')
+          Button($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)
+            .backgroundColor(Color.Transparent).margin({ left: 4 }).accessibilityText($r('app.string.ui_74aba3dac5'))
             .onClick(() => { this.searchKey = ''; })
         }
       }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
 
       if (this.loadError) {
         Column() {
-          Text('发现书源加载失败').fontSize(16).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_ec6fd1a827')).fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
           Text(this.loadError).fontSize(12).fontColor(ThemeColors.error(this.isDark))
             .textAlign(TextAlign.Center).margin({ top: 8 }).padding({ left: 24, right: 24 })
-          Button('重试').height(44).margin({ top: 16 })
+          Button($r('app.string.common_retry')).height(44).margin({ top: 16 })
             .onClick((): void => { void this.loadExploreSources(); })
         }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else if (this.getFilteredSources().length === 0) {
         Column() {
-          Text('🔍').fontSize(48).margin({ top: 80 })
-          Text('暂无可用的发现书源').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
-          Text('请在书源管理中导入带有发现URL的书源').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
+          Text($r('app.string.ui_b154edc2dd')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
+          Text($r('app.string.ui_c1a9e8ea2e')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+          Text($r('app.string.ui_0357072997')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else {
         // 书源列表
@@ -726,20 +726,20 @@ export struct ExplorePage {
                   if (this.loadingKinds) {
                     Row() {
                       LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
-                      Text('加载分类...').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
+                      Text($r('app.string.ui_6aae64b4ab')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
                     }.padding(16)
                   } else if (this.categoryError) {
                     Row() {
                       Text(this.categoryError).fontSize(12).fontColor(ThemeColors.error(this.isDark))
                         .layoutWeight(1).maxLines(2)
-                      Button('重试').height(44).fontSize(12)
+                      Button($r('app.string.common_retry')).height(44).fontSize(12)
                         .onClick((): void => {
                           this.expandedSourceUrl = '';
                           this.toggleExpand(source.sourceUrl);
                         })
                     }.width('100%').padding({ left: 16, right: 16, bottom: 10 })
                   } else if (this.resolvedCategories.length === 0) {
-                    Text('无分类').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+                    Text($r('app.string.ui_f11956caf6')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
                       .padding({ left: 16, bottom: 12 })
                   } else {
                     this.buildKindGrid(source)

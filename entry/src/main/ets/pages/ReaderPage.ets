@@ -155,8 +155,8 @@ struct ReaderPage {
   @State pageText: string = '';
   @State aloudText: string = '';
   @State aloudTextOffset: number = 0;
-  @State readBgColor: string = '#F5F0E8';
-  @State readTextColor: string = '#333333';
+  @State readBgColor: string = ThemeColors.readingBackgroundDefault();
+  @State readTextColor: string = ThemeColors.readingTextDefault();
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
@@ -170,9 +170,9 @@ struct ReaderPage {
   @State fontList: FontInfo[] = [];
   @State cfg: PageViewConfig = {
     animType: PageTurnAnim.NONE,
-    bgColor: '#F5F0E8',
-    textColor: '#333333',
-    titleColor: '#999999',
+    bgColor: ThemeColors.readingBackgroundDefault(),
+    textColor: ThemeColors.readingTextDefault(),
+    titleColor: ThemeColors.secondaryText(this.isDark),
     fontSize: 18,
     fontWeight: 1,
     fontFamily: EPUB_BOOK_FONT_FAMILY,
@@ -223,8 +223,8 @@ struct ReaderPage {
   private styleSaveScheduled_: boolean = false;
   private pdfEnhanceTimer_: number = -1;
 
-  private static readonly NIGHT_BG: string = '#1A1A1A';
-  private static readonly NIGHT_TEXT: string = '#C0C0C0';
+  private static readonly NIGHT_BG: string = ThemeColors.readingNightBackground();
+  private static readonly NIGHT_TEXT: string = ThemeColors.readingNightText();
 
   async aboutToAppear(): Promise<void> {
     await this.initFonts_();
@@ -452,8 +452,8 @@ struct ReaderPage {
     const paddingRightPromise = s.get<number>(EPUB_PADDING_RIGHT_KEY, 20);
     const chineseModePromise = s.get<string>(EPUB_CHINESE_MODE_KEY, 'original');
     const zhFormatPromise = s.get<boolean>(EPUB_ZH_FORMAT_KEY, true);
-    const bgColorPromise = s.get<string>(EPUB_READ_BG_KEY, '#F5F0E8');
-    const textColorPromise = s.get<string>(EPUB_READ_TEXT_KEY, '#333333');
+    const bgColorPromise = s.get<string>(EPUB_READ_BG_KEY, ThemeColors.readingBackgroundDefault());
+    const textColorPromise = s.get<string>(EPUB_READ_TEXT_KEY, ThemeColors.readingTextDefault());
     const nightModePromise = s.get<boolean>(EPUB_READ_NIGHT_MODE_KEY, false);
     const followThemePromise = s.get<boolean>(EPUB_READ_FOLLOW_THEME_KEY, true);
     const flowModePromise = s.get<string>(EPUB_FLOW_MODE_KEY, 'paginated');
@@ -515,8 +515,8 @@ struct ReaderPage {
     this.readBgColor = await bgColorPromise;
     this.readTextColor = await textColorPromise;
     if (this.readBgColor === ReaderPage.NIGHT_BG && this.readTextColor === ReaderPage.NIGHT_TEXT) {
-      this.readBgColor = '#F5F0E8';
-      this.readTextColor = '#333333';
+      this.readBgColor = ThemeColors.readingBackgroundDefault();
+      this.readTextColor = ThemeColors.readingTextDefault();
       s.put(EPUB_READ_BG_KEY, this.readBgColor).catch(() => {});
       s.put(EPUB_READ_TEXT_KEY, this.readTextColor).catch(() => {});
     }
@@ -1524,7 +1524,7 @@ struct ReaderPage {
         .margin({ top: 12 })
         .textAlign(TextAlign.Center)
       if (this.loadError) {
-        Button('返回')
+        Button($r('app.string.common_back'))
           .margin({ top: 18 })
           .fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.primary(this.isDark))
@@ -1543,7 +1543,7 @@ struct ReaderPage {
   MenuLayer() {
     Column() {
       Row() {
-        Button('返回')
+        Button($r('app.string.common_back'))
           .fontSize(14)
           .fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
@@ -1605,15 +1605,15 @@ struct ReaderPage {
     Row() {
       Column() {
         Row() {
-          Text('目录')
+          Text($r('app.string.ui_41e5243e2d'))
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onSurface(this.isDark))
             .layoutWeight(1)
-          Button('关闭')
+          Button($r('app.string.common_close'))
             .fontSize(13)
             .fontColor(ThemeColors.primary(this.isDark))
-            .backgroundColor('transparent')
+            .backgroundColor(ThemeColors.transparent())
             .onClick(() => { this.showToc = false; })
         }
         .height(52)

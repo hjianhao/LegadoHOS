@@ -1,15 +1,18 @@
+import { ThemeColors } from '../theme/ThemeColors';
+
 @Entry
 @Component
 struct SimplePage {
+  @StorageLink('isDark') isDark: boolean = false;
   build() {
     Column() {
-      Text("Test")
+      Text($r('app.string.ui_640ab2bae0'))
         .fontSize(30)
-        .fontColor('#FF0000')
+        .fontColor(ThemeColors.error(this.isDark))
         .margin({ top: 200 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#1A1A2E')
+    .backgroundColor(ThemeColors.background(this.isDark))
   }
 }

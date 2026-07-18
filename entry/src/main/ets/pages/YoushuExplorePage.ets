@@ -131,9 +131,9 @@ struct YoushuLibraryPage {
     Column() {
       Row() {
         Column() {
-          Text('书库').fontSize(20).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_2c598c6710')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('筛选优书网书目，点击书籍后从现有书源搜索')
+          Text($r('app.string.ui_74b2e1c7af'))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button(this.filterExpanded ? '收起筛选' : '展开筛选')
@@ -146,16 +146,16 @@ struct YoushuLibraryPage {
       if (this.isLoading && this.books.length === 0) {
         Column() {
           LoadingProgress().width(32).height(32).color(ThemeColors.primary(this.isDark))
-          Text('正在加载优书网书库…').fontSize(13)
+          Text($r('app.string.ui_ef45ebc684')).fontSize(13)
             .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 10 })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.errorMessage && this.books.length === 0) {
         Column() {
-          Text('书库加载失败').fontSize(16).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_2f3e5c58fd')).fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
           Text(this.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
             .margin({ top: 8 }).padding({ left: 24, right: 24 }).textAlign(TextAlign.Center)
-          Button('重试').margin({ top: 16 })
+          Button($r('app.string.common_retry')).margin({ top: 16 })
             .onClick((): void => { void this.loadPage(this.currentUrl || YOUSHU_BOOKS_URL, false); })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else {
@@ -193,13 +193,13 @@ struct YoushuLibraryPage {
               ListItem() {
                 Row() {
                   LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
-                  Text('加载下一页…').fontSize(12)
+                  Text($r('app.string.ui_d5d58840ea')).fontSize(12)
                     .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
                 }.width('100%').justifyContent(FlexAlign.Center).padding(16)
               }
             } else if (!this.nextPageUrl && this.books.length > 0) {
               ListItem() {
-                Text('没有更多结果').width('100%').textAlign(TextAlign.Center).fontSize(12)
+                Text($r('app.string.ui_3471e133fa')).width('100%').textAlign(TextAlign.Center).fontSize(12)
                   .fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
               }
             }

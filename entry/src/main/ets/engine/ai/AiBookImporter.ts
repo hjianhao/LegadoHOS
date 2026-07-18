@@ -117,7 +117,7 @@ export class AiBookImporter {
     const db = AppDatabase.getInstance().rdbStore;
     const sourceDao = new BookSourceTable(db);
     source.isAiGenerated = true;
-    source.sourceName = tocRules.siteName ? tocRules.siteName + '(AI)' : 'AI导入-' + new URL(url).hostname;
+    source.sourceName = tocRules.siteName ? tocRules.siteName + '(AI)' : 'AI导入-' + this.extractHost_(url);
     const sourceId = await sourceDao.insertSource(source);
     source.id = sourceId;
 
@@ -137,6 +137,11 @@ export class AiBookImporter {
 
   private report_(phase: ImportProgress['phase'], message: string, current: number, total: number): void {
     this.callback_({ phase, message, current, total });
+  }
+
+  private extractHost_(url: string): string {
+    const match = url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^\/:?#]+)/);
+    return match && match.length > 1 ? match[1] : '网页';
   }
 
   /** 抓取页面 HTML */

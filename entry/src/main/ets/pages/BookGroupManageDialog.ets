@@ -14,10 +14,12 @@ import { BookTable } from '../data/database/BookTable';
 import { BookGroupItem, BookGroup } from '../model/BookGroup';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct BookGroupManageDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State groups: BookGroupItem[] = [];
   @State isLoading: boolean = true;
   @State showAddInput: boolean = false;
@@ -87,7 +89,7 @@ export struct BookGroupManageDialog {
       message: `确定删除 "${g.name}"？分组内书籍将移回"全部"`,
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
-        value: '删除', fontColor: '#E53935',
+        value: '删除', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           try {
             await AppDatabase.getInstance().waitForInit();
@@ -139,33 +141,34 @@ export struct BookGroupManageDialog {
     Column() {
       // 标题栏
       Row() {
-        Text('分组管理').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button() { Text('新增').fontSize(14).fontColor('#FFF') }
-          .height(32).backgroundColor('#0078D7').borderRadius(16)
+        Text($r('app.string.ui_e900b55ce7')).fontSize(18).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+        Button() { Text($r('app.string.ui_2cd9e6ce81')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark)) }
+          .height(40).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(20)
           .padding({ left: 12, right: 12 })
           .onClick(() => { this.addGroupName = ''; this.showAddInput = true; this.editingId = -1; })
-        Button() { Text('✕').fontSize(16).fontColor('#888') }
-          .width(32).height(32).backgroundColor(Color.Transparent)
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText($r('app.string.ui_6eca4a7990'))
           .onClick(() => { this.controller.close(); })
       }.padding({ top: 12, bottom: 8 })
 
       // 新增输入
       if (this.showAddInput) {
         Row() {
-          TextInput({ placeholder: '新分组名', text: this.addGroupName })
-            .height(36).fontSize(14).layoutWeight(1).borderRadius(4).padding({ left: 8 })
+          TextInput({ placeholder: $r('app.string.ui_b279500285'), text: this.addGroupName })
+            .height(40).fontSize(14).layoutWeight(1).borderRadius(4).padding({ left: 8 })
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
             .onChange((v: string) => { this.addGroupName = v; })
-          Button('添加').fontSize(13).height(36).backgroundColor('#4CAF50').fontColor('#FFF')
+          Button($r('app.string.common_add')).fontSize(13).height(40).backgroundColor(ThemeColors.success(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
             .borderRadius(4).padding({ left: 12, right: 12 }).margin({ left: 6 })
             .onClick(() => { this.doAddGroup(); })
-          Button('取消').fontSize(13).height(36).backgroundColor('#E0E0E0').fontColor('#333')
+          Button($r('app.string.common_cancel')).fontSize(13).height(40).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
             .borderRadius(4).padding({ left: 12, right: 12 }).margin({ left: 4 })
             .onClick(() => { this.showAddInput = false; })
         }.width('100%').margin({ bottom: 8 })
       }
 
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 40 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
       } else {
         List() {
           ForEach(this.groups, (g: BookGroupItem, idx: number) => {
@@ -173,13 +176,14 @@ export struct BookGroupManageDialog {
               // 编辑模式
               if (this.editingId === g.id) {
                 Row() {
-                  TextInput({ text: this.editingName }).height(32).fontSize(14).layoutWeight(1)
-                    .borderRadius(4).padding({ left: 8 })
+                  TextInput({ text: this.editingName }).height(40).fontSize(14).layoutWeight(1)
+                    .borderRadius(4).padding({ left: 8 }).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+                    .fontColor(ThemeColors.onSurface(this.isDark))
                     .onChange((v: string) => { this.editingName = v; })
-                  Button('保存').fontSize(12).height(32).backgroundColor('#4CAF50').fontColor('#FFF')
+                  Button($r('app.string.common_save')).fontSize(12).height(40).backgroundColor(ThemeColors.success(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
                     .borderRadius(4).padding({ left: 8, right: 8 }).margin({ left: 4 })
                     .onClick(() => { this.doRename(); })
-                  Button('取消').fontSize(12).height(32).backgroundColor('#E0E0E0').fontColor('#333')
+                  Button($r('app.string.common_cancel')).fontSize(12).height(40).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
                     .borderRadius(4).padding({ left: 8, right: 8 }).margin({ left: 4 })
                     .onClick(() => { this.cancelRename(); })
                 }.width('100%').padding({ left: 8, right: 8, top: 6, bottom: 6 })
@@ -187,25 +191,25 @@ export struct BookGroupManageDialog {
                 Row() {
                   // 系统标记
                   if (g.isSystem) {
-                    Text('🔒').fontSize(14).margin({ right: 4 })
+                    Text($r('app.string.ui_1a1f6dff78')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 8 })
                   }
-                  Text(g.name).fontSize(15).fontColor(g.isSystem ? '#888' : '#333').layoutWeight(1)
+                  Text(g.name).fontSize(15).fontColor(g.isSystem ? ThemeColors.secondaryText(this.isDark) : ThemeColors.onSurface(this.isDark)).layoutWeight(1)
 
                   if (!g.isSystem) {
                     // 排序
-                    Button() { Text('↑').fontSize(12).fontColor('#0078D7') }
-                      .width(28).height(28).backgroundColor(Color.Transparent)
+                    Button() { Text($r('app.string.ui_9555ffd723')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)) }
+                      .width(40).height(40).backgroundColor(Color.Transparent).accessibilityText('上移' + g.name)
                       .onClick(() => { this.moveUp(g, idx); })
-                    Button() { Text('↓').fontSize(12).fontColor('#0078D7') }
-                      .width(28).height(28).backgroundColor(Color.Transparent)
+                    Button() { Text($r('app.string.ui_fc486696ad')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)) }
+                      .width(40).height(40).backgroundColor(Color.Transparent).accessibilityText('下移' + g.name)
                       .onClick(() => { this.moveDown(g, idx); })
 
-                    Button() { Text('编辑').fontSize(12).fontColor('#0078D7') }
-                      .height(28).backgroundColor(Color.Transparent).borderRadius(4)
+                    Button() { Text($r('app.string.common_edit')).fontSize(12).fontColor(ThemeColors.primary(this.isDark)) }
+                      .height(40).backgroundColor(Color.Transparent).borderRadius(4)
                       .padding({ left: 6, right: 6 })
                       .onClick(() => { this.startRename(g); })
-                    Button() { Text('删除').fontSize(12).fontColor('#F44336') }
-                      .height(28).backgroundColor(Color.Transparent).borderRadius(4)
+                    Button() { Text($r('app.string.common_delete')).fontSize(12).fontColor(ThemeColors.error(this.isDark)) }
+                      .height(40).backgroundColor(Color.Transparent).borderRadius(4)
                       .padding({ left: 6, right: 6 })
                       .onClick(() => { this.confirmDelete(g); })
                   }
@@ -213,18 +217,18 @@ export struct BookGroupManageDialog {
                 .width('100%').padding({ left: 8, right: 8, top: 10, bottom: 10 })
               }
             }
-            .border({ width: { bottom: 0.5 }, color: '#E8E8E8' })
+            .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
           })
         }.width('100%').layoutWeight(1)
       }
 
-      Button('关闭').height(36).fontSize(14)
-        .backgroundColor('#E0E0E0').fontColor('#333').borderRadius(8).width('100%').margin({ top: 8 })
+      Button($r('app.string.common_close')).height(44).fontSize(14)
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).width('100%').margin({ top: 8 })
         .onClick(() => { this.controller.close(); })
     }
     .padding({ left: 16, right: 16, top: 0, bottom: 12 })
     .width('100%').height('70%')
-    .backgroundColor('#FFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

@@ -3,6 +3,7 @@
  * 直接走 SourceExecutor 引擎解析，复用搜索/发现规则。
  */
 import { ThemeColors } from '../theme/ThemeColors';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
@@ -21,7 +22,12 @@ struct ExploreBookPage {
   @State categoryUrl: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
-  @State books: SearchResult[] = [];
+  @State @Watch('onBooksChanged_') books: SearchResult[] = [];
+  private bookDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
+
+  private onBooksChanged_(): void {
+    this.bookDataSource_.reset(this.books);
+  }
   @State isLoading: boolean = true;
   @State errorMsg: string = '';
 
@@ -127,8 +133,8 @@ struct ExploreBookPage {
   build() {
     Column() {
       Row() {
-        Button('\u2190').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
-          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('返回')
+        Button($r('app.string.ui_8179643cdc')).fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText($r('app.string.common_back'))
           .onClick((): void => { UiUtil.back(this.getUIContext()); })
         Text(this.categoryName || this.sourceName)
           .fontSize(18).fontWeight(FontWeight.Medium)
@@ -141,26 +147,26 @@ struct ExploreBookPage {
       if (this.isLoading) {
         Column() {
           LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 80 })
-          Text('加载中...').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+          Text($r('app.string.common_loading')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else if (this.errorMsg) {
         Column() {
-          Text('\u26A0\uFE0F').fontSize(48).margin({ top: 80 })
+          Text($r('app.string.ui_76e163cfa2')).fontSize(48).margin({ top: 80 })
           Text(this.errorMsg).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
-          Button('重试').margin({ top: 12 }).fontSize(13)
+          Button($r('app.string.common_retry')).margin({ top: 12 }).fontSize(13)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(18)
             .onClick((): void => { void this.loadBooks(); })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else if (this.books.length === 0) {
         Column() {
-          Text('\uD83D\uDCDA').fontSize(48).margin({ top: 80 })
-          Text('没有找到书籍').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+          Text($r('app.string.ui_a2cd7e5079')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
+          Text($r('app.string.ui_55f4785cab')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else {
         Text('找到 ' + this.books.length + ' 本书').fontSize(12)
           .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4 })
         List() {
-          ForEach(this.books, (item: SearchResult) => {
+          LazyForEach(this.bookDataSource_, (item: SearchResult) => {
             ListItem() {
               Row() {
                 BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 56, coverHeight: 80, coverDecodeJs: item.coverDecodeJs || '' })
@@ -183,7 +189,7 @@ struct ExploreBookPage {
               }.padding(12).width('100%')
               .onClick((): void => { this.openBookDetail(item); })
             }.border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-          })
+          }, (item: SearchResult): string => item.key)
         }.width('100%').layoutWeight(1)
       }
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))

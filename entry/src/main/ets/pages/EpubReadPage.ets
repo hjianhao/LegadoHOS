@@ -4,5 +4,5 @@
  */
 @Component
 export struct EpubReadPage {
-  build() { Text('EPUB 阅读器开发中...') }
+  build() { Text($r('app.string.ui_ebb607fc23')) }
 }

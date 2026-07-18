@@ -382,33 +382,33 @@ struct BookSourcePage {
   build() {
     Column() {
       Row() {
-        Button('‹').fontSize(26).width(40).height(40).backgroundColor('transparent')
+        Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { UiUtil.back(this.getUIContext()); })
         Column() {
-          Text('书源管理').fontSize(20).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_2e4bfce823')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).width('100%')
           Text(this.sources.length + ' 个书源' + (this.isSelectMode_ ? ' · 已选 ' + this.selectedUrls.length : ''))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         }.layoutWeight(1)
         // 选择模式：显示"取消"按钮；非选择模式：显示"+"/导入/分组按钮
         // 使用 visibility 避免条件渲染导致组件重建
-        Button('取消').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+        Button($r('app.string.common_cancel')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
           .onClick(() => { this.exitSelectMode(); })
-        Button('+').fontSize(24).width(40).height(40).borderRadius(20)
+        Button($r('app.string.ui_a979ef10cc')).fontSize(24).width(40).height(40).borderRadius(20)
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
-        Button('导入').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+        Button($r('app.string.common_import')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.importDlg?.open(); })
-        Button('分组').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+        Button($r('app.string.ui_97d8a6c05b')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.groupManageDlg?.open(); })
       }.height(64).padding({ left: 8, right: 8 }).width('100%')
 
       Row() {
-        TextInput({ placeholder: '搜索名称、网址或分组', text: this.searchText })
+        TextInput({ placeholder: $r('app.string.ui_3be802f0e1'), text: this.searchText })
           .height(48).layoutWeight(1).borderRadius(24).padding({ left: 16, right: 12 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
@@ -453,16 +453,16 @@ struct BookSourcePage {
 
       Row() {
         Toggle({ type: ToggleType.Switch, isOn: this.groupByDomain }).onChange((value: boolean) => { this.groupByDomain = value; })
-        Text('按域名归类显示').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
+        Text($r('app.string.ui_4a8c9350fe')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
         Blank()
         Text(this.filtered.length + ' 项').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
       }.height(40).padding({ left: 16, right: 16 }).width('100%')
 
       if (this.isLoading) {
-        Column() { LoadingProgress().color(ThemeColors.primary(this.isDark)); Text('正在加载书源').fontSize(13).margin({ top: 10 }).fontColor(ThemeColors.secondaryText(this.isDark)) }
+        Column() { LoadingProgress().color(ThemeColors.primary(this.isDark)); Text($r('app.string.ui_6ad638ae77')).fontSize(13).margin({ top: 10 }).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .layoutWeight(1).justifyContent(FlexAlign.Center)
       } else if (this.filtered.length === 0) {
-        Column() { Text('没有匹配的书源').fontSize(18).fontWeight(FontWeight.Medium); Text('可调整搜索或筛选条件').fontSize(13).margin({ top: 8 }).fontColor(ThemeColors.secondaryText(this.isDark)) }
+        Column() { Text($r('app.string.ui_198c2214f2')).fontSize(18).fontWeight(FontWeight.Medium); Text($r('app.string.ui_f49bb525e4')).fontSize(13).margin({ top: 8 }).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
         List({ space: 4 }) {
@@ -483,7 +483,7 @@ struct BookSourcePage {
           this.actionButton('分组', () => { this.openAssignGroup(); })
           this.actionButton('校验', () => { this.openCheckConfig(); })
           this.actionButton('导出', () => { this.doExport(); })
-          Button('删除').height(40).borderRadius(20).padding({ left: 16, right: 16 })
+          Button($r('app.string.common_delete')).height(40).borderRadius(20).padding({ left: 16, right: 16 })
             .backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
             .onClick(() => { this.confirmDelete(); })
         }.padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -497,7 +497,7 @@ struct BookSourcePage {
             .width(28).height(28).color(ThemeColors.primary(this.isDark))
           Text('正在校验 ' + this.checkProgress + '/' + this.checkTotal).fontSize(13).layoutWeight(1)
             .fontColor(ThemeColors.onSurface(this.isDark)).margin({ left: 10 })
-          Button('停止').height(40).backgroundColor('transparent').fontColor(ThemeColors.error(this.isDark))
+          Button($r('app.string.common_stop')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.error(this.isDark))
             .onClick(() => { this.cancelCheck(); })
         }.height(56).padding({ left: 16, right: 12 }).width('100%').backgroundColor(ThemeColors.surface(this.isDark))
       } else if (this.showCheckSummary && this.checkResults.length > 0) {
@@ -506,7 +506,7 @@ struct BookSourcePage {
             ' · 部分 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'partial').length +
             ' · 失败 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'fail').length)
             .fontSize(13).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
-          Button('关闭').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+          Button($r('app.string.common_close')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
             .onClick(() => { this.showCheckSummary = false; })
         }.height(52).padding({ left: 16, right: 12 }).width('100%').backgroundColor(ThemeColors.surface(this.isDark))
       }
@@ -566,10 +566,10 @@ struct BookSourcePage {
           if (this.isSelectMode()) this.toggleSelect(source.sourceUrl);
           else UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage', params: { url: source.sourceUrl } });
         })
-        Button('⋮').fontSize(22).width(40).height(40).backgroundColor('transparent')
+        Button($r('app.string.ui_b7ed67990b')).fontSize(22).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.secondaryText(this.isDark))
           .visibility(this.isSelectMode() ? Visibility.None : Visibility.Visible)
-          .onClick(() => { this.contextMenuUrl = this.contextMenuUrl === source.sourceUrl ? '' : source.sourceUrl; })
+          .accessibilityText($r('app.string.ui_77836d3a99')).onClick(() => { this.contextMenuUrl = this.contextMenuUrl === source.sourceUrl ? '' : source.sourceUrl; })
       }.width('100%').padding({ left: 12, right: 6, top: 12, bottom: 12 })
         .borderRadius(16).backgroundColor(this.isSelected(source.sourceUrl) ? ThemeColors.surfaceVariant(this.isDark) : ThemeColors.surface(this.isDark))
         .gesture(LongPressGesture().onAction(() => {

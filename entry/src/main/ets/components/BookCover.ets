@@ -4,9 +4,11 @@
  */
 import { NetUtil } from '../util/NetUtil';
 import { CoverDecoder } from '../util/CoverDecoder';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Component
 export struct BookCover {
+  @StorageLink('isDark') isDark: boolean = false;
   @Prop name: string = '';
   @Prop coverUrl: string = '';
   @Prop coverWidth: number = 52;
@@ -132,7 +134,7 @@ export struct BookCover {
       Column() {
         Text(this.name ? this.name.charAt(0) : '?')
           .fontSize(this.coverWidth > 50 ? 22 : 18)
-          .fontColor('#FFF').fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
       }
       .width(this.coverWidth).height(this.coverHeight)
       .backgroundColor(this.getCoverColor(this.name))
@@ -142,6 +144,7 @@ export struct BookCover {
       // 解密后的封面（data URL）— 优先显示，不受 imgFailed 影响
       if (this.decryptedDataUrl) {
         Image(this.decryptedDataUrl)
+          .accessibilityText((this.name || '书籍') + '封面')
           .width(this.coverWidth).height(this.coverHeight)
           .borderRadius(6)
           .objectFit(ImageFit.Cover)
@@ -154,6 +157,7 @@ export struct BookCover {
       // 网络封面（无解密时直接加载，或有解密但还在解码中时作为兜底）
       if (this.useNetwork && this.coverUrl && !this.imgFailed && !this.decryptedDataUrl) {
         Image(this.coverUrl)
+          .accessibilityText((this.name || '书籍') + '封面')
           .width(this.coverWidth).height(this.coverHeight)
           .borderRadius(6)
           .objectFit(ImageFit.Cover)
@@ -166,6 +170,7 @@ export struct BookCover {
       // 本地封面
       if (this.isLocalFile && this.coverUrl && !this.imgFailed) {
         Image(this.coverUrl)
+          .accessibilityText((this.name || '书籍') + '封面')
           .width(this.coverWidth).height(this.coverHeight)
           .borderRadius(6)
           .objectFit(ImageFit.Cover)
@@ -179,8 +184,7 @@ export struct BookCover {
   }
 
   private getCoverColor(name: string): string {
-    const colors = ['#455A64', '#5C6BC0', '#26A69A', '#EC407A', '#AB47BC',
-      '#42A5F5', '#66BB6A', '#FF7043', '#8D6E63', '#78909C', '#7E57C2', '#29B6F6'];
+    const colors = ThemeColors.coverPlaceholderPalette();
     if (!name) return colors[0];
     return colors[name.charCodeAt(0) % colors.length];
   }

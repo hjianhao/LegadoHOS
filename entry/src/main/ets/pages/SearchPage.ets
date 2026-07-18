@@ -16,6 +16,7 @@ import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 import { ThemeColors } from '../theme/ThemeColors';
 
 interface SearchSourceGroup {
@@ -43,7 +44,7 @@ struct SearchPage {
   @State committedKeyword: string = '';
   @StorageLink('isDark') isDark: boolean = false;
   @State allResults: SearchResult[] = [];
-  @State results: SearchResult[] = [];
+  @State @Watch('onResultsChanged_') results: SearchResult[] = [];
   @State isSearching: boolean = false;
   @State isLoadingMore: boolean = false;
   @State hasSearched: boolean = false;
@@ -86,6 +87,11 @@ struct SearchPage {
   private queryHintTimer: number = -1;
   private initialized: boolean = false;
   private previewItem: SearchResult | null = null;
+  private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
+
+  private onResultsChanged_(): void {
+    this.resultDataSource_.reset(this.results);
+  }
 
   aboutToAppear(): void {
     this.initPage();
@@ -953,7 +959,7 @@ struct SearchPage {
     }
   }
 
-  primaryColor(): string { return '#0A7F70'; }
+  primaryColor(): string { return ThemeColors.primary(this.isDark); }
   bgColor(): string { return ThemeColors.background(this.isDark); }
   surfaceColor(): string { return ThemeColors.surface(this.isDark); }
   surfaceAltColor(): string { return ThemeColors.surfaceVariant(this.isDark); }
@@ -992,7 +998,7 @@ struct SearchPage {
             }
           })
       } else if (this.hasSearched && this.hasMore && this.results.length > 0) {
-        Button('+')
+        Button($r('app.string.ui_a979ef10cc'))
           .fontSize(24)
           .fontColor(ThemeColors.onPrimary(this.isDark))
           .width(56)
@@ -1044,19 +1050,19 @@ struct SearchPage {
   @Builder buildTopArea() {
     Column() {
       Row() {
-        Button('<')
+        Button($r('app.string.ui_c4dd3c8cdd'))
           .fontSize(20)
           .fontColor(this.textColor())
           .width(40)
           .height(40)
-          .backgroundColor('transparent')
+          .backgroundColor(ThemeColors.transparent())
           .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('搜索')
+        Text($r('app.string.common_search'))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textColor())
           .layoutWeight(1)
-        this.buildIconAction('⚙', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
+        this.buildIconAction('筛选', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
           this.showSettingsSheet = true;
           this.showScopeSheet = false;
         })
@@ -1075,13 +1081,13 @@ struct SearchPage {
 
       Row() {
         Row() {
-          Text('⌕')
+          Text($r('app.string.ui_1b0a1f59a5'))
             .fontSize(18)
             .fontColor(this.subTextColor())
             .width(34)
             .height(42)
             .textAlign(TextAlign.Center)
-          TextInput({ placeholder: '搜索书名或作者...', text: this.keyword })
+          TextInput({ placeholder: $r('app.string.ui_f9faaeaa8e'), text: this.keyword })
             .height(42)
             .defaultFocus(true)
             .layoutWeight(1)
@@ -1098,7 +1104,7 @@ struct SearchPage {
               }
             })
           if (this.keyword) {
-            Text('×')
+            Text($r('app.string.ui_67fba2f357'))
               .fontSize(16)
               .fontColor(this.subTextColor())
               .width(34)
@@ -1148,10 +1154,10 @@ struct SearchPage {
       .fontSize(13)
       .fontWeight(FontWeight.Medium)
       .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.textColor())
-      .width(36)
-      .height(36)
+      .width(40)
+      .height(40)
       .padding(0)
-      .backgroundColor(selected ? this.primaryColor() : 'transparent')
+      .backgroundColor(selected ? this.primaryColor() : ThemeColors.transparent())
       .borderRadius(18)
       .margin({ left: 2 })
       .onClick(action)
@@ -1218,12 +1224,12 @@ struct SearchPage {
   @Builder buildSuggestionPanel() {
     if (this.bookshelfHints.length === 0 && this.history.length === 0) {
       Column() {
-        Text('无')
+        Text($r('app.string.ui_72077749f7'))
           .fontSize(42)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.subTextColor())
           .margin({ top: 24 })
-        Text('暂无搜索建议')
+        Text($r('app.string.ui_6685a5ea64'))
           .fontSize(15)
           .fontColor(this.subTextColor())
           .margin({ top: 8 })
@@ -1238,7 +1244,7 @@ struct SearchPage {
         if (this.bookshelfHints.length > 0) {
           ListItem() {
             Row() {
-              Text('书架匹配')
+              Text($r('app.string.ui_8986a5a260'))
                 .fontSize(13)
                 .fontColor(this.subTextColor())
                 .layoutWeight(1)
@@ -1270,11 +1276,11 @@ struct SearchPage {
                     .margin({ top: 4 })
                 }
                 .layoutWeight(1)
-                Text('已在书架')
+                Text($r('app.string.ui_a6f11567e2'))
                   .fontSize(11)
                   .fontColor(this.primaryColor())
                   .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-                  .backgroundColor('#140A7F70')
+                  .backgroundColor(ThemeColors.primaryContainer(this.isDark))
                   .borderRadius(4)
               }
               .width('100%')
@@ -1288,11 +1294,11 @@ struct SearchPage {
         if (this.history.length > 0) {
           ListItem() {
             Row() {
-              Text('搜索历史')
+              Text($r('app.string.ui_adf6d73a69'))
                 .fontSize(13)
                 .fontColor(this.subTextColor())
                 .layoutWeight(1)
-              Text('清除全部')
+              Text($r('app.string.ui_2e9ab4934c'))
                 .fontSize(12)
                 .fontColor(ThemeColors.error(this.isDark))
                 .onClick(() => { this.showClearHistoryDialog = true; })
@@ -1304,7 +1310,7 @@ struct SearchPage {
           ForEach(this.history, (h: string, idx: number) => {
             ListItem() {
               Row() {
-                Text('时')
+                Text($r('app.string.ui_a34801ad9c'))
                   .fontSize(12)
                   .fontColor(this.subTextColor())
                   .width(24)
@@ -1314,7 +1320,7 @@ struct SearchPage {
                   .layoutWeight(1)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text('x')
+                Text($r('app.string.ui_11f6ad8ec5'))
                   .fontSize(14)
                   .fontColor(this.subTextColor())
                   .width(32)
@@ -1374,18 +1380,18 @@ struct SearchPage {
       .margin({ top: 8, bottom: 2 })
       .borderRadius(18)
       .backgroundColor(this.surfaceColor())
-      .shadow({ radius: 8, color: this.isDark ? '#66000000' : '#16000000', offsetY: 2 })
+      .shadow({ radius: 8, color: this.isDark ? ThemeColors.strongScrim(this.isDark) : ThemeColors.shadow(this.isDark), offsetY: 2 })
     }
   }
 
   @Builder buildListResults() {
     List({ space: 8 }) {
-      ForEach(this.results, (item: SearchResult) => {
+      LazyForEach(this.resultDataSource_, (item: SearchResult) => {
         ListItem() {
           this.buildBookListItem(item)
         }
-      }, (item: SearchResult, index: number): string => {
-        return item.key + '|' + item.sourceCount.toString() + '|' + (item.noteUrl || '') + '|' + index.toString()
+      }, (item: SearchResult): string => {
+        return item.key + '|' + item.sourceCount.toString() + '|' + (item.noteUrl || '')
       })
       ListItem() {
         this.buildFooter()
@@ -1421,7 +1427,7 @@ struct SearchPage {
                 .backgroundColor(this.surfaceAltColor())
                 .borderRadius(10)
                 .margin({ right: 8 })
-              Text('全部')
+              Text($r('app.string.ui_778fc8f994'))
                 .fontSize(12)
                 .fontColor(this.primaryColor())
                 .onClick(() => { this.openExpandedSourceSheet(group); })
@@ -1500,7 +1506,7 @@ struct SearchPage {
               .fontSize(10)
               .fontColor(this.primaryColor())
               .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-              .backgroundColor('#140A7F70')
+              .backgroundColor(ThemeColors.primaryContainer(this.isDark))
               .borderRadius(4)
               .margin({ left: 8 })
           }
@@ -1565,7 +1571,7 @@ struct SearchPage {
       .height(101)
       .justifyContent(FlexAlign.Center)
 
-      Text('>')
+      Text($r('app.string.ui_091385be99'))
         .fontSize(18)
         .fontColor(this.subTextColor())
         .margin({ left: 8 })
@@ -1631,16 +1637,16 @@ struct SearchPage {
           .fontSize(12)
           .fontColor(this.subTextColor())
       } else if (this.hasMore && this.results.length > 0) {
-        Button('继续搜索')
+        Button($r('app.string.ui_8e1ac919ae'))
           .fontSize(14)
           .fontColor(this.primaryColor())
-          .height(38)
+          .height(40)
           .padding({ left: 18, right: 18 })
           .backgroundColor(this.surfaceAltColor())
           .borderRadius(19)
           .onClick(() => { this.loadMore(); })
       } else if (this.hasSearched) {
-        Text('没有更多结果')
+        Text($r('app.string.ui_3471e133fa'))
           .fontSize(12)
           .fontColor(this.subTextColor())
       }
@@ -1652,7 +1658,7 @@ struct SearchPage {
 
   @Builder buildEmptyResult() {
     Column() {
-      Text('无')
+      Text($r('app.string.ui_72077749f7'))
         .fontSize(42)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.subTextColor())
@@ -1666,10 +1672,10 @@ struct SearchPage {
         .fontColor(this.subTextColor())
         .margin({ top: 4 })
       if (this.hasRelaxableFilters()) {
-        Button('放宽筛选')
+        Button($r('app.string.ui_423b4efd16'))
           .fontSize(14)
           .fontColor(ThemeColors.onPrimary(this.isDark))
-          .height(38)
+          .height(40)
           .padding({ left: 18, right: 18 })
           .backgroundColor(this.primaryColor())
           .borderRadius(19)
@@ -1684,12 +1690,12 @@ struct SearchPage {
 
   @Builder buildIdle() {
     Column() {
-      Text('搜')
+      Text($r('app.string.ui_35d70d63b7'))
         .fontSize(46)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.subTextColor())
         .margin({ top: 96 })
-      Text('搜索你想看的书籍')
+      Text($r('app.string.ui_70ed469dce'))
         .fontSize(16)
         .fontColor(this.subTextColor())
         .margin({ top: 8 })
@@ -1707,19 +1713,19 @@ struct SearchPage {
     Column() {}
       .width('100%')
       .height('100%')
-      .backgroundColor('#66000000')
+      .backgroundColor(ThemeColors.strongScrim(this.isDark))
       .onClick(action)
   }
 
   @Builder buildSettingsSheet() {
     Column() {
       Row() {
-        Text('搜索设置')
+        Text($r('app.string.ui_07f40562ca'))
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textColor())
           .layoutWeight(1)
-        Text('完成')
+        Text($r('app.string.common_done'))
           .fontSize(14)
           .fontColor(this.primaryColor())
           .onClick(() => { this.showSettingsSheet = false; })
@@ -1728,7 +1734,7 @@ struct SearchPage {
       .height(52)
       .padding({ left: 18, right: 18 })
 
-      Text('布局')
+      Text($r('app.string.ui_b0961e172b'))
         .fontSize(13)
         .fontColor(this.subTextColor())
         .alignSelf(ItemAlign.Start)
@@ -1744,7 +1750,7 @@ struct SearchPage {
       .width('100%')
       .padding({ left: 18, right: 18 })
 
-      Text('书源类型')
+      Text($r('app.string.ui_b3eb306129'))
         .fontSize(13)
         .fontColor(this.subTextColor())
         .alignSelf(ItemAlign.Start)
@@ -1759,7 +1765,7 @@ struct SearchPage {
       .width('100%')
       .padding({ left: 18, right: 18 })
 
-      Text('匹配')
+      Text($r('app.string.ui_c7127bb6ee'))
         .fontSize(13)
         .fontColor(this.subTextColor())
         .alignSelf(ItemAlign.Start)
@@ -1813,17 +1819,17 @@ struct SearchPage {
   @Builder buildScopeSheet() {
     Column() {
       Row() {
-        Text('搜索范围')
+        Text($r('app.string.ui_2cacc1b742'))
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textColor())
           .layoutWeight(1)
-        Text('全部')
+        Text($r('app.string.ui_778fc8f994'))
           .fontSize(14)
           .fontColor(this.primaryColor())
           .margin({ right: 18 })
           .onClick(() => { this.selectAllScope(); })
-        Text('完成')
+        Text($r('app.string.common_done'))
           .fontSize(14)
           .fontColor(this.primaryColor())
           .onClick(() => { this.finishScopeSheet(); })
@@ -1834,7 +1840,7 @@ struct SearchPage {
 
       Row() {
         Row() {
-          TextInput({ placeholder: '筛选分组或书源', text: this.sourceFilterText })
+          TextInput({ placeholder: $r('app.string.ui_440a4757f9'), text: this.sourceFilterText })
             .height(40)
             .layoutWeight(1)
             .backgroundColor(Color.Transparent)
@@ -1844,7 +1850,7 @@ struct SearchPage {
             .padding({ left: 12 })
             .onChange((v: string) => { this.sourceFilterText = v; })
           if (this.sourceFilterText) {
-            Text('x')
+            Text($r('app.string.ui_11f6ad8ec5'))
               .fontSize(14)
               .fontColor(this.subTextColor())
               .width(32)
@@ -1937,17 +1943,17 @@ struct SearchPage {
 
   @Builder buildClearHistoryDialog() {
     Column() {
-      Text('清除搜索历史')
+      Text($r('app.string.ui_63c63d5fff'))
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.textColor())
         .margin({ top: 20 })
-      Text('确定清除全部搜索历史吗？')
+      Text($r('app.string.ui_258e710c18'))
         .fontSize(14)
         .fontColor(this.subTextColor())
         .margin({ top: 12, bottom: 18 })
       Row() {
-        Button('取消')
+        Button($r('app.string.common_cancel'))
           .fontSize(14)
           .fontColor(this.textColor())
           .layoutWeight(1)
@@ -1955,7 +1961,7 @@ struct SearchPage {
           .backgroundColor(this.surfaceAltColor())
           .borderRadius(20)
           .onClick(() => { this.showClearHistoryDialog = false; })
-        Button('清除')
+        Button($r('app.string.ui_7b15e5e8e7'))
           .fontSize(14)
           .fontColor(ThemeColors.onPrimary(this.isDark))
           .layoutWeight(1)
@@ -1976,12 +1982,12 @@ struct SearchPage {
 
   @Builder buildRelaxFilterDialog() {
     Column() {
-      Text('放宽搜索条件')
+      Text($r('app.string.ui_7b518aad5a'))
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.textColor())
         .margin({ top: 20 })
-      Text('当前筛选可能过严，可以关闭精确匹配或切回全部书源后重新搜索。')
+      Text($r('app.string.ui_84128a8270'))
         .fontSize(14)
         .fontColor(this.subTextColor())
         .lineHeight(20)
@@ -1989,7 +1995,7 @@ struct SearchPage {
         .padding({ left: 20, right: 20 })
         .margin({ top: 10, bottom: 16 })
       if (this.matchModeExact) {
-        Button('关闭精确匹配')
+        Button($r('app.string.ui_61041cbe12'))
           .fontSize(14)
           .fontColor(ThemeColors.onPrimary(this.isDark))
           .width('100%')
@@ -2000,7 +2006,7 @@ struct SearchPage {
           .onClick(() => { this.relaxFiltersAndSearch(0); })
       }
       if (this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0 || this.selectedSourceTypes.length > 0) {
-        Button('切回全部书源')
+        Button($r('app.string.ui_510d465771'))
           .fontSize(14)
           .fontColor(this.primaryColor())
           .width('100%')
@@ -2010,7 +2016,7 @@ struct SearchPage {
           .margin({ bottom: 8 })
           .onClick(() => { this.relaxFiltersAndSearch(1); })
       }
-      Button('全部放宽')
+      Button($r('app.string.ui_3597d00e59'))
         .fontSize(14)
         .fontColor(this.textColor())
         .width('100%')
@@ -2018,7 +2024,7 @@ struct SearchPage {
         .backgroundColor(this.surfaceAltColor())
         .borderRadius(20)
         .onClick(() => { this.relaxFiltersAndSearch(2); })
-      Text('取消')
+      Text($r('app.string.common_cancel'))
         .fontSize(14)
         .fontColor(this.subTextColor())
         .height(40)
@@ -2050,7 +2056,7 @@ struct SearchPage {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Text('关闭')
+        Text($r('app.string.common_close'))
           .fontSize(14)
           .fontColor(this.primaryColor())
           .onClick(() => {
@@ -2076,15 +2082,15 @@ struct SearchPage {
                 .width(22)
                 .height(22)
                 .color(this.primaryColor())
-              Text('正在加载该书源下一页')
+              Text($r('app.string.ui_109062ac89'))
                 .fontSize(12)
                 .fontColor(this.subTextColor())
                 .margin({ top: 8 })
             } else if (this.expandedSourceHasMore) {
-              Button('加载更多')
+              Button($r('app.string.ui_3a0fab4978'))
                 .fontSize(14)
                 .fontColor(this.primaryColor())
-                .height(38)
+                .height(40)
                 .padding({ left: 18, right: 18 })
                 .backgroundColor(this.surfaceAltColor())
                 .borderRadius(19)
@@ -2122,12 +2128,12 @@ struct SearchPage {
     if (this.previewItem) {
       Column() {
         Row() {
-          Text('书籍预览')
+          Text($r('app.string.ui_0cb95c69f1'))
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.textColor())
             .layoutWeight(1)
-          Text('关闭')
+          Text($r('app.string.common_close'))
             .fontSize(14)
             .fontColor(this.primaryColor())
             .onClick(() => { this.showPreviewSheet = false; })
@@ -2188,7 +2194,7 @@ struct SearchPage {
         }
 
         Row() {
-          Button('加入书架')
+          Button($r('app.string.ui_c0ea2c7481'))
             .fontSize(14)
             .fontColor(this.primaryColor())
             .layoutWeight(1)
@@ -2196,7 +2202,7 @@ struct SearchPage {
             .backgroundColor(this.surfaceAltColor())
             .borderRadius(21)
             .onClick(() => { this.addPreviewToShelf(); })
-          Button('查看详情')
+          Button($r('app.string.ui_faea8c1db9'))
             .fontSize(14)
             .fontColor(ThemeColors.onPrimary(this.isDark))
             .layoutWeight(1)

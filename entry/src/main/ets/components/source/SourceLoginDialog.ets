@@ -119,12 +119,12 @@ export struct SourceLoginDialog {
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.webViewMode) {
-          Button('完成').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
+          Button($r('app.string.common_done')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
             .height(44).padding({ left: 12, right: 12 })
             .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(22)
             .onClick(() => { void this.finishWebViewLogin(); })
         }
-        Button('关闭').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
+        Button($r('app.string.common_close')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
           .height(44).padding({ left: 10, right: 10 })
           .backgroundColor(Color.Transparent)
           .onClick(() => { this.controller.close(); })
@@ -146,7 +146,7 @@ export struct SourceLoginDialog {
           }
         }
         .width('100%').layoutWeight(1)
-        Text('在页面中完成登录后点击右上角"完成"，登录状态将保存并用于后续访问')
+        Text($r('app.string.ui_ea210a4fcc'))
           .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 8 })
       } else {

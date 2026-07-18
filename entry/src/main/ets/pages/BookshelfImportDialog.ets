@@ -4,10 +4,12 @@ import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct BookshelfImportDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State inputText: string = '';
   @State isRunning: boolean = false;
   @State statusText: string = '';
@@ -60,44 +62,44 @@ export struct BookshelfImportDialog {
   build() {
     Column() {
       Row() {
-        Text('导入书架').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor('#888').backgroundColor(Color.Transparent)
-          .width(36).height(36)
-          .onClick((): void => { this.controller.close(); })
+        Text($r('app.string.ui_356fb1b027')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(Color.Transparent)
+          .width(40).height(40)
+          .accessibilityText($r('app.string.common_close')).onClick((): void => { this.controller.close(); })
       }.width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
       Row() {
-        Button('选择文件').fontSize(13).height(34).fontColor('#0078D7').backgroundColor('#EAF4FF')
+        Button($r('app.string.ui_21a6f5a8d9')).fontSize(13).height(40).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(ThemeColors.primaryContainer(this.isDark))
           .borderRadius(8).padding({ left: 12, right: 12 })
           .enabled(!this.isRunning)
           .onClick((): void => { this.chooseFile(); })
-        Text('支持 Android 书架导出的 JSON，或填写远程 JSON 地址')
-          .fontSize(12).fontColor('#888').margin({ left: 10 }).layoutWeight(1)
+        Text($r('app.string.ui_346e030c2f'))
+          .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 }).layoutWeight(1)
       }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
 
-      TextArea({ text: this.inputText, placeholder: '[{\"name\":\"书名\",\"author\":\"作者\",\"intro\":\"简介\"}] 或 https://...' })
-        .width('100%').height(190).fontSize(12).backgroundColor('#F5F5F5').borderRadius(8)
+      TextArea({ text: this.inputText, placeholder: $r('app.string.ui_3dc9907c14') })
+        .width('100%').height(190).fontSize(12).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
         .padding(12).margin({ left: 16, right: 16 })
         .onChange((value: string): void => { this.inputText = value; })
 
       if (this.isRunning) {
-        LoadingProgress().color('#0078D7').margin({ top: 12 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 12 })
       }
       if (this.statusText) {
-        Text(this.statusText).fontSize(12).fontColor('#666').width('100%')
+        Text(this.statusText).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
           .padding({ left: 16, right: 16, top: 10 })
       }
 
       Row() {
-        Button('取消').fontSize(14).backgroundColor('#EEE').fontColor('#666').height(40)
+        Button($r('app.string.common_cancel')).fontSize(14).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.secondaryText(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1).margin({ right: 8 })
           .onClick((): void => { this.controller.close(); })
-        Button('导入').fontSize(14).backgroundColor('#0078D7').fontColor('#FFF').height(40)
+        Button($r('app.string.common_import')).fontSize(14).backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1)
           .enabled(!this.isRunning)
           .onClick((): void => { this.doImport(); })
       }.width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 })
     }
-    .width('100%').backgroundColor('#FFF').borderRadius({ topLeft: 16, topRight: 16 })
+    .width('100%').backgroundColor(ThemeColors.onPrimary(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

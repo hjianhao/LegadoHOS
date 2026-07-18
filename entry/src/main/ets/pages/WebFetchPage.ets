@@ -7,10 +7,12 @@
 import webview from '@ohos.web.webview';
 import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
 export struct WebFetchPage {
+  @StorageLink('isDark') isDark: boolean = false;
   private controller: webview.WebviewController = new webview.WebviewController();
   @State fetchUrl: string = '';
   @State statusText: string = '正在加载...';
@@ -69,13 +71,13 @@ export struct WebFetchPage {
     Column() {
       // 加载状态
       Row() {
-        Text(this.statusText).fontSize(14).fontColor('#888')
+        Text(this.statusText).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
         if (!this.isLoaded) {
           LoadingProgress().width(20).height(20).margin({ left: 8 })
         }
       }.padding(16).width('100%')
 
-      Text('URL: ' + this.fetchUrl).fontSize(11).fontColor('#AAA')
+      Text('URL: ' + this.fetchUrl).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, right: 16 }).width('100%').maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
@@ -94,13 +96,13 @@ export struct WebFetchPage {
 
       // 显示实际内容的预览（可选）
       if (this.isLoaded) {
-        Button('返回').margin(16).fontSize(14)
+        Button($r('app.string.common_back')).margin(16).fontSize(14)
           .onClick((): void => {
             UiUtil.back(this.getUIContext(), { url: 'pages/MainPage' });
           })
       }
     }
     .width('100%').height('100%')
-    .backgroundColor('#F5F5F5')
+    .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
   }
 }

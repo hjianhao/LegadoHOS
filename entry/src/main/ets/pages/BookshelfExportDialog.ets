@@ -4,10 +4,12 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct BookshelfExportDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State jsonText: string = '';
   @State isRunning: boolean = false;
   books: Book[] = [];
@@ -43,32 +45,32 @@ export struct BookshelfExportDialog {
   build() {
     Column() {
       Row() {
-        Text('导出书架').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor('#888').backgroundColor(Color.Transparent)
-          .width(36).height(36)
-          .onClick((): void => { this.controller.close(); })
+        Text($r('app.string.ui_8ce30b48a4')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(Color.Transparent)
+          .width(40).height(40)
+          .accessibilityText($r('app.string.common_close')).onClick((): void => { this.controller.close(); })
       }.width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
       if (this.isRunning) {
-        LoadingProgress().color('#0078D7').margin({ top: 20, bottom: 20 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 20, bottom: 20 })
       } else {
-        TextArea({ text: this.jsonText, placeholder: '导出内容' })
-          .width('100%').height(240).fontSize(12).backgroundColor('#F5F5F5').borderRadius(8)
+        TextArea({ text: this.jsonText, placeholder: $r('app.string.ui_7d1a7c3218') })
+          .width('100%').height(240).fontSize(12).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
           .padding(12).margin({ left: 16, right: 16 })
           .onChange((value: string): void => { this.jsonText = value; })
       }
 
       Row() {
-        Button('重新生成').fontSize(14).backgroundColor('#EEE').fontColor('#666').height(40)
+        Button($r('app.string.ui_2e19057052')).fontSize(14).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.secondaryText(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1).margin({ right: 8 })
           .enabled(!this.isRunning)
           .onClick((): void => { this.generate(); })
-        Button('保存文件').fontSize(14).backgroundColor('#0078D7').fontColor('#FFF').height(40)
+        Button($r('app.string.ui_184adfdabf')).fontSize(14).backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1)
           .enabled(!this.isRunning)
           .onClick((): void => { this.saveFile(); })
       }.width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 })
     }
-    .width('100%').backgroundColor('#FFF').borderRadius({ topLeft: 16, topRight: 16 })
+    .width('100%').backgroundColor(ThemeColors.onPrimary(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

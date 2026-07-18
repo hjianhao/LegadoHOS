@@ -37,6 +37,8 @@ function schemeMatches(s: AppColorScheme, isDark: boolean): boolean {
 export class ThemeColors {
   /** 页面背景色 */
   static background(isDark: boolean): string {
+    const s = getScheme();
+    if (s && schemeMatches(s, isDark)) return s.background;
     if (isDark) return DARK_BG_HEX;
     return LIGHT_BG_HEX;
   }
@@ -91,7 +93,9 @@ export class ThemeColors {
   }
 
   /** 主色调上的文字/图标色 */
-  static onPrimary(_isDark: boolean): string {
+  static onPrimary(isDark: boolean): string {
+    const s = getScheme();
+    if (s && schemeMatches(s, isDark)) return s.onPrimary;
     return '#FFFFFF';
   }
 
@@ -101,9 +105,85 @@ export class ThemeColors {
   }
 
   /** 错误/警告色 */
-  static error(_isDark: boolean): string {
+  static error(isDark: boolean): string {
     const s = getScheme();
-    if (s && s.error) return s.error;
+    if (s && schemeMatches(s, isDark) && s.error) return s.error;
     return '#EF5350';
+  }
+
+  /** 成功状态色。保持足够饱和度，避免与正文颜色混淆。 */
+  static success(isDark: boolean): string {
+    return isDark ? '#66BB6A' : '#2E7D32';
+  }
+
+  /** 警告状态色。 */
+  static warning(isDark: boolean): string {
+    return isDark ? '#FFB74D' : '#E65100';
+  }
+
+  /** 主色弱化容器，用于选中项而不是主按钮。 */
+  static primaryContainer(isDark: boolean): string {
+    const s = getScheme();
+    if (s && schemeMatches(s, isDark)) return s.primaryContainer;
+    return isDark ? '#1A3A5A' : '#E8F0FE';
+  }
+
+  static successContainer(isDark: boolean): string {
+    return isDark ? '#1A3A2A' : '#E8F5E9';
+  }
+
+  static warningContainer(isDark: boolean): string {
+    return isDark ? '#4A3218' : '#FFF3E0';
+  }
+
+  static shadow(isDark: boolean): string {
+    return isDark ? 'rgba(0,0,0,0.40)' : 'rgba(0,0,0,0.14)';
+  }
+
+  static surfaceTranslucent(isDark: boolean): string {
+    return isDark ? 'rgba(18,18,18,0.80)' : 'rgba(255,255,255,0.85)';
+  }
+
+  static transparent(): string { return 'rgba(0,0,0,0)'; }
+
+  static heroGradientStart(isDark: boolean): string {
+    return isDark ? 'rgba(38,50,56,0.67)' : 'rgba(221,230,232,0.67)';
+  }
+
+  static heroGradientEnd(isDark: boolean): string {
+    return isDark ? 'rgba(18,18,18,0.90)' : 'rgba(255,255,255,0.85)';
+  }
+
+  static strongScrim(_isDark: boolean): string {
+    return 'rgba(0,0,0,0.40)';
+  }
+
+  /** 漫画内容画布需要纯黑/纯白，不随 surface 色板偏移。 */
+  static comicCanvas(isDark: boolean): string {
+    return isDark ? '#000000' : '#FFFFFF';
+  }
+
+  static readingBackgroundDefault(): string { return '#F5F0E8'; }
+  static readingTextDefault(): string { return '#333333'; }
+  static readingTitleDefault(): string { return '#999999'; }
+  static readingNightBackground(): string { return '#1A1A1A'; }
+  static readingNightText(): string { return '#C0C0C0'; }
+
+  static readingBackgroundPresets(): string[] {
+    return ['#F5F0E8', '#FFFFFF', '#C6E2E8', '#D4E8D0', '#F0D0C0', '#E8E0D0', '#D0D0D0', '#000000'];
+  }
+
+  static readingTextPresets(): string[] {
+    return ['#333333', '#000000', '#2C3E50', '#5D4037', '#666666', '#FFFFFF', '#1A237E', '#880E4F'];
+  }
+
+  static coverPlaceholderPalette(): string[] {
+    return ['#455A64', '#5C6BC0', '#26A69A', '#EC407A', '#AB47BC', '#42A5F5',
+      '#66BB6A', '#FF7043', '#8D6E63', '#78909C', '#7E57C2', '#29B6F6'];
+  }
+
+  static coverPlaceholder(index: number): string {
+    const colors = ThemeColors.coverPlaceholderPalette();
+    return colors[Math.abs(index) % colors.length];
   }
 }

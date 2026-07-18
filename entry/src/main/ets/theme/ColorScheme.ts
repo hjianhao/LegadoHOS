@@ -230,7 +230,9 @@ export class ColorScheme {
   static resolve(config: ThemeConfig, isDark: boolean): AppColorScheme {
     if (config.colorMode === 'preset') {
       const palette = PALETTES[config.presetPalette] || PALETTES[PresetPalette.DEFAULT];
-      const scheme = isDark ? palette.dark : palette.light;
+      // 预设 palette 是全局共享常量。先复制再应用 AMOLED/阅读配色覆盖，
+      // 避免一次 AMOLED 解析永久污染后续主题解析结果。
+      const scheme: AppColorScheme = { ...(isDark ? palette.dark : palette.light) };
 
       // 应用自定义覆盖
       if (config.amoledBlack && isDark) {

@@ -18,19 +18,19 @@ export struct LoginDialog {
 
   build() {
     Column() {
-      Text('登录光遇看书').fontSize(18).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_3b78cb6281')).fontSize(18).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 20, bottom: 8 })
-      Text('登录后可使用完整功能').fontSize(13)
+      Text($r('app.string.ui_e4266d73c5')).fontSize(13)
         .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ bottom: 16 })
 
-      TextInput({ placeholder: '邮箱', text: this.email })
+      TextInput({ placeholder: $r('app.string.ui_9ed627bcf6'), text: this.email })
         .type(InputType.Email)
         .width('100%').height(44).margin({ bottom: 12 })
         .backgroundColor(ThemeColors.surface(this.isDark))
         .borderRadius(8).fontSize(15)
         .onChange((v: string) => { this.email = v; })
 
-      TextInput({ placeholder: '密码', text: this.password })
+      TextInput({ placeholder: $r('app.string.ui_c839a8ff17'), text: this.password })
         .type(InputType.Password)
         .width('100%').height(44).margin({ bottom: 16 })
         .backgroundColor(ThemeColors.surface(this.isDark))
@@ -39,17 +39,17 @@ export struct LoginDialog {
 
       if (this.statusText) {
         Text(this.statusText).fontSize(13)
-          .fontColor(this.statusText.includes('成功') ? '#4CAF50' : ThemeColors.error(this.isDark))
+          .fontColor(this.statusText.includes('成功') ? ThemeColors.success(this.isDark) : ThemeColors.error(this.isDark))
           .margin({ bottom: 12 })
       }
 
       Row() {
-        Button('取消').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
+        Button($r('app.string.common_cancel')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
           .height(40).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
           .onClick(() => { this.controller.close(); })
 
-        Button(this.isLoading ? '登录中...' : '登录').fontSize(14).fontColor('#FFF')
+        Button(this.isLoading ? '登录中...' : '登录').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .height(40).layoutWeight(1).margin({ left: 12 })
           .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
           .enabled(!this.isLoading)

@@ -181,90 +181,90 @@ struct BackupSettingsPage {
   build() {
     Column() {
       Row() {
-        Text('< 返回').fontSize(16).fontColor('#0078D7').padding({ right: 12 })
+        Text($r('app.string.ui_39b50007b2')).fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
           .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('备份与恢复').fontSize(20).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_dddaeefb0e')).fontSize(20).fontWeight(FontWeight.Bold)
         Blank()
       }.padding(16).width('100%')
 
       Scroll() {
         Column() {
           if (this.statusText) {
-            Text(this.statusText).fontSize(13).fontColor('#888')
+            Text(this.statusText).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
               .width('100%').padding({ left: 16, right: 16, bottom: 8 })
           }
           if (this.isBusy) {
-            LoadingProgress().width(30).height(30).color('#0078D7').margin({ bottom: 8 })
+            LoadingProgress().width(30).height(30).color(ThemeColors.primary(this.isDark)).margin({ bottom: 8 })
           }
 
           // ===== WebDAV 配置 =====
           this.buildSection('🌩 WebDAV 云端配置')
-          TextInput({ placeholder: '服务器地址', text: this.webDavUrl })
+          TextInput({ placeholder: $r('app.string.ui_2eb291f695'), text: this.webDavUrl })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUrl = v; })
-          TextInput({ placeholder: '用户名', text: this.webDavUser })
+          TextInput({ placeholder: $r('app.string.ui_a1aaf352cb'), text: this.webDavUser })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUser = v; })
-          TextInput({ placeholder: '密码', text: this.webDavPwd })
+          TextInput({ placeholder: $r('app.string.ui_c839a8ff17'), text: this.webDavPwd })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .type(InputType.Password)
             .onChange((v: string) => { this.webDavPwd = v; this.savePassword(v); })
-          TextInput({ placeholder: '路径前缀', text: this.webDavPath })
+          TextInput({ placeholder: $r('app.string.ui_5aa328deb8'), text: this.webDavPath })
             .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavPath = v; })
           Row() {
-            Text('自动同步').fontSize(14)
+            Text($r('app.string.ui_220e7111f6')).fontSize(14)
             Toggle({ type: ToggleType.Switch, isOn: this.webDavAutoSync })
               .onChange((v: boolean) => { this.webDavAutoSync = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 6 })
           Row() {
-            Text('同步阅读进度').fontSize(14)
+            Text($r('app.string.ui_64c9bc1502')).fontSize(14)
             Toggle({ type: ToggleType.Switch, isOn: this.syncProgress })
               .onChange((v: boolean) => { this.syncProgress = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 2 })
           Row() {
-            Text('增强同步').fontSize(12).fontColor('#888')
+            Text($r('app.string.ui_c0fba8a4d5')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
             Toggle({ type: ToggleType.Switch, isOn: this.syncProgressPlus })
               .onChange((v: boolean) => { this.syncProgressPlus = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 6 })
 
-          Button('测试 WebDAV 连接').fontSize(14).height(40).width('100%')
-            .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(8)
+          Button($r('app.string.ui_721d1ee6c8')).fontSize(14).height(40).width('100%')
+            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8)
             .margin({ bottom: 6 }).onClick(() => { this.testConnection(); })
 
           // ===== 本地备份 =====
           this.buildSection('💾 本地备份')
-          this.buildButton('备份到本地文件', '#0078D7', () => { this.backupToLocal(); })
-          this.buildButton('从本地文件恢复（选 ZIP）', '#FF9800', () => { this.restoreFromLocal(); })
+          this.buildButton('备份到本地文件', ThemeColors.primary(this.isDark), () => { this.backupToLocal(); })
+          this.buildButton('从本地文件恢复（选 ZIP）', ThemeColors.warning(this.isDark), () => { this.restoreFromLocal(); })
 
           // ===== 云端备份 =====
           this.buildSection('☁ 云端备份')
-          this.buildButton('备份到云端', '#0078D7', () => { this.backupToCloud(); })
-          Button('从云端恢复').fontSize(14).height(44).width('100%')
-            .backgroundColor('#FF9800').fontColor('#FFF').borderRadius(8)
+          this.buildButton('备份到云端', ThemeColors.primary(this.isDark), () => { this.backupToCloud(); })
+          Button($r('app.string.ui_b75af5b178')).fontSize(14).height(44).width('100%')
+            .backgroundColor(ThemeColors.warning(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8)
             .margin({ bottom: 6 }).onClick(async () => {
               await this.listCloudBackups();
               // 备份列表已显示在下方，用户点击具体条目恢复
             })
 
-          Text('手动输入备份文件名（跨设备恢复时使用）').fontSize(12).fontColor('#888')
+          Text($r('app.string.ui_18fb6a0eb7')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
             .width('100%').margin({ top: 8, bottom: 4 })
           Row() {
-            TextInput({ placeholder: '如 backup_2026-07-03.zip', text: this.manualBackupName })
+            TextInput({ placeholder: $r('app.string.ui_598dd1606f'), text: this.manualBackupName })
               .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
               .backgroundColor(ThemeColors.outlineVariant(this.isDark))
               .layoutWeight(1)
               .onChange((v: string) => { this.manualBackupName = v; })
             Blank().width(8)
-            Button('恢复').fontSize(13).height(40).fontColor('#0078D7')
+            Button($r('app.string.ui_79748ca1c6')).fontSize(13).height(40).fontColor(ThemeColors.primary(this.isDark))
               .backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(8)
               .onClick(() => {
                 const name = this.manualBackupName.trim();
@@ -274,15 +274,15 @@ struct BackupSettingsPage {
           }.width('100%')
 
           if (this.backupNames.length > 0) {
-            this.buildSection('📋 可用备份')
+            this.buildSection('可用备份')
             ForEach(this.backupNames, (name: string) => {
-              Text(name).fontSize(13).fontColor('#0078D7')
+              Text(name).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
                 .padding({ left: 16, top: 6, bottom: 6 })
                 .width('100%').onClick(() => { this.restoreFromCloud(name); })
             }, (name: string) => name)
           }
 
-          Divider().height(30).color('transparent')
+          Divider().height(30).color(ThemeColors.transparent())
         }.width('100%').padding(16)
       }.layoutWeight(1)
     }
@@ -298,7 +298,7 @@ struct BackupSettingsPage {
   @Builder
   buildButton(label: string, color: string, onClick: () => void) {
     Button(label).fontSize(14).height(44).width('100%')
-      .backgroundColor(color).fontColor('#FFF').borderRadius(8)
+      .backgroundColor(color).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8)
       .margin({ bottom: 6 }).onClick(onClick)
   }
 }

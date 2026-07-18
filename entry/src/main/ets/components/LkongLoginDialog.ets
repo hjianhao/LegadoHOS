@@ -40,13 +40,13 @@ export struct LkongLoginDialog {
   build() {
     Column() {
       Row() {
-        Text('登录龙的天空').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_1f0dca2752')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
-        Button('完成').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
+        Button($r('app.string.common_done')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
           .height(44).padding({ left: 12, right: 12 }).borderRadius(22)
           .backgroundColor(ThemeColors.primary(this.isDark))
           .onClick((): void => { void this.finishLogin(); })
-        Button('关闭').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
+        Button($r('app.string.common_close')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
           .height(44).padding({ left: 10, right: 10 }).backgroundColor(Color.Transparent)
           .onClick((): void => { this.controller.close(); })
       }.width('100%').height(52).padding({ left: 12, right: 8 })
@@ -59,7 +59,7 @@ export struct LkongLoginDialog {
           .width('100%').layoutWeight(1)
         if (this.pageLoading) LoadingProgress().color(ThemeColors.primary(this.isDark))
       }.width('100%').layoutWeight(1)
-      Text('在页面中完成登录（含验证码/二次验证）后点击“完成”')
+      Text($r('app.string.ui_02da59ddca'))
         .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 8 })
     }

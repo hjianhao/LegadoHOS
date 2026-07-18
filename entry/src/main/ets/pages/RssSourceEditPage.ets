@@ -14,42 +14,42 @@ import { ThemeColors } from '../theme/ThemeColors';
 interface FieldGroup {
   key: string;
   label: string;
-  placeholder: string;
+  placeholder: ResourceStr;
 }
 
 const TAB_BASIC: FieldGroup[] = [
-  { key: 'sourceName', label: '名称', placeholder: 'RSS 源名称' },
-  { key: 'sourceUrl', label: '源 URL', placeholder: 'https://example.com/rss' },
-  { key: 'sourceIcon', label: '图标 URL', placeholder: '图标地址（可选）' },
-  { key: 'sourceGroup', label: '分组', placeholder: '分组名称' },
-  { key: 'sourceComment', label: '备注', placeholder: '备注信息' },
-  { key: 'sortUrl', label: '分类 URL', placeholder: '分类 URL（可选）' },
-  { key: 'searchUrl', label: '搜索 URL', placeholder: '搜索 URL（可选）' },
+  { key: 'sourceName', label: '名称', placeholder: $r('app.string.ui_480e880b53') },
+  { key: 'sourceUrl', label: '源 URL', placeholder: $r('app.string.ui_3ba3bf5779') },
+  { key: 'sourceIcon', label: '图标 URL', placeholder: $r('app.string.ui_6f2ba599e2') },
+  { key: 'sourceGroup', label: '分组', placeholder: $r('app.string.ui_65731c12ae') },
+  { key: 'sourceComment', label: '备注', placeholder: $r('app.string.ui_f5558aeb6a') },
+  { key: 'sortUrl', label: '分类 URL', placeholder: $r('app.string.ui_944255fc77') },
+  { key: 'searchUrl', label: '搜索 URL', placeholder: $r('app.string.ui_047e3c89f6') },
 ];
 
 const TAB_LIST_RULES: FieldGroup[] = [
-  { key: 'ruleArticles', label: '文章列表规则', placeholder: 'CSS/JSONPath 规则' },
-  { key: 'ruleTitle', label: '标题规则', placeholder: '文章标题提取规则' },
-  { key: 'rulePubDate', label: '日期规则', placeholder: '文章发布日期规则' },
-  { key: 'ruleDescription', label: '摘要规则', placeholder: '文章摘要提取规则' },
-  { key: 'ruleImage', label: '图片规则', placeholder: '文章图片提取规则' },
-  { key: 'ruleLink', label: '链接规则', placeholder: '文章链接提取规则' },
-  { key: 'ruleNextPage', label: '下一页规则', placeholder: '分页规则' },
+  { key: 'ruleArticles', label: '文章列表规则', placeholder: $r('app.string.ui_a6620e6056') },
+  { key: 'ruleTitle', label: '标题规则', placeholder: $r('app.string.ui_c474b0e54d') },
+  { key: 'rulePubDate', label: '日期规则', placeholder: $r('app.string.ui_affe91da1d') },
+  { key: 'ruleDescription', label: '摘要规则', placeholder: $r('app.string.ui_75ddbbb859') },
+  { key: 'ruleImage', label: '图片规则', placeholder: $r('app.string.ui_d208f2dc03') },
+  { key: 'ruleLink', label: '链接规则', placeholder: $r('app.string.ui_cd3099a78e') },
+  { key: 'ruleNextPage', label: '下一页规则', placeholder: $r('app.string.ui_089fbf1b07') },
 ];
 
 const TAB_CONTENT_RULES: FieldGroup[] = [
-  { key: 'ruleContent', label: '正文规则', placeholder: '文章正文提取规则' },
-  { key: 'contentWhitelist', label: '标签白名单', placeholder: '允许的 HTML 标签' },
-  { key: 'contentBlacklist', label: '标签黑名单', placeholder: '禁用的 HTML 标签' },
+  { key: 'ruleContent', label: '正文规则', placeholder: $r('app.string.ui_5a5b650138') },
+  { key: 'contentWhitelist', label: '标签白名单', placeholder: $r('app.string.ui_48e36927c6') },
+  { key: 'contentBlacklist', label: '标签黑名单', placeholder: $r('app.string.ui_8b8264ddb5') },
 ];
 
 const TAB_WEBVIEW: FieldGroup[] = [
-  { key: 'style', label: '自定义样式(CSS)', placeholder: '注入的 CSS 样式' },
-  { key: 'injectJs', label: '注入 JS', placeholder: '页面加载后注入的 JS' },
-  { key: 'preloadJs', label: '预载 JS', placeholder: '页面加载前执行的 JS' },
-  { key: 'startHtml', label: '自定义 HTML', placeholder: '替换页面的 HTML 模板' },
-  { key: 'startStyle', label: '自定义内部 CSS', placeholder: '嵌入 HTML 的 style 标签内容' },
-  { key: 'startJs', label: '自定义内部 JS', placeholder: '嵌入 HTML 的 script 标签内容' },
+  { key: 'style', label: '自定义样式(CSS)', placeholder: $r('app.string.ui_3a9f79b186') },
+  { key: 'injectJs', label: '注入 JS', placeholder: $r('app.string.ui_9f17b317b8') },
+  { key: 'preloadJs', label: '预载 JS', placeholder: $r('app.string.ui_619fe1103f') },
+  { key: 'startHtml', label: '自定义 HTML', placeholder: $r('app.string.ui_735b0d3015') },
+  { key: 'startStyle', label: '自定义内部 CSS', placeholder: $r('app.string.ui_197e1fb34c') },
+  { key: 'startJs', label: '自定义内部 JS', placeholder: $r('app.string.ui_d13666889f') },
 ];
 
 @Entry
@@ -177,17 +177,17 @@ struct RssSourceEditPage {
       // 标题栏
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('← 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_4968e7f610')).fontSize(16).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.isNew ? '添加 RSS 源' : '编辑 RSS 源').fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
-          Text('保存').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)
+          Text($r('app.string.common_save')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => { this.save(); })
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })

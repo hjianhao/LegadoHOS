@@ -15,6 +15,7 @@ import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ChapterCache } from '../util/ChapterCache';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 
 interface ContentSearchResult {
   chapterIndex: number;
@@ -34,7 +35,7 @@ struct SearchContentPage {
   @State originUrl: string = '';
   @State currentIndex: number = 0;
   @State keyword: string = '';
-  @State results: ContentSearchResult[] = [];
+  @State @Watch('onResultsChanged_') results: ContentSearchResult[] = [];
   @State history: string[] = [];
   @State isSearching: boolean = false;
   @State processed: number = 0;
@@ -49,6 +50,11 @@ struct SearchContentPage {
   private replaceEngine_: ContentReplaceEngine = new ContentReplaceEngine();
   private searchRunId_: number = 0;
   private debounceTimer_: number = -1;
+  private resultDataSource_: ArrayDataSource<ContentSearchResult> = new ArrayDataSource<ContentSearchResult>();
+
+  private onResultsChanged_(): void {
+    this.resultDataSource_.reset(this.results);
+  }
 
   aboutToAppear(): void {
     this.initPage();
@@ -370,9 +376,9 @@ struct SearchContentPage {
   private optionChip(label: string, active: boolean, onTap: () => void) {
     Text(label)
       .fontSize(13)
-      .fontColor(active ? '#FFFFFF' : this.textColor())
+      .fontColor(active ? ThemeColors.onPrimary(this.isDark) : this.textColor())
       .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor(active ? '#0078D7' : (ThemeColors.surfaceVariant(this.isDark)))
+      .backgroundColor(active ? ThemeColors.primary(this.isDark) : (ThemeColors.surfaceVariant(this.isDark)))
       .borderRadius(16)
       .onClick(onTap)
   }
@@ -381,7 +387,7 @@ struct SearchContentPage {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
         Row() {
-          Text('<')
+          Text($r('app.string.ui_c4dd3c8cdd'))
             .fontSize(24)
             .fontColor(this.textColor())
             .width(40)
@@ -403,10 +409,10 @@ struct SearchContentPage {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
           Button(this.isSearching ? '停止' : '搜索')
-            .height(34)
+            .height(40)
             .fontSize(13)
-            .fontColor('#FFFFFF')
-            .backgroundColor(this.isSearching ? '#D64545' : '#0078D7')
+            .fontColor(ThemeColors.onPrimary(this.isDark))
+            .backgroundColor(this.isSearching ? ThemeColors.error(this.isDark) : ThemeColors.primary(this.isDark))
             .onClick(() => {
               if (this.isSearching) this.stopSearch(); else this.startSearch();
             })
@@ -416,7 +422,7 @@ struct SearchContentPage {
         .backgroundColor(this.surfaceColor())
 
         Row() {
-          TextInput({ placeholder: '搜索章节内容', text: this.keyword })
+          TextInput({ placeholder: $r('app.string.ui_945b33eb9d'), text: this.keyword })
             .height(42)
             .defaultFocus(true)
             .layoutWeight(1)
@@ -428,11 +434,11 @@ struct SearchContentPage {
             .onChange((v: string) => { this.onQueryChanged(v); })
             .onSubmit(() => { this.startSearch(); })
           if (this.keyword) {
-            Text('x')
+            Text($r('app.string.ui_11f6ad8ec5'))
               .fontSize(16)
               .fontColor(this.subTextColor())
-              .width(36)
-              .height(36)
+              .width(40)
+              .height(40)
               .textAlign(TextAlign.Center)
               .onClick(() => {
                 this.keyword = '';
@@ -461,9 +467,9 @@ struct SearchContentPage {
             this.toggleHistoryScope();
           })
           if (this.history.length > 0 && !this.keyword) {
-            Text('清空')
+            Text($r('app.string.common_clear'))
               .fontSize(13)
-              .fontColor('#D64545')
+              .fontColor(ThemeColors.error(this.isDark))
               .padding({ left: 10, right: 10, top: 7, bottom: 7 })
               .onClick(() => { this.clearHistory(); })
           }
@@ -473,7 +479,7 @@ struct SearchContentPage {
         if (this.errorText) {
           Text(this.errorText)
             .fontSize(13)
-            .fontColor('#D64545')
+            .fontColor(ThemeColors.error(this.isDark))
             .padding({ left: 18, right: 18, bottom: 8 })
         }
 
@@ -488,11 +494,11 @@ struct SearchContentPage {
                     .layoutWeight(1)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text('x')
+                  Text($r('app.string.ui_11f6ad8ec5'))
                     .fontSize(14)
                     .fontColor(this.subTextColor())
-                    .width(36)
-                    .height(36)
+                    .width(40)
+                    .height(40)
                     .textAlign(TextAlign.Center)
                     .onClick(() => { this.removeHistory(item); })
                 }
@@ -519,22 +525,22 @@ struct SearchContentPage {
           .justifyContent(FlexAlign.Center)
         } else {
           List() {
-            ForEach(this.results, (item: ContentSearchResult) => {
+            LazyForEach(this.resultDataSource_, (item: ContentSearchResult) => {
               ListItem() {
                 Column() {
                   Row() {
                     Text(item.chapterTitle)
                       .fontSize(15)
                       .fontWeight(item.isCurrent ? FontWeight.Bold : FontWeight.Medium)
-                      .fontColor(item.isCurrent ? '#0078D7' : this.textColor())
+                      .fontColor(item.isCurrent ? ThemeColors.primary(this.isDark) : this.textColor())
                       .layoutWeight(1)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(`${item.count}`)
                       .fontSize(11)
-                      .fontColor('#FFFFFF')
+                      .fontColor(ThemeColors.onPrimary(this.isDark))
                       .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-                      .backgroundColor(item.isCurrent ? '#0078D7' : '#88929C')
+                      .backgroundColor(item.isCurrent ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
                       .borderRadius(10)
                   }
                   Text(item.snippet)
@@ -561,11 +567,11 @@ struct SearchContentPage {
       .backgroundColor(this.bgColor())
 
       if (this.results.length > 0) {
-        Button('当前')
+        Button($r('app.string.ui_25e74dceac'))
           .height(44)
           .fontSize(14)
-          .fontColor('#FFFFFF')
-          .backgroundColor('#0078D7')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
+          .backgroundColor(ThemeColors.primary(this.isDark))
           .margin({ right: 18, bottom: 24 })
           .onClick(() => { this.jumpToCurrentResult(); })
       }

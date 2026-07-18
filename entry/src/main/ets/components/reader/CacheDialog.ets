@@ -65,28 +65,28 @@ export struct CacheDialog {
   @Builder
   buildInputPanel() {
     Column() {
-      Text('离线缓存').fontSize(18).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_fa2c7b7a75')).fontSize(18).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 4 }).alignSelf(ItemAlign.Start)
 
-      Text('将章节内容下载到本地，离线阅读')
+      Text($r('app.string.ui_b91af4abcf'))
         .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, bottom: 12 }).alignSelf(ItemAlign.Start)
 
       // 章节范围
       Row() {
-        Text('起始章节').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
-        TextInput({ placeholder: '1', text: this.startChapter })
-          .width(80).height(36)
+        Text($r('app.string.ui_08d760c5e8')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
+        TextInput({ placeholder: $r('app.string.ui_356a192b79'), text: this.startChapter })
+          .width(80).height(40)
           .fontSize(14)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .onChange((v: string) => { this.startChapter = v; })
       }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
 
       Row() {
-        Text('结束章节').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
+        Text($r('app.string.ui_dbd6ec8454')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         TextInput({ placeholder: String(this.totalChapters), text: this.endChapter })
-          .width(80).height(36)
+          .width(80).height(40)
           .fontSize(14)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .onChange((v: string) => { this.endChapter = v; })
@@ -98,11 +98,11 @@ export struct CacheDialog {
 
       // 按钮
       Row() {
-        Button('取消').fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
+        Button($r('app.string.common_cancel')).fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
           .backgroundColor(Color.Transparent)
           .height(44).layoutWeight(1)
           .onClick(() => { this.onDismiss?.(); })
-        Button('开始缓存').fontSize(15).fontColor('#FFF')
+        Button($r('app.string.ui_4a69127be0')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.primary(this.isDark))
           .height(44).layoutWeight(1).borderRadius(0)
           .onClick(() => { this.startCache(); })
@@ -113,7 +113,7 @@ export struct CacheDialog {
   @Builder
   buildProgressPanel() {
     Column() {
-      Text('正在缓存...').fontSize(16).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_e4bccf7cfb')).fontSize(16).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 8 }).alignSelf(ItemAlign.Start)
 
@@ -130,10 +130,10 @@ export struct CacheDialog {
       .padding({ left: 0, right: 0 })
 
       Row() {
-        Button('取消缓存').fontSize(14).fontColor('#FFF')
+        Button($r('app.string.ui_5011ed5755')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.error(this.isDark)).height(40).layoutWeight(1).margin({ right: 4 })
           .onClick(() => { this.stopCaching(); })
-        Button('后台运行').fontSize(14).fontColor('#FFF')
+        Button($r('app.string.ui_d8478a3802')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.primary(this.isDark)).height(40).layoutWeight(1).margin({ left: 4 })
           .onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 16, right: 16, bottom: 12 })

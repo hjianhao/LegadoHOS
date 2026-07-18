@@ -719,13 +719,13 @@ export struct ReadAloudPanel {
     if (this.voicesLoading) {
       Row() {
         LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
-        Text('正在加载音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
+        Text($r('app.string.ui_15dc4f08ac')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
       }
       .width('100%')
       .height(44)
       .justifyContent(FlexAlign.Center)
     } else if (this.voices.length === 0) {
-      Text('未获取到系统音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+      Text($r('app.string.ui_6243f074f1')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').textAlign(TextAlign.Center).padding({ top: 12, bottom: 12 })
     } else {
       Scroll() {
@@ -740,7 +740,7 @@ export struct ReadAloudPanel {
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 Text(this.voiceSubText_(voice))
                   .fontSize(10)
-                  .fontColor(voice.downloaded ? ThemeColors.secondaryText(this.isDark) : '#F57C00')
+                  .fontColor(voice.downloaded ? ThemeColors.secondaryText(this.isDark) : ThemeColors.warning(this.isDark))
                   .margin({ top: 2 })
               }
               .layoutWeight(1)
@@ -755,29 +755,29 @@ export struct ReadAloudPanel {
                     .margin({ left: 4 })
                 }
               } else if (voice.key === this.currentVoiceKey_()) {
-                Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
+                Text($r('app.string.ui_e6aa2cbd7b')).fontSize(11).fontColor(ThemeColors.primary(this.isDark))
               } else if (voice.downloaded) {
-                Button('选择')
+                Button($r('app.string.ui_70b208202c'))
                   .fontSize(11)
-                  .height(28)
+                  .height(40)
                   .padding({ left: 10, right: 10 })
                   .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
                   .fontColor(ThemeColors.onSurface(this.isDark))
                   .onClick(() => { this.selectVoice_(voice); })
               } else {
-                Button('下载')
+                Button($r('app.string.ui_2b9d013177'))
                   .fontSize(11)
-                  .height(28)
+                  .height(40)
                   .padding({ left: 10, right: 10 })
                   .backgroundColor(ThemeColors.primary(this.isDark))
-                  .fontColor('#FFF')
+                  .fontColor(ThemeColors.onPrimary(this.isDark))
                   .enabled(this.downloadingVoiceKey.length === 0)
                   .onClick(() => { this.selectVoice_(voice); })
               }
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(voice.key === this.currentVoiceKey_() ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+            .backgroundColor(voice.key === this.currentVoiceKey_() ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
             .borderRadius(8)
             .onClick(() => { this.selectVoice_(voice); })
           }, (voice: ReadAloudVoice) => voice.key)
@@ -845,46 +845,46 @@ export struct ReadAloudPanel {
             ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         Text(desc)
           .fontSize(10)
-          .fontColor(downloaded ? ThemeColors.secondaryText(this.isDark) : '#F57C00')
+          .fontColor(downloaded ? ThemeColors.secondaryText(this.isDark) : ThemeColors.warning(this.isDark))
           .margin({ top: 2 })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
       if (this.isEngineActive_(engine, modelType)) {
-        Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
+        Text($r('app.string.ui_e6aa2cbd7b')).fontSize(11).fontColor(ThemeColors.primary(this.isDark))
       } else if (engine === TTS_ENGINE_SHERPA_ONNX && !downloaded) {
-        Button('下载模型')
+        Button($r('app.string.ui_1252c81119'))
           .fontSize(11)
-          .height(28)
+          .height(40)
           .padding({ left: 10, right: 10 })
           .backgroundColor(ThemeColors.primary(this.isDark))
-          .fontColor('#FFF')
+          .fontColor(ThemeColors.onPrimary(this.isDark))
           .enabled(!downloading)
           .onClick(() => { this.downloadModelFor_(modelType as TtsModelType); })
       } else if (engine === TTS_ENGINE_SHERPA_ONNX && downloaded) {
         Row() {
-          Button('选择')
+          Button($r('app.string.ui_70b208202c'))
             .fontSize(11)
-            .height(28)
+            .height(40)
             .padding({ left: 8, right: 8 })
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .fontColor(ThemeColors.onSurface(this.isDark))
             .margin({ right: 4 })
             .onClick(() => { this.selectEngine_(engine, modelType as TtsModelType); })
-          Button('重下')
+          Button($r('app.string.ui_49c5e3b52b'))
             .fontSize(11)
-            .height(28)
+            .height(40)
             .padding({ left: 8, right: 8 })
-            .backgroundColor('#FFF3E0')
-            .fontColor('#E65100')
+            .backgroundColor(ThemeColors.warningContainer(this.isDark))
+            .fontColor(ThemeColors.warning(this.isDark))
             .enabled(!downloading)
             .onClick(() => { this.downloadModelFor_(modelType as TtsModelType); })
         }
       } else {
-        Button('选择')
+        Button($r('app.string.ui_70b208202c'))
           .fontSize(11)
-          .height(28)
+          .height(40)
           .padding({ left: 10, right: 10 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark))
@@ -893,7 +893,7 @@ export struct ReadAloudPanel {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(this.isEngineActive_(engine, modelType) ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+    .backgroundColor(this.isEngineActive_(engine, modelType) ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
     .borderRadius(8)
     .onClick(() => {
       if (engine === TTS_ENGINE_SYSTEM || engine === TTS_ENGINE_AZURE || downloaded) {
@@ -905,7 +905,7 @@ export struct ReadAloudPanel {
   @Builder
   azureVoiceListContent_() {
     if (this.azureVoices.length === 0) {
-      Text('未加载微软语音音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+      Text($r('app.string.ui_8e9942fe51')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').textAlign(TextAlign.Center).padding({ top: 12, bottom: 12 })
     } else {
       Scroll() {
@@ -927,11 +927,11 @@ export struct ReadAloudPanel {
               .alignItems(HorizontalAlign.Start)
 
               if (voice.id === this.selectedAzureVoiceId) {
-                Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
+                Text($r('app.string.ui_e6aa2cbd7b')).fontSize(11).fontColor(ThemeColors.primary(this.isDark))
               } else {
-                Button('选择')
+                Button($r('app.string.ui_70b208202c'))
                   .fontSize(11)
-                  .height(28)
+                  .height(40)
                   .padding({ left: 10, right: 10 })
                   .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
                   .fontColor(ThemeColors.onSurface(this.isDark))
@@ -940,7 +940,7 @@ export struct ReadAloudPanel {
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(voice.id === this.selectedAzureVoiceId ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+            .backgroundColor(voice.id === this.selectedAzureVoiceId ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
             .borderRadius(8)
             .onClick(() => { this.selectAzureVoice_(voice); })
           }, (voice: TtsVoiceInfo) => voice.id)
@@ -958,7 +958,7 @@ export struct ReadAloudPanel {
     if (this.sherpaVoices.length === 0) {
       Row() {
         LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
-        Text('加载离线音色...').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
+        Text($r('app.string.ui_280fd119d9')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
       }
       .width('100%').height(44).justifyContent(FlexAlign.Center)
     } else {
@@ -981,11 +981,11 @@ export struct ReadAloudPanel {
               .alignItems(HorizontalAlign.Start)
 
               if (voice.id === this.selectedSherpaVoiceId) {
-                Text('使用中').fontSize(11).fontColor(ThemeColors.primary(this.isDark))
+                Text($r('app.string.ui_e6aa2cbd7b')).fontSize(11).fontColor(ThemeColors.primary(this.isDark))
               } else {
-                Button('选择')
+                Button($r('app.string.ui_70b208202c'))
                   .fontSize(11)
-                  .height(28)
+                  .height(40)
                   .padding({ left: 10, right: 10 })
                   .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
                   .fontColor(ThemeColors.onSurface(this.isDark))
@@ -994,7 +994,7 @@ export struct ReadAloudPanel {
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(voice.id === this.selectedSherpaVoiceId ? (this.isDark ? '#153047' : '#EAF4FF') : 'transparent')
+            .backgroundColor(voice.id === this.selectedSherpaVoiceId ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
             .borderRadius(8)
             .onClick(() => { this.selectSherpaVoice_(voice); })
           }, (voice: TtsVoiceInfo) => voice.id)
@@ -1014,9 +1014,9 @@ export struct ReadAloudPanel {
         Text(this.chapterTitle || '朗读').fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onSurface(this.isDark)).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
-          .backgroundColor('transparent').width(32).height(32)
-          .onClick(() => { this.onDismiss?.(); })
+        Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          .backgroundColor(ThemeColors.transparent()).width(40).height(40)
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 12, right: 8, top: 8 })
 
       // 进度条
@@ -1036,7 +1036,7 @@ export struct ReadAloudPanel {
 
       // ---- 引擎选择 ----
       Row() {
-        Text('引擎').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
+        Text($r('app.string.ui_9413bdc38c')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Column() {
           Text(this.engineDisplayName_())
             .fontSize(13)
@@ -1054,7 +1054,7 @@ export struct ReadAloudPanel {
         .margin({ left: 4, right: 8 })
         Button(this.showEngineSelect ? '收起' : '切换')
           .fontSize(12)
-          .height(30)
+          .height(40)
           .padding({ left: 12, right: 12 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark))
@@ -1073,7 +1073,7 @@ export struct ReadAloudPanel {
 
       // ---- 音色选择 ----
       Row() {
-        Text('音色').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
+        Text($r('app.string.ui_c4301894a2')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Column() {
           Text(this.currentVoiceName_())
             .fontSize(13)
@@ -1087,7 +1087,7 @@ export struct ReadAloudPanel {
         .margin({ left: 4, right: 8 })
         Button(this.showVoiceSelect ? '收起' : '切换')
           .fontSize(12)
-          .height(30)
+          .height(40)
           .padding({ left: 12, right: 12 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark))
@@ -1111,7 +1111,7 @@ export struct ReadAloudPanel {
 
       // 语速调节
       Row() {
-        Text('语速').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
+        Text($r('app.string.ui_747374775d')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(36)
         Slider({ value: this.speed, min: 0.5, max: 2.0, step: 0.25 })
           .width('60%').margin({ left: 4, right: 8 })
           .onChange((v: number) => { this.changeSpeed(v); })
@@ -1120,23 +1120,23 @@ export struct ReadAloudPanel {
 
       // 控制按钮
       Row() {
-        Button('⏮').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor('transparent').layoutWeight(1)
+        Button($r('app.string.ui_4ccc70caa6')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
+          .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
             this.onPrevChapter?.();
           })
         Button(this.isPlaying_() ? '⏸' : '▶️').fontSize(28).fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor('transparent').layoutWeight(1)
+          .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => { this.togglePlay(); })
-        Button('⏭').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor('transparent').layoutWeight(1)
+        Button($r('app.string.ui_dc0d472de6')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
+          .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
             this.onNextChapter?.();
           })
-        Button('⏹').fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor('transparent').layoutWeight(1)
+        Button($r('app.string.ui_0ef94bd672')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
+          .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => {
             this.stopPlay(); this.stopBgTask_();
             this.onDismiss?.();
@@ -1145,11 +1145,11 @@ export struct ReadAloudPanel {
 
       // 辅助操作
       Row() {
-        Button('从本页朗读').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
-          .backgroundColor(this.isDark ? '#1A3A2A' : '#E8F5E9').fontColor('#4CAF50')
+        Button($r('app.string.ui_6701c1a30b')).fontSize(12).height(40).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(ThemeColors.successContainer(this.isDark)).fontColor(ThemeColors.success(this.isDark))
           .onClick(() => { this.stopPlay(); this.startPlay(); })
-        Button('跳转到朗读进度').fontSize(12).height(32).padding({ left: 12, right: 12 }).borderRadius(16)
-          .backgroundColor(this.isDark ? '#1A2A3A' : '#E8F4FD').fontColor(ThemeColors.primary(this.isDark))
+        Button($r('app.string.ui_56b1c4def5')).fontSize(12).height(40).padding({ left: 12, right: 12 }).borderRadius(16)
+          .backgroundColor(ThemeColors.primaryContainer(this.isDark)).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (eng && eng.state === AloudState.PLAYING) this.onGoToPosition?.(ci, ch); })
       }.width('100%').justifyContent(FlexAlign.SpaceEvenly).padding({ bottom: 8 })
 

@@ -5,8 +5,6 @@
 import { AiBookImporter, ImportProgress } from '../engine/ai/AiBookImporter';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
-import router from '@ohos.router';
-import promptAction from '@ohos.promptAction';
 
 @Entry
 @Component
@@ -68,12 +66,12 @@ struct AiImportBookPage {
 
   private getPhaseLabel(): string {
     switch (this.phase) {
-      case 'fetch': return '🔍 抓取页面';
-      case 'analyze_toc': return '🤖 分析目录';
-      case 'analyze_content': return '🤖 分析正文';
-      case 'download': return '📥 下载章节';
-      case 'done': return '✅ 完成';
-      case 'error': return '❌ 出错';
+      case 'fetch': return '抓取页面';
+      case 'analyze_toc': return '分析目录';
+      case 'analyze_content': return '分析正文';
+      case 'download': return '下载章节';
+      case 'done': return '完成';
+      case 'error': return '出错';
       default: return '';
     }
   }
@@ -82,22 +80,24 @@ struct AiImportBookPage {
     Column() {
       // 标题栏
       Row() {
-        Text('< 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
-          .onClick(() => { router.back(); })
-        Text('AI 智能导入').fontSize(20).fontWeight(FontWeight.Bold)
+        Button($r('app.string.ui_8179643cdc')).fontSize(20).fontColor(ThemeColors.primary(this.isDark))
+          .width(44).height(44).backgroundColor(Color.Transparent)
+          .accessibilityText($r('app.string.common_back'))
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
+        Text($r('app.string.ui_d919c10f40')).fontSize(20).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
       }.padding(16).width('100%')
 
       // URL 输入
-      TextArea({ text: this.url, placeholder: '输入小说目录页URL' })
+      TextArea({ text: this.url, placeholder: $r('app.string.ui_31450a8073') })
         .width('calc(100% - 32)').height(80).fontSize(14)
         .backgroundColor(ThemeColors.surface(this.isDark))
         .borderRadius(8).padding(12).margin({ left: 16, right: 16, top: 8 })
         .onChange((v: string) => { this.url = v; })
 
       // 开始按钮
-      Button('开始导入').fontSize(16).fontColor('#FFF')
+      Button($r('app.string.ui_3d04880897')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark))
         .height(44).width('calc(100% - 32)').borderRadius(8)
         .backgroundColor(ThemeColors.primary(this.isDark))
         .enabled(!this.isRunning)
@@ -106,8 +106,8 @@ struct AiImportBookPage {
 
       // AI 配置入口
       Row() {
-        Text('LLM 未配置？').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-        Text('前往配置 →').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+        Text($r('app.string.ui_289e30bde5')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_c83c5d2b4d')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
       }.margin({ top: 8 })
 
@@ -136,7 +136,7 @@ struct AiImportBookPage {
           }
 
           if (this.resultText) {
-            Text(this.resultText).fontSize(15).fontColor('#4CAF50').margin({ top: 8 })
+            Text(this.resultText).fontSize(15).fontColor(ThemeColors.success(this.isDark)).margin({ top: 8 })
           }
 
           if (this.errorText) {
@@ -151,13 +151,13 @@ struct AiImportBookPage {
 
       // 说明
       Column() {
-        Text('📖 使用说明').fontSize(14).fontWeight(FontWeight.Medium)
+        Text($r('app.string.ui_15683f6cd3')).fontSize(14).fontWeight(FontWeight.Medium)
           .fontColor(ThemeColors.onBackground(this.isDark)).margin({ bottom: 4 })
-        Text('1. 输入小说网站的目录页URL')
+        Text($r('app.string.ui_4db72f1b92'))
           .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ bottom: 2 })
-        Text('2. AI 自动分析页面的目录和正文结构')
+        Text($r('app.string.ui_7f122bb1b0'))
           .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ bottom: 2 })
-        Text('3. 自动下载所有章节到本地，后续无需网络')
+        Text($r('app.string.ui_e108a94b68'))
           .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
       }
       .width('calc(100% - 32)').padding(12).margin({ top: 16, left: 16, right: 16 })

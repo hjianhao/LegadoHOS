@@ -119,9 +119,9 @@ export struct YoushuBooklistPage {
     Column() {
       Row() {
         Column() {
-          Text('书单').fontSize(20).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_6938ad92fa')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('筛选书单并查看书单内书籍与评语')
+          Text($r('app.string.ui_df517e0dd3'))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button(this.loggedIn ? '已登录' : '登录').fontSize(12).height(44)
@@ -150,16 +150,16 @@ export struct YoushuBooklistPage {
       if (this.isLoading && this.booklists.length === 0) {
         Column() {
           LoadingProgress().width(32).height(32).color(ThemeColors.primary(this.isDark))
-          Text('正在加载优书网书单…').fontSize(13)
+          Text($r('app.string.ui_d11ef1d8a3')).fontSize(13)
             .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 10 })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.errorMessage && this.booklists.length === 0) {
         Column() {
-          Text('书单加载失败').fontSize(16).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_b1ea604569')).fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
           Text(this.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
             .margin({ top: 8 }).padding({ left: 24, right: 24 }).textAlign(TextAlign.Center)
-          Button('重试').margin({ top: 16 })
+          Button($r('app.string.common_retry')).margin({ top: 16 })
             .onClick((): void => { void this.loadPage(this.currentUrl || YOUSHU_BOOKLISTS_URL, false); })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else {
@@ -190,13 +190,13 @@ export struct YoushuBooklistPage {
               ListItem() {
                 Row() {
                   LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
-                  Text('加载下一页…').fontSize(12).margin({ left: 8 })
+                  Text($r('app.string.ui_d5d58840ea')).fontSize(12).margin({ left: 8 })
                     .fontColor(ThemeColors.secondaryText(this.isDark))
                 }.width('100%').justifyContent(FlexAlign.Center).padding(16)
               }
             } else if (!this.nextPageUrl && this.booklists.length > 0) {
               ListItem() {
-                Text('没有更多结果').width('100%').textAlign(TextAlign.Center).fontSize(12)
+                Text($r('app.string.ui_3471e133fa')).width('100%').textAlign(TextAlign.Center).fontSize(12)
                   .fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
               }
             }
@@ -230,7 +230,7 @@ export struct YoushuBooklistPage {
   @Builder
   private buildBooklistRow(item: YoushuBooklistItem) {
     Row() {
-      Image(item.coverUrl).width(66).height(88).objectFit(ImageFit.Cover)
+      Image(item.coverUrl).width(66).height(88).objectFit(ImageFit.Cover).accessibilityText(item.title + '封面')
         .borderRadius(7).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).margin({ right: 12 })
       Column() {
         Text(item.title).fontSize(15).fontWeight(FontWeight.Medium).maxLines(2)

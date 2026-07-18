@@ -75,7 +75,7 @@ export struct ExportBookDialog {
   @Builder
   buildOptionPanel() {
     Column() {
-      Text('导出书籍').fontSize(18).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_a9bb68aec3')).fontSize(18).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 4 }).alignSelf(ItemAlign.Start)
 
@@ -94,17 +94,17 @@ export struct ExportBookDialog {
 
       // 导出格式
       Row() {
-        Text('格式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
+        Text($r('app.string.ui_9d2601c843')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         Radio({ value: 'txt', group: 'exportFormat' })
           .checked(this.exportFormat === 'txt')
           .onChange((checked: boolean) => { if (checked) this.exportFormat = 'txt'; })
-        Text('TXT').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+        Text($r('app.string.ui_7475c2bd12')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
           .margin({ left: 6, right: 24 })
           .onClick(() => { this.exportFormat = 'txt'; })
         Radio({ value: 'epub', group: 'exportFormat' })
           .checked(this.exportFormat === 'epub')
           .onChange((checked: boolean) => { if (checked) this.exportFormat = 'epub'; })
-        Text('EPUB').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+        Text($r('app.string.ui_7f464ff72d')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
           .margin({ left: 6 })
           .onClick(() => { this.exportFormat = 'epub'; })
       }
@@ -122,11 +122,11 @@ export struct ExportBookDialog {
       this.buildSwitchRow('替换净化', this.useReplace, (v: boolean): void => { this.useReplace = v; })
 
       Row() {
-        Button('取消').fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
+        Button($r('app.string.common_cancel')).fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
           .backgroundColor(Color.Transparent)
           .height(44).layoutWeight(1)
           .onClick(() => { this.onDismiss?.(); })
-        Button('导出').fontSize(15).fontColor('#FFF')
+        Button($r('app.string.common_export')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(this.totalChapters > 0 ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark))
           .enabled(this.totalChapters > 0 && !this.statsLoading)
           .height(44).layoutWeight(1).borderRadius(0)
@@ -162,7 +162,7 @@ export struct ExportBookDialog {
   @Builder
   buildProgressPanel() {
     Column() {
-      Text('正在导出...').fontSize(16).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_3d67f2697e')).fontSize(16).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 8 }).alignSelf(ItemAlign.Start)
 
@@ -177,10 +177,10 @@ export struct ExportBookDialog {
       }.width('100%').height(6).backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(3)
 
       Row() {
-        Button('取消').fontSize(14).fontColor('#FFF')
+        Button($r('app.string.common_cancel')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.error(this.isDark)).height(40).layoutWeight(1).margin({ right: 4 })
           .onClick(() => { this.cancelExport(); })
-        Button('后台运行').fontSize(14).fontColor('#FFF')
+        Button($r('app.string.ui_d8478a3802')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.primary(this.isDark)).height(40).layoutWeight(1).margin({ left: 4 })
           .onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
@@ -190,7 +190,7 @@ export struct ExportBookDialog {
   @Builder
   buildResultPanel() {
     Column() {
-      Text('导出结果').fontSize(16).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_d733ad3e85')).fontSize(16).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ top: 16, left: 16, bottom: 8 }).alignSelf(ItemAlign.Start)
 
@@ -198,7 +198,7 @@ export struct ExportBookDialog {
         .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, right: 16, bottom: 16 }).alignSelf(ItemAlign.Start)
 
-      Button('完成').fontSize(15).fontColor('#FFF')
+      Button($r('app.string.common_done')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
         .backgroundColor(ThemeColors.primary(this.isDark))
         .height(44).width('calc(100% - 32)').margin({ left: 16, right: 16, bottom: 16 })
         .onClick(() => { this.onDismiss?.(); })

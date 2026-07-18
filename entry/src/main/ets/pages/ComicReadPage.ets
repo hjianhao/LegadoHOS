@@ -950,7 +950,7 @@ struct ComicReadPage {
 	          if (this.loadError) {
 	            Text(this.loadError).fontSize(14).fontColor(ThemeColors.error(this.isDark)).margin({ top: 16 })
 	          } else {
-	            Text('加载中…').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })
+	            Text($r('app.string.ui_300ee3dee4')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })
 	          }
 	        }
 	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
@@ -962,10 +962,10 @@ struct ComicReadPage {
 	        Column() {
 	          Text(this.loadError || '本章没有图片').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
 	          Row() {
-	          Button('重试').margin({ top: 20 }).onClick(() => {
+	          Button($r('app.string.common_retry')).margin({ top: 20 }).onClick(() => {
 	              this.loadChapterImages(this.currentIndex, false, false, -1, true);
 	            })
-		            Button('菜单').margin({ top: 20 }).margin({ left: 16 }).onClick(() => {
+		            Button($r('app.string.ui_7082456207')).margin({ top: 20 }).margin({ left: 16 }).onClick(() => {
 		              this.showMenu = !this.showMenu;
 		            })
 	          }
@@ -1006,7 +1006,7 @@ struct ComicReadPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     .onAreaChange((_old: Area, n: Area) => {
       const w: number = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       const h: number = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
@@ -1036,7 +1036,7 @@ struct ComicReadPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     .onReachStart(() => {
       if (this.chapterSwitching_) return;
       if (!this.justLoadedChapter_ && this.currentIndex > 0) {
@@ -1070,7 +1070,7 @@ struct ComicReadPage {
           this.buildImageItem(url, index)
         }
         .width('100%').height('100%')
-        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+        .backgroundColor(ThemeColors.comicCanvas(this.isDark))
       }, (url: string) => url)
     }
     .indicator(false)
@@ -1078,7 +1078,7 @@ struct ComicReadPage {
     .duration(300)
     .index(this.swiperIndex)
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     .onChange((index: number) => {
       // RTL 模式下反转 index 映射
       const actualIndex: number = this.readMode === READ_MODE_RIGHT_TO_LEFT
@@ -1105,10 +1105,10 @@ struct ComicReadPage {
         Stack() {
           if (this.failedImages.has(url)) {
             Column() {
-              Text('🖼 图片加载失败').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+              Text($r('app.string.ui_486ca2d3e4')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
               Text(url.substring(0, 80)).fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
                 .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
-              Button('重试').margin({ top: 12 }).fontSize(12).height(32)
+              Button($r('app.string.common_retry')).margin({ top: 12 }).fontSize(12).height(40)
                 .onClick(() => {
                   const newSet = new Set<string>(this.failedImages);
                   newSet.delete(url);
@@ -1178,7 +1178,7 @@ struct ComicReadPage {
           }
         }
         .width('100%').height('100%')
-        .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+        .backgroundColor(ThemeColors.comicCanvas(this.isDark))
       }, (url: string) => url)
     }
     .indicator(false)
@@ -1186,7 +1186,7 @@ struct ComicReadPage {
     .duration(300)
     .index(this.swiperIndex)
     .width('100%').height('100%')
-    .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+    .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     .onChange((index: number) => {
       this.currentPageIndex = index;
       this.swiperIndex = index;
@@ -1204,10 +1204,10 @@ struct ComicReadPage {
       if (this.failedImages.has(url)) {
         // 加载失败占位
         Column() {
-          Text('🖼 图片加载失败').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_486ca2d3e4')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
           Text(url.substring(0, 80)).fontSize(10).fontColor(ThemeColors.outlineVariant(this.isDark))
             .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
-          Button('重试').margin({ top: 12 }).fontSize(12).height(32)
+          Button($r('app.string.common_retry')).margin({ top: 12 }).fontSize(12).height(40)
             .onClick(() => {
               const newSet = new Set<string>(this.failedImages);
               newSet.delete(url);
@@ -1299,14 +1299,14 @@ struct ComicReadPage {
         .fontSize(12).fontColor(ThemeColors.outlineVariant(this.isDark))
         .margin({ top: 4 })
       if (isEnd && this.currentIndex >= this.totalChapters - 1) {
-        Text('已是最后一章').fontSize(12).fontColor(ThemeColors.outlineVariant(this.isDark))
+        Text($r('app.string.ui_e647cd13d7')).fontSize(12).fontColor(ThemeColors.outlineVariant(this.isDark))
           .margin({ top: 8 })
       } else if (isEnd) {
-        Text('继续阅读下一章').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+        Text($r('app.string.ui_f61763b8b7')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
           .margin({ top: 8 })
           .onClick(() => { this.onNextChapter(); })
       } else if (!isEnd && this.currentIndex > 0) {
-        Text('查看上一章').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+        Text($r('app.string.ui_2c96dbe4ab')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
           .margin({ top: 8 })
           .onClick(() => { this.onPrevChapter(); })
       }
@@ -1339,7 +1339,7 @@ struct ComicReadPage {
         .padding({ left: 20, right: 20 })
       }
       .width('100%')
-      .backgroundColor(this.isDark ? '#000000' : '#FFFFFF')
+      .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     }
     .width('100%').height('100%')
     .hitTestBehavior(HitTestMode.None)
@@ -1350,7 +1350,7 @@ struct ComicReadPage {
     Column() {
       // 顶部栏
       Row() {
-        Text('〈').fontSize(24).fontColor(ThemeColors.onSurface(this.isDark))
+        Text($r('app.string.ui_9fb248dfd4')).fontSize(24).fontColor(ThemeColors.onSurface(this.isDark))
           .onClick(() => { UiUtil.back(this.getUIContext()); })
           .padding({ left: 12, right: 12 })
         Column() {
@@ -1378,7 +1378,7 @@ struct ComicReadPage {
       // 章节进度条
       if (this.totalChapters > 1) {
         Row() {
-          Text('章节').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
+          Text($r('app.string.ui_e54d3bce2a')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
           Slider({ value: this.currentIndex + 1, min: 1, max: this.totalChapters, step: 1 })
             .layoutWeight(1).margin({ left: 8, right: 8 })
             .onChange((val: number) => {
@@ -1398,7 +1398,7 @@ struct ComicReadPage {
 
       // 亮度调节
       Row() {
-        Text('亮度').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
+        Text($r('app.string.ui_5d419889c4')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
         Slider({ value: this.comicBrightness, min: 0, max: 100, step: 5 })
           .layoutWeight(1).margin({ left: 8, right: 8 })
           .onChange((val: number) => {
@@ -1414,7 +1414,7 @@ struct ComicReadPage {
       // 页内进度条（图片跳转）
       if (this.imageUrls.length > 1) {
         Row() {
-          Text('页码').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
+          Text($r('app.string.ui_7b0930e205')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width(30)
           Slider({ value: this.currentPageIndex + 1, min: 1, max: this.imageUrls.length, step: 1 })
             .layoutWeight(1).margin({ left: 8, right: 8 })
             .onChange((val: number) => {
@@ -1440,17 +1440,17 @@ struct ComicReadPage {
       // 底部按钮栏
       Row() {
         Column() {
-          Text('上一章').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.ui_1393bb2a70')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.onPrevChapter(); })
 
         Column() {
-          Text('目录').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.ui_41e5243e2d')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.onOpenToc(); })
 
         Column() {
-          Text('下一章').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.ui_1b061d776b')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.onNextChapter(); })
 
@@ -1466,12 +1466,12 @@ struct ComicReadPage {
 
       Row() {
         Column() {
-          Text('刷新').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.common_refresh')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.onRefresh(); })
 
         Column() {
-          Text('换源').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.ui_f28106c1d8')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.openChangeSourceDialog(); })
 
@@ -1482,7 +1482,7 @@ struct ComicReadPage {
         .onClick(() => { this.toggleSinglePageMode(); })
 
         Column() {
-          Text('触控').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          Text($r('app.string.ui_580c1ae19a')).fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
         .onClick(() => { this.showMenu = false; this.showZoneConfig = true; })
       }
@@ -1498,7 +1498,7 @@ struct ComicReadPage {
     Column() {
       Column().width('100%').layoutWeight(1).onClick(() => { this.showModeSelect = false; })
       Column() {
-        Text('阅读模式').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_3eac2277d9')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 16, top: 16 })
         ForEach([
           { mode: READ_MODE_WEBTOON, label: '条漫（从上到下滚动）' } as ReadModeOption,
@@ -1508,7 +1508,7 @@ struct ComicReadPage {
           Row() {
             Text(item.label).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
             if (this.readMode === item.mode) {
-              Text('✓').fontSize(18).fontColor(ThemeColors.primary(this.isDark))
+              Text($r('app.string.ui_698a879938')).fontSize(18).fontColor(ThemeColors.primary(this.isDark))
             }
           }
           .width('100%').height(48).padding({ left: 24, right: 24 })
@@ -1532,9 +1532,9 @@ struct ComicReadPage {
     Column() {
       Column().width('100%').layoutWeight(1).onClick(() => { this.showZoneConfig = false; })
       Column() {
-        Text('触控区域设置').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_ee2972614e')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 8, top: 16 })
-        Text('点击各区域设置动作').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_30abb7cbaa')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
           .margin({ bottom: 16 })
         // 3x3 网格
         ForEach([0, 1, 2], (rowIdx: number) => {
@@ -1547,7 +1547,7 @@ struct ComicReadPage {
           .justifyContent(FlexAlign.SpaceEvenly)
         }, (rowIdx: number) => rowIdx.toString())
         // 保存按钮
-        Button('保存').margin({ top: 16, bottom: 16 }).onClick(async () => {
+        Button($r('app.string.common_save')).margin({ top: 16, bottom: 16 }).onClick(async () => {
           try {
             const s = SettingsStore.getInstance();
             await s.init(UiUtil.getHostContext(this.getUIContext()));

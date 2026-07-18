@@ -265,8 +265,8 @@ struct RssSortPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
-          .onClick(() => UiUtil.back(this.getUIContext()))
+        Text($r('app.string.ui_8179643cdc')).fontSize(22).fontColor(ThemeColors.primary(this.isDark))
+          .accessibilityText($r('app.string.common_back')).onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
@@ -275,12 +275,12 @@ struct RssSortPage {
           Text(this.articleStyle === 0 ? '列表' : this.articleStyle === 1 ? '大卡' : this.articleStyle === 2 ? '网格' : '瀑布')
             .fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent').margin({ right: 4 })
+        .backgroundColor(ThemeColors.transparent()).margin({ right: 4 })
         .onClick(() => this.switchLayout())
         Button({ type: ButtonType.Normal }) {
-          Text('搜索').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.common_search')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => {
           this.isSearch = !this.isSearch;
           if (!this.isSearch) {
@@ -294,7 +294,7 @@ struct RssSortPage {
 
       // ===== 搜索栏 =====
       if (this.isSearch) {
-        Search({ placeholder: '搜索文章...', value: this.searchKey })
+        Search({ placeholder: $r('app.string.ui_5fd0aabe28'), value: this.searchKey })
           .onSubmit((val) => {
             this.searchKey = val;
             const tab = this.sortTabs[this.currentTab];
@@ -364,7 +364,7 @@ struct RssSortPage {
               Text(this.loadState.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
                 .padding(12).onClick(() => this.loadMore())
             } else if (!this.loadState.hasMore && this.articles.length > 0) {
-              Text('— 已加载全部 —').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+              Text($r('app.string.ui_a90e20dcba')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                 .width('100%').textAlign(TextAlign.Center).padding(12)
             }
           }

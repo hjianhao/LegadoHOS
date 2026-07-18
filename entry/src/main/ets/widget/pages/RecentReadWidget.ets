@@ -6,8 +6,11 @@
  *
  * HarmonyOS Widget 组件使用 @ohos.form.formExtension 生命周期。
  */
+import { ThemeColors } from '../../theme/ThemeColors';
+
 @Component
 export struct RecentReadWidget {
+  @StorageProp('isDark') isDark: boolean = false;
   @State bookName: string = '';
   @State chapterTitle: string = '';
   @State progress: number = 0;
@@ -23,11 +26,13 @@ export struct RecentReadWidget {
             .margin({ right: 8 })
         } else {
           Column() {
-            Text((this.bookName || '📚').charAt(0))
-              .fontSize(24).fontColor('#FFF')
+            Image($r('app.media.ic_bookshelf'))
+              .width(28).height(28)
+              .fillColor(ThemeColors.onPrimary(this.isDark))
+              .accessibilityText($r('app.string.ui_32ffb8c287'))
           }
           .width(48).height(64)
-          .backgroundColor('#455A64')
+          .backgroundColor(ThemeColors.primary(this.isDark))
           .borderRadius(4)
           .margin({ right: 8 })
           .justifyContent(FlexAlign.Center)
@@ -35,14 +40,15 @@ export struct RecentReadWidget {
         }
 
         Column() {
-          Text(this.bookName || '点击开始阅读')
+          Text(this.bookName || $r('app.string.widget_start_reading'))
             .fontSize(14).fontWeight(FontWeight.Bold)
+            .fontColor(ThemeColors.onSurface(this.isDark))
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .alignSelf(ItemAlign.Start)
 
           if (this.chapterTitle) {
             Text(this.chapterTitle)
-              .fontSize(11).fontColor('#888')
+              .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
               .maxLines(1)
               .alignSelf(ItemAlign.Start)
               .margin({ top: 2 })
@@ -53,11 +59,11 @@ export struct RecentReadWidget {
             Column()
               .width(`${Math.min(100, this.progress * 100)}%`)
               .height(3)
-              .backgroundColor('#0078D7')
+              .backgroundColor(ThemeColors.primary(this.isDark))
               .borderRadius(2)
           }
           .width('100%').height(3)
-          .backgroundColor('#333')
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
           .borderRadius(2)
           .margin({ top: 4 })
         }
@@ -67,11 +73,12 @@ export struct RecentReadWidget {
       .padding(12)
     }
     .width('100%').height('100%')
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius(8)
     .onClick(() => {
       // 打开书籍
       console.info('[Widget] Open book');
     })
+    .accessibilityText($r('app.string.widget_start_reading'))
   }
 }

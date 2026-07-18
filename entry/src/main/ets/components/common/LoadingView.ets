@@ -1,19 +1,22 @@
 /**
  * 通用加载视图
  */
+import { ThemeColors } from '../../theme/ThemeColors';
+
 @Component
 export struct LoadingView {
   @Prop message: string;
+  @StorageLink('isDark') isDark: boolean = false;
 
   build() {
     Column() {
       LoadingProgress()
-        .color('#0078D7')
+        .color(ThemeColors.primary(this.isDark))
         .width(48)
         .height(48)
       Text(this.message)
         .fontSize(14)
-        .fontColor('#888')
+        .fontColor(ThemeColors.secondaryText(this.isDark))
         .margin({ top: 16 })
     }
     .width('100%')
@@ -35,7 +38,7 @@ export struct EmptyView {
         .margin({ bottom: 16 })
       Text(this.message)
         .fontSize(15)
-        .fontColor('#888')
+        .fontColor(ThemeColors.secondaryText(this.isDark))
         .textAlign(TextAlign.Center)
         .lineHeight(22)
     }

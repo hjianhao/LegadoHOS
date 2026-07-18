@@ -123,8 +123,8 @@ export struct GroupManageDialog {
     Column() {
       // ===== 标题栏 =====
       Row() {
-        Text('分组管理').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button() { Text('新增').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark)) }
+        Text($r('app.string.ui_e900b55ce7')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button() { Text($r('app.string.ui_2cd9e6ce81')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark)) }
           .height(40).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(20)
           .padding({ left: 12, right: 12 })
           .onClick(() => {
@@ -132,24 +132,24 @@ export struct GroupManageDialog {
             this.showAddInput = true;
             this.showEditInput = false;
           })
-        Button() { Text('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
-          .width(40).height(40).backgroundColor('transparent')
-          .onClick(() => { this.controller.close(); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }.padding({ top: 12, bottom: 8 })
 
       // ===== 新增输入框 =====
       if (this.showAddInput) {
         Row() {
-          TextInput({ placeholder: '输入新分组名称', text: this.addGroupName })
+          TextInput({ placeholder: $r('app.string.ui_7fcdc76296'), text: this.addGroupName })
             .height(48).fontSize(14).layoutWeight(1).borderRadius(12)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .padding({ left: 8 })
             .onChange((v: string) => { this.addGroupName = v; })
-          Button('添加').fontSize(13).height(48)
+          Button($r('app.string.common_add')).fontSize(13).height(48)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 6 })
             .onClick(() => { this.onAddGroup(); })
-          Button('取消').fontSize(13).height(48)
+          Button($r('app.string.common_cancel')).fontSize(13).height(48)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 4 })
             .onClick(() => { this.showAddInput = false; })
@@ -159,16 +159,16 @@ export struct GroupManageDialog {
       // ===== 编辑输入框 =====
       if (this.showEditInput) {
         Row() {
-          TextInput({ placeholder: '输入新名称', text: this.editGroupName })
+          TextInput({ placeholder: $r('app.string.ui_7c6286bb83'), text: this.editGroupName })
             .height(48).fontSize(14).layoutWeight(1).borderRadius(12)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .padding({ left: 8 })
             .onChange((v: string) => { this.editGroupName = v; })
-          Button('保存').fontSize(13).height(48)
+          Button($r('app.string.common_save')).fontSize(13).height(48)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 6 })
             .onClick(() => { this.onSaveEdit(); })
-          Button('取消').fontSize(13).height(48)
+          Button($r('app.string.common_cancel')).fontSize(13).height(48)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 4 })
             .onClick(() => { this.showEditInput = false; })
@@ -180,8 +180,8 @@ export struct GroupManageDialog {
         LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
       } else if (this.groups.length === 0) {
         Column() {
-          Text('还没有分组').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 40 })
-          Text('新增分组会分配给当前未分组书源').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
+          Text($r('app.string.ui_06913109ef')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 40 })
+          Text($r('app.string.ui_7b138e3773')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').alignItems(HorizontalAlign.Center).layoutWeight(1)
       } else {
         List() {
@@ -189,11 +189,11 @@ export struct GroupManageDialog {
             ListItem() {
               Row() {
                 Text(group).fontSize(15).layoutWeight(1)
-                Button() { Text('编辑').fontSize(12).fontColor(ThemeColors.primary(this.isDark)) }
-                  .height(40).backgroundColor('transparent').borderRadius(20)
+                Button() { Text($r('app.string.common_edit')).fontSize(12).fontColor(ThemeColors.primary(this.isDark)) }
+                  .height(40).backgroundColor(ThemeColors.transparent()).borderRadius(20)
                   .onClick(() => { this.onEditGroup(group); })
-                Button() { Text('删除').fontSize(12).fontColor(ThemeColors.error(this.isDark)) }
-                  .height(40).backgroundColor('transparent').borderRadius(20)
+                Button() { Text($r('app.string.common_delete')).fontSize(12).fontColor(ThemeColors.error(this.isDark)) }
+                  .height(40).backgroundColor(ThemeColors.transparent()).borderRadius(20)
                   .margin({ left: 4 })
                   .onClick(() => { this.confirmDeleteGroup(group); })
               }
@@ -207,7 +207,7 @@ export struct GroupManageDialog {
       }
 
       // ===== 底部关闭 =====
-      Button('关闭').height(48).fontSize(14)
+      Button($r('app.string.common_close')).height(48).fontSize(14)
         .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24).width('100%').margin({ top: 8 })
         .onClick(() => { this.controller.close(); })
     }

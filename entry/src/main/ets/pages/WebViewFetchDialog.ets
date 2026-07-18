@@ -5,10 +5,12 @@
  * Cloudflare 挑战在此自动完成。
  */
 import webview from '@ohos.web.webview';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct WebViewFetchDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   private webController: webview.WebviewController = new webview.WebviewController();
 
   @State fetchUrl: string = '';
@@ -77,8 +79,8 @@ export struct WebViewFetchDialog {
   build() {
     Column() {
       // 状态提示
-      Text(this.statusText).fontSize(14).fontColor('#888').margin({ top: 20 })
-      Text(this.fetchUrl).fontSize(11).fontColor('#AAA').margin({ top: 4 })
+      Text(this.statusText).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 20 })
+      Text(this.fetchUrl).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .padding({ left: 20, right: 20 })
 
@@ -95,7 +97,7 @@ export struct WebViewFetchDialog {
         .mixedMode(MixedMode.All)
 
       // 取消按钮
-      Button('取消').margin({ top: 12, bottom: 20 }).fontSize(14)
+      Button($r('app.string.common_cancel')).margin({ top: 12, bottom: 20 }).fontSize(14)
         .onClick((): void => {
           this.controller.close();
           if (this.onFetched) {

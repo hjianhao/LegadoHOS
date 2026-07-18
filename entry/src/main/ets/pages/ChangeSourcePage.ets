@@ -22,6 +22,7 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { SourceSwitchStore } from '../util/SourceSwitchStore';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 
 @Entry
 @Component
@@ -37,7 +38,12 @@ export struct ChangeSourcePage {
   @State isSearching: boolean = false;
   @State searchProgress: string = '';
   @State filterText: string = '';
-  @State results: SearchResult[] = [];       // 当前展示的结果（已过滤）
+  @State @Watch('onResultsChanged_') results: SearchResult[] = [];       // 当前展示的结果（已过滤）
+  private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
+
+  private onResultsChanged_(): void {
+    this.resultDataSource_.reset(this.results);
+  }
   @State allResults: SearchResult[] = [];    // 所有结果（原始，未过滤）
   @State isFromCache: boolean = false;       // 是否来自缓存（非实时搜索）
 
@@ -306,12 +312,12 @@ export struct ChangeSourcePage {
       // ===== 顶部导航栏 =====
       Row() {
         Button() {
-          Text('←').fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
+          Text($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
         }
-        .width(40).height(40).backgroundColor('transparent')
-        .onClick((): void => { this.searching = false; UiUtil.back(this.getUIContext()); })
+        .width(40).height(40).backgroundColor(ThemeColors.transparent())
+        .accessibilityText($r('app.string.common_back')).onClick((): void => { this.searching = false; UiUtil.back(this.getUIContext()); })
 
-        Text('更换书源').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_209ae0beeb')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
 
         Blank()
@@ -321,21 +327,21 @@ export struct ChangeSourcePage {
       // ===== 过滤 + 刷新 操作行 =====
       Row() {
         // 过滤输入框
-        TextInput({ placeholder: '输入文字过滤源...', text: this.filterText })
-          .layoutWeight(1).height(36).fontSize(13)
-          .borderRadius(18)
+        TextInput({ placeholder: $r('app.string.ui_6517c8605c'), text: this.filterText })
+          .layoutWeight(1).height(40).fontSize(13)
+          .borderRadius(20)
           .backgroundColor(ThemeColors.outlineVariant(this.isDark))
           .fontColor(ThemeColors.onBackground(this.isDark))
           .padding({ left: 12, right: 12 })
           .onChange((value: string) => { this.onFilterChange(value); })
 
         // 过滤按钮
-        Button('🔍').fontSize(14).height(36).width(44).margin({ left: 6 })
-          .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
+        Button($r('app.string.common_search')).fontSize(13).height(40).margin({ left: 6 })
+          .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(18)
           .onClick(() => { this.applyFilter(); })
 
         // 刷新按钮（重新搜索）
-        Button('🔄').fontSize(14).height(36).width(44).margin({ left: 6 })
+        Button($r('app.string.common_refresh')).fontSize(13).height(40).margin({ left: 6 })
           .backgroundColor(ThemeColors.outlineVariant(this.isDark))
           .fontColor(ThemeColors.onBackground(this.isDark)).borderRadius(18)
           .onClick(() => { this.onRefresh(); })
@@ -344,10 +350,10 @@ export struct ChangeSourcePage {
 
       // ===== 状态提示 =====
       if (this.isSearching) {
-        Text(this.searchProgress || '搜索中...').fontSize(11).fontColor('#999')
+        Text(this.searchProgress || '搜索中...').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').padding({ left: 16, right: 16, bottom: 4 })
       } else if (this.isFromCache && this.allResults.length > 0) {
-        Text('缓存源，点击刷新重新搜索').fontSize(11).fontColor('#999')
+        Text($r('app.string.ui_e5033d5837')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').padding({ left: 16, right: 16, bottom: 4 })
       }
 
@@ -356,25 +362,25 @@ export struct ChangeSourcePage {
         // 搜索中且无缓存结果
         Column() {
           LoadingProgress().width(40).height(40).margin({ top: 30 })
-          Text('搜索中...').fontSize(13).fontColor('#999').margin({ top: 8 })
+          Text($r('app.string.ui_ab0501d882')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.width('100%').layoutWeight(1)
       } else if (this.results.length === 0) {
         Column() {
-          Text('没有找到书源').fontSize(14).fontColor('#999').margin({ top: 30 })
-          Text(this.isFromCache ? '试试点击刷新重新搜索' : '试试修改过滤词').fontSize(12).fontColor('#CCC').margin({ top: 4 })
+          Text($r('app.string.ui_e99c6a8299')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 30 })
+          Text(this.isFromCache ? '试试点击刷新重新搜索' : '试试修改过滤词').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').layoutWeight(1)
       } else {
         List() {
-          ForEach(this.results, (item: SearchResult) => {
+          LazyForEach(this.resultDataSource_, (item: SearchResult) => {
             ListItem() {
               Row() {
                 Column() {
                   Row() {
                     Text(item.origin || '未知').fontSize(14).fontWeight(FontWeight.Medium)
-                      .fontColor(item.originUrl === this.sourceOriginUrl ? '#4CAF50' : (ThemeColors.onBackground(this.isDark)))
+                      .fontColor(item.originUrl === this.sourceOriginUrl ? ThemeColors.success(this.isDark) : (ThemeColors.onBackground(this.isDark)))
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     if (item.originUrl === this.sourceOriginUrl) {
-                      Text('  当前').fontSize(11).fontColor('#4CAF50')
+                      Text($r('app.string.ui_9025ffefeb')).fontSize(11).fontColor(ThemeColors.success(this.isDark))
                     }
                   }.alignSelf(ItemAlign.Start)
 
@@ -384,7 +390,7 @@ export struct ChangeSourcePage {
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
 
                   if (item.wordCount) {
-                    Text('字数: ' + item.wordCount).fontSize(11).fontColor('#AAA')
+                    Text('字数: ' + item.wordCount).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                       .alignSelf(ItemAlign.Start).margin({ top: 2 })
                   }
                 }
@@ -394,7 +400,7 @@ export struct ChangeSourcePage {
             }
             .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
             .onClick(() => { this.onSourceSelect(item); })
-          })
+          }, (item: SearchResult): string => item.key)
         }
         .layoutWeight(1).width('100%')
       }

@@ -1,10 +1,12 @@
 import { BookshelfTransferResult, BookshelfTransferService } from '../service/BookshelfTransferService';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct AddBookUrlDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State inputText: string = '';
   @State isRunning: boolean = false;
   @State statusText: string = '';
@@ -40,35 +42,35 @@ export struct AddBookUrlDialog {
   build() {
     Column() {
       Row() {
-        Text('添加 URL').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor('#888').backgroundColor(Color.Transparent)
-          .width(36).height(36)
-          .onClick((): void => { this.controller.close(); })
+        Text($r('app.string.ui_0eb27905fd')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(Color.Transparent)
+          .width(40).height(40)
+          .accessibilityText($r('app.string.common_close')).onClick((): void => { this.controller.close(); })
       }.width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
-      TextArea({ text: this.inputText, placeholder: '每行一个书籍详情页 URL' })
-        .width('100%').height(180).fontSize(13).backgroundColor('#F5F5F5').borderRadius(8)
+      TextArea({ text: this.inputText, placeholder: $r('app.string.ui_9bab3618b6') })
+        .width('100%').height(180).fontSize(13).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
         .padding(12).margin({ left: 16, right: 16 })
         .onChange((value: string): void => { this.inputText = value; })
 
       if (this.isRunning) {
-        LoadingProgress().color('#0078D7').margin({ top: 12 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 12 })
       }
       if (this.statusText) {
-        Text(this.statusText).fontSize(12).fontColor('#666').width('100%')
+        Text(this.statusText).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
           .padding({ left: 16, right: 16, top: 10 })
       }
 
       Row() {
-        Button('取消').fontSize(14).backgroundColor('#EEE').fontColor('#666').height(40)
+        Button($r('app.string.common_cancel')).fontSize(14).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.secondaryText(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1).margin({ right: 8 })
           .onClick((): void => { this.controller.close(); })
-        Button('添加').fontSize(14).backgroundColor('#0078D7').fontColor('#FFF').height(40)
+        Button($r('app.string.common_add')).fontSize(14).backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).height(40)
           .borderRadius(8).layoutWeight(1)
           .enabled(!this.isRunning)
           .onClick((): void => { this.doAdd(); })
       }.width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 })
     }
-    .width('100%').backgroundColor('#FFF').borderRadius({ topLeft: 16, topRight: 16 })
+    .width('100%').backgroundColor(ThemeColors.onPrimary(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

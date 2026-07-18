@@ -100,13 +100,13 @@ struct YoushuBooklistDetailPage {
   build() {
     Column() {
       Row() {
-        Button('←').fontSize(22).fontColor(ThemeColors.onBackground(this.isDark))
-          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('返回')
+        Button($r('app.string.ui_8179643cdc')).fontSize(22).fontColor(ThemeColors.onBackground(this.isDark))
+          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText($r('app.string.common_back'))
           .onClick((): void => { UiUtil.back(this.getUIContext()); })
         Text(this.detail?.title || this.routeTitle).fontSize(18).fontWeight(FontWeight.Medium)
           .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 12 }).layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Button('登录').fontSize(12).height(44).padding({ left: 12, right: 12 })
+        Button($r('app.string.ui_21f1e88275')).fontSize(12).height(44).padding({ left: 12, right: 12 })
           .fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
           .borderRadius(16).onClick((): void => { this.openLogin(); })
       }.width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 })
@@ -114,26 +114,26 @@ struct YoushuBooklistDetailPage {
       if (this.isLoading && this.books.length === 0) {
         Column() {
           LoadingProgress().width(32).height(32).color(ThemeColors.primary(this.isDark))
-          Text('正在加载书单详情…').fontSize(13).margin({ top: 10 })
+          Text($r('app.string.ui_5ad84fbb32')).fontSize(13).margin({ top: 10 })
             .fontColor(ThemeColors.secondaryText(this.isDark))
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.detail?.loginRequired) {
         Column() {
-          Text('该书单需要登录后查看').fontSize(17).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_f52aef24a9')).fontSize(17).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('登录状态和可选凭据会保存在本机应用中').fontSize(12).margin({ top: 8 })
+          Text($r('app.string.ui_62c8d4d429')).fontSize(12).margin({ top: 8 })
             .fontColor(ThemeColors.secondaryText(this.isDark))
-          Button('登录优书网').margin({ top: 18 })
+          Button($r('app.string.ui_24934124ef')).margin({ top: 18 })
             .fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
             .onClick((): void => { this.openLogin(); })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.errorMessage && this.books.length === 0) {
         Column() {
-          Text('书单详情加载失败').fontSize(16).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_e977b63424')).fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
           Text(this.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
             .margin({ top: 8 }).padding({ left: 24, right: 24 }).textAlign(TextAlign.Center)
-          Button('重试').margin({ top: 16 }).onClick((): void => { void this.loadDetail(this.detailUrl, false); })
+          Button($r('app.string.common_retry')).margin({ top: 16 }).onClick((): void => { void this.loadDetail(this.detailUrl, false); })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else {
         List({ space: 10 }) {
@@ -153,13 +153,13 @@ struct YoushuBooklistDetailPage {
             ListItem() {
               Row() {
                 LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
-                Text('加载下一页…').fontSize(12).margin({ left: 8 })
+                Text($r('app.string.ui_d5d58840ea')).fontSize(12).margin({ left: 8 })
                   .fontColor(ThemeColors.secondaryText(this.isDark))
               }.width('100%').justifyContent(FlexAlign.Center).padding(16)
             }
           } else if (!this.nextPageUrl && this.books.length > 0) {
             ListItem() {
-              Text('书单已加载完毕').width('100%').textAlign(TextAlign.Center).fontSize(12)
+              Text($r('app.string.ui_6378e1ddf7')).width('100%').textAlign(TextAlign.Center).fontSize(12)
                 .fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
             }
           }
@@ -173,7 +173,7 @@ struct YoushuBooklistDetailPage {
   private buildBooklistInfo(detail: YoushuBooklistDetail) {
     Column() {
       Row() {
-        Image(detail.coverUrl).width(82).height(108).objectFit(ImageFit.Cover).borderRadius(8)
+        Image(detail.coverUrl).width(82).height(108).objectFit(ImageFit.Cover).borderRadius(8).accessibilityText(detail.title + '封面')
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).margin({ right: 14 })
         Column() {
           Text(detail.title).fontSize(17).fontWeight(FontWeight.Bold).maxLines(3)
@@ -210,7 +210,7 @@ struct YoushuBooklistDetailPage {
     Column() {
       Row() {
         Stack({ alignContent: Alignment.TopStart }) {
-          Image(book.coverUrl).width(66).height(92).objectFit(ImageFit.Cover).borderRadius(7)
+          Image(book.coverUrl).width(66).height(92).objectFit(ImageFit.Cover).borderRadius(7).accessibilityText(book.name + '封面')
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           Text(book.position).fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark))
             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
@@ -233,7 +233,7 @@ struct YoushuBooklistDetailPage {
       }.width('100%')
       if (book.review) {
         Column() {
-          Text('评语').fontSize(11).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_975c61b3f8')).fontSize(11).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.primary(this.isDark)).alignSelf(ItemAlign.Start)
           Text(book.review).fontSize(12).lineHeight(19).margin({ top: 4 })
             .fontColor(ThemeColors.onSurface(this.isDark)).alignSelf(ItemAlign.Start)

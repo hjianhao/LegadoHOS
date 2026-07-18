@@ -16,31 +16,31 @@ import { ThemeColors } from '../theme/ThemeColors';
 interface FieldGroup {
   key: string;
   label: string;
-  placeholder: string;
+  placeholder: ResourceStr;
 }
 
 const TAB_BASIC: FieldGroup[] = [
-  { key: 'sourceName', label: '书源名称', placeholder: '输入书源名称' },
-  { key: 'sourceUrl', label: '书源 URL', placeholder: 'https://example.com' },
-  { key: 'sourceType', label: '书源类型', placeholder: '0 小说 / 1 音频 / 2 漫画 / 3 文件' },
-  { key: 'enabled', label: '启用书源', placeholder: 'true/false' },
-  { key: 'group', label: '分组', placeholder: '输入分组名' },
-  { key: 'bookUrlPattern', label: '书 URL 正则', placeholder: '如 https?://example\\.com/book/\\d+' },
-  { key: 'bookSourceComment', label: '注释', placeholder: '可选备注' },
-  { key: 'variableComment', label: '变量说明', placeholder: 'JSON格式变量说明' },
-  { key: 'header', label: 'HTTP 头', placeholder: '如 {"User-Agent":"..."}' },
-  { key: 'loginUrl', label: '登录 URL', placeholder: '登录页面地址' },
-  { key: 'loginCheckJs', label: '登录检测 JS', placeholder: '返回 true 表示已登录' },
-  { key: 'coverDecodeJs', label: '封面解密 JS', placeholder: '封面 URL 解密脚本' },
-  { key: 'weight', label: '权重', placeholder: '数值越大越优先' },
-  { key: 'respondTime', label: '响应超时 (ms)', placeholder: '默认 180000' },
-  { key: 'concurrentRate', label: '并发率', placeholder: '搜索并发数' },
-  { key: 'jsLib', label: 'JS 库', placeholder: '自定义 JS 库代码' },
+  { key: 'sourceName', label: '书源名称', placeholder: $r('app.string.ui_aa5499a758') },
+  { key: 'sourceUrl', label: '书源 URL', placeholder: $r('app.string.ui_327c3fda87') },
+  { key: 'sourceType', label: '书源类型', placeholder: $r('app.string.ui_ac1424ddd8') },
+  { key: 'enabled', label: '启用书源', placeholder: $r('app.string.ui_6db4e26e48') },
+  { key: 'group', label: '分组', placeholder: $r('app.string.ui_bce3df74e6') },
+  { key: 'bookUrlPattern', label: '书 URL 正则', placeholder: $r('app.string.ui_114e089a41') },
+  { key: 'bookSourceComment', label: '注释', placeholder: $r('app.string.ui_ef950bf450') },
+  { key: 'variableComment', label: '变量说明', placeholder: $r('app.string.ui_073bef33f6') },
+  { key: 'header', label: 'HTTP 头', placeholder: $r('app.string.ui_7877ebb0b5') },
+  { key: 'loginUrl', label: '登录 URL', placeholder: $r('app.string.ui_e7395dbc96') },
+  { key: 'loginCheckJs', label: '登录检测 JS', placeholder: $r('app.string.ui_5fac32676a') },
+  { key: 'coverDecodeJs', label: '封面解密 JS', placeholder: $r('app.string.ui_b685e2d33d') },
+  { key: 'weight', label: '权重', placeholder: $r('app.string.ui_9458b775c5') },
+  { key: 'respondTime', label: '响应超时 (ms)', placeholder: $r('app.string.ui_1c822c4b5c') },
+  { key: 'concurrentRate', label: '并发率', placeholder: $r('app.string.ui_5b636f79d2') },
+  { key: 'jsLib', label: 'JS 库', placeholder: $r('app.string.ui_6b0a3df4f1') },
 ];
 
 const TAB_SEARCH: FieldGroup[] = [
-  { key: 'ruleSearchUrl', label: '搜索 URL', placeholder: '{{key}} 为关键词' },
-  { key: 'ruleSearchList', label: '搜索列表规则', placeholder: 'CSS/JSONPath' },
+  { key: 'ruleSearchUrl', label: '搜索 URL', placeholder: $r('app.string.ui_bc111be397') },
+  { key: 'ruleSearchList', label: '搜索列表规则', placeholder: $r('app.string.ui_7e0493b05c') },
   { key: 'ruleSearchName', label: '书名规则', placeholder: '' },
   { key: 'ruleSearchAuthor', label: '作者规则', placeholder: '' },
   { key: 'ruleSearchCover', label: '封面规则', placeholder: '' },
@@ -53,7 +53,7 @@ const TAB_SEARCH: FieldGroup[] = [
 
 const TAB_BOOKINFO_TOC: FieldGroup[] = [
   // 详情规则
-  { key: 'ruleBookInfoInit', label: '【详情】初始化 JS', placeholder: '预处理脚本' },
+  { key: 'ruleBookInfoInit', label: '【详情】初始化 JS', placeholder: $r('app.string.ui_33d7a0c1b0') },
   { key: 'ruleBookInfoName', label: '书名规则', placeholder: '' },
   { key: 'ruleBookInfoAuthor', label: '作者规则', placeholder: '' },
   { key: 'ruleBookInfoCover', label: '封面规则', placeholder: '' },
@@ -63,12 +63,12 @@ const TAB_BOOKINFO_TOC: FieldGroup[] = [
   { key: 'ruleBookInfoLastUpdateTime', label: '最后更新时间规则', placeholder: '' },
   { key: 'ruleBookInfoLastChapter', label: '最新章节规则', placeholder: '' },
   { key: 'ruleBookInfoTocUrl', label: '目录 URL 规则', placeholder: '' },
-  { key: 'ruleBookInfoCanReName', label: '能否重命名', placeholder: 'true/false' },
+  { key: 'ruleBookInfoCanReName', label: '能否重命名', placeholder: $r('app.string.ui_6db4e26e48') },
   { key: 'ruleBookInfoDownloadUrls', label: '下载 URL 规则', placeholder: '' },
   { key: 'ruleBookInfoRelatedBooks', label: '相关书籍规则', placeholder: '' },
   // 目录规则
-  { key: 'ruleTocUrl', label: '【目录】URL 规则', placeholder: '目录页 URL' },
-  { key: 'ruleToc', label: '目录列表规则', placeholder: 'CSS/JSONPath' },
+  { key: 'ruleTocUrl', label: '【目录】URL 规则', placeholder: $r('app.string.ui_2a703199b1') },
+  { key: 'ruleToc', label: '目录列表规则', placeholder: $r('app.string.ui_7e0493b05c') },
   { key: 'ruleTocTitle', label: '章节名规则', placeholder: '' },
   { key: 'ruleTocUrlItem', label: '章节 URL 规则', placeholder: '' },
   { key: 'ruleTocPreUpdateJs', label: '预处理 JS', placeholder: '' },
@@ -83,20 +83,20 @@ const TAB_BOOKINFO_TOC: FieldGroup[] = [
 const TAB_CONTENT_EXPLORE: FieldGroup[] = [
   // 正文规则
   { key: 'ruleBookContentUrl', label: '【正文】URL 规则', placeholder: '' },
-  { key: 'ruleBookContent', label: '内容规则', placeholder: 'CSS/JSONPath' },
+  { key: 'ruleBookContent', label: '内容规则', placeholder: $r('app.string.ui_7e0493b05c') },
   { key: 'ruleBookContentSubContent', label: '副内容规则', placeholder: '' },
   { key: 'ruleBookContentTitle', label: '标题规则', placeholder: '' },
   { key: 'ruleBookContentNext', label: '下一页规则', placeholder: '' },
   { key: 'ruleBookContentWebJs', label: 'Web JS', placeholder: '' },
-  { key: 'ruleBookContentSourceRegex', label: '源正则', placeholder: '替换前的正则' },
-  { key: 'ruleBookContentReplaceRegex', label: '替换正则', placeholder: '替换后的内容' },
+  { key: 'ruleBookContentSourceRegex', label: '源正则', placeholder: $r('app.string.ui_e20c0e0065') },
+  { key: 'ruleBookContentReplaceRegex', label: '替换正则', placeholder: $r('app.string.ui_161778d3b5') },
   { key: 'ruleBookContentImageStyle', label: '图片样式', placeholder: '' },
   { key: 'ruleBookContentImageDecode', label: '图片解密', placeholder: '' },
   { key: 'ruleBookContentPayAction', label: '付费操作', placeholder: '' },
   { key: 'ruleBookContentCallBackJs', label: '回调 JS', placeholder: '' },
   // 发现规则
-  { key: 'exploreUrl', label: '【发现】发现 URL', placeholder: '发现页地址' },
-  { key: 'ruleExplores', label: '发现分类规则', placeholder: 'JSON 数组或键值对' },
+  { key: 'exploreUrl', label: '【发现】发现 URL', placeholder: $r('app.string.ui_9f32ff3eed') },
+  { key: 'ruleExplores', label: '发现分类规则', placeholder: $r('app.string.ui_4fc8d91101') },
   { key: 'ruleExploreList', label: '发现列表规则', placeholder: '' },
   { key: 'ruleExploreName', label: '发现书名规则', placeholder: '' },
   { key: 'ruleExploreAuthor', label: '发现作者规则', placeholder: '' },
@@ -109,15 +109,15 @@ const TAB_CONTENT_EXPLORE: FieldGroup[] = [
 ];
 
 const TAB_ADVANCED: FieldGroup[] = [
-  { key: 'script', label: '脚本', placeholder: '书源脚本代码' },
-  { key: 'loginUi', label: '登录 UI', placeholder: 'JSON 格式登录界面' },
-  { key: 'eventListener', label: '事件监听', placeholder: 'JSON 格式' },
-  { key: 'customButton', label: '自定义按钮', placeholder: 'JSON 格式' },
-  { key: 'homepageModules', label: '首页模块', placeholder: 'JSON 格式' },
-  { key: 'enabledCookieJar', label: '启用 Cookie', placeholder: 'true/false' },
-  { key: 'enabledExplore', label: '启用发现', placeholder: 'true/false' },
+  { key: 'script', label: '脚本', placeholder: $r('app.string.ui_c1a33f3ea5') },
+  { key: 'loginUi', label: '登录 UI', placeholder: $r('app.string.ui_bfd7a18e56') },
+  { key: 'eventListener', label: '事件监听', placeholder: $r('app.string.ui_554d61a111') },
+  { key: 'customButton', label: '自定义按钮', placeholder: $r('app.string.ui_554d61a111') },
+  { key: 'homepageModules', label: '首页模块', placeholder: $r('app.string.ui_554d61a111') },
+  { key: 'enabledCookieJar', label: '启用 Cookie', placeholder: $r('app.string.ui_6db4e26e48') },
+  { key: 'enabledExplore', label: '启用发现', placeholder: $r('app.string.ui_6db4e26e48') },
   { key: 'exploreScreen', label: '发现屏幕', placeholder: '' },
-  { key: 'review', label: '评论规则', placeholder: '评论列表规则' },
+  { key: 'review', label: '评论规则', placeholder: $r('app.string.ui_9faba6fa67') },
   { key: 'reviewUrl', label: '评论 URL 规则', placeholder: '' },
   { key: 'reviewAvatar', label: '评论头像规则', placeholder: '' },
   { key: 'reviewContent', label: '评论内容规则', placeholder: '' },
@@ -418,9 +418,9 @@ struct BookSourceEditPage {
           Row() {
             Text(field.label).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
               .layoutWeight(1)
-            Button() { Text('✕').fontSize(10).fontColor(ThemeColors.error(this.isDark)) }
-              .width(20).height(20).backgroundColor('transparent')
-              .onClick(() => { this.deleteField(field.key); })
+            Button() { Text($r('app.string.ui_0951b9a022')).fontSize(10).fontColor(ThemeColors.error(this.isDark)) }
+              .width(40).height(40).backgroundColor(ThemeColors.transparent())
+              .accessibilityText($r('app.string.common_close')).onClick(() => { this.deleteField(field.key); })
           }.width('100%')
           if (this.isBooleanField(field.key)) {
             Row() {
@@ -455,13 +455,13 @@ struct BookSourceEditPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Button('‹').fontSize(26).width(40).height(40).backgroundColor('transparent')
+        Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { this.cancelEdit(); })
         Text(this.isNew ? '新建书源' : '编辑书源').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
         if (!this.isNew) {
-          Button('测试').fontSize(13).height(40).backgroundColor('transparent')
+          Button($r('app.string.ui_0b5d7ed54b')).fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
             .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openSearchTest(); })
-          Button('调试').fontSize(13).height(40).backgroundColor('transparent')
+          Button($r('app.string.ui_f4c117afe8')).fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
             .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openDebug(); })
         }
         Button(this.isSaving ? '保存中' : '保存').fontSize(14).height(40)
@@ -473,7 +473,7 @@ struct BookSourceEditPage {
 
       if (this.isLoading) {
         LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 100 })
-        Text('加载中...').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+        Text($r('app.string.common_loading')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
           .width('100%').textAlign(TextAlign.Center)
       } else if (this.editSource) {
         // ===== Tab 栏 =====

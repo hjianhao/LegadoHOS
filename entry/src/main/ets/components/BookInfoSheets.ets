@@ -45,6 +45,7 @@ interface RecordDayInfo {
 @CustomDialog
 export struct ChangeCoverSheet {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   bookName: string = '';
   bookAuthor: string = '';
   @State coverResults: SearchResult[] = [];
@@ -80,21 +81,21 @@ export struct ChangeCoverSheet {
   build() {
     Column() {
       Row() {
-        Text('更换封面').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_8c7609ffeb')).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor('#666') }
-          .width(32).height(32).backgroundColor('transparent')
-          .onClick(() => { this.controller.close(); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }
       .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
       if (this.isSearching) {
         LoadingProgress().width(40).height(40).margin({ top: 20 })
-        Text('搜索封面中...').fontSize(13).fontColor('#999').margin({ top: 8, bottom: 20 })
+        Text($r('app.string.ui_6f0d03e371')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8, bottom: 20 })
       } else if (this.coverResults.length === 0) {
-        Text('未找到封面').fontSize(13).fontColor('#999').margin(20)
+        Text($r('app.string.ui_e3b9e029b5')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin(20)
       } else {
-        Text('已找到 ' + this.coverResults.length + ' 个封面').fontSize(12).fontColor('#999').padding(8)
+        Text('已找到 ' + this.coverResults.length + ' 个封面').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).padding(8)
       }
 
       if (this.coverResults.length > 0) {
@@ -103,9 +104,10 @@ export struct ChangeCoverSheet {
             GridItem() {
               Column() {
                 Image(item.coverUrl)
+                  .accessibilityText((item.origin || '候选') + '封面')
                   .width('100%').aspectRatio(5 / 7)
                   .objectFit(ImageFit.Cover).borderRadius(4)
-                Text(item.origin).fontSize(10).fontColor('#999').maxLines(1)
+                Text(item.origin).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
               }
               .width('100%').padding(4)
@@ -123,7 +125,7 @@ export struct ChangeCoverSheet {
       }
     }
     .width('100%').height(420)
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }
@@ -416,9 +418,9 @@ export struct ChangeSourceSheet {
       Row() {
         Text(this.singleChapterMode ? '单章换源' : '更换书源').fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor('#666') }
-          .width(32).height(32).backgroundColor('transparent')
-          .onClick(() => {
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => {
             this.searching = false; // 对齐 Legado: dispose 时 stopSearch
             this.controller.close();
           })
@@ -427,17 +429,17 @@ export struct ChangeSourceSheet {
 
       // 搜索栏 + 刷新按钮
       Row() {
-        TextInput({ text: this.keyword, placeholder: '搜索书名' })
+        TextInput({ text: this.keyword, placeholder: $r('app.string.ui_7f4ffe6a5d') })
           .layoutWeight(1).height(36).fontSize(13)
-          .borderRadius(18).backgroundColor('#F5F5F5')
+          .borderRadius(18).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .padding({ left: 12, right: 12 })
           .onChange((value: string) => { this.keyword = value; })
-        Button() { Text('搜索').fontSize(13).fontColor('#FFF') }
-          .height(36).width(56).margin({ left: 8 }).padding(0)
-          .backgroundColor('#0078D7').borderRadius(18)
+        Button() { Text($r('app.string.common_search')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)) }
+          .height(40).width(56).margin({ left: 8 }).padding(0)
+          .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(18)
           .onClick(() => { this.searchSources(); })
-        Button() { Text('刷新').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)) }
-          .height(36).width(56).margin({ left: 4 }).padding(0)
+        Button() { Text($r('app.string.common_refresh')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)) }
+          .height(40).width(56).margin({ left: 4 }).padding(0)
           .backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(18)
           .onClick(() => { this.cachedSources = []; this.searchSources(); })
       }
@@ -445,9 +447,9 @@ export struct ChangeSourceSheet {
 
       // 校验作者开关（对齐 Legado checkAuthor）
       Row() {
-        Text('校验作者').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_12d4cdea63')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         Toggle({ type: ToggleType.Checkbox, isOn: this.checkAuthor })
-          .selectedColor('#0078D7')
+          .selectedColor(ThemeColors.primary(this.isDark))
           .margin({ left: 6 })
           .onChange((isOn: boolean) => {
             this.checkAuthor = isOn;
@@ -465,7 +467,7 @@ export struct ChangeSourceSheet {
 
       // 进度提示
       if (this.searchProgress) {
-        Text(this.searchProgress).fontSize(11).fontColor('#999')
+        Text(this.searchProgress).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').padding({ left: 16, right: 16, bottom: 4 })
       }
 
@@ -473,12 +475,12 @@ export struct ChangeSourceSheet {
 	      if (this.isSearching && this.results.length === 0) {
 	        Column() {
 	          LoadingProgress().width(40).height(40).margin({ top: 30 })
-	          Text('搜索中...').fontSize(13).fontColor('#999').margin({ top: 8 })
+	          Text($r('app.string.ui_ab0501d882')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
 	        }.width('100%').layoutWeight(1)
 	      } else if (this.results.length === 0) {
         Column() {
-          Text('没有找到其他书源').fontSize(14).fontColor('#999').margin({ top: 30 })
-          Text('试试修改搜索词或点击刷新').fontSize(12).fontColor('#CCC').margin({ top: 4 })
+          Text($r('app.string.ui_7266978dd6')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 30 })
+          Text($r('app.string.ui_8dbff19fd7')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').layoutWeight(1)
       } else {
         List() {
@@ -487,7 +489,7 @@ export struct ChangeSourceSheet {
               Row() {
                 // 当前源标识（前置）
                 if (item.originUrl === this.currentOriginUrl) {
-                  Text('✓').fontSize(14).fontColor('#4CAF50').fontWeight(FontWeight.Bold)
+                  Text($r('app.string.ui_698a879938')).fontSize(14).fontColor(ThemeColors.success(this.isDark)).fontWeight(FontWeight.Bold)
                     .margin({ right: 6 })
                 }
                 Column() {
@@ -495,18 +497,18 @@ export struct ChangeSourceSheet {
                     Text(item.name || '未知').fontSize(14).fontWeight(FontWeight.Medium)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     if (item.originUrl === this.currentOriginUrl) {
-                      Text('当前').fontSize(10).fontColor('#4CAF50').margin({ left: 6 })
-                        .backgroundColor('#E8F5E9').borderRadius(4).padding({ left: 4, right: 4 })
+                      Text($r('app.string.ui_25e74dceac')).fontSize(10).fontColor(ThemeColors.success(this.isDark)).margin({ left: 6 })
+                        .backgroundColor(ThemeColors.successContainer(this.isDark)).borderRadius(4).padding({ left: 4, right: 4 })
                     }
                   }.alignItems(VerticalAlign.Center)
-                  Text(item.author || '').fontSize(12).fontColor('#888')
+                  Text(item.author || '').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                     .maxLines(1).margin({ top: 2 })
                   Row() {
                     Text(item.origin || '未知').fontSize(11)
-                      .fontColor(item.originUrl === this.currentOriginUrl ? '#4CAF50' : '#0078D7')
+                      .fontColor(item.originUrl === this.currentOriginUrl ? ThemeColors.success(this.isDark) : ThemeColors.primary(this.isDark))
                       .maxLines(1)
                     if (item.wordCount) {
-                      Text(' · ' + item.wordCount).fontSize(11).fontColor('#AAA')
+                      Text(' · ' + item.wordCount).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                     }
                   }.margin({ top: 2 })
                 }
@@ -514,7 +516,7 @@ export struct ChangeSourceSheet {
               }
               .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
             }
-            .border({ width: { bottom: 0.5 }, color: '#EEEEEE' })
+            .border({ width: { bottom: 0.5 }, color: ThemeColors.surfaceVariant(this.isDark) })
             .onClick(() => { this.onResultClick_(item); })
           })
         }
@@ -528,7 +530,6 @@ export struct ChangeSourceSheet {
 
   /** 网络搜索的原始结果（用于"校验作者"开关切换后本地重过滤） */
   private rawResults_: SearchResult[] = [];
-  private optionDlg?: CustomDialogController;
 
   /** 点击候选源：先检查书籍类型是否一致（对齐 Legado），再选择替换或作为新书 */
   private onResultClick_(item: SearchResult): void {
@@ -538,24 +539,17 @@ export struct ChangeSourceSheet {
           this.proceedWithCandidate_(item);
           return;
         }
-        // 类型不一致（如小说换成漫画源）：先弹确认
-        this.optionDlg = new CustomDialogController({
-          builder: OptionSelectSheet({
-            controller: this.optionDlg!,
-            title: '书籍类型不一致',
-            message: '当前书籍与所选书源的类型不同（如小说/漫画），换源后可能无法正常阅读',
-            options: [
-              {
-                title: '仍然换源',
-                action: () => { this.proceedWithCandidate_(item); }
-              },
-            ]
-          }),
-          autoCancel: true,
-          alignment: DialogAlignment.Bottom,
-          customStyle: true
+        // @CustomDialog 中不再嵌套第二个 CustomDialogController，避免生命周期冲突。
+        UiUtil.showDialog(this.getUIContext(), {
+          title: '书籍类型不一致',
+          message: '当前书籍与所选书源的类型不同（如小说/漫画），换源后可能无法正常阅读',
+          buttons: [
+            { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+            { text: '仍然换源', color: ThemeColors.warning(this.isDark) }
+          ]
+        }).then((result: promptAction.ShowDialogSuccessResponse) => {
+          if (result.index === 1) this.proceedWithCandidate_(item);
         });
-        this.optionDlg.open();
       })
       .catch(() => { this.proceedWithCandidate_(item); });
   }
@@ -582,33 +576,23 @@ export struct ChangeSourceSheet {
       this.confirmReplace_(item);
       return;
     }
-    this.optionDlg = new CustomDialogController({
-      builder: OptionSelectSheet({
-        controller: this.optionDlg!,
-        title: item.name || '',
-        message: (item.origin || '') + (item.author ? ' · ' + item.author : ''),
-        options: [
-          {
-            title: '替换当前书籍',
-            description: '迁移阅读进度到新源',
-            action: () => { this.confirmReplace_(item); }
-          },
-          {
-            title: '作为新书加入书架',
-            description: '保留当前书籍，另存一本新书',
-            action: () => {
-              if (this.onAddAsNew) this.onAddAsNew(item);
-              this.searching = false;
-              this.controller.close();
-            }
-          },
-        ]
-      }),
-      autoCancel: true,
-      alignment: DialogAlignment.Bottom,
-      customStyle: true
+    UiUtil.showDialog(this.getUIContext(), {
+      title: item.name || '',
+      message: (item.origin || '') + (item.author ? ' · ' + item.author : ''),
+      buttons: [
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '替换当前书籍', color: ThemeColors.primary(this.isDark) },
+        { text: '作为新书加入书架', color: ThemeColors.primary(this.isDark) }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse) => {
+      if (result.index === 1) {
+        this.confirmReplace_(item);
+      } else if (result.index === 2) {
+        if (this.onAddAsNew) this.onAddAsNew(item);
+        this.searching = false;
+        this.controller.close();
+      }
     });
-    this.optionDlg.open();
   }
 
   private confirmReplace_(item: SearchResult): void {
@@ -648,6 +632,7 @@ export interface GroupItem {
 @CustomDialog
 export struct GroupSelectSheet {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State groups: GroupItem[] = [];
   @State isLoading: boolean = true;
   @State selectedGroupId: number = 0;
@@ -692,10 +677,10 @@ export struct GroupSelectSheet {
   build() {
     Column() {
       Row() {
-        Text('选择分组').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_d3c09574cc')).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
-        Button() { Text('完成').fontSize(14).fontColor('#0078D7') }
-          .backgroundColor('transparent')
+        Button() { Text($r('app.string.common_done')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)) }
+          .backgroundColor(ThemeColors.transparent())
           .onClick(() => {
             if (this.onConfirm) this.onConfirm(this.selectedGroupId);
             this.controller.close();
@@ -704,7 +689,7 @@ export struct GroupSelectSheet {
       .width('100%').padding({ left: 16, right: 12, top: 16, bottom: 8 })
 
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 20 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 20 })
       } else {
         List() {
           ForEach(this.groups, (item: GroupItem, index: number) => {
@@ -735,7 +720,7 @@ export struct GroupSelectSheet {
       }
     }
     .width('100%').height(360)
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }
@@ -831,18 +816,18 @@ export struct BookReadRecordSheet {
   build() {
     Column() {
       Row() {
-        Text('阅读记录').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_c3733c356a')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
-          .width(32).height(32).backgroundColor('transparent')
-          .onClick(() => { this.controller.close(); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }
       .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
       // 总阅读时长
       Column() {
-        Text('累计阅读时长').fontSize(13).fontColor('#999')
+        Text($r('app.string.ui_9958d93233')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         Text(this.formatDuration(this.realTotalTime > 0 ? this.realTotalTime : this.totalReadTime))
           .fontSize(20).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -857,23 +842,23 @@ export struct BookReadRecordSheet {
         Column() {
           Text(this.durChapterIndex.toString()).fontSize(22).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('当前章节').fontSize(11).fontColor('#999').margin({ top: 2 })
+          Text($r('app.string.ui_d3cf87651f')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.layoutWeight(1)
         Column() {
           Text(this.totalChapterNum.toString()).fontSize(22).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('总章节数').fontSize(11).fontColor('#999').margin({ top: 2 })
+          Text($r('app.string.ui_783198abda')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.layoutWeight(1)
         Column() {
           Text(this.progressPercent + '%').fontSize(22).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('阅读进度').fontSize(11).fontColor('#999').margin({ top: 2 })
+          Text($r('app.string.ui_035b6a0cf4')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.layoutWeight(1)
       }
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 16 })
 
       // 时间线
-      Text('阅读日历').fontSize(13).fontColor('#999')
+      Text($r('app.string.ui_48dcb13745')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').padding({ left: 16 })
         .margin({ top: 4, bottom: 4 })
 
@@ -886,7 +871,7 @@ export struct BookReadRecordSheet {
                   Text(this.dailyRecords[di].date).fontSize(13).fontWeight(FontWeight.Medium)
                     .fontColor(ThemeColors.primary(this.isDark))
                   Blank()
-                  Text(this.dailyRecords[di].totalMinutes + ' 分钟').fontSize(11).fontColor('#999')
+                  Text(this.dailyRecords[di].totalMinutes + ' 分钟').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                 }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 4 })
 
                 // 显示该日期的阅读会话
@@ -895,7 +880,7 @@ export struct BookReadRecordSheet {
                     Text(this.dailyRecords[di].sessions[si].time).fontSize(12)
                       .fontColor(ThemeColors.secondaryText(this.isDark))
                     Text(' 阅读 ' + Math.floor(this.dailyRecords[di].sessions[si].dur / 60) + ' 分钟')
-                      .fontSize(11).fontColor('#999').margin({ left: 8 })
+                      .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
                   }
                   .width('100%').padding({ left: 28, right: 16, top: 2, bottom: 2 })
                 })
@@ -906,7 +891,7 @@ export struct BookReadRecordSheet {
         .layoutWeight(1).width('100%')
         .margin({ bottom: 16 })
       } else {
-        Text('暂无阅读记录').fontSize(13).fontColor('#CCC')
+        Text($r('app.string.ui_367b6ee56c')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').padding(24).textAlign(TextAlign.Center)
       }
     }
@@ -922,31 +907,32 @@ export struct BookReadRecordSheet {
 @CustomDialog
 export struct RemarkEditDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State remarkText: string = '';
   onConfirm?: (text: string) => void;
 
   build() {
     Column() {
       Row() {
-        Text('编辑备注').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_1c9313edc3')).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor('#666') }
-          .width(32).height(32).backgroundColor('transparent')
-          .onClick(() => { this.controller.close(); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }
       .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
-      TextArea({ text: this.remarkText, placeholder: '输入备注文字...' })
+      TextArea({ text: this.remarkText, placeholder: $r('app.string.ui_b2b1b960f6') })
         .width('100%').layoutWeight(1)
         .margin({ left: 16, right: 16, top: 8, bottom: 8 })
         .fontSize(14)
-        .backgroundColor('#F5F5F5')
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
         .borderRadius(8)
         .padding(12)
         .onChange((value: string): void => { this.remarkText = value; })
 
-      Button('保存').fontSize(14).fontColor('#FFF')
-        .backgroundColor('#0078D7').width('100%').height(44)
+      Button($r('app.string.common_save')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
+        .backgroundColor(ThemeColors.primary(this.isDark)).width('100%').height(44)
         .borderRadius(0)
         .margin({ top: 4 })
         .onClick(() => {
@@ -955,7 +941,7 @@ export struct RemarkEditDialog {
         })
     }
     .width('100%').height(280)
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }
@@ -986,11 +972,11 @@ export struct ChapterPickSheet {
   build() {
     Column() {
       Row() {
-        Text('选择章节').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_e164fce278')).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
-        Button() { Text('✕').fontSize(16).fontColor('#666') }
-          .width(32).height(32).backgroundColor('transparent')
-          .onClick(() => { this.controller.close(); })
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }
       .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
 
@@ -999,7 +985,7 @@ export struct ChapterPickSheet {
           ListItem() {
             Text(ch.title || ('第 ' + (index + 1) + ' 节'))
               .fontSize(14)
-              .fontColor(index === this.currentIndex ? '#0078D7' : ThemeColors.onBackground(this.isDark))
+              .fontColor(index === this.currentIndex ? ThemeColors.primary(this.isDark) : ThemeColors.onBackground(this.isDark))
               .fontWeight(index === this.currentIndex ? FontWeight.Bold : FontWeight.Normal)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1085,7 +1071,7 @@ export struct OptionSelectSheet {
       .width('100%')
       .margin({ top: 14 })
 
-      Text('取消')
+      Text($r('app.string.common_cancel'))
         .fontSize(17)
         .fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%')

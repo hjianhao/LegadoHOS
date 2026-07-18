@@ -50,18 +50,18 @@ export struct RssMainPage {
   build() {
     Column() {
       Row() {
-        Text('订阅').fontSize(20).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_5319af762d')).fontSize(20).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
         Button({ type: ButtonType.Normal }) {
-          Text('↻').fontSize(18).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_178f1f4007')).fontSize(18).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent').margin({ right: 8 })
+        .backgroundColor(ThemeColors.transparent()).margin({ right: 8 })
         .onClick((): void => { this.onRefresh(); })
         Button({ type: ButtonType.Normal }) {
-          Text('管理').fontSize(14).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_4989b5cf94')).fontSize(14).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick((): void => { this.onToManage(); })
       }
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 8 })
@@ -70,10 +70,10 @@ export struct RssMainPage {
         LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.sources.length === 0) {
         Column() {
-          Text('暂无订阅源').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('点击右上角「管理」添加 RSS 订阅源')
+          Text($r('app.string.ui_68a5160559')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_b9fc94e920'))
             .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
-          Button('去管理')
+          Button($r('app.string.ui_88ba0b7d82'))
             .margin({ top: 16 })
             .onClick((): void => { this.onToManage(); })
         }
@@ -88,7 +88,7 @@ export struct RssMainPage {
                     Image(source.sourceIcon)
                       .width(40).height(40).borderRadius(8).objectFit(ImageFit.Cover)
                   } else {
-                    Text('📰').fontSize(30)
+                    Text($r('app.string.ui_9cce584749')).fontSize(30)
                   }
                   Column() {
                     Text(source.sourceName).fontSize(15)
@@ -102,7 +102,7 @@ export struct RssMainPage {
                     }
                   }
                   .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 10 })
-                  Text('>').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+                  Text($r('app.string.ui_091385be99')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
                 }
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 }).width('100%')
                 .onClick((): void => {

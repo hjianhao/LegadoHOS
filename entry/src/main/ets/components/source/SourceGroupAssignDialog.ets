@@ -37,34 +37,34 @@ export struct SourceGroupAssignDialog {
   build() {
     Column() {
       Row() {
-        Text('设置分组').fontSize(20).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_74027a0ec6')).fontSize(20).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
-        Button('关闭').height(40).backgroundColor('transparent')
+        Button($r('app.string.common_close')).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.controller.close(); })
       }.height(56).width('100%')
       Row() {
-        Button('加入分组').height(40).layoutWeight(1).borderRadius(20)
+        Button($r('app.string.ui_98f81e481a')).height(40).layoutWeight(1).borderRadius(20)
           .backgroundColor(!this.removeMode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
           .fontColor(!this.removeMode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
           .onClick(() => { this.removeMode = false; })
-        Button('移除分组').height(40).layoutWeight(1).borderRadius(20).margin({ left: 8 })
+        Button($r('app.string.ui_35c6d23953')).height(40).layoutWeight(1).borderRadius(20).margin({ left: 8 })
           .backgroundColor(this.removeMode ? ThemeColors.error(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
           .fontColor(this.removeMode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
           .onClick(() => { this.removeMode = true; })
       }.width('100%').margin({ bottom: 12 })
       Row() {
-        TextInput({ text: this.groupName, placeholder: '输入新分组或选择已有分组' })
+        TextInput({ text: this.groupName, placeholder: $r('app.string.ui_f26dbf60c5') })
           .height(48).layoutWeight(1).borderRadius(12)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark))
           .placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((value: string) => { this.groupName = value; })
-        Button('确定').height(48).borderRadius(24).margin({ left: 8 })
+        Button($r('app.string.common_confirm')).height(48).borderRadius(24).margin({ left: 8 })
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .onClick(() => { this.applyGroup(this.groupName); })
       }.width('100%')
       if (this.groups.length > 0) {
-        Text('已有分组').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_905ecef313')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
           .width('100%').margin({ top: 16, bottom: 6 })
         List({ space: 4 }) {
           ForEach(this.groups, (group: string) => {

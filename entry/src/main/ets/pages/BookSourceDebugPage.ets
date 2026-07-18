@@ -76,11 +76,11 @@ struct BookSourceDebugPage {
   build() {
     Column() {
       Row() {
-        Button('‹').fontSize(26).width(40).height(40).backgroundColor('transparent')
+        Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.onBackground(this.isDark))
           .onClick(() => { UiUtil.back(this.getUIContext()); })
         Column() {
-          Text('书源调试').fontSize(20).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_51f7688b7a')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).width('100%')
           Text(this.source ? this.source.sourceName : '加载中…').fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').maxLines(1)
@@ -88,9 +88,9 @@ struct BookSourceDebugPage {
       }.height(64).padding({ left: 8, right: 16 }).width('100%')
 
       Column() {
-        Text('测试关键词').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+        Text($r('app.string.ui_284abffdc3')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         Row() {
-          TextInput({ text: this.keyword, placeholder: '输入能命中该书源的书名' })
+          TextInput({ text: this.keyword, placeholder: $r('app.string.ui_57292d42ea') })
             .height(48).layoutWeight(1).borderRadius(12)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .fontColor(ThemeColors.onSurface(this.isDark))
@@ -114,9 +114,9 @@ struct BookSourceDebugPage {
 
       if (!this.isRunning && this.details.length === 0) {
         Column() {
-          Text('规则链路').fontSize(18).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_45b3b04258')).fontSize(18).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('搜索  →  详情  →  目录  →  正文').fontSize(14).margin({ top: 10 })
+          Text($r('app.string.ui_7d46687776')).fontSize(14).margin({ top: 10 })
             .fontColor(ThemeColors.secondaryText(this.isDark))
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {

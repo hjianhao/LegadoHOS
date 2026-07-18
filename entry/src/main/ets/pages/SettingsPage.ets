@@ -15,34 +15,39 @@ interface ReadModeOption { mode: number; label: string; }
 @CustomDialog
 struct DnsDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   dnsServers: string = '';
   dnsEnabled: boolean = true;
   onSave: (servers: string, enabled: boolean) => void = () => {};
 
   build() {
     Column() {
-      Text('DNS 设置').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#000000')
+      Text($r('app.string.ui_508aad2848')).fontSize(16).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onSurface(this.isDark))
         .padding({ bottom: 12 })
-      Text('逗号分隔多个 DNS 服务器地址').fontSize(12).fontColor('#666666')
+      Text($r('app.string.ui_2ef24aca64')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ bottom: 8 })
-      TextInput({ text: this.dnsServers, placeholder: '如 8.8.8.8,114.114.114.114' })
-        .height(36).fontSize(13).width('100%')
+      TextInput({ text: this.dnsServers, placeholder: $r('app.string.ui_94a1fb04e2') })
+        .height(40).fontSize(13).width('100%')
         .onChange((v: string) => { this.dnsServers = v; })
       Row() {
-        Text('启用').fontSize(14).fontColor('#333333').margin({ right: 8 })
+        Text($r('app.string.ui_d4e9ca3dd4')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).margin({ right: 8 })
         Toggle({ type: ToggleType.Switch, isOn: this.dnsEnabled })
           .onChange((v: boolean) => { this.dnsEnabled = v; })
       }.margin({ top: 12 })
       Row() {
-        Button('取消').fontSize(13).height(32).margin({ right: 8 }).onClick(() => {
+        Button($r('app.string.common_cancel')).fontSize(13).height(40).margin({ right: 8 }).onClick(() => {
           this.controller.close();
         })
-        Button('保存').fontSize(13).height(32).onClick(() => {
+        Button($r('app.string.common_save')).fontSize(13).height(40).onClick(() => {
           this.onSave(this.dnsServers, this.dnsEnabled);
           this.controller.close();
         })
       }.margin({ top: 16 }).justifyContent(FlexAlign.Center).width('100%')
-    }.padding(20).width(300)
+    }
+    .padding(20)
+    .width('90%')
+    .constraintSize({ maxWidth: 400 })
+    .backgroundColor(ThemeColors.surface(this.isDark))
   }
 }
 
@@ -145,10 +150,10 @@ struct SettingsPage {
     Column() {
       Row() {
         if (this.currentSection !== 'main') {
-          Text('< 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
+          Text($r('app.string.ui_39b50007b2')).fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
             .onClick(() => { this.currentSection = 'main'; })
         }
-        Text('设置').fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.common_settings')).fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
       }.padding(16).width('100%')
 
@@ -179,33 +184,31 @@ struct SettingsPage {
   buildMainMenu() {
     List() {
       ForEach([
-	        { icon: '\uD83D\uDCD6', title: '阅读设置', key: 'read' },
-	        { icon: '\uD83C\uDFA7', title: '语音朗读设置', key: 'tts' },
-	        { icon: '\uD83D\uDCDA', title: '漫画设置', key: 'comic' },
-        { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
-        { icon: '\uD83E\uDD16', title: '大模型配置', key: 'ai' },
-        { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
-        { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
-	        { icon: '\uD83D\uDD04', title: '备份与恢复', key: 'backup' },
-	        { icon: '\u2699\uFE0F', title: 'Worker测试', key: 'worker_test' },
-	        { icon: '\u2139\uFE0F', title: '关于', key: 'about' },
+	        { icon: '读', title: '阅读设置', key: 'read' },
+	        { icon: '声', title: '语音朗读设置', key: 'tts' },
+	        { icon: '漫', title: '漫画设置', key: 'comic' },
+        { icon: '搜', title: '搜索设置', key: 'search' },
+        { icon: 'AI', title: '大模型配置', key: 'ai' },
+        { icon: '网', title: '网络设置', key: 'network' },
+        { icon: '题', title: '主题设置', key: 'theme' },
+	        { icon: '备', title: '备份与恢复', key: 'backup' },
+	        { icon: '关', title: '关于', key: 'about' },
 	      ] as SettingItem[], (item: SettingItem) => {
         ListItem() {
           Row() {
             Text(item.icon).fontSize(22).margin({ right: 14 }).fontColor(ThemeColors.onBackground(this.isDark))
             Text(item.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onBackground(this.isDark))
             Blank()
-            Text('>').fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
+            Text($r('app.string.ui_091385be99')).fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
           }.padding(16).width('100%')
         }
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+        .accessibilityText(item.title)
 		        .onClick(() => {
 		          if (item.key === 'backup') {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/BackupSettingsPage' }).catch(() => {});
 		          } else if (item.key === 'ai') {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/AiConfigPage' }).catch(() => {});
-		          } else if (item.key === 'worker_test') {
-		            this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkerTestPage' }).catch(() => {});
 		          } else {
 		            this.currentSection = item.key;
 		          }
@@ -219,7 +222,7 @@ struct SettingsPage {
     Column() {
       // 并发搜索数配置
       Row() {
-        Text('\uD83D\uDD0D 并发搜索数').fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.ui_600907a2c7')).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         Text(String(this.searchConcurrency)).fontSize(16).fontColor(ThemeColors.primary(this.isDark))
           .width(40).textAlign(TextAlign.End)
       }.padding({ left: 16, right: 16, top: 16, bottom: 8 }).width('100%')
@@ -234,17 +237,17 @@ struct SettingsPage {
         AppStorage.set<number>('searchConcurrency', val);
       })
 
-      Text('同时搜索的书源数量，值越大搜索越快但网络负载越高')
+      Text($r('app.string.ui_0a4ed43a7e'))
         .fontSize(12).fontColor(ThemeColors.onBackground(this.isDark)).padding({ left: 16, right: 16, top: 4 })
 
       // 分组：默认启用
       Row() {
-        Text('\uD83D\uDCC2 搜索时启用全部源').fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.ui_f2307104fe')).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         Toggle({ type: ToggleType.Switch, isOn: true })
       }.padding(16).width('100%')
       .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-      Text('关闭后仅使用已启用的书源搜索')
+      Text($r('app.string.ui_136ddb8c2d'))
         .fontSize(12).fontColor(ThemeColors.onBackground(this.isDark)).padding({ left: 16, right: 16, bottom: 8 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
@@ -253,11 +256,11 @@ struct SettingsPage {
   @Builder
   buildReadSettings() {
     Column() {
-      Text('📖 阅读设置').fontSize(16).fontWeight(FontWeight.Medium)
+      Text($r('app.string.ui_bc0832465e')).fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
       // 自动缓存章节数
-      Text('自动缓存').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_2cde0d64a9')).fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
       Row() {
         Slider({ value: this.autoCacheSize, min: 0, max: 50, step: 1 })
           .width('60%').margin({ left: 16 })
@@ -273,26 +276,26 @@ struct SettingsPage {
       }.width('100%').margin({ top: 4 })
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-	      Text('阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
+	      Text($r('app.string.ui_761b13d7e8')).fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
 	        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
 
 	      // EPUB 阅读引擎
-	      Text('EPUB 阅读引擎').fontSize(15).fontWeight(FontWeight.Bold)
+	      Text($r('app.string.ui_e8a5847184')).fontSize(15).fontWeight(FontWeight.Bold)
 	        .padding({ left: 16, top: 12, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
 	      Row() {
-	        Text('小说阅读').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+	        Text($r('app.string.ui_fc917f3a3c')).fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 	        Radio({ value: 'novel', group: 'epubEngine' })
 	          .checked(this.epubEngine === 'novel')
 	          .onChange(() => { this.setEpubEngine_('novel'); })
 	      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-		        Text('图文混排1').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Text($r('app.string.ui_9e712a850b')).fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 		        Radio({ value: 'epub_js', group: 'epubEngine' })
 		          .checked(this.epubEngine === 'epub_js')
 		          .onChange(() => { this.setEpubEngine_('epub_js'); })
 		      }.padding({ left: 16, right: 16, top: 4, bottom: 4 }).width('100%')
 	      Row() {
-		        Text('图文混排2').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+		        Text($r('app.string.ui_c695d53340')).fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 		        Radio({ value: 'foliate', group: 'epubEngine' })
 		          .checked(this.epubEngine === 'foliate')
 		          .onChange(() => { this.setEpubEngine_('foliate'); })
@@ -306,21 +309,21 @@ struct SettingsPage {
   buildTtsSettings() {
     Scroll() {
       Column() {
-        Text('语音朗读设置').fontSize(16).fontWeight(FontWeight.Medium)
+        Text($r('app.string.ui_a0d3218048')).fontSize(16).fontWeight(FontWeight.Medium)
           .padding({ left: 16, right: 16, top: 16, bottom: 8 })
           .alignSelf(ItemAlign.Start)
           .fontColor(ThemeColors.onBackground(this.isDark))
 
-        Text('微软 Azure 语音服务').fontSize(15).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_2f5f1495cc')).fontSize(15).fontWeight(FontWeight.Bold)
           .padding({ left: 16, right: 16, top: 12, bottom: 4 })
           .alignSelf(ItemAlign.Start)
           .fontColor(ThemeColors.onBackground(this.isDark))
 
-        Text('端点').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_2a1cad5f9e')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 16, right: 16, top: 8, bottom: 4 })
           .alignSelf(ItemAlign.Start)
         Column() {
-          TextInput({ text: this.ttsAzureEndpoint, placeholder: 'https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1' })
+          TextInput({ text: this.ttsAzureEndpoint, placeholder: $r('app.string.ui_298b8d3d76') })
             .fontSize(13)
             .height(42)
             .width('100%')
@@ -328,23 +331,23 @@ struct SettingsPage {
         }
         .width('100%')
         .padding({ left: 16, right: 16 })
-        Text('可填写完整 TTS 合成地址；也可填写 Portal 里的 https://<region>.api.cognitive.microsoft.com，应用会自动转换')
+        Text($r('app.string.ui_44aaab081d'))
           .fontSize(11)
           .fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 16, right: 16, top: 4, bottom: 8 })
 
-        Text('密钥').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text($r('app.string.ui_0d1965e139')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 16, right: 16, top: 8, bottom: 4 })
           .alignSelf(ItemAlign.Start)
         Row() {
-          TextInput({ text: this.ttsAzureKey, placeholder: 'Azure Speech Key' })
+          TextInput({ text: this.ttsAzureKey, placeholder: $r('app.string.ui_81474dc689') })
             .fontSize(13)
             .layoutWeight(1)
             .type(this.showTtsAzureKey ? InputType.Normal : InputType.Password)
             .onChange((v: string) => { this.ttsAzureKey = v; })
           Button(this.showTtsAzureKey ? '隐藏' : '显示')
             .fontSize(12)
-            .height(34)
+            .height(40)
             .padding({ left: 10, right: 10 })
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .fontColor(ThemeColors.onSurface(this.isDark))
@@ -354,13 +357,13 @@ struct SettingsPage {
         .width('100%')
         .padding({ left: 16, right: 16 })
 
-        Text('微软语音的音色在阅读页朗读面板中选择，首次默认使用第一个中文音色。')
+        Text($r('app.string.ui_7701f53574'))
           .fontSize(11)
           .fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 16, right: 16, top: 16, bottom: 12 })
 
         Column() {
-          Button('保存微软语音设置')
+          Button($r('app.string.ui_ea7c1a58fa'))
             .fontSize(14)
             .height(44)
             .width('100%')
@@ -371,7 +374,7 @@ struct SettingsPage {
         .width('100%')
         .padding({ left: 16, right: 16, top: 8, bottom: 16 })
 
-        Text('保存后，在阅读页朗读面板的“引擎”里选择“微软语音”。文本会发送到 Azure 进行在线合成。')
+        Text($r('app.string.ui_2932250412'))
           .fontSize(12)
           .fontColor(ThemeColors.secondaryText(this.isDark))
           .padding({ left: 16, right: 16, bottom: 16 })
@@ -386,11 +389,11 @@ struct SettingsPage {
   @Builder
   buildComicSettings() {
     Column() {
-      Text('\uD83D\uDCDA 漫画设置').fontSize(16).fontWeight(FontWeight.Medium)
+      Text($r('app.string.ui_7da1731cca')).fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
       // 阅读方向
-      Text('阅读方向').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_d3eaabf98d')).fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
       Row() {
         ForEach([
           { mode: 0, label: '条漫' } as ReadModeOption,
@@ -416,7 +419,7 @@ struct SettingsPage {
       .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       // 预加载数量
-      Text('图片预加载数量').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_1899e4c569')).fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
       Row() {
         Slider({ value: this.comicPreloadNum, min: 1, max: 20, step: 1 })
           .width('60%').margin({ left: 16 })
@@ -431,15 +434,15 @@ struct SettingsPage {
         Text(this.comicPreloadNum + ' 张').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
       }.width('100%').margin({ top: 4 })
         .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-      Text('预先下载当前章节前 N 张图片到本地缓存').fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_c6e1130def')).fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ left: 16, right: 16, top: 4, bottom: 12 })
 
       // 缓存管理
-      Text('图片缓存管理').fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_f76562e2f2')).fontSize(15).padding({ left: 16, top: 8 }).fontColor(ThemeColors.onBackground(this.isDark))
       Row() {
-        Text('当前缓存').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.ui_bc473d919d')).fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         Text(this.formatCacheSize(this.comicCacheSize)).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 8 })
-        Button('清理').fontSize(13).height(32).onClick(async () => {
+        Button($r('app.string.ui_907c3945d8')).fontSize(13).height(40).onClick(async () => {
           try {
             await MangaImageLoader.clearAllCache();
             await this.loadComicCacheSize();
@@ -457,11 +460,11 @@ struct SettingsPage {
   @Builder
   buildThemeSettings() {
     Column() {
-      Text('\uD83C\uDFA8 主题设置').fontSize(16).fontWeight(FontWeight.Medium)
+      Text($r('app.string.ui_9ce0aa853f')).fontSize(16).fontWeight(FontWeight.Medium)
         .padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
 	      Row() {
-	        Text('跟随系统').fontSize(16).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+	        Text($r('app.string.ui_f4bbd91f79')).fontSize(16).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
 	        Toggle({ type: ToggleType.Switch, isOn: this.isFollowSystem })
 	          .onChange((v: boolean) => {
 	            if (v) {
@@ -482,7 +485,7 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16, top: 12, bottom: 4 }).width('100%')
 
       Row() {
-        Text('深色模式').fontSize(16).fontColor(this.isFollowSystem ? ThemeColors.secondaryText(this.isDark) : ThemeColors.onBackground(this.isDark)).layoutWeight(1)
+        Text($r('app.string.ui_750642ccd6')).fontSize(16).fontColor(this.isFollowSystem ? ThemeColors.secondaryText(this.isDark) : ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.isDark })
           .onChange((v: boolean) => {
             if (v) {
@@ -497,7 +500,7 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
 
       Row() {
-        Text('阅读界面随主题切换').fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        Text($r('app.string.ui_731e048a56')).fontSize(14).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         Toggle({ type: ToggleType.Switch, isOn: this.readFollowTheme })
           .onChange((v: boolean) => {
             this.readFollowTheme = v;
@@ -510,7 +513,7 @@ struct SettingsPage {
             })();
           })
       }.padding({ left: 16, right: 16, top: 4, bottom: 12 }).width('100%')
-      Text('开启后切换应用主题时，阅读界面自动切换日间/夜间模式').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+      Text($r('app.string.ui_2244992a1c')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, right: 16, bottom: 12 })
     }
     .width('100%').alignItems(HorizontalAlign.Start)
@@ -519,10 +522,10 @@ struct SettingsPage {
   @Builder
   buildNetSettings() {
     Column() {
-      Text('\uD83C\uDF10 网络设置').fontSize(16).fontWeight(FontWeight.Medium).padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_faec236cbb')).fontSize(16).fontWeight(FontWeight.Medium).padding(16).alignSelf(ItemAlign.Start).fontColor(ThemeColors.onBackground(this.isDark))
 
       // DNS 开关
-      Row() { Text('启用自定义 DNS').fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+      Row() { Text($r('app.string.ui_48ef79da8b')).fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         Toggle({ type: ToggleType.Switch, isOn: this.dnsEnabled }).onChange((v: boolean) => {
           this.dnsEnabled = v; AppStorage.set<boolean>('dnsEnabled', v);
           NetUtil.setDns(this.dnsServers, v);
@@ -532,10 +535,10 @@ struct SettingsPage {
 
       // DNS 服务器（紧凑：一行显示当前值 + 设置按钮）
       Row() {
-        Text('DNS 服务器').fontSize(15).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
+        Text($r('app.string.ui_94c9cca7ea')).fontSize(15).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
         Text(this.dnsServers).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
           .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Button('设置').fontSize(12).height(28).onClick(() => {
+        Button($r('app.string.common_settings')).fontSize(12).height(40).onClick(() => {
           const dlg = new CustomDialogController({
             builder: DnsDialog({
               dnsServers: this.dnsServers,
@@ -556,9 +559,9 @@ struct SettingsPage {
       }.padding({ left: 16, right: 16 }).width('100%').margin({ top: 4, bottom: 8 })
 
       // 网络超时
-      Row() { Text('网络超时').fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
-        TextInput({ text: String(this.netTimeout), placeholder: '60' })
-          .height(36).fontSize(13).width(60).type(InputType.Number)
+      Row() { Text($r('app.string.ui_bbd5eab31b')).fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
+        TextInput({ text: String(this.netTimeout), placeholder: $r('app.string.ui_e6c3dd6304') })
+          .height(40).fontSize(13).width(60).type(InputType.Number)
           .onChange((v: string) => {
             const val = parseInt(v);
             if (val && val > 0) {
@@ -566,27 +569,27 @@ struct SettingsPage {
               AppStorage.set<number>('network_timeout', val);
             }
           })
-        Text('秒').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 4 })
+        Text($r('app.string.ui_eb6aaba1a1')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 4 })
       }.padding({ left: 16, right: 16 }).width('100%')
       Row() {
-        Text('默认60秒，影响目录加载、搜索等操作，修改后即时生效').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16 })
+        Text($r('app.string.ui_65eee70aa6')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16 })
       }.width('100%').margin({ bottom: 8 })
 
       Divider().margin({ top: 8, bottom: 8 })
-      Text('HTTP 代理').fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 4, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_d95ef5ba39')).fontSize(15).fontWeight(FontWeight.Medium).padding({ left: 16, top: 4, bottom: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
 
       // 代理地址和端口（@StorageLink 自动同步，无需手动保存）
       Row() {
-        TextInput({ text: this.proxyHost, placeholder: '代理地址 如 127.0.0.1' })
-          .height(36).fontSize(13).layoutWeight(1).margin({ left: 16 })
+        TextInput({ text: this.proxyHost, placeholder: $r('app.string.ui_d74862f686') })
+          .height(40).fontSize(13).layoutWeight(1).margin({ left: 16 })
           .onChange((v: string) => { this.proxyHost = v; this.applyProxy_(); })
-        TextInput({ text: this.proxyPort, placeholder: '端口' })
-          .height(36).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
+        TextInput({ text: this.proxyPort, placeholder: $r('app.string.ui_6cbb7335b5') })
+          .height(40).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
           .onChange((v: string) => { this.proxyPort = v; this.applyProxy_(); })
       }.width('100%').margin({ top: 4 })
 
       Row() {
-        Button('清除代理').fontSize(12).height(28).margin({ left: 16 }).backgroundColor('#FF5722').fontColor('#FFF').onClick(() => {
+        Button($r('app.string.ui_be090d82b1')).fontSize(12).height(40).margin({ left: 16 }).backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).onClick(() => {
           this.proxyHost = ''; this.proxyPort = '';
           NetUtil.clearProxy();
           this.syncWebViewNetwork();
@@ -594,7 +597,7 @@ struct SettingsPage {
         })
       }.margin({ top: 4 })
 
-      Text('设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
+      Text($r('app.string.ui_97ccf737aa')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).padding(16)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -611,10 +614,10 @@ struct SettingsPage {
   @Builder
   buildAboutPage() {
     Column() {
-      Text('LegadoHOS').fontSize(24).fontWeight(FontWeight.Bold).margin({ top: 40 }).fontColor(ThemeColors.onBackground(this.isDark))
-      Text('v1.0.0').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
-      Text('鸿蒙原生阅读APP').fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 2 })
-      Text('基于 legado-with-MD3 重构').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 16 })
+      Text($r('app.string.ui_3fbe4d7fb9')).fontSize(24).fontWeight(FontWeight.Bold).margin({ top: 40 }).fontColor(ThemeColors.onBackground(this.isDark))
+      Text($r('app.string.ui_7ac19ee157')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
+      Text($r('app.string.ui_4ac6b626ac')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 2 })
+      Text($r('app.string.ui_af0f06ab56')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 16 })
     }
     .width('100%').alignItems(HorizontalAlign.Center)
   }

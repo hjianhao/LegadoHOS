@@ -88,14 +88,14 @@ struct ReadPage {
   @State showZoneConfig: boolean = false;
   @State showAloud: boolean = false;
   @State flowMode: string = 'paginated';
-  @State readBgColor: string = '#F5F0E8';
-  @State readTextColor: string = '#333333';
+  @State readBgColor: string = ThemeColors.readingBackgroundDefault();
+  @State readTextColor: string = ThemeColors.readingTextDefault();
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
   @State zoneActions: number[] = DEFAULT_ZONE_ACTIONS;
   @State fontList: FontInfo[] = [];
   @State cfg: PageViewConfig = {
-    animType: PageTurnAnim.SLIDE, bgColor: '#F5F0E8', textColor: '#333333', titleColor: '#999',
+    animType: PageTurnAnim.SLIDE, bgColor: ThemeColors.readingBackgroundDefault(), textColor: ThemeColors.readingTextDefault(), titleColor: ThemeColors.secondaryText(this.isDark),
     fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans', lineHeight: 1.6,
     letterSpacing: 0.5, paragraphSpacing: 10, textAlign: 'justify', indentSize: 2,
     paddingTop: 24, paddingBottom: 24, paddingLeft: 20, paddingRight: 20,
@@ -260,8 +260,8 @@ struct ReadPage {
 	    this.readBgColor = await s.getReadBgColor();
 	    this.readTextColor = await s.getReadTextColor();
         if (this.readBgColor === ReadPage.NIGHT_BG && this.readTextColor === ReadPage.NIGHT_TEXT) {
-          this.readBgColor = '#F5F0E8';
-          this.readTextColor = '#333333';
+          this.readBgColor = ThemeColors.readingBackgroundDefault();
+          this.readTextColor = ThemeColors.readingTextDefault();
           s.setReadBgColor(this.readBgColor).catch(() => {});
           s.setReadTextColor(this.readTextColor).catch(() => {});
         }
@@ -281,9 +281,9 @@ struct ReadPage {
 	  }
 
 	  /** 夜间模式阅读背景色 */
-	  private static readonly NIGHT_BG: string = '#1A1A1A';
+	  private static readonly NIGHT_BG: string = ThemeColors.readingNightBackground();
 	  /** 夜间模式阅读文字色 */
-	  private static readonly NIGHT_TEXT: string = '#C0C0C0';
+	  private static readonly NIGHT_TEXT: string = ThemeColors.readingNightText();
 
 	  /**
 	   * 根据 readNightMode 和 readFollowTheme 应用阅读颜色

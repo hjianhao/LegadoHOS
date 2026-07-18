@@ -17,6 +17,7 @@ import { LocalBookEngine } from '../engine/book/LocalBookEngine';
 import { ExportBookDialog } from '../components/ExportBookDialog';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 
 interface CacheRow {
   book: Book;
@@ -33,7 +34,7 @@ interface CacheRow {
 @Component
 struct BookCachePage {
   @StorageLink('isDark') isDark: boolean = false;
-  @State rows: CacheRow[] = [];
+  @State @Watch('onRowsChanged_') rows: CacheRow[] = [];
   @State isLoading: boolean = true;
   @State showExportDialog: boolean = false;
 
@@ -42,6 +43,11 @@ struct BookCachePage {
   private needRefresh_: boolean = false;
   private wasRunning_: boolean = false;
   private refreshing_: boolean = false;
+  private rowDataSource_: ArrayDataSource<CacheRow> = new ArrayDataSource<CacheRow>();
+
+  private onRowsChanged_(): void {
+    this.rowDataSource_.reset(this.rows);
+  }
 
   aboutToAppear(): void {
     this.loadRows();
@@ -194,10 +200,10 @@ struct BookCachePage {
       Column() {
         // 标题栏
         Row() {
-          Button() { Text('←').fontSize(20).fontColor(ThemeColors.primary(this.isDark)) }
+          Button() { Text($r('app.string.ui_8179643cdc')).fontSize(20).fontColor(ThemeColors.primary(this.isDark)) }
             .backgroundColor(Color.Transparent)
-            .onClick(() => { UiUtil.back(this.getUIContext()); })
-          Text('离线缓存').fontSize(18).fontWeight(FontWeight.Bold)
+            .accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
+          Text($r('app.string.ui_fa2c7b7a75')).fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         }
         .width('100%').height(56).padding({ left: 8, right: 12 })
@@ -207,12 +213,12 @@ struct BookCachePage {
         if (this.isLoading) {
           LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
         } else if (this.rows.length === 0) {
-          Text('书架暂无书源小说')
+          Text($r('app.string.ui_99160509f5'))
             .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 60 })
         } else {
           List() {
-            ForEach(this.rows, (row: CacheRow) => {
+            LazyForEach(this.rowDataSource_, (row: CacheRow) => {
               ListItem() {
                 Row() {
                   BookCover({ name: row.book.name, coverUrl: row.book.coverUrl, coverWidth: 42, coverHeight: 58 })
@@ -233,12 +239,12 @@ struct BookCachePage {
                     .fontColor(row.running
                       ? ThemeColors.error(this.isDark) : ThemeColors.primary(this.isDark))
                     .backgroundColor(Color.Transparent)
-                    .height(34).padding({ left: 6, right: 6 })
+                    .height(40).padding({ left: 6, right: 6 })
                     .onClick((): void => { this.onCacheButton(row.book); })
-                  Button('导出')
+                  Button($r('app.string.common_export'))
                     .fontSize(13).fontColor(ThemeColors.primary(this.isDark))
                     .backgroundColor(Color.Transparent)
-                    .height(34).padding({ left: 6, right: 6 })
+                    .height(40).padding({ left: 6, right: 6 })
                     .onClick((): void => { this.openExport(row.book); })
                 }
                 .width('100%').padding({ left: 12, right: 4, top: 8, bottom: 8 })

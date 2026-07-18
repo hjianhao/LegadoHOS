@@ -9,10 +9,10 @@ struct WebServicePage {
 
   build() {
     Column() {
-      Text('WebServicePage').fontSize(20).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_6980edd1a3')).fontSize(20).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .alignSelf(ItemAlign.Start).padding(16)
-      Text('功能开发中').fontSize(14).fontColor('#888').margin({ top: 40 })
+      Text($r('app.string.ui_b48ed8db6e')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 40 })
     }
     .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }

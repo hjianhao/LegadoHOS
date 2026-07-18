@@ -3,6 +3,7 @@
     "pages/MainPage",
     "pages/SettingsPage",
     "pages/AiConfigPage",
+    "pages/AiImportBookPage",
     "pages/SearchPage",
     "pages/SearchContentPage",
     "pages/ReadPage",

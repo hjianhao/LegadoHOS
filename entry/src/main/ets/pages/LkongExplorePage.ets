@@ -18,6 +18,7 @@ import {
   LkongBookAgent,
   LkongBookRecommendation,
 } from '../engine/ai/LkongBookAgent';
+import { ArrayDataSource } from '../util/ArrayDataSource';
 
 interface LkongFilterOption {
   value: LkongBrowseMode;
@@ -52,7 +53,7 @@ export struct LkongExplorePage {
   @State private filter: LkongForumFilter = 'all';
   @State private tags: LkongTagItem[] = [];
   @State private selectedTag: LkongTagItem | null = null;
-  @State private threads: LkongThreadItem[] = [];
+  @State @Watch('onThreadsChanged_') private threads: LkongThreadItem[] = [];
   @State private selectedIds: number[] = [];
   @State private page: number = 1;
   @State private hasMore: boolean = false;
@@ -73,6 +74,11 @@ export struct LkongExplorePage {
   private selectedSet: Set<number> = new Set();
   private isActive: boolean = false;
   private loginDialog?: CustomDialogController;
+  private threadDataSource_: ArrayDataSource<LkongThreadItem> = new ArrayDataSource<LkongThreadItem>();
+
+  private onThreadsChanged_(): void {
+    this.threadDataSource_.reset(this.threads);
+  }
 
   aboutToAppear(): void {
     this.isActive = true;
@@ -439,9 +445,9 @@ export struct LkongExplorePage {
     Column() {
       Row() {
         Column() {
-          Text('龙空 · 推书试读').fontSize(20).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_669a0d78a8')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('多选帖子，让 AI 整理推荐与讨论书目').fontSize(12)
+          Text($r('app.string.ui_ed3fa2f3e8')).fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 2 })
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button(this.loginRequired ? '登录' : '账号').fontSize(12).height(44).borderRadius(22)
@@ -472,7 +478,7 @@ export struct LkongExplorePage {
       if (this.browseMode === 'tag' && this.tags.length > 0) {
         Column() {
           Row() {
-            Text('选择标签').fontSize(13).fontWeight(FontWeight.Medium)
+            Text($r('app.string.ui_608b8e137e')).fontSize(13).fontWeight(FontWeight.Medium)
               .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
             if (this.selectedTag) {
               Text('正在浏览：' + this.selectedTag.name).fontSize(11)
@@ -498,7 +504,7 @@ export struct LkongExplorePage {
       Row() {
         Text(this.selectedIds.length.toString() + ' / ' + this.threads.length.toString() + ' 已选择')
           .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
-        Button('全选').fontSize(12).height(44).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+        Button($r('app.string.common_select_all')).fontSize(12).height(44).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ right: 6 })
           .onClick((): void => { this.toggleAllLoaded(); })
         Select(RECENT_DAY_OPTIONS)
@@ -532,27 +538,27 @@ export struct LkongExplorePage {
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.browseMode === 'tag' && !this.selectedTag) {
         Column() {
-          Text('请选择一个标签').fontSize(16).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_4994e3d43b')).fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('选择上方标签后，这里会列出该标签下的帖子')
+          Text($r('app.string.ui_24041f7a07'))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (this.threads.length === 0) {
         Column() {
           Text(this.browseMode === 'hot' ? '今日暂无热门帖子' : '暂无帖子')
             .fontSize(16).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onBackground(this.isDark))
-          Button('刷新').height(44).margin({ top: 12 }).onClick((): void => { void this.loadThreads(false); })
+          Button($r('app.string.common_refresh')).height(44).margin({ top: 12 }).onClick((): void => { void this.loadThreads(false); })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else {
         List({ space: 7 }) {
-          ForEach(this.threads, (item: LkongThreadItem) => {
+          LazyForEach(this.threadDataSource_, (item: LkongThreadItem) => {
             ListItem() { this.buildThreadRow(item) }
           }, (item: LkongThreadItem): string => item.tid.toString())
           if (this.isLoadingMore) {
             ListItem() {
               Row() {
                 LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
-                Text('加载下一页…').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
+                Text($r('app.string.ui_d5d58840ea')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
               }.width('100%').justifyContent(FlexAlign.Center).padding(14)
             }
           }
@@ -584,7 +590,7 @@ export struct LkongExplorePage {
         Row() {
           Text(item.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onSurface(this.isDark))
             .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-          if (item.digest) Text('精').fontSize(10).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 6 })
+          if (item.digest) Text($r('app.string.ui_fcb83b62bc')).fontSize(10).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 6 })
         }.width('100%')
         Text(this.formatThreadMeta(item))
           .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 5 }).maxLines(1)
@@ -608,7 +614,7 @@ export struct LkongExplorePage {
                   .padding({ left: 10, right: 6 }).backgroundColor(Color.Transparent)
                   .accessibilityText('查看分析结果：' + record.title)
                   .onClick((): void => { this.currentRecord = record; })
-                Button('×').fontSize(14).width(44).height(44)
+                Button($r('app.string.ui_67fba2f357')).fontSize(14).width(44).height(44)
                   .fontColor(this.currentRecord?.id === record.id ? ThemeColors.onPrimary(this.isDark) : ThemeColors.error(this.isDark))
                   .padding(0).backgroundColor(Color.Transparent)
                   .accessibilityText('删除分析结果：' + record.title)
@@ -623,9 +629,9 @@ export struct LkongExplorePage {
 
       if (!this.currentRecord) {
         Column() {
-          Text('还没有分析结果').fontSize(17).fontWeight(FontWeight.Medium)
+          Text($r('app.string.ui_fa49c1b160')).fontSize(17).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
-          Text('到“选帖子”中选择龙空主题并交给 AI 分析')
+          Text($r('app.string.ui_0cb9ce6e01'))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else {
@@ -660,7 +666,7 @@ export struct LkongExplorePage {
         if (book.author) {
           Text(book.author).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
         }
-        Text('搜索 ›').fontSize(11).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
+        Text($r('app.string.ui_ea0cb6560f')).fontSize(11).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
       }.width('100%')
       Text(book.reason).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .lineHeight(19).margin({ top: 8 }).width('100%')

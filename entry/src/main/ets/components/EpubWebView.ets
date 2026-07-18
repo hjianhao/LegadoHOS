@@ -51,8 +51,8 @@ export struct EpubWebView {
   /** 事件轮询定时器 */
   private pollTimer_: number | null = null;
   /** 主题配置 */
-  @State private bgColor: string = '#FFFFFF';
-  @State private textColor: string = '#333333';
+  @State private bgColor: string = ThemeColors.readingBackgroundDefault();
+  @State private textColor: string = ThemeColors.readingTextDefault();
   @State private fontSize: number = 18;
   @State private fontFamily: string = "'PingFang SC', 'Noto Sans SC', serif";
   @State private lineHeight: number = 1.8;

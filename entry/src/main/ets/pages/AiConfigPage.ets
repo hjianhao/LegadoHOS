@@ -181,10 +181,11 @@ struct AiConfigPage {
       const json = JSON.parse(resp) as Record<string, Object>;
       const data = json['data'] as Record<string, string>[];
       if (data && data.length > 0) {
+        const nextModels: string[] = [];
         for (let i = 0; i < data.length; i++) {
-          if (data[i]['id']) { this.models.push(data[i]['id']); }
+          if (data[i]['id']) { nextModels.push(data[i]['id']); }
         }
-        this.models.sort();
+        this.models = nextModels.sort();
         this.showModelPicker = true;
       }
     } catch (e) {
@@ -208,13 +209,13 @@ struct AiConfigPage {
       const resp = await NetUtil.httpPost(this.endpoint, body, headers, timeoutMs);
       const json = JSON.parse(resp) as Record<string, Object>;
       if (json['choices']) {
-        this.testResult = '✅ 连接成功';
+        this.testResult = '连接成功';
         UiUtil.showToast(this.getUIContext(), { message: '连接成功', duration: 1500 });
       } else {
-        this.testResult = '❌ 响应异常';
+        this.testResult = '响应异常';
       }
     } catch (e) {
-      this.testResult = '❌ ' + (e as Error).message?.substring(0, 60);
+      this.testResult = (e as Error).message?.substring(0, 60) || '连接失败';
     }
     this.isTesting = false;
   }
@@ -232,9 +233,9 @@ struct AiConfigPage {
     Row() {
       Text(m).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (this.model === m) { Text('✓').fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 }) }
+      if (this.model === m) { Text($r('app.string.ui_698a879938')).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 }) }
     }.padding({ left: 8, right: 8, top: 8, bottom: 8 }).width('100%')
-    .backgroundColor(this.model === m ? ThemeColors.surfaceVariant(this.isDark) : 'transparent')
+    .backgroundColor(this.model === m ? ThemeColors.surfaceVariant(this.isDark) : ThemeColors.transparent())
     .borderRadius(6)
     .onClick(() => { this.model = m; this.showModelPicker = false; })
   }
@@ -246,7 +247,7 @@ struct AiConfigPage {
           .fontColor(this.activeProfileId === profile.id ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         if (this.activeProfileId === profile.id) {
-          Text('当前').fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).margin({ left: 8 })
+          Text($r('app.string.ui_25e74dceac')).fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).margin({ left: 8 })
         }
       }.width('100%')
       Text(profile.model || '未设置模型').fontSize(11).margin({ top: 5 })
@@ -266,20 +267,20 @@ struct AiConfigPage {
   build() {
     Column() {
       Row() {
-        Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
-          .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('大模型配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
+          .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
+        Text($r('app.string.ui_dc95e4a9f8')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
           .fontColor(ThemeColors.onBackground(this.isDark))
-        Button('新增').fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
-          .height(32).padding({ left: 10, right: 10 }).onClick((): void => { this.createProfile(); })
-        Button('保存').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
-          .height(32).padding({ left: 14, right: 14 }).borderRadius(16)
+        Button($r('app.string.ui_2cd9e6ce81')).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
+          .height(40).padding({ left: 10, right: 10 }).onClick((): void => { this.createProfile(); })
+        Button($r('app.string.common_save')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
+          .height(40).padding({ left: 14, right: 14 }).borderRadius(16)
           .onClick(() => { this.save(); })
       }.padding({ left: 12, right: 12, top: 44 }).width('100%')
 
       Scroll() {
         Column() {
-          Text('已保存配置').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_038f5a0fe2')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
             .alignSelf(ItemAlign.Start).margin({ top: 12, bottom: 6 })
           Scroll() {
             Row() {
@@ -293,48 +294,48 @@ struct AiConfigPage {
             Text(this.editingProfileId ? '编辑配置' : '新增配置').fontSize(15).fontWeight(FontWeight.Medium)
               .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
             if (this.editingProfileId && this.profiles.length > 1) {
-              Text('删除').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+              Text($r('app.string.common_delete')).fontSize(12).fontColor(ThemeColors.error(this.isDark))
                 .onClick((): void => { this.deleteCurrentProfile(); })
             }
           }.width('100%').margin({ top: 18, bottom: 6 })
 
-          Text('配置名称').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_a5f08c1d33')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
             .alignSelf(ItemAlign.Start).margin({ top: 6, bottom: 4 })
-          TextInput({ text: this.profileName, placeholder: '例如：OpenRouter 免费' })
+          TextInput({ text: this.profileName, placeholder: $r('app.string.ui_c1d25f3cd3') })
             .fontSize(14).width('100%').fontColor(ThemeColors.onBackground(this.isDark))
             .onChange((v: string): void => { this.profileName = v; })
 
           // ===== 常用 API 预设 =====
-          Text('供应商预设').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
+          Text($r('app.string.ui_b21af4486d')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
           Row() {
             ForEach(PRESETS, (p: PresetItem) => { this.presetChip(p); })
           }.width('100%')
 
           // ===== API 地址 =====
-          Text('API 地址').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
-          TextInput({ text: this.endpoint, placeholder: 'https://api.openai.com/v1/chat/completions' })
+          Text($r('app.string.ui_acd8a50431')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          TextInput({ text: this.endpoint, placeholder: $r('app.string.ui_e4d0357e84') })
             .fontSize(14).width('100%')
             .onChange((v: string) => { this.endpoint = v; this.detectPreset_(); })
 
           // ===== API Key =====
-          Text('API Key').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          Text($r('app.string.ui_47acd2028c')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
-            TextInput({ text: this.apiKey, placeholder: 'sk-...' })
+            TextInput({ text: this.apiKey, placeholder: $r('app.string.ui_ec3810e10f') })
               .fontSize(14).layoutWeight(1).type(this.showKey ? InputType.Normal : InputType.Password)
               .onChange((v: string) => { this.apiKey = v; })
-            Button(this.showKey ? '🙈' : '👁').fontSize(14)
-              .backgroundColor('transparent').width(36).height(36)
+            Button(this.showKey ? '隐藏' : '显示').fontSize(12)
+              .backgroundColor(ThemeColors.transparent()).width(40).height(40)
               .onClick(() => { this.showKey = !this.showKey; })
           }.width('100%')
 
           // ===== 模型 =====
-          Text('模型').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          Text($r('app.string.ui_98fd0cbd9c')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
-            TextInput({ text: this.model, placeholder: 'gpt-4o' })
+            TextInput({ text: this.model, placeholder: $r('app.string.ui_6d9372f6ba') })
               .fontSize(14).layoutWeight(1)
               .onChange((v: string) => { this.model = v; })
-            Button(this.isFetchingModels ? '⏳' : '📋').fontSize(14)
-              .backgroundColor('transparent').width(36).height(36)
+            Button(this.isFetchingModels ? '获取中' : '获取模型').fontSize(12)
+              .backgroundColor(ThemeColors.transparent()).width(40).height(40)
               .onClick(() => { this.fetchModels(); })
           }.width('100%')
 
@@ -350,12 +351,12 @@ struct AiConfigPage {
             .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(8)
           }
 
-          Text('请求超时（秒）').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_0d38dfddcb')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
             .alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
-          TextInput({ text: this.timeoutSecondsText, placeholder: '120' })
+          TextInput({ text: this.timeoutSecondsText, placeholder: $r('app.string.ui_775bc5c30e') })
             .fontSize(14).width('100%').type(InputType.Number)
             .onChange((v: string): void => { this.timeoutSecondsText = v; })
-          Text('默认 120 秒；OpenRouter 免费模型可设为 300 秒或更高')
+          Text($r('app.string.ui_e6400fa473'))
             .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
             .alignSelf(ItemAlign.Start).margin({ top: 4 })
 
@@ -368,7 +369,7 @@ struct AiConfigPage {
 
           if (this.testResult) {
             Text(this.testResult).fontSize(12)
-              .fontColor(this.testResult.startsWith('✅') ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
+              .fontColor(this.testResult === '连接成功' ? ThemeColors.success(this.isDark) : ThemeColors.error(this.isDark))
               .margin({ top: 8 }).alignSelf(ItemAlign.Start)
           }
         }

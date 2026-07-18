@@ -109,32 +109,32 @@ struct RssSourceManagePage {
       // 顶部栏
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('← 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_4968e7f610')).fontSize(16).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('RSS 管理').fontSize(18).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_02e2c453fc')).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 8 })
         Blank()
         Button({ type: ButtonType.Normal }) {
-          Text('导入').fontSize(14).fontColor('#FF9800').fontWeight(FontWeight.Bold)
+          Text($r('app.string.common_import')).fontSize(14).fontColor(ThemeColors.warning(this.isDark)).fontWeight(FontWeight.Bold)
         }
-        .backgroundColor('transparent').margin({ right: 8 })
+        .backgroundColor(ThemeColors.transparent()).margin({ right: 8 })
         .onClick(() => {
           this.importDialogController.open();
         })
         Button({ type: ButtonType.Normal }) {
-          Text('添加').fontSize(14).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)
+          Text($r('app.string.common_add')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => {
           UiUtil.pushUrl(this.getUIContext(), { url: 'pages/RssSourceEditPage' });
         })
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })
 
-      Search({ placeholder: '搜索订阅源...', value: this.searchKey })
+      Search({ placeholder: $r('app.string.ui_6846e924de'), value: this.searchKey })
         .onSubmit((val: string) => { this.searchKey = val; })
         .onChange((val: string) => { if (!val) this.searchKey = ''; })
         .width('100%').padding({ left: 12, right: 12, bottom: 8 })
@@ -145,14 +145,14 @@ struct RssSourceManagePage {
             .fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           Blank()
           Button({ type: ButtonType.Normal }) {
-            Text('启用').fontSize(13).fontColor('#4CAF50')
-          }.backgroundColor('transparent').onClick(() => this.enableSelection(true))
+            Text($r('app.string.ui_d4e9ca3dd4')).fontSize(13).fontColor(ThemeColors.success(this.isDark))
+          }.backgroundColor(ThemeColors.transparent()).onClick(() => this.enableSelection(true))
           Button({ type: ButtonType.Normal }) {
-            Text('禁用').fontSize(13).fontColor('#F44336')
-          }.backgroundColor('transparent').onClick(() => this.enableSelection(false))
+            Text($r('app.string.ui_be70be5a2e')).fontSize(13).fontColor(ThemeColors.error(this.isDark))
+          }.backgroundColor(ThemeColors.transparent()).onClick(() => this.enableSelection(false))
           Button({ type: ButtonType.Normal }) {
-            Text('删除').fontSize(13).fontColor('#F44336')
-          }.backgroundColor('transparent').onClick(() => this.deleteSelected())
+            Text($r('app.string.common_delete')).fontSize(13).fontColor(ThemeColors.error(this.isDark))
+          }.backgroundColor(ThemeColors.transparent()).onClick(() => this.deleteSelected())
         }
         .width('100%').padding({ left: 12, right: 12, bottom: 4 })
       }
@@ -161,8 +161,8 @@ struct RssSourceManagePage {
         LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.getFiltered().length === 0) {
         Column() {
-          Text('暂无 RSS 源').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('点击右上角「添加」新增 RSS 源')
+          Text($r('app.string.ui_f0ca898ae3')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_3b2cc3b570'))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
@@ -189,7 +189,7 @@ struct RssSourceManagePage {
                         .border({ radius: 4 }).borderColor(ThemeColors.primary(this.isDark)).borderWidth(0.5)
                     }
                     if (!source.enabled) {
-                      Text('已禁用').fontSize(10).fontColor('#F44336')
+                      Text($r('app.string.ui_0fe5a98e9f')).fontSize(10).fontColor(ThemeColors.error(this.isDark))
                         .margin({ left: 6 })
                     }
                   }.margin({ top: 4 })
@@ -197,16 +197,16 @@ struct RssSourceManagePage {
                 .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
 
                 Button({ type: ButtonType.Normal }) {
-                  Text('编辑').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+                  Text($r('app.string.common_edit')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
                 }
-                .backgroundColor('transparent').margin({ right: 4 })
+                .backgroundColor(ThemeColors.transparent()).margin({ right: 4 })
                 .onClick(() => {
                   UiUtil.pushUrl(this.getUIContext(), { url: 'pages/RssSourceEditPage', params: { sourceUrl: source.sourceUrl } });
                 })
                 Button({ type: ButtonType.Normal }) {
-                  Text('删除').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+                  Text($r('app.string.common_delete')).fontSize(12).fontColor(ThemeColors.error(this.isDark))
                 }
-                .backgroundColor('transparent')
+                .backgroundColor(ThemeColors.transparent())
                 .onClick(() => {
                   UiUtil.showAlertDialog(this.getUIContext(), {
                     title: '删除确认',

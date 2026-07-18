@@ -3,6 +3,7 @@
  */
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
+import { ThemeColors } from '../../theme/ThemeColors';
 
 export enum PageTurnAnim {
   NONE = 0,
@@ -43,8 +44,8 @@ export struct PageView {
   @Prop dualPage: boolean = false;
   @Prop chapterIndex: number = 0;
   @Prop config: PageViewConfig = {
-    animType: PageTurnAnim.SLIDE, bgColor: '#F5F0E8', textColor: '#333333',
-    titleColor: '#999999', fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans',
+    animType: PageTurnAnim.SLIDE, bgColor: ThemeColors.readingBackgroundDefault(), textColor: ThemeColors.readingTextDefault(),
+    titleColor: ThemeColors.readingTitleDefault(), fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans',
     lineHeight: 1.6, letterSpacing: 0.5, paragraphSpacing: 10, textAlign: 'justify',
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
@@ -200,7 +201,7 @@ export struct PageView {
   build() {
     Column() {
       // 隐藏的测量文本（测量字宽和行高，用于 TextLayout 精确估算）
-      Text('字').fontSize(this.config.fontSize)
+      Text($r('app.string.ui_582c50066c')).fontSize(this.config.fontSize)
         .fontFamily(this.config.fontFamily)
         .fontWeight(this.getFontWeight())
         .visibility(Visibility.None)

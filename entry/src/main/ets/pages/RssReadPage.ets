@@ -215,8 +215,8 @@ struct RssReadPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text('←').fontSize(22).fontColor(ThemeColors.primary(this.isDark))
-          .onClick(() => UiUtil.back(this.getUIContext()))
+        Text($r('app.string.ui_8179643cdc')).fontSize(22).fontColor(ThemeColors.primary(this.isDark))
+          .accessibilityText($r('app.string.common_back')).onClick(() => UiUtil.back(this.getUIContext()))
         Text(this.title || 'RSS 阅读')
           .fontSize(17).fontWeight(FontWeight.Medium)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -224,14 +224,14 @@ struct RssReadPage {
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
         Button({ type: ButtonType.Normal }) {
-          Text(this.isStarred ? '★' : '☆').fontSize(20).fontColor('#FFC107')
+          Text(this.isStarred ? '★' : '☆').fontSize(20).fontColor(ThemeColors.warning(this.isDark))
         }
-        .backgroundColor('transparent').margin({ right: 4 })
+        .backgroundColor(ThemeColors.transparent()).margin({ right: 4 })
         .onClick(() => this.toggleStar())
         Button({ type: ButtonType.Normal }) {
-          Text('分享').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_7a92434114')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => this.shareUrl())
       }
       .width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 })
@@ -276,27 +276,27 @@ struct RssReadPage {
       // ===== 底部操作栏 =====
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('打开浏览器').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_3f550f3594')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => this.openInBrowser())
 
         Blank()
 
         if (this.isStarred) {
           Button({ type: ButtonType.Normal }) {
-            Text('编辑收藏').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            Text($r('app.string.ui_07d90ddc52')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
           }
-          .backgroundColor('transparent')
+          .backgroundColor(ThemeColors.transparent())
           .onClick(() => {
             this.showStarEdit = true;
           })
         }
 
         Button({ type: ButtonType.Normal }) {
-          Text('刷新').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.common_refresh')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent').margin({ left: 8 })
+        .backgroundColor(ThemeColors.transparent()).margin({ left: 8 })
         .onClick(() => {
           this.isLoading = true;
           this.content = '';

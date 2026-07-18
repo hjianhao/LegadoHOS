@@ -80,9 +80,9 @@ struct RssArticlesPage {
     Column() {
       Row() {
         Button({ type: ButtonType.Normal }) {
-          Text('← 返回').fontSize(16).fontColor(ThemeColors.primary(this.isDark))
+          Text($r('app.string.ui_4968e7f610')).fontSize(16).fontColor(ThemeColors.primary(this.isDark))
         }
-        .backgroundColor('transparent')
+        .backgroundColor(ThemeColors.transparent())
         .onClick(() => { UiUtil.back(this.getUIContext()); })
         Text(this.sourceName).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -92,16 +92,16 @@ struct RssArticlesPage {
       .width('100%').padding({ left: 8, right: 12, top: 8, bottom: 4 })
 
       if (this.statusMsg) {
-        Text(this.statusMsg).fontSize(12).fontColor('#FF5722')
-          .padding(8).backgroundColor('#FFF3E0').width('100%')
+        Text(this.statusMsg).fontSize(12).fontColor(ThemeColors.error(this.isDark))
+          .padding(8).backgroundColor(ThemeColors.warningContainer(this.isDark)).width('100%')
       }
 
       if (this.isLoading) {
         LoadingProgress().color(ThemeColors.primary(this.isDark))
       } else if (this.articles.length === 0) {
         Column() {
-          Text('暂无文章').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('该源暂无内容，请检查源URL是否正确')
+          Text($r('app.string.ui_4a8be83972')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          Text($r('app.string.ui_39f50da07f'))
             .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
@@ -120,9 +120,9 @@ struct RssArticlesPage {
                   }
                   Blank()
                   if (article.read) {
-                    Text('已读').fontSize(10).fontColor('#4CAF50')
+                    Text($r('app.string.ui_642ec8b596')).fontSize(10).fontColor(ThemeColors.success(this.isDark))
                       .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-                      .border({ radius: 3 }).borderColor('#4CAF50').borderWidth(0.5)
+                      .border({ radius: 3 }).borderColor(ThemeColors.success(this.isDark)).borderWidth(0.5)
                   }
                 }.width('100%').margin({ top: 4 })
               }

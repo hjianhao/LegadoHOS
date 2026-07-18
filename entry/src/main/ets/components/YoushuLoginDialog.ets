@@ -87,21 +87,21 @@ export struct YoushuLoginDialog {
     Scroll() {
       Column() {
       Row() {
-        Text('登录优书网').fontSize(17).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_24934124ef')).fontSize(17).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
-        Button('关闭').fontSize(13).height(44).padding({ left: 10, right: 10 })
+        Button($r('app.string.common_close')).fontSize(13).height(44).padding({ left: 10, right: 10 })
           .fontColor(ThemeColors.onBackground(this.isDark)).backgroundColor(Color.Transparent)
           .onClick((): void => { this.controller.close(); })
       }.width('100%').margin({ bottom: 10 })
 
-      TextInput({ placeholder: '用户名 / 邮箱', text: this.username })
+      TextInput({ placeholder: $r('app.string.ui_3f27a643d4'), text: this.username })
         .type(InputType.Normal).width('100%').height(44).fontSize(14)
         .fontColor(ThemeColors.onSurface(this.isDark))
         .placeholderColor(ThemeColors.secondaryText(this.isDark))
         .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(9)
         .onChange((value: string): void => { this.username = value; })
 
-      TextInput({ placeholder: '密码', text: this.password })
+      TextInput({ placeholder: $r('app.string.ui_c839a8ff17'), text: this.password })
         .type(InputType.Password).width('100%').height(44).fontSize(14).margin({ top: 10 })
         .fontColor(ThemeColors.onSurface(this.isDark))
         .placeholderColor(ThemeColors.secondaryText(this.isDark))
@@ -109,7 +109,7 @@ export struct YoushuLoginDialog {
         .onChange((value: string): void => { this.password = value; })
 
       Row() {
-        TextInput({ placeholder: '验证码', text: this.checkcode })
+        TextInput({ placeholder: $r('app.string.ui_3e3d59a258'), text: this.checkcode })
           .type(InputType.Normal).height(44).fontSize(14).layoutWeight(1)
           .fontColor(ThemeColors.onSurface(this.isDark))
           .placeholderColor(ThemeColors.secondaryText(this.isDark))
@@ -121,11 +121,11 @@ export struct YoushuLoginDialog {
           } else if (this.captchaData) {
             Image(this.captchaData).width(92).height(40).objectFit(ImageFit.Contain)
           } else {
-            Text('刷新').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+            Text($r('app.string.common_refresh')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
           }
         }.width(100).height(44).margin({ left: 8 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(9)
-          .accessibilityText('刷新验证码')
+          .accessibilityText($r('app.string.ui_d00634eb60'))
           .onClick((): void => { void this.refreshCaptcha(); })
       }.width('100%').margin({ top: 10 })
 
@@ -141,7 +141,7 @@ export struct YoushuLoginDialog {
         .backgroundColor(ThemeColors.primary(this.isDark)).enabled(!this.busy)
         .onClick((): void => { void this.submit(); })
 
-      Text('仅在本机保存 Cookie 登录会话，不保存账号和密码。')
+      Text($r('app.string.ui_0ce66bc635'))
         .width('100%').fontSize(11).margin({ top: 10 })
         .fontColor(ThemeColors.secondaryText(this.isDark))
       }.width('100%').padding(18)

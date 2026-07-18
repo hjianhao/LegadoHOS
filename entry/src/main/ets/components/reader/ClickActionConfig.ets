@@ -51,18 +51,18 @@ export struct ClickActionConfig {
     Column() {
       // 顶栏
       Row() {
-        Text('阅读设置').fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_bc0832465e')).fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
-        Button('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
-          .backgroundColor('transparent').onClick(() => { this.onDismiss?.(); })
+        Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
+          .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_close')).onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 12, right: 12, top: 8 })
 
       // ===== 编码设置（仅本地 TXT） =====
       if (this.isLocalTxt) {
         Row() {
-          Text('TXT 编码').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+          Text($r('app.string.ui_9b7b6a50fc')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
           Text(this.txtEncoding).fontSize(14).fontColor(ThemeColors.primary(this.isDark))
-          Text('▾').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 4 })
+          Text($r('app.string.ui_13cadede9f')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 4 })
         }
         .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 6 })
         .onClick(() => { this.showEncodingOptions = !this.showEncodingOptions; })
@@ -88,7 +88,7 @@ export struct ClickActionConfig {
       }
 
       // ===== 阅读模式（分页 / 滚动） =====
-      Text('阅读模式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+      Text($r('app.string.ui_3eac2277d9')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
         .padding({ left: 12, right: 12, top: 6 })
       Row() {
         this.flowModeChip('分页', 'paginated')
@@ -100,11 +100,11 @@ export struct ClickActionConfig {
         .backgroundColor(ThemeColors.outlineVariant(this.isDark)).margin({ top: 4, bottom: 6 })
 
       // ===== 触控区域设置 =====
-      Text('触控区域设置').fontSize(14).fontWeight(FontWeight.Bold)
+      Text($r('app.string.ui_ee2972614e')).fontSize(14).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
         .padding({ left: 12, right: 12, bottom: 4 })
 
-      Text('点击下方格子，选择该区域点击时触发的动作')
+      Text($r('app.string.ui_4e566eddb7'))
         .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 12, right: 12, bottom: 8 }).alignSelf(ItemAlign.Start)
 
@@ -122,8 +122,8 @@ export struct ClickActionConfig {
       }
 
       // 恢复默认
-      Button('恢复默认').fontSize(14).fontColor(ThemeColors.primary(this.isDark))
-        .backgroundColor(Color.Transparent).width('100%').height(36)
+      Button($r('app.string.ui_a191935bc6')).fontSize(14).fontColor(ThemeColors.primary(this.isDark))
+        .backgroundColor(Color.Transparent).width('100%').height(40)
         .margin({ top: 4 })
         .onClick(() => {
           this.zoneActions = [...DEFAULT_ZONE_ACTIONS];
@@ -138,7 +138,7 @@ export struct ClickActionConfig {
   @Builder flowModeChip(label: string, mode: string) {
     Column() {
       Text(label).fontSize(13)
-        .fontColor(this.flowMode === mode ? '#FFF' : ThemeColors.onSurface(this.isDark))
+        .fontColor(this.flowMode === mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .padding({ top: 6, bottom: 6, left: 20, right: 20 })
     }
     .backgroundColor(this.flowMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
@@ -169,7 +169,7 @@ export struct ClickActionConfig {
     .layoutWeight(1).height('100%')
     .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     .backgroundColor(this.editZone === z ?
-      (this.isDark ? '#3A3A3A' : '#E8F0FE') :
+      (ThemeColors.primaryContainer(this.isDark)) :
       ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(8)
     .border({ width: this.editZone === z ? 1 : 0, color: ThemeColors.primary(this.isDark) })
@@ -182,50 +182,50 @@ export struct ClickActionConfig {
       Text('选择「' + this.zoneLabel(this.editZone) + '」的动作')
         .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 12, bottom: 4 }).alignSelf(ItemAlign.Start)
-      Text('无动作').fontSize(14)
+      Text($r('app.string.ui_c5cc5bb410')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === -1 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === -1 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === -1 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(-1); })
-      Text('显示菜单').fontSize(14)
+      Text($r('app.string.ui_f73088bc8d')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 0 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 0 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 0 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(0); })
-      Text('下一页').fontSize(14)
+      Text($r('app.string.ui_67a246a344')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 1 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 1 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 1 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(1); })
-      Text('上一页').fontSize(14)
+      Text($r('app.string.ui_b41561d807')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 2 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 2 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 2 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(2); })
-      Text('下一章').fontSize(14)
+      Text($r('app.string.ui_1b061d776b')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 3 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 3 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 3 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(3); })
-      Text('上一章').fontSize(14)
+      Text($r('app.string.ui_1393bb2a70')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 4 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 4 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 4 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(4); })
-      Text('添加书签').fontSize(14)
+      Text($r('app.string.ui_9dbbfd0278')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 7 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 7 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 7 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(7); })
-      Text('目录').fontSize(14)
+      Text($r('app.string.ui_41e5243e2d')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 10 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 10 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 10 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(10); })
-      Text('朗读').fontSize(14)
+      Text($r('app.string.ui_8f84b8a07c')).fontSize(14)
         .fontColor(this.zoneActions[this.editZone] === 13 ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
         .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        .backgroundColor(this.zoneActions[this.editZone] === 13 ? (this.isDark ? '#1A3A5A' : '#E8F0FE') : 'transparent')
+        .backgroundColor(this.zoneActions[this.editZone] === 13 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.transparent())
         .borderRadius(6).onClick(() => { this.pickAction(13); })
     }
     .width('100%').padding({ left: 12, right: 12, top: 4, bottom: 4 })

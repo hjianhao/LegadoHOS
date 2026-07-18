@@ -1,8 +1,2288 @@
 {
   "string": [
-    { "name": "module_desc", "value": "开源阅读 - 鸿蒙版" },
-    { "name": "reason_read_media", "value": "用于导入本地书籍和封面" },
-    { "name": "reason_write_media", "value": "用于缓存书籍和导出备份" },
-    { "name": "reason_background", "value": "用于后台朗读和下载服务" }
+    {
+      "name": "module_desc",
+      "value": "开源阅读 - 鸿蒙版"
+    },
+    {
+      "name": "reason_read_media",
+      "value": "用于导入本地书籍和封面"
+    },
+    {
+      "name": "reason_write_media",
+      "value": "用于缓存书籍和导出备份"
+    },
+    {
+      "name": "reason_background",
+      "value": "用于后台朗读和下载服务"
+    },
+    {
+      "name": "ui_4968e7f610",
+      "value": "← 返回"
+    },
+    {
+      "name": "common_save",
+      "value": "保存"
+    },
+    {
+      "name": "ui_480e880b53",
+      "value": "RSS 源名称"
+    },
+    {
+      "name": "ui_3ba3bf5779",
+      "value": "https://example.com/rss"
+    },
+    {
+      "name": "ui_6f2ba599e2",
+      "value": "图标地址（可选）"
+    },
+    {
+      "name": "ui_65731c12ae",
+      "value": "分组名称"
+    },
+    {
+      "name": "ui_f5558aeb6a",
+      "value": "备注信息"
+    },
+    {
+      "name": "ui_944255fc77",
+      "value": "分类 URL（可选）"
+    },
+    {
+      "name": "ui_047e3c89f6",
+      "value": "搜索 URL（可选）"
+    },
+    {
+      "name": "ui_a6620e6056",
+      "value": "CSS/JSONPath 规则"
+    },
+    {
+      "name": "ui_c474b0e54d",
+      "value": "文章标题提取规则"
+    },
+    {
+      "name": "ui_affe91da1d",
+      "value": "文章发布日期规则"
+    },
+    {
+      "name": "ui_75ddbbb859",
+      "value": "文章摘要提取规则"
+    },
+    {
+      "name": "ui_d208f2dc03",
+      "value": "文章图片提取规则"
+    },
+    {
+      "name": "ui_cd3099a78e",
+      "value": "文章链接提取规则"
+    },
+    {
+      "name": "ui_089fbf1b07",
+      "value": "分页规则"
+    },
+    {
+      "name": "ui_5a5b650138",
+      "value": "文章正文提取规则"
+    },
+    {
+      "name": "ui_48e36927c6",
+      "value": "允许的 HTML 标签"
+    },
+    {
+      "name": "ui_8b8264ddb5",
+      "value": "禁用的 HTML 标签"
+    },
+    {
+      "name": "ui_3a9f79b186",
+      "value": "注入的 CSS 样式"
+    },
+    {
+      "name": "ui_9f17b317b8",
+      "value": "页面加载后注入的 JS"
+    },
+    {
+      "name": "ui_619fe1103f",
+      "value": "页面加载前执行的 JS"
+    },
+    {
+      "name": "ui_735b0d3015",
+      "value": "替换页面的 HTML 模板"
+    },
+    {
+      "name": "ui_197e1fb34c",
+      "value": "嵌入 HTML 的 style 标签内容"
+    },
+    {
+      "name": "ui_d13666889f",
+      "value": "嵌入 HTML 的 script 标签内容"
+    },
+    {
+      "name": "ui_ebb607fc23",
+      "value": "EPUB 阅读器开发中..."
+    },
+    {
+      "name": "ui_6938ad92fa",
+      "value": "书单"
+    },
+    {
+      "name": "ui_df517e0dd3",
+      "value": "筛选书单并查看书单内书籍与评语"
+    },
+    {
+      "name": "ui_d11ef1d8a3",
+      "value": "正在加载优书网书单…"
+    },
+    {
+      "name": "ui_b1ea604569",
+      "value": "书单加载失败"
+    },
+    {
+      "name": "common_retry",
+      "value": "重试"
+    },
+    {
+      "name": "ui_d5d58840ea",
+      "value": "加载下一页…"
+    },
+    {
+      "name": "ui_3471e133fa",
+      "value": "没有更多结果"
+    },
+    {
+      "name": "ui_8179643cdc",
+      "value": "←"
+    },
+    {
+      "name": "common_loading",
+      "value": "加载中..."
+    },
+    {
+      "name": "ui_76e163cfa2",
+      "value": "⚠️"
+    },
+    {
+      "name": "ui_a2cd7e5079",
+      "value": "暂无书籍"
+    },
+    {
+      "name": "ui_55f4785cab",
+      "value": "没有找到书籍"
+    },
+    {
+      "name": "common_back",
+      "value": "返回"
+    },
+    {
+      "name": "ui_4f5a0869c2",
+      "value": "书架管理"
+    },
+    {
+      "name": "common_select_all",
+      "value": "全选"
+    },
+    {
+      "name": "ui_591f3aa55f",
+      "value": "移动"
+    },
+    {
+      "name": "common_export",
+      "value": "导出"
+    },
+    {
+      "name": "ui_6cdba4aad0",
+      "value": "缓存"
+    },
+    {
+      "name": "ui_36528cefed",
+      "value": "清缓存"
+    },
+    {
+      "name": "ui_0d01c5a3a2",
+      "value": "移出"
+    },
+    {
+      "name": "ui_fe238ad8bf",
+      "value": "移动到分组"
+    },
+    {
+      "name": "ui_60ecbc7f40",
+      "value": "›"
+    },
+    {
+      "name": "common_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "ui_2c643fe94c",
+      "value": "搜索书名或作者"
+    },
+    {
+      "name": "ui_6980edd1a3",
+      "value": "WebServicePage"
+    },
+    {
+      "name": "ui_b48ed8db6e",
+      "value": "功能开发中"
+    },
+    {
+      "name": "ui_0eb27905fd",
+      "value": "添加 URL"
+    },
+    {
+      "name": "ui_0951b9a022",
+      "value": "✕"
+    },
+    {
+      "name": "common_add",
+      "value": "添加"
+    },
+    {
+      "name": "ui_9bab3618b6",
+      "value": "每行一个书籍详情页 URL"
+    },
+    {
+      "name": "common_close",
+      "value": "关闭"
+    },
+    {
+      "name": "ui_763e78b9fb",
+      "value": "RSSPage"
+    },
+    {
+      "name": "ui_965c956cb1",
+      "value": "页面加载失败"
+    },
+    {
+      "name": "ui_232ec8d773",
+      "value": "请重启应用或检查日志"
+    },
+    {
+      "name": "ui_7a92434114",
+      "value": "分享"
+    },
+    {
+      "name": "ui_3f550f3594",
+      "value": "打开浏览器"
+    },
+    {
+      "name": "ui_07d90ddc52",
+      "value": "编辑收藏"
+    },
+    {
+      "name": "common_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "ui_8ce30b48a4",
+      "value": "导出书架"
+    },
+    {
+      "name": "ui_2e19057052",
+      "value": "重新生成"
+    },
+    {
+      "name": "ui_184adfdabf",
+      "value": "保存文件"
+    },
+    {
+      "name": "ui_7d1a7c3218",
+      "value": "导出内容"
+    },
+    {
+      "name": "ui_4a8be83972",
+      "value": "暂无文章"
+    },
+    {
+      "name": "ui_39f50da07f",
+      "value": "该源暂无内容，请检查源URL是否正确"
+    },
+    {
+      "name": "ui_642ec8b596",
+      "value": "已读"
+    },
+    {
+      "name": "ui_4831ec355a",
+      "value": "字体管理"
+    },
+    {
+      "name": "common_delete",
+      "value": "删除"
+    },
+    {
+      "name": "common_import",
+      "value": "导入"
+    },
+    {
+      "name": "ui_4c106ddba7",
+      "value": "🔤"
+    },
+    {
+      "name": "ui_524f9b3e07",
+      "value": "暂无自定义字体"
+    },
+    {
+      "name": "ui_ce206202aa",
+      "value": "点击右上角\"导入\"添加字体"
+    },
+    {
+      "name": "ui_698a879938",
+      "value": "✓"
+    },
+    {
+      "name": "ui_4ab1cac229",
+      "value": "日出江花红似火"
+    },
+    {
+      "name": "ui_1cd80fd7a8",
+      "value": "重命名"
+    },
+    {
+      "name": "ui_ba525dae9b",
+      "value": "重命名字体"
+    },
+    {
+      "name": "common_confirm",
+      "value": "确定"
+    },
+    {
+      "name": "ui_7c6286bb83",
+      "value": "输入新名称"
+    },
+    {
+      "name": "common_select_none",
+      "value": "全不选"
+    },
+    {
+      "name": "ui_812421bd66",
+      "value": "选新增"
+    },
+    {
+      "name": "ui_2aa8da7c5f",
+      "value": "选更新"
+    },
+    {
+      "name": "ui_221ee0cc94",
+      "value": "选项"
+    },
+    {
+      "name": "ui_8aa8476aa8",
+      "value": "保留原名"
+    },
+    {
+      "name": "ui_d2570e2bf1",
+      "value": "保留分组"
+    },
+    {
+      "name": "ui_75598fec28",
+      "value": "保留启用"
+    },
+    {
+      "name": "ui_17a2c45c82",
+      "value": "导入选中"
+    },
+    {
+      "name": "ui_873b2f22c0",
+      "value": "请输入书源 JSON 文件的下载链接"
+    },
+    {
+      "name": "ui_5fc350fb8d",
+      "value": "下载并导入"
+    },
+    {
+      "name": "ui_c5faeb98cd",
+      "value": "请粘贴书源的 JSON 内容"
+    },
+    {
+      "name": "ui_1503a5a605",
+      "value": "解析并导入"
+    },
+    {
+      "name": "ui_95462abb0d",
+      "value": "选择本地文件"
+    },
+    {
+      "name": "ui_5e71071b34",
+      "value": "粘贴 JSON 内容"
+    },
+    {
+      "name": "ui_a27b2f6612",
+      "value": "从 URL 导入"
+    },
+    {
+      "name": "ui_bd736410f9",
+      "value": "自定义分组名"
+    },
+    {
+      "name": "ui_a47dc3912c",
+      "value": "https://example.com/sources.json"
+    },
+    {
+      "name": "ui_9e6ca0bcd0",
+      "value": "[{\"bookSourceName\":\"...\",\"bookSourceUrl\":\"...\", ...}]"
+    },
+    {
+      "name": "common_search",
+      "value": "搜索"
+    },
+    {
+      "name": "ui_a90e20dcba",
+      "value": "— 已加载全部 —"
+    },
+    {
+      "name": "ui_5fd0aabe28",
+      "value": "搜索文章..."
+    },
+    {
+      "name": "ui_669a0d78a8",
+      "value": "龙空 · 推书试读"
+    },
+    {
+      "name": "ui_ed3fa2f3e8",
+      "value": "多选帖子，让 AI 整理推荐与讨论书目"
+    },
+    {
+      "name": "ui_608b8e137e",
+      "value": "选择标签"
+    },
+    {
+      "name": "ui_4994e3d43b",
+      "value": "请选择一个标签"
+    },
+    {
+      "name": "ui_24041f7a07",
+      "value": "选择上方标签后，这里会列出该标签下的帖子"
+    },
+    {
+      "name": "ui_fcb83b62bc",
+      "value": "精"
+    },
+    {
+      "name": "ui_67fba2f357",
+      "value": "×"
+    },
+    {
+      "name": "ui_fa49c1b160",
+      "value": "还没有分析结果"
+    },
+    {
+      "name": "ui_0cb9ce6e01",
+      "value": "到“选帖子”中选择龙空主题并交给 AI 分析"
+    },
+    {
+      "name": "ui_ea0cb6560f",
+      "value": "搜索 ›"
+    },
+    {
+      "name": "ui_640ab2bae0",
+      "value": "Test"
+    },
+    {
+      "name": "ui_a979ef10cc",
+      "value": "+"
+    },
+    {
+      "name": "ui_c4dd3c8cdd",
+      "value": "<"
+    },
+    {
+      "name": "ui_1b0a1f59a5",
+      "value": "⌕"
+    },
+    {
+      "name": "ui_72077749f7",
+      "value": "无"
+    },
+    {
+      "name": "ui_6685a5ea64",
+      "value": "暂无搜索建议"
+    },
+    {
+      "name": "ui_8986a5a260",
+      "value": "书架匹配"
+    },
+    {
+      "name": "ui_a6f11567e2",
+      "value": "已在书架"
+    },
+    {
+      "name": "ui_adf6d73a69",
+      "value": "搜索历史"
+    },
+    {
+      "name": "ui_2e9ab4934c",
+      "value": "清除全部"
+    },
+    {
+      "name": "ui_a34801ad9c",
+      "value": "时"
+    },
+    {
+      "name": "ui_11f6ad8ec5",
+      "value": "x"
+    },
+    {
+      "name": "ui_778fc8f994",
+      "value": "全部"
+    },
+    {
+      "name": "ui_091385be99",
+      "value": ">"
+    },
+    {
+      "name": "ui_8e1ac919ae",
+      "value": "继续搜索"
+    },
+    {
+      "name": "ui_423b4efd16",
+      "value": "放宽筛选"
+    },
+    {
+      "name": "ui_35d70d63b7",
+      "value": "搜"
+    },
+    {
+      "name": "ui_70ed469dce",
+      "value": "搜索你想看的书籍"
+    },
+    {
+      "name": "ui_07f40562ca",
+      "value": "搜索设置"
+    },
+    {
+      "name": "common_done",
+      "value": "完成"
+    },
+    {
+      "name": "ui_b0961e172b",
+      "value": "布局"
+    },
+    {
+      "name": "ui_b3eb306129",
+      "value": "书源类型"
+    },
+    {
+      "name": "ui_c7127bb6ee",
+      "value": "匹配"
+    },
+    {
+      "name": "ui_2cacc1b742",
+      "value": "搜索范围"
+    },
+    {
+      "name": "ui_63c63d5fff",
+      "value": "清除搜索历史"
+    },
+    {
+      "name": "ui_258e710c18",
+      "value": "确定清除全部搜索历史吗？"
+    },
+    {
+      "name": "ui_7b15e5e8e7",
+      "value": "清除"
+    },
+    {
+      "name": "ui_7b518aad5a",
+      "value": "放宽搜索条件"
+    },
+    {
+      "name": "ui_84128a8270",
+      "value": "当前筛选可能过严，可以关闭精确匹配或切回全部书源后重新搜索。"
+    },
+    {
+      "name": "ui_61041cbe12",
+      "value": "关闭精确匹配"
+    },
+    {
+      "name": "ui_510d465771",
+      "value": "切回全部书源"
+    },
+    {
+      "name": "ui_3597d00e59",
+      "value": "全部放宽"
+    },
+    {
+      "name": "ui_109062ac89",
+      "value": "正在加载该书源下一页"
+    },
+    {
+      "name": "ui_3a0fab4978",
+      "value": "加载更多"
+    },
+    {
+      "name": "ui_0cb95c69f1",
+      "value": "书籍预览"
+    },
+    {
+      "name": "ui_c0ea2c7481",
+      "value": "加入书架"
+    },
+    {
+      "name": "ui_faea8c1db9",
+      "value": "查看详情"
+    },
+    {
+      "name": "ui_f9faaeaa8e",
+      "value": "搜索书名或作者..."
+    },
+    {
+      "name": "ui_440a4757f9",
+      "value": "筛选分组或书源"
+    },
+    {
+      "name": "ui_39b50007b2",
+      "value": "< 返回"
+    },
+    {
+      "name": "ui_dddaeefb0e",
+      "value": "备份与恢复"
+    },
+    {
+      "name": "ui_220e7111f6",
+      "value": "自动同步"
+    },
+    {
+      "name": "ui_64c9bc1502",
+      "value": "同步阅读进度"
+    },
+    {
+      "name": "ui_c0fba8a4d5",
+      "value": "增强同步"
+    },
+    {
+      "name": "ui_721d1ee6c8",
+      "value": "测试 WebDAV 连接"
+    },
+    {
+      "name": "ui_b75af5b178",
+      "value": "从云端恢复"
+    },
+    {
+      "name": "ui_18fb6a0eb7",
+      "value": "手动输入备份文件名（跨设备恢复时使用）"
+    },
+    {
+      "name": "ui_79748ca1c6",
+      "value": "恢复"
+    },
+    {
+      "name": "ui_2eb291f695",
+      "value": "服务器地址"
+    },
+    {
+      "name": "ui_a1aaf352cb",
+      "value": "用户名"
+    },
+    {
+      "name": "ui_c839a8ff17",
+      "value": "密码"
+    },
+    {
+      "name": "ui_5aa328deb8",
+      "value": "路径前缀"
+    },
+    {
+      "name": "ui_598dd1606f",
+      "value": "如 backup_2026-07-03.zip"
+    },
+    {
+      "name": "ui_300ee3dee4",
+      "value": "加载中…"
+    },
+    {
+      "name": "ui_7082456207",
+      "value": "菜单"
+    },
+    {
+      "name": "ui_486ca2d3e4",
+      "value": "🖼 图片加载失败"
+    },
+    {
+      "name": "ui_e647cd13d7",
+      "value": "已是最后一章"
+    },
+    {
+      "name": "ui_f61763b8b7",
+      "value": "继续阅读下一章"
+    },
+    {
+      "name": "ui_2c96dbe4ab",
+      "value": "查看上一章"
+    },
+    {
+      "name": "ui_9fb248dfd4",
+      "value": "〈"
+    },
+    {
+      "name": "ui_e54d3bce2a",
+      "value": "章节"
+    },
+    {
+      "name": "ui_5d419889c4",
+      "value": "亮度"
+    },
+    {
+      "name": "ui_7b0930e205",
+      "value": "页码"
+    },
+    {
+      "name": "ui_1393bb2a70",
+      "value": "上一章"
+    },
+    {
+      "name": "ui_41e5243e2d",
+      "value": "目录"
+    },
+    {
+      "name": "ui_1b061d776b",
+      "value": "下一章"
+    },
+    {
+      "name": "ui_f28106c1d8",
+      "value": "换源"
+    },
+    {
+      "name": "ui_580c1ae19a",
+      "value": "触控"
+    },
+    {
+      "name": "ui_3eac2277d9",
+      "value": "阅读模式"
+    },
+    {
+      "name": "ui_ee2972614e",
+      "value": "触控区域设置"
+    },
+    {
+      "name": "ui_30abb7cbaa",
+      "value": "点击各区域设置动作"
+    },
+    {
+      "name": "ui_7b1b3f86fe",
+      "value": "BookmarkPage"
+    },
+    {
+      "name": "ui_1ef00e7d2f",
+      "value": "AI 生成书源"
+    },
+    {
+      "name": "ui_d7d7ce790b",
+      "value": "配置"
+    },
+    {
+      "name": "ui_735c63bd30",
+      "value": "输入小说网站首页地址"
+    },
+    {
+      "name": "ui_0f19d1f0d6",
+      "value": "搜索关键词（用于构造搜索测试）"
+    },
+    {
+      "name": "ui_4769da8dd6",
+      "value": "开始分析"
+    },
+    {
+      "name": "ui_c46ddaba9a",
+      "value": "AI 将自动分析网站结构，提取 CSS 选择器规则"
+    },
+    {
+      "name": "ui_480e589572",
+      "value": "交互日志"
+    },
+    {
+      "name": "ui_6e1dce9241",
+      "value": "重新分析"
+    },
+    {
+      "name": "ui_fcf0c4061c",
+      "value": "保存并编辑"
+    },
+    {
+      "name": "ui_740e739790",
+      "value": "https://www.example.com"
+    },
+    {
+      "name": "ui_1ffe87e82f",
+      "value": "输入书名关键词"
+    },
+    {
+      "name": "ui_356fb1b027",
+      "value": "导入书架"
+    },
+    {
+      "name": "ui_21a6f5a8d9",
+      "value": "选择文件"
+    },
+    {
+      "name": "ui_346e030c2f",
+      "value": "支持 Android 书架导出的 JSON，或填写远程 JSON 地址"
+    },
+    {
+      "name": "ui_3dc9907c14",
+      "value": "[{\"name\":\"书名\",\"author\":\"作者\",\"intro\":\"简介\"}] 或 https://..."
+    },
+    {
+      "name": "ui_d926370389",
+      "value": "暂无目录"
+    },
+    {
+      "name": "ui_7bf45985d7",
+      "value": "请确认书源支持目录获取"
+    },
+    {
+      "name": "ui_0dccf90917",
+      "value": "‹"
+    },
+    {
+      "name": "ui_6564582d82",
+      "value": "↗"
+    },
+    {
+      "name": "ui_b7ed67990b",
+      "value": "⋮"
+    },
+    {
+      "name": "ui_e8555020c4",
+      "value": "作"
+    },
+    {
+      "name": "ui_4ad9435ac1",
+      "value": "网"
+    },
+    {
+      "name": "ui_fe04274cef",
+      "value": "书"
+    },
+    {
+      "name": "ui_aac0ef6c1c",
+      "value": "阅读"
+    },
+    {
+      "name": "ui_3eb416223e",
+      "value": "|"
+    },
+    {
+      "name": "ui_31bfcf117e",
+      "value": "目录加载失败或书源暂无目录"
+    },
+    {
+      "name": "ui_77836d3a99",
+      "value": "更多操作"
+    },
+    {
+      "name": "ui_e900b55ce7",
+      "value": "分组管理"
+    },
+    {
+      "name": "ui_2cd9e6ce81",
+      "value": "新增"
+    },
+    {
+      "name": "ui_1a1f6dff78",
+      "value": "系统"
+    },
+    {
+      "name": "ui_9555ffd723",
+      "value": "↑"
+    },
+    {
+      "name": "ui_fc486696ad",
+      "value": "↓"
+    },
+    {
+      "name": "common_edit",
+      "value": "编辑"
+    },
+    {
+      "name": "ui_b279500285",
+      "value": "新分组名"
+    },
+    {
+      "name": "ui_6eca4a7990",
+      "value": "关闭分组管理"
+    },
+    {
+      "name": "ui_2c598c6710",
+      "value": "书库"
+    },
+    {
+      "name": "ui_74b2e1c7af",
+      "value": "筛选优书网书目，点击书籍后从现有书源搜索"
+    },
+    {
+      "name": "ui_ef45ebc684",
+      "value": "正在加载优书网书库…"
+    },
+    {
+      "name": "ui_2f3e5c58fd",
+      "value": "书库加载失败"
+    },
+    {
+      "name": "ui_fa2c7b7a75",
+      "value": "离线缓存"
+    },
+    {
+      "name": "ui_99160509f5",
+      "value": "书架暂无书源小说"
+    },
+    {
+      "name": "ui_02e2c453fc",
+      "value": "RSS 管理"
+    },
+    {
+      "name": "ui_d4e9ca3dd4",
+      "value": "启用"
+    },
+    {
+      "name": "ui_be70be5a2e",
+      "value": "禁用"
+    },
+    {
+      "name": "ui_f0ca898ae3",
+      "value": "暂无 RSS 源"
+    },
+    {
+      "name": "ui_3b2cc3b570",
+      "value": "点击右上角「添加」新增 RSS 源"
+    },
+    {
+      "name": "ui_0fe5a98e9f",
+      "value": "已禁用"
+    },
+    {
+      "name": "ui_6846e924de",
+      "value": "搜索订阅源..."
+    },
+    {
+      "name": "ui_508aad2848",
+      "value": "DNS 设置"
+    },
+    {
+      "name": "ui_2ef24aca64",
+      "value": "逗号分隔多个 DNS 服务器地址"
+    },
+    {
+      "name": "common_settings",
+      "value": "设置"
+    },
+    {
+      "name": "ui_600907a2c7",
+      "value": "并发搜索数"
+    },
+    {
+      "name": "ui_0a4ed43a7e",
+      "value": "同时搜索的书源数量，值越大搜索越快但网络负载越高"
+    },
+    {
+      "name": "ui_f2307104fe",
+      "value": "搜索时启用全部源"
+    },
+    {
+      "name": "ui_136ddb8c2d",
+      "value": "关闭后仅使用已启用的书源搜索"
+    },
+    {
+      "name": "ui_bc0832465e",
+      "value": "阅读设置"
+    },
+    {
+      "name": "ui_2cde0d64a9",
+      "value": "自动缓存"
+    },
+    {
+      "name": "ui_761b13d7e8",
+      "value": "阅读时自动缓存当前章节前后 ±N 章（0 = 不自动缓存）"
+    },
+    {
+      "name": "ui_e8a5847184",
+      "value": "EPUB 阅读引擎"
+    },
+    {
+      "name": "ui_fc917f3a3c",
+      "value": "小说阅读"
+    },
+    {
+      "name": "ui_9e712a850b",
+      "value": "图文混排1"
+    },
+    {
+      "name": "ui_c695d53340",
+      "value": "图文混排2"
+    },
+    {
+      "name": "ui_a0d3218048",
+      "value": "语音朗读设置"
+    },
+    {
+      "name": "ui_2f5f1495cc",
+      "value": "微软 Azure 语音服务"
+    },
+    {
+      "name": "ui_2a1cad5f9e",
+      "value": "端点"
+    },
+    {
+      "name": "ui_44aaab081d",
+      "value": "可填写完整 TTS 合成地址；也可填写 Portal 里的 https://<region>.api.cognitive.microsoft.com，应用会自动转换"
+    },
+    {
+      "name": "ui_0d1965e139",
+      "value": "密钥"
+    },
+    {
+      "name": "ui_7701f53574",
+      "value": "微软语音的音色在阅读页朗读面板中选择，首次默认使用第一个中文音色。"
+    },
+    {
+      "name": "ui_ea7c1a58fa",
+      "value": "保存微软语音设置"
+    },
+    {
+      "name": "ui_2932250412",
+      "value": "保存后，在阅读页朗读面板的“引擎”里选择“微软语音”。文本会发送到 Azure 进行在线合成。"
+    },
+    {
+      "name": "ui_7da1731cca",
+      "value": "漫画设置"
+    },
+    {
+      "name": "ui_d3eaabf98d",
+      "value": "阅读方向"
+    },
+    {
+      "name": "ui_1899e4c569",
+      "value": "图片预加载数量"
+    },
+    {
+      "name": "ui_c6e1130def",
+      "value": "预先下载当前章节前 N 张图片到本地缓存"
+    },
+    {
+      "name": "ui_f76562e2f2",
+      "value": "图片缓存管理"
+    },
+    {
+      "name": "ui_bc473d919d",
+      "value": "当前缓存"
+    },
+    {
+      "name": "ui_907c3945d8",
+      "value": "清理"
+    },
+    {
+      "name": "ui_9ce0aa853f",
+      "value": "主题设置"
+    },
+    {
+      "name": "ui_f4bbd91f79",
+      "value": "跟随系统"
+    },
+    {
+      "name": "ui_750642ccd6",
+      "value": "深色模式"
+    },
+    {
+      "name": "ui_731e048a56",
+      "value": "阅读界面随主题切换"
+    },
+    {
+      "name": "ui_2244992a1c",
+      "value": "开启后切换应用主题时，阅读界面自动切换日间/夜间模式"
+    },
+    {
+      "name": "ui_faec236cbb",
+      "value": "网络设置"
+    },
+    {
+      "name": "ui_48ef79da8b",
+      "value": "启用自定义 DNS"
+    },
+    {
+      "name": "ui_94c9cca7ea",
+      "value": "DNS 服务器"
+    },
+    {
+      "name": "ui_bbd5eab31b",
+      "value": "网络超时"
+    },
+    {
+      "name": "ui_eb6aaba1a1",
+      "value": "秒"
+    },
+    {
+      "name": "ui_65eee70aa6",
+      "value": "默认60秒，影响目录加载、搜索等操作，修改后即时生效"
+    },
+    {
+      "name": "ui_d95ef5ba39",
+      "value": "HTTP 代理"
+    },
+    {
+      "name": "ui_be090d82b1",
+      "value": "清除代理"
+    },
+    {
+      "name": "ui_97ccf737aa",
+      "value": "设置 DNS 可解决部分书源无法解析域名的问题。默认配置了 4 个公共 DNS。"
+    },
+    {
+      "name": "ui_3fbe4d7fb9",
+      "value": "LegadoHOS"
+    },
+    {
+      "name": "ui_7ac19ee157",
+      "value": "v1.0.0"
+    },
+    {
+      "name": "ui_4ac6b626ac",
+      "value": "鸿蒙原生阅读APP"
+    },
+    {
+      "name": "ui_af0f06ab56",
+      "value": "基于 legado-with-MD3 重构"
+    },
+    {
+      "name": "ui_94a1fb04e2",
+      "value": "如 8.8.8.8,114.114.114.114"
+    },
+    {
+      "name": "ui_298b8d3d76",
+      "value": "https://japaneast.tts.speech.microsoft.com/cognitiveservices/v1"
+    },
+    {
+      "name": "ui_81474dc689",
+      "value": "Azure Speech Key"
+    },
+    {
+      "name": "ui_e6c3dd6304",
+      "value": "60"
+    },
+    {
+      "name": "ui_d74862f686",
+      "value": "代理地址 如 127.0.0.1"
+    },
+    {
+      "name": "ui_6cbb7335b5",
+      "value": "端口"
+    },
+    {
+      "name": "ui_25e74dceac",
+      "value": "当前"
+    },
+    {
+      "name": "ui_dc95e4a9f8",
+      "value": "大模型配置"
+    },
+    {
+      "name": "ui_038f5a0fe2",
+      "value": "已保存配置"
+    },
+    {
+      "name": "ui_a5f08c1d33",
+      "value": "配置名称"
+    },
+    {
+      "name": "ui_b21af4486d",
+      "value": "供应商预设"
+    },
+    {
+      "name": "ui_acd8a50431",
+      "value": "API 地址"
+    },
+    {
+      "name": "ui_47acd2028c",
+      "value": "API Key"
+    },
+    {
+      "name": "ui_98fd0cbd9c",
+      "value": "模型"
+    },
+    {
+      "name": "ui_0d38dfddcb",
+      "value": "请求超时（秒）"
+    },
+    {
+      "name": "ui_e6400fa473",
+      "value": "默认 120 秒；OpenRouter 免费模型可设为 300 秒或更高"
+    },
+    {
+      "name": "ui_c1d25f3cd3",
+      "value": "例如：OpenRouter 免费"
+    },
+    {
+      "name": "ui_e4d0357e84",
+      "value": "https://api.openai.com/v1/chat/completions"
+    },
+    {
+      "name": "ui_ec3810e10f",
+      "value": "sk-..."
+    },
+    {
+      "name": "ui_6d9372f6ba",
+      "value": "gpt-4o"
+    },
+    {
+      "name": "ui_775bc5c30e",
+      "value": "120"
+    },
+    {
+      "name": "ui_0b5d7ed54b",
+      "value": "测试"
+    },
+    {
+      "name": "ui_f4c117afe8",
+      "value": "调试"
+    },
+    {
+      "name": "ui_aa5499a758",
+      "value": "输入书源名称"
+    },
+    {
+      "name": "ui_327c3fda87",
+      "value": "https://example.com"
+    },
+    {
+      "name": "ui_ac1424ddd8",
+      "value": "0 小说 / 1 音频 / 2 漫画 / 3 文件"
+    },
+    {
+      "name": "ui_6db4e26e48",
+      "value": "true/false"
+    },
+    {
+      "name": "ui_bce3df74e6",
+      "value": "输入分组名"
+    },
+    {
+      "name": "ui_114e089a41",
+      "value": "如 https?://example\\.com/book/\\d+"
+    },
+    {
+      "name": "ui_ef950bf450",
+      "value": "可选备注"
+    },
+    {
+      "name": "ui_073bef33f6",
+      "value": "JSON格式变量说明"
+    },
+    {
+      "name": "ui_7877ebb0b5",
+      "value": "如 {\"User-Agent\":\"...\"}"
+    },
+    {
+      "name": "ui_e7395dbc96",
+      "value": "登录页面地址"
+    },
+    {
+      "name": "ui_5fac32676a",
+      "value": "返回 true 表示已登录"
+    },
+    {
+      "name": "ui_b685e2d33d",
+      "value": "封面 URL 解密脚本"
+    },
+    {
+      "name": "ui_9458b775c5",
+      "value": "数值越大越优先"
+    },
+    {
+      "name": "ui_1c822c4b5c",
+      "value": "默认 180000"
+    },
+    {
+      "name": "ui_5b636f79d2",
+      "value": "搜索并发数"
+    },
+    {
+      "name": "ui_6b0a3df4f1",
+      "value": "自定义 JS 库代码"
+    },
+    {
+      "name": "ui_bc111be397",
+      "value": "{{key}} 为关键词"
+    },
+    {
+      "name": "ui_7e0493b05c",
+      "value": "CSS/JSONPath"
+    },
+    {
+      "name": "ui_33d7a0c1b0",
+      "value": "预处理脚本"
+    },
+    {
+      "name": "ui_2a703199b1",
+      "value": "目录页 URL"
+    },
+    {
+      "name": "ui_e20c0e0065",
+      "value": "替换前的正则"
+    },
+    {
+      "name": "ui_161778d3b5",
+      "value": "替换后的内容"
+    },
+    {
+      "name": "ui_9f32ff3eed",
+      "value": "发现页地址"
+    },
+    {
+      "name": "ui_4fc8d91101",
+      "value": "JSON 数组或键值对"
+    },
+    {
+      "name": "ui_c1a33f3ea5",
+      "value": "书源脚本代码"
+    },
+    {
+      "name": "ui_bfd7a18e56",
+      "value": "JSON 格式登录界面"
+    },
+    {
+      "name": "ui_554d61a111",
+      "value": "JSON 格式"
+    },
+    {
+      "name": "ui_9faba6fa67",
+      "value": "评论列表规则"
+    },
+    {
+      "name": "ui_209ae0beeb",
+      "value": "更换书源"
+    },
+    {
+      "name": "ui_e5033d5837",
+      "value": "缓存源，点击刷新重新搜索"
+    },
+    {
+      "name": "ui_ab0501d882",
+      "value": "搜索中..."
+    },
+    {
+      "name": "ui_e99c6a8299",
+      "value": "没有找到书源"
+    },
+    {
+      "name": "ui_9025ffefeb",
+      "value": "  当前"
+    },
+    {
+      "name": "ui_6517c8605c",
+      "value": "输入文字过滤源..."
+    },
+    {
+      "name": "ui_a7d09a6235",
+      "value": "阅"
+    },
+    {
+      "name": "ui_c24e01964b",
+      "value": "Legado HOS"
+    },
+    {
+      "name": "ui_715a993b09",
+      "value": "编辑规则订阅"
+    },
+    {
+      "name": "ui_0edb3ace51",
+      "value": "订阅类型"
+    },
+    {
+      "name": "ui_88de0b0f86",
+      "value": "规则订阅"
+    },
+    {
+      "name": "ui_ef855b4789",
+      "value": "重置排序"
+    },
+    {
+      "name": "ui_df32b300bf",
+      "value": "点击右上角「添加」新增订阅"
+    },
+    {
+      "name": "ui_1be7ae4fc2",
+      "value": "名称"
+    },
+    {
+      "name": "ui_0e2d9b0777",
+      "value": "URL"
+    },
+    {
+      "name": "ui_5319af762d",
+      "value": "订阅"
+    },
+    {
+      "name": "ui_178f1f4007",
+      "value": "↻"
+    },
+    {
+      "name": "ui_4989b5cf94",
+      "value": "管理"
+    },
+    {
+      "name": "ui_68a5160559",
+      "value": "暂无订阅源"
+    },
+    {
+      "name": "ui_b9fc94e920",
+      "value": "点击右上角「管理」添加 RSS 订阅源"
+    },
+    {
+      "name": "ui_88ba0b7d82",
+      "value": "去管理"
+    },
+    {
+      "name": "ui_9cce584749",
+      "value": "📰"
+    },
+    {
+      "name": "ui_d919c10f40",
+      "value": "AI 智能导入"
+    },
+    {
+      "name": "ui_3d04880897",
+      "value": "开始导入"
+    },
+    {
+      "name": "ui_289e30bde5",
+      "value": "LLM 未配置？"
+    },
+    {
+      "name": "ui_c83c5d2b4d",
+      "value": "前往配置 →"
+    },
+    {
+      "name": "ui_15683f6cd3",
+      "value": "使用说明"
+    },
+    {
+      "name": "ui_4db72f1b92",
+      "value": "1. 输入小说网站的目录页URL"
+    },
+    {
+      "name": "ui_7f122bb1b0",
+      "value": "2. AI 自动分析页面的目录和正文结构"
+    },
+    {
+      "name": "ui_e108a94b68",
+      "value": "3. 自动下载所有章节到本地，后续无需网络"
+    },
+    {
+      "name": "ui_31450a8073",
+      "value": "输入小说目录页URL"
+    },
+    {
+      "name": "ui_06913109ef",
+      "value": "还没有分组"
+    },
+    {
+      "name": "ui_7b138e3773",
+      "value": "新增分组会分配给当前未分组书源"
+    },
+    {
+      "name": "ui_7fcdc76296",
+      "value": "输入新分组名称"
+    },
+    {
+      "name": "ui_523e40a074",
+      "value": "发现"
+    },
+    {
+      "name": "ui_ec6fd1a827",
+      "value": "发现书源加载失败"
+    },
+    {
+      "name": "ui_b154edc2dd",
+      "value": "暂无发现结果"
+    },
+    {
+      "name": "ui_c1a9e8ea2e",
+      "value": "暂无可用的发现书源"
+    },
+    {
+      "name": "ui_0357072997",
+      "value": "请在书源管理中导入带有发现URL的书源"
+    },
+    {
+      "name": "ui_6aae64b4ab",
+      "value": "加载分类..."
+    },
+    {
+      "name": "ui_f11956caf6",
+      "value": "无分类"
+    },
+    {
+      "name": "ui_6966e1dc8e",
+      "value": "筛选发现源..."
+    },
+    {
+      "name": "ui_74aba3dac5",
+      "value": "清空筛选条件"
+    },
+    {
+      "name": "ui_21f1e88275",
+      "value": "登录"
+    },
+    {
+      "name": "ui_5ad84fbb32",
+      "value": "正在加载书单详情…"
+    },
+    {
+      "name": "ui_f52aef24a9",
+      "value": "该书单需要登录后查看"
+    },
+    {
+      "name": "ui_62c8d4d429",
+      "value": "登录状态和可选凭据会保存在本机应用中"
+    },
+    {
+      "name": "ui_24934124ef",
+      "value": "登录优书网"
+    },
+    {
+      "name": "ui_e977b63424",
+      "value": "书单详情加载失败"
+    },
+    {
+      "name": "ui_6378e1ddf7",
+      "value": "书单已加载完毕"
+    },
+    {
+      "name": "ui_975c61b3f8",
+      "value": "评语"
+    },
+    {
+      "name": "ui_2e4bfce823",
+      "value": "书源管理"
+    },
+    {
+      "name": "ui_97d8a6c05b",
+      "value": "分组"
+    },
+    {
+      "name": "ui_4a8c9350fe",
+      "value": "按域名归类显示"
+    },
+    {
+      "name": "ui_6ad638ae77",
+      "value": "正在加载书源"
+    },
+    {
+      "name": "ui_198c2214f2",
+      "value": "没有匹配的书源"
+    },
+    {
+      "name": "ui_f49bb525e4",
+      "value": "可调整搜索或筛选条件"
+    },
+    {
+      "name": "common_stop",
+      "value": "停止"
+    },
+    {
+      "name": "ui_3be802f0e1",
+      "value": "搜索名称、网址或分组"
+    },
+    {
+      "name": "common_clear",
+      "value": "清空"
+    },
+    {
+      "name": "ui_945b33eb9d",
+      "value": "搜索章节内容"
+    },
+    {
+      "name": "ui_5a35cf6119",
+      "value": "AboutPage"
+    },
+    {
+      "name": "ui_f7d77d7da3",
+      "value": "书架"
+    },
+    {
+      "name": "ui_32ffb8c287",
+      "value": "搜书"
+    },
+    {
+      "name": "ui_2f752c005e",
+      "value": "移除"
+    },
+    {
+      "name": "ui_9065e08914",
+      "value": "没有匹配的书籍"
+    },
+    {
+      "name": "ui_228b298850",
+      "value": "试试其他关键词"
+    },
+    {
+      "name": "ui_a14ef60f5d",
+      "value": "当前分组没有书籍"
+    },
+    {
+      "name": "ui_81e9ebaa90",
+      "value": "去搜索添加书籍吧"
+    },
+    {
+      "name": "ui_6543d688f9",
+      "value": "书架是空的"
+    },
+    {
+      "name": "ui_51f7688b7a",
+      "value": "书源调试"
+    },
+    {
+      "name": "ui_284abffdc3",
+      "value": "测试关键词"
+    },
+    {
+      "name": "ui_45b3b04258",
+      "value": "规则链路"
+    },
+    {
+      "name": "ui_7d46687776",
+      "value": "搜索  →  详情  →  目录  →  正文"
+    },
+    {
+      "name": "ui_57292d42ea",
+      "value": "输入能命中该书源的书名"
+    },
+    {
+      "name": "ui_99f30ec7d9",
+      "value": "书架布局设置"
+    },
+    {
+      "name": "ui_b42911985e",
+      "value": "分组样式"
+    },
+    {
+      "name": "ui_3bf3689a69",
+      "value": "排序方式"
+    },
+    {
+      "name": "ui_c0276ec9a7",
+      "value": "升序"
+    },
+    {
+      "name": "ui_c6b568b516",
+      "value": "布局模式"
+    },
+    {
+      "name": "ui_b65a519f48",
+      "value": "网格样式"
+    },
+    {
+      "name": "ui_94e885c673",
+      "value": "网格列数"
+    },
+    {
+      "name": "ui_76b7708dba",
+      "value": "显示分隔线"
+    },
+    {
+      "name": "ui_5631e62f4e",
+      "value": "精简详情"
+    },
+    {
+      "name": "ui_10f8d00352",
+      "value": "封面宽度"
+    },
+    {
+      "name": "ui_33f508cafc",
+      "value": "书名最大行数"
+    },
+    {
+      "name": "ui_d88a491209",
+      "value": "封面阴影"
+    },
+    {
+      "name": "ui_56e7fe236f",
+      "value": "显示未读数"
+    },
+    {
+      "name": "ui_cb637b277a",
+      "value": "显示类型标签"
+    },
+    {
+      "name": "ui_250914a225",
+      "value": "显示最后更新时间"
+    },
+    {
+      "name": "ui_3f1dbc33b9",
+      "value": "显示更多信息"
+    },
+    {
+      "name": "ui_297c07c337",
+      "value": "显示最新章节"
+    },
+    {
+      "name": "ui_6c64d7e6ab",
+      "value": "显示标签"
+    },
+    {
+      "name": "ui_5ca7f32445",
+      "value": "简介最大行数"
+    },
+    {
+      "name": "ui_d9fa520992",
+      "value": "刷新上限"
+    },
+    {
+      "name": "ui_c3733c356a",
+      "value": "阅读记录"
+    },
+    {
+      "name": "ui_b6589fc6ab",
+      "value": "0"
+    },
+    {
+      "name": "ui_957cc945c1",
+      "value": "总阅读时长"
+    },
+    {
+      "name": "ui_962b3a5d34",
+      "value": "阅读天数"
+    },
+    {
+      "name": "ui_11731fd41d",
+      "value": "已读书籍"
+    },
+    {
+      "name": "ui_367b6ee56c",
+      "value": "暂无阅读记录"
+    },
+    {
+      "name": "ui_af57b02c34",
+      "value": "解析"
+    },
+    {
+      "name": "ui_61e567dad0",
+      "value": "粘贴 RSS 源的 JSON..."
+    },
+    {
+      "name": "ui_53e32830a5",
+      "value": "可选"
+    },
+    {
+      "name": "ui_3a619b2b8d",
+      "value": "关闭导入窗口"
+    },
+    {
+      "name": "ui_9868ed9c8a",
+      "value": "收藏文章"
+    },
+    {
+      "name": "ui_8a99d5db9e",
+      "value": "暂无收藏"
+    },
+    {
+      "name": "ui_f02e943954",
+      "value": "取消选择"
+    },
+    {
+      "name": "ui_b0e5fe94d9",
+      "value": "搜索收藏..."
+    },
+    {
+      "name": "ui_0ce66bc635",
+      "value": "仅在本机保存 Cookie 登录会话，不保存账号和密码。"
+    },
+    {
+      "name": "ui_3f27a643d4",
+      "value": "用户名 / 邮箱"
+    },
+    {
+      "name": "ui_3e3d59a258",
+      "value": "验证码"
+    },
+    {
+      "name": "ui_d00634eb60",
+      "value": "刷新验证码"
+    },
+    {
+      "name": "ui_a9bb68aec3",
+      "value": "导出书籍"
+    },
+    {
+      "name": "ui_9d2601c843",
+      "value": "格式"
+    },
+    {
+      "name": "ui_7475c2bd12",
+      "value": "TXT"
+    },
+    {
+      "name": "ui_7f464ff72d",
+      "value": "EPUB"
+    },
+    {
+      "name": "ui_3d67f2697e",
+      "value": "正在导出..."
+    },
+    {
+      "name": "ui_d8478a3802",
+      "value": "后台运行"
+    },
+    {
+      "name": "ui_d733ad3e85",
+      "value": "导出结果"
+    },
+    {
+      "name": "ui_8c7609ffeb",
+      "value": "更换封面"
+    },
+    {
+      "name": "ui_6f0d03e371",
+      "value": "搜索封面中..."
+    },
+    {
+      "name": "ui_e3b9e029b5",
+      "value": "未找到封面"
+    },
+    {
+      "name": "ui_12d4cdea63",
+      "value": "校验作者"
+    },
+    {
+      "name": "ui_7266978dd6",
+      "value": "没有找到其他书源"
+    },
+    {
+      "name": "ui_8dbff19fd7",
+      "value": "试试修改搜索词或点击刷新"
+    },
+    {
+      "name": "ui_d3c09574cc",
+      "value": "选择分组"
+    },
+    {
+      "name": "ui_9958d93233",
+      "value": "累计阅读时长"
+    },
+    {
+      "name": "ui_d3cf87651f",
+      "value": "当前章节"
+    },
+    {
+      "name": "ui_783198abda",
+      "value": "总章节数"
+    },
+    {
+      "name": "ui_035b6a0cf4",
+      "value": "阅读进度"
+    },
+    {
+      "name": "ui_48dcb13745",
+      "value": "阅读日历"
+    },
+    {
+      "name": "ui_1c9313edc3",
+      "value": "编辑备注"
+    },
+    {
+      "name": "ui_e164fce278",
+      "value": "选择章节"
+    },
+    {
+      "name": "ui_7f4ffe6a5d",
+      "value": "搜索书名"
+    },
+    {
+      "name": "ui_b2b1b960f6",
+      "value": "输入备注文字..."
+    },
+    {
+      "name": "ui_1f0dca2752",
+      "value": "登录龙的天空"
+    },
+    {
+      "name": "ui_02da59ddca",
+      "value": "在页面中完成登录（含验证码/二次验证）后点击“完成”"
+    },
+    {
+      "name": "ui_582c50066c",
+      "value": "字"
+    },
+    {
+      "name": "ui_b91af4abcf",
+      "value": "将章节内容下载到本地，离线阅读"
+    },
+    {
+      "name": "ui_08d760c5e8",
+      "value": "起始章节"
+    },
+    {
+      "name": "ui_dbd6ec8454",
+      "value": "结束章节"
+    },
+    {
+      "name": "ui_4a69127be0",
+      "value": "开始缓存"
+    },
+    {
+      "name": "ui_e4bccf7cfb",
+      "value": "正在缓存..."
+    },
+    {
+      "name": "ui_5011ed5755",
+      "value": "取消缓存"
+    },
+    {
+      "name": "ui_356a192b79",
+      "value": "1"
+    },
+    {
+      "name": "ui_3b78cb6281",
+      "value": "登录光遇看书"
+    },
+    {
+      "name": "ui_e4266d73c5",
+      "value": "登录后可使用完整功能"
+    },
+    {
+      "name": "ui_9ed627bcf6",
+      "value": "邮箱"
+    },
+    {
+      "name": "ui_15dc4f08ac",
+      "value": "正在加载音色"
+    },
+    {
+      "name": "ui_6243f074f1",
+      "value": "未获取到系统音色"
+    },
+    {
+      "name": "ui_e6aa2cbd7b",
+      "value": "使用中"
+    },
+    {
+      "name": "ui_70b208202c",
+      "value": "选择"
+    },
+    {
+      "name": "ui_2b9d013177",
+      "value": "下载"
+    },
+    {
+      "name": "ui_1252c81119",
+      "value": "下载模型"
+    },
+    {
+      "name": "ui_49c5e3b52b",
+      "value": "重下"
+    },
+    {
+      "name": "ui_8e9942fe51",
+      "value": "未加载微软语音音色"
+    },
+    {
+      "name": "ui_280fd119d9",
+      "value": "加载离线音色..."
+    },
+    {
+      "name": "ui_9413bdc38c",
+      "value": "引擎"
+    },
+    {
+      "name": "ui_c4301894a2",
+      "value": "音色"
+    },
+    {
+      "name": "ui_747374775d",
+      "value": "语速"
+    },
+    {
+      "name": "ui_4ccc70caa6",
+      "value": "⏮"
+    },
+    {
+      "name": "ui_dc0d472de6",
+      "value": "⏭"
+    },
+    {
+      "name": "ui_0ef94bd672",
+      "value": "⏹"
+    },
+    {
+      "name": "ui_6701c1a30b",
+      "value": "从本页朗读"
+    },
+    {
+      "name": "ui_56b1c4def5",
+      "value": "跳转到朗读进度"
+    },
+    {
+      "name": "ui_2f116b7d1c",
+      "value": "切换"
+    },
+    {
+      "name": "ui_be5522d56c",
+      "value": " ✓"
+    },
+    {
+      "name": "ui_3a0ea34a22",
+      "value": "目"
+    },
+    {
+      "name": "ui_1e358ba2b7",
+      "value": "听"
+    },
+    {
+      "name": "ui_8f84b8a07c",
+      "value": "朗读"
+    },
+    {
+      "name": "ui_ccb920edc1",
+      "value": "签"
+    },
+    {
+      "name": "ui_820f5b6440",
+      "value": "书签"
+    },
+    {
+      "name": "ui_e7a0cc5d37",
+      "value": "样"
+    },
+    {
+      "name": "ui_a4ce420c69",
+      "value": "风格"
+    },
+    {
+      "name": "ui_ebbdf13fa6",
+      "value": "设"
+    },
+    {
+      "name": "ui_9394cdbfe1",
+      "value": "源"
+    },
+    {
+      "name": "ui_11f1ad2c76",
+      "value": "存"
+    },
+    {
+      "name": "ui_7b8a6bebd3",
+      "value": "新"
+    },
+    {
+      "name": "ui_280750b313",
+      "value": "阅读风格"
+    },
+    {
+      "name": "ui_94eb3aea29",
+      "value": "验证完成"
+    },
+    {
+      "name": "ui_bf341e957f",
+      "value": "😞"
+    },
+    {
+      "name": "ui_e1a2e746b7",
+      "value": "页面无法访问"
+    },
+    {
+      "name": "ui_82153b1e69",
+      "value": "服务器返回了错误，该页面可能已失效"
+    },
+    {
+      "name": "ui_3de1b2251f",
+      "value": "风格设置"
+    },
+    {
+      "name": "ui_576ccdb1f1",
+      "value": "字号"
+    },
+    {
+      "name": "ui_b361526fa3",
+      "value": "字重"
+    },
+    {
+      "name": "ui_32711e1626",
+      "value": "字族"
+    },
+    {
+      "name": "ui_25afac8c6a",
+      "value": "字体管理 >"
+    },
+    {
+      "name": "ui_514b541ac4",
+      "value": "行距"
+    },
+    {
+      "name": "ui_c86f1b361f",
+      "value": "字距"
+    },
+    {
+      "name": "ui_f8d961b64e",
+      "value": "段距"
+    },
+    {
+      "name": "ui_3b411a009b",
+      "value": "缩进"
+    },
+    {
+      "name": "ui_c2b2faa5e1",
+      "value": "上边距"
+    },
+    {
+      "name": "ui_0d9189e570",
+      "value": "下边距"
+    },
+    {
+      "name": "ui_c22a3ffa46",
+      "value": "左边距"
+    },
+    {
+      "name": "ui_a78c05fbec",
+      "value": "右边距"
+    },
+    {
+      "name": "ui_80ec9e2b1b",
+      "value": "浅色"
+    },
+    {
+      "name": "ui_30b2c979ac",
+      "value": "深色"
+    },
+    {
+      "name": "ui_498e30003d",
+      "value": "背景色"
+    },
+    {
+      "name": "ui_7fbfaef2d0",
+      "value": "文字色"
+    },
+    {
+      "name": "ui_0f68d35084",
+      "value": "PDF 阅读模式"
+    },
+    {
+      "name": "ui_6433b1cc35",
+      "value": "屏幕方向"
+    },
+    {
+      "name": "ui_4a9a898510",
+      "value": "自动裁边"
+    },
+    {
+      "name": "ui_a7f4eb7124",
+      "value": "内容加黑"
+    },
+    {
+      "name": "ui_064bdd2d9f",
+      "value": "背景漂白"
+    },
+    {
+      "name": "ui_788be77ceb",
+      "value": "中文排版"
+    },
+    {
+      "name": "ui_365bdb3b92",
+      "value": "显示页脚"
+    },
+    {
+      "name": "ui_fd900500a2",
+      "value": "简繁转换"
+    },
+    {
+      "name": "ui_80bb821d7b",
+      "value": "切换浅色阅读"
+    },
+    {
+      "name": "ui_79d4a34df5",
+      "value": "切换深色阅读"
+    },
+    {
+      "name": "ui_9b7b6a50fc",
+      "value": "TXT 编码"
+    },
+    {
+      "name": "ui_13cadede9f",
+      "value": "▾"
+    },
+    {
+      "name": "ui_4e566eddb7",
+      "value": "点击下方格子，选择该区域点击时触发的动作"
+    },
+    {
+      "name": "ui_a191935bc6",
+      "value": "恢复默认"
+    },
+    {
+      "name": "ui_c5cc5bb410",
+      "value": "无动作"
+    },
+    {
+      "name": "ui_f73088bc8d",
+      "value": "显示菜单"
+    },
+    {
+      "name": "ui_67a246a344",
+      "value": "下一页"
+    },
+    {
+      "name": "ui_b41561d807",
+      "value": "上一页"
+    },
+    {
+      "name": "ui_9dbbfd0278",
+      "value": "添加书签"
+    },
+    {
+      "name": "ui_ea210a4fcc",
+      "value": "在页面中完成登录后点击右上角\"完成\"，登录状态将保存并用于后续访问"
+    },
+    {
+      "name": "ui_74027a0ec6",
+      "value": "设置分组"
+    },
+    {
+      "name": "ui_98f81e481a",
+      "value": "加入分组"
+    },
+    {
+      "name": "ui_35c6d23953",
+      "value": "移除分组"
+    },
+    {
+      "name": "ui_905ecef313",
+      "value": "已有分组"
+    },
+    {
+      "name": "ui_f26dbf60c5",
+      "value": "输入新分组或选择已有分组"
+    },
+    {
+      "name": "ui_6190ea7cea",
+      "value": "校验配置"
+    },
+    {
+      "name": "ui_ba53d79c46",
+      "value": "搜索关键词"
+    },
+    {
+      "name": "ui_d446be0680",
+      "value": "单阶段超时（毫秒）"
+    },
+    {
+      "name": "ui_b324a672c3",
+      "value": "开始校验"
+    },
+    {
+      "name": "ui_afa3ab04fa",
+      "value": "输入常见关键词"
+    },
+    {
+      "name": "ui_a5f4fde1e3",
+      "value": "30000"
+    },
+    {
+      "name": "common_invert_selection",
+      "value": "反选"
+    },
+    {
+      "name": "common_cache_all",
+      "value": "缓存全部"
+    },
+    {
+      "name": "widget_start_reading",
+      "value": "点击开始阅读"
+    }
   ]
 }
