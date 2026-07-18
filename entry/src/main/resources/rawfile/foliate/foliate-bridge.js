@@ -646,8 +646,10 @@ const playTurnAnimation = async (direction, navigate) => {
   }
 }
 
-window.nextPage = () => playTurnAnimation(1, () => view?.goRight?.())
-window.prevPage = () => playTurnAnimation(-1, () => view?.goLeft?.())
+// 翻页 API 表达语义方向，不再按出版物 RTL/LTR 二次映射物理方向。
+// 物理手势已在 finishSwipe 中统一：右滑 prev，左滑 next。
+window.nextPage = () => playTurnAnimation(1, () => view?.next?.())
+window.prevPage = () => playTurnAnimation(-1, () => view?.prev?.())
 window.goTo = target => target ? view?.goTo?.(target) : null
 window.goToHref = target => target ? view?.goTo?.(target) : null
 window.setPdfMode = mode => {

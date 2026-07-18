@@ -94,6 +94,22 @@ export struct PageView {
     }
   }
 
+  /**
+   * 分页模式统一使用物理滑动方向：右滑上一页，左滑下一页。
+   * 仅接受明显的横向手势，避免轻微抖动和斜向滚动误触发翻页。
+   */
+  private handlePageSwipe_(event: GestureEvent): void {
+    const offsetX: number = event.offsetX;
+    const offsetY: number = event.offsetY;
+    const minDistance: number = Math.max(40, (this.pageWidth > 0 ? this.pageWidth : 360) * 0.08);
+    if (Math.abs(offsetX) < minDistance || Math.abs(offsetX) <= Math.abs(offsetY) * 1.25) return;
+    if (offsetX > 0) {
+      this.prevPage();
+    } else {
+      this.nextPage();
+    }
+  }
+
   /** 统一点击处理（Text 和父 Column 共享同一逻辑） */
   private handleClick_(x: number, y: number): void {
     console.info('[PageView] click! x=' + x + ' y=' + y + ' w=' + (this.pageWidth > 0 ? this.pageWidth : 360) + ' h=' + (this.pageHeight > 0 ? this.pageHeight : 640));
@@ -268,6 +284,12 @@ export struct PageView {
       top: this.config.paddingTop, bottom: this.config.paddingBottom })
     .width('100%').height('100%')
     .backgroundColor(this.config.bgColor)
+    .gesture(
+      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 10 })
+        .onActionEnd((event: GestureEvent) => {
+          this.handlePageSwipe_(event);
+        })
+    )
     .onAreaChange((_old: Area, n: Area) => {
       this.pageWidth = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       this.pageHeight = typeof n.height === 'number' ? n.height : Number(n.height) || 0;

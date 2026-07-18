@@ -34,7 +34,7 @@ import { common } from '@kit.AbilityKit';
 /** 阅读方向模式 */
 const READ_MODE_WEBTOON: number = 0;  // 条漫（从上到下连续滚动）
 const READ_MODE_LEFT_TO_RIGHT: number = 1;  // 左->右翻页
-const READ_MODE_RIGHT_TO_LEFT: number = 2;  // 右->左翻页（日漫）
+const READ_MODE_RIGHT_TO_LEFT: number = 2;  // 旧版右->左模式，仅用于设置迁移
 const READ_MODE_SINGLE_PAGE: number = 3;  // 单页全屏（每屏一张图，Contain缩放）
 
 /** 缩放范围 */
@@ -151,7 +151,13 @@ struct ComicReadPage {
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
-      this.readMode = await s.getComicReadMode();
+      const storedReadMode: number = await s.getComicReadMode();
+      // 旧版“右->左”模式会反转物理滑动方向，迁移为统一的横向翻页模式。
+      this.readMode = storedReadMode === READ_MODE_RIGHT_TO_LEFT
+        ? READ_MODE_LEFT_TO_RIGHT : storedReadMode;
+      if (storedReadMode === READ_MODE_RIGHT_TO_LEFT) {
+        await s.setComicReadMode(READ_MODE_LEFT_TO_RIGHT);
+      }
       this.singlePageMode = await s.getComicSinglePageMode();
       this.preloadNum_ = await s.getComicPreloadNum();
       this.autoReadSpeed_ = await s.getComicAutoReadSpeed();
@@ -337,8 +343,7 @@ struct ComicReadPage {
           targetPage = 0;
         }
         this.currentPageIndex = targetPage;
-        // RTL 模式下 Swiper index 是反转的
-        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT ? urls.length - 1 - targetPage : targetPage;
+        this.swiperIndex = targetPage;
         this.imageUrls = urls;
         this.isLoading = false;
         // 以目标页为中心向两侧扩散预加载，确保目标页优先下载
@@ -580,8 +585,7 @@ struct ComicReadPage {
     // 在设置 imageUrls 之前确定目标页码和 Swiper index，使 Swiper 数据变化时直接从正确页渲染
     const targetPage: number = gotoLastPage ? urls.length - 1 : 0;
     this.currentPageIndex = targetPage;
-    // RTL 模式下 Swiper index 是反转的
-    this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT ? urls.length - 1 - targetPage : targetPage;
+    this.swiperIndex = targetPage;
     this.imageUrls = urls;
     this.isLoading = false;
     if (fromNextCache) {
@@ -904,9 +908,7 @@ struct ComicReadPage {
     } else {
       if (this.currentPageIndex < this.imageUrls.length - 1) {
         this.currentPageIndex++;
-        // RTL 模式下 Swiper index 是反转的
-        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
-          ? this.imageUrls.length - 1 - this.currentPageIndex : this.currentPageIndex;
+        this.swiperIndex = this.currentPageIndex;
       } else {
         this.onNextChapter();
       }
@@ -924,20 +926,15 @@ struct ComicReadPage {
     } else {
       if (this.currentPageIndex > 0) {
         this.currentPageIndex--;
-        // RTL 模式下 Swiper index 是反转的
-        this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
-          ? this.imageUrls.length - 1 - this.currentPageIndex : this.currentPageIndex;
+        this.swiperIndex = this.currentPageIndex;
       } else {
         this.onPrevChapter();
       }
     }
   }
 
-  /** 获取翻页模式下的有效图片列表（RTL 模式反转） */
+  /** 获取翻页模式图片；页序始终保持语义顺序，物理手势方向不随排版设置反转。 */
   private getDisplayImageUrls(): string[] {
-    if (this.readMode === READ_MODE_RIGHT_TO_LEFT) {
-      return this.imageUrls.slice().reverse();
-    }
     return this.imageUrls;
   }
 
@@ -1076,14 +1073,12 @@ struct ComicReadPage {
     .indicator(false)
     .loop(false)
     .duration(300)
+    .disableSwipe(this.imageScale > 1.0)
     .index(this.swiperIndex)
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.comicCanvas(this.isDark))
     .onChange((index: number) => {
-      // RTL 模式下反转 index 映射
-      const actualIndex: number = this.readMode === READ_MODE_RIGHT_TO_LEFT
-        ? this.imageUrls.length - 1 - index : index;
-      this.currentPageIndex = actualIndex;
+      this.currentPageIndex = index;
       this.swiperIndex = index;
       this.saveProgress();
       // 翻到边界时不自动切章，由触控区域 nextPage()/prevPage() 处理，
@@ -1184,6 +1179,7 @@ struct ComicReadPage {
     .indicator(false)
     .loop(false)
     .duration(300)
+    .disableSwipe(this.imageScale > 1.0)
     .index(this.swiperIndex)
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.comicCanvas(this.isDark))
@@ -1424,8 +1420,7 @@ struct ComicReadPage {
                 if (this.readMode === READ_MODE_WEBTOON && !this.singlePageMode) {
                   this.listScroller_.scrollToIndex(idx);
                 } else {
-                  this.swiperIndex = this.readMode === READ_MODE_RIGHT_TO_LEFT
-                    ? this.imageUrls.length - 1 - idx : idx;
+                  this.swiperIndex = idx;
                 }
               }
             })
@@ -1502,8 +1497,7 @@ struct ComicReadPage {
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 16, top: 16 })
         ForEach([
           { mode: READ_MODE_WEBTOON, label: '条漫（从上到下滚动）' } as ReadModeOption,
-          { mode: READ_MODE_LEFT_TO_RIGHT, label: '左 -> 右翻页' } as ReadModeOption,
-          { mode: READ_MODE_RIGHT_TO_LEFT, label: '右 -> 左翻页（日漫）' } as ReadModeOption,
+          { mode: READ_MODE_LEFT_TO_RIGHT, label: '横向翻页' } as ReadModeOption,
         ], (item: ReadModeOption) => {
           Row() {
             Text(item.label).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
@@ -1514,6 +1508,7 @@ struct ComicReadPage {
           .width('100%').height(48).padding({ left: 24, right: 24 })
           .onClick(() => {
             this.readMode = item.mode;
+            this.swiperIndex = this.currentPageIndex;
             this.saveReadMode();
             this.showModeSelect = false;
             this.showMenu = false;
@@ -1811,8 +1806,9 @@ struct ComicReadPage {
   private readModeLabel(): string {
     if (this.singlePageMode) return '单页';
     switch (this.readMode) {
-      case READ_MODE_LEFT_TO_RIGHT: return '左->右';
-      case READ_MODE_RIGHT_TO_LEFT: return '右->左';
+      case READ_MODE_LEFT_TO_RIGHT:
+      case READ_MODE_RIGHT_TO_LEFT:
+        return '横向';
       default: return '条漫';
     }
   }
