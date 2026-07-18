@@ -29,6 +29,7 @@ struct BookSourcePage {
   @State selectedUrls: string[] = [];
   @State isSelectMode_: boolean = false;
   private selectedSet_: Set<string> = new Set();
+  private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
   @State isChecking: boolean = false;
@@ -170,11 +171,15 @@ struct BookSourcePage {
   }
 
   private enterSelectMode(url: string): void {
+    // 抑制长按后紧接着触发的 click 事件，避免立即 toggleSelect 取消选中
+    this.suppressClick_ = true;
     setTimeout(() => {
       this.selectedUrls = [url];
       this.syncSelectedSet_();
       this.isSelectMode_ = true;
       this.contextMenuUrl = '';
+      // 下一帧解除抑制
+      setTimeout(() => { this.suppressClick_ = false; }, 50);
     }, 0);
   }
 
@@ -529,6 +534,7 @@ struct BookSourcePage {
             }.width('100%').margin({ top: 6 })
           }
         }.layoutWeight(1).onClick(() => {
+          if (this.suppressClick_) return;
           if (this.isSelectMode()) this.toggleSelect(source.sourceUrl);
           else UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage', params: { url: source.sourceUrl } });
         })
