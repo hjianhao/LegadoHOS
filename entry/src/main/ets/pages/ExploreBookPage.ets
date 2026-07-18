@@ -132,7 +132,14 @@ struct ExploreBookPage {
         this.errorMsg = '该分类无可用链接';
         return;
       }
-      if (!catUrl.startsWith('http') && this.sourceUrl) {
+      if (catUrl.startsWith('//')) {
+        // 协议相对地址应继承书源协议，不能作为站内路径再次拼接域名。
+        // 例如起点分类地址 //www.qidian.com/free/... 应解析为
+        // https://www.qidian.com/free/...，而不是 https://www.qidian.com//www.qidian.com/free/...
+        const sourceSchemeMatch: RegExpMatchArray | null = this.sourceUrl.match(/^(https?):/i);
+        const sourceScheme: string = sourceSchemeMatch ? sourceSchemeMatch[1].toLowerCase() : 'https';
+        catUrl = sourceScheme + ':' + catUrl;
+      } else if (!/^https?:\/\//i.test(catUrl) && this.sourceUrl) {
         // Android 版允许在 bookSourceUrl 后附加 `##...` 作为同域书源的唯一标识。
         // 该标识只参与书源身份判断，不能进入实际请求地址。
         const cleanSourceUrl: string = this.sourceUrl.replace(/##.*$/, '').replace(/\/+$/, '');
