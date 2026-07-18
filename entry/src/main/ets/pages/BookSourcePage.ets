@@ -27,6 +27,7 @@ struct BookSourcePage {
   @State groupByDomain: boolean = false;
   @State isLoading: boolean = true;
   @State selectedUrls: string[] = [];
+  @State isSelectMode_: boolean = false;
   private selectedSet_: Set<string> = new Set();
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
@@ -71,6 +72,7 @@ struct BookSourcePage {
       this.selectedUrls = this.selectedUrls.filter((url: string): boolean =>
         this.sources.some((source: BookSource): boolean => source.sourceUrl === url));
       this.syncSelectedSet_();
+      if (this.selectedUrls.length === 0) this.isSelectMode_ = false;
     } catch (e) {
       UiUtil.showToast(this.getUIContext(), { message: '加载书源失败：' + String(e), duration: 2000 });
     }
@@ -136,11 +138,11 @@ struct BookSourcePage {
     this.selectedSet_ = new Set(this.selectedUrls);
   }
 
-  private isSelectMode(): boolean { return this.selectedUrls.length > 0; }
+  private isSelectMode(): boolean { return this.isSelectMode_; }
   private isSelected(url: string): boolean { return this.selectedSet_.has(url); }
 
   private toggleSelect(url: string): void {
-    // 延迟到下一个事件循环，避免在 render 过程中修改 state 导致 "State variable has changed during render" 错误
+    // 延迟到下一个事件循环，避免在 render 过程中修改 state
     setTimeout(() => {
       if (this.selectedSet_.has(url)) {
         this.selectedUrls = this.selectedUrls.filter((item: string): boolean => item !== url);
@@ -148,6 +150,8 @@ struct BookSourcePage {
         this.selectedUrls = [...this.selectedUrls, url];
       }
       this.syncSelectedSet_();
+      // 最后一项被取消时退出选择模式
+      if (this.selectedUrls.length === 0) this.isSelectMode_ = false;
       this.contextMenuUrl = '';
     }, 0);
   }
@@ -165,12 +169,30 @@ struct BookSourcePage {
     }, 0);
   }
 
+  private enterSelectMode(url: string): void {
+    setTimeout(() => {
+      this.selectedUrls = [url];
+      this.syncSelectedSet_();
+      this.isSelectMode_ = true;
+      this.contextMenuUrl = '';
+    }, 0);
+  }
+
+  private exitSelectMode(): void {
+    setTimeout(() => {
+      this.selectedUrls = [];
+      this.syncSelectedSet_();
+      this.isSelectMode_ = false;
+    }, 0);
+  }
+
   private async batchEnable(enabled: boolean): Promise<void> {
     const ids = this.selectedSources().map((source: BookSource): number => source.id);
     if (!this.dao_ || ids.length === 0) return;
     await this.dao_.batchSetEnabled(ids, enabled);
     this.selectedUrls = [];
     this.syncSelectedSet_();
+    this.isSelectMode_ = false;
     await this.load();
   }
 
@@ -180,6 +202,7 @@ struct BookSourcePage {
     await this.dao_.batchSetExploreEnabled(ids, enabled);
     this.selectedUrls = [];
     this.syncSelectedSet_();
+    this.isSelectMode_ = false;
     await this.load();
   }
 
@@ -189,7 +212,7 @@ struct BookSourcePage {
     this.groupAssignDlg = new CustomDialogController({
       builder: SourceGroupAssignDialog({
         controller: this.groupAssignDlg!, sourceIds: ids,
-        onChanged: () => { this.selectedUrls = []; this.load(); }
+        onChanged: () => { this.selectedUrls = []; this.syncSelectedSet_(); this.isSelectMode_ = false; this.load(); }
       }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
     });
     this.groupAssignDlg.open();
@@ -209,6 +232,7 @@ struct BookSourcePage {
       await this.dao_.batchDelete(selected.map((source: BookSource): number => source.id));
       this.selectedUrls = [];
       this.syncSelectedSet_();
+      this.isSelectMode_ = false;
       await this.load();
     });
   }
@@ -298,6 +322,7 @@ struct BookSourcePage {
     this.showCheckSummary = false;
     this.selectedUrls = [];
     this.syncSelectedSet_();
+    this.isSelectMode_ = false;
     this.activeChecker_ = new SourceChecker(config);
     this.activeChecker_.checkSources(targets, (completed: number, total: number, result: CheckResult) => {
       this.checkProgress = completed;
@@ -334,23 +359,23 @@ struct BookSourcePage {
         Column() {
           Text('书源管理').fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).width('100%')
-          Text(this.sources.length + ' 个书源' + (this.selectedUrls.length > 0 ? ' · 已选 ' + this.selectedUrls.length : ''))
+          Text(this.sources.length + ' 个书源' + (this.isSelectMode_ ? ' · 已选 ' + this.selectedUrls.length : ''))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         }.layoutWeight(1)
         // 选择模式：显示"取消"按钮；非选择模式：显示"+"/导入/分组按钮
         // 使用 visibility 避免条件渲染导致组件重建
         Button('取消').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-          .visibility(this.selectedUrls.length > 0 ? Visibility.Visible : Visibility.Hidden)
-          .onClick(() => { this.selectedUrls = []; this.syncSelectedSet_(); })
+          .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
+          .onClick(() => { this.exitSelectMode(); })
         Button('+').fontSize(24).width(40).height(40).borderRadius(20)
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
-          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
         Button('导入').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.importDlg?.open(); })
         Button('分组').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.groupManageDlg?.open(); })
       }.height(64).padding({ left: 8, right: 8 }).width('100%')
 
@@ -416,7 +441,7 @@ struct BookSourcePage {
           ForEach(this.getDisplayList(), (source: BookSource) => {
             ListItem() { this.sourceItem(source) }
           }, (source: BookSource): string => source.sourceUrl)
-        }.layoutWeight(1).padding({ left: 12, right: 12, bottom: this.selectedUrls.length > 0 ? 4 : 12 })
+        }.layoutWeight(1).padding({ left: 12, right: 12, bottom: this.isSelectMode_ ? 4 : 12 })
       }
 
       // 操作栏常驻 DOM，通过 visibility 控制显隐，避免选择/退出选择时大量组件创建/销毁阻塞主线程
@@ -434,9 +459,9 @@ struct BookSourcePage {
             .backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
             .onClick(() => { this.confirmDelete(); })
         }.padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      }.height(this.selectedUrls.length > 0 ? 56 : 0).width('100%').scrollable(ScrollDirection.Horizontal)
+      }.height(this.isSelectMode_ ? 56 : 0).width('100%').scrollable(ScrollDirection.Horizontal)
         .backgroundColor(ThemeColors.surface(this.isDark)).scrollBar(BarState.Off)
-        .visibility(this.selectedUrls.length > 0 ? Visibility.Visible : Visibility.Hidden)
+        .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
 
       if (this.isChecking) {
         Row() {
@@ -513,7 +538,10 @@ struct BookSourcePage {
           .onClick(() => { this.contextMenuUrl = this.contextMenuUrl === source.sourceUrl ? '' : source.sourceUrl; })
       }.width('100%').padding({ left: 12, right: 6, top: 12, bottom: 12 })
         .borderRadius(16).backgroundColor(this.isSelected(source.sourceUrl) ? ThemeColors.surfaceVariant(this.isDark) : ThemeColors.surface(this.isDark))
-        .gesture(LongPressGesture().onAction(() => { this.toggleSelect(source.sourceUrl); }))
+        .gesture(LongPressGesture().onAction(() => {
+          if (!this.isSelectMode_) this.enterSelectMode(source.sourceUrl);
+          else this.toggleSelect(source.sourceUrl);
+        }))
 
       if (this.contextMenuUrl === source.sourceUrl) {
         Column() {
@@ -523,7 +551,7 @@ struct BookSourcePage {
           this.menuItem(source.enabledExplore ? '停用发现' : '启用发现', false, () => { this.toggleExplore(source); })
           this.menuItem('搜索测试', false, () => { this.contextMenuUrl = ''; this.openSearch(source); })
           this.menuItem('规则调试', false, () => { this.contextMenuUrl = ''; this.openDebug(source); })
-          this.menuItem('删除', true, () => { this.selectedUrls = [source.sourceUrl]; this.syncSelectedSet_(); this.contextMenuUrl = ''; this.confirmDelete(); })
+          this.menuItem('删除', true, () => { this.selectedUrls = [source.sourceUrl]; this.syncSelectedSet_(); this.isSelectMode_ = false; this.contextMenuUrl = ''; this.confirmDelete(); })
         }.width(136).padding({ top: 4, bottom: 4 }).borderRadius(16)
           .backgroundColor(ThemeColors.surface(this.isDark)).shadow({ radius: 12, color: ThemeColors.scrim(this.isDark) })
           .position({ x: 'calc(100% - 148)', y: 48 }).zIndex(120)
