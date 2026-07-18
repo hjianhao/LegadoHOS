@@ -142,19 +142,25 @@ struct BookSourcePage {
   private isSelectMode(): boolean { return this.isSelectMode_; }
   private isSelected(url: string): boolean { return this.selectedSet_.has(url); }
 
-  private toggleSelect(url: string): void {
-    // 延迟到下一个事件循环，避免在 render 过程中修改 state
+  private setSelected(url: string, selected: boolean): void {
+    // Checkbox 的 select 属性变化也可能触发 onChange，因此按目标值更新，避免程序性选中后又被反转取消。
     setTimeout(() => {
-      if (this.selectedSet_.has(url)) {
-        this.selectedUrls = this.selectedUrls.filter((item: string): boolean => item !== url);
-      } else {
+      const currentlySelected = this.selectedSet_.has(url);
+      if (currentlySelected === selected) return;
+      if (selected) {
         this.selectedUrls = [...this.selectedUrls, url];
+      } else {
+        this.selectedUrls = this.selectedUrls.filter((item: string): boolean => item !== url);
       }
       this.syncSelectedSet_();
       // 最后一项被取消时退出选择模式
       if (this.selectedUrls.length === 0) this.isSelectMode_ = false;
       this.contextMenuUrl = '';
     }, 0);
+  }
+
+  private toggleSelect(url: string): void {
+    this.setSelected(url, !this.selectedSet_.has(url));
   }
 
   private selectedSources(): BookSource[] {
@@ -507,7 +513,7 @@ struct BookSourcePage {
         Checkbox({ name: source.sourceUrl, group: 'book_sources' }).select(this.isSelected(source.sourceUrl))
           .selectedColor(ThemeColors.primary(this.isDark)).margin({ right: 10 })
           .visibility(this.isSelectMode() ? Visibility.Visible : Visibility.Hidden)
-          .onChange(() => { this.toggleSelect(source.sourceUrl); })
+          .onChange((selected: boolean) => { this.setSelected(source.sourceUrl, selected); })
         Column() {
           Row() {
             Text(source.sourceName || '未命名书源').fontSize(16).fontWeight(FontWeight.Medium)
