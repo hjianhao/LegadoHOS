@@ -1217,7 +1217,7 @@ export class SourceExecutor {
         name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
         author: this.extractJsonRuleValue(source.ruleBookInfoAuthor, root),
         coverUrl: this.extractJsonRuleValue(source.ruleBookInfoCover, root),
-        introduce: this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root),
+        introduce: HtmlUtil.toPlainText(this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root)),
         kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
         wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
         lastUpdateTime: this.extractJsonRuleValue(source.ruleBookInfoLastUpdateTime, root),
