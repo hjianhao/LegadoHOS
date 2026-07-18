@@ -28,7 +28,7 @@ struct BookSourcePage {
   @State isLoading: boolean = true;
   @State selectedUrls: string[] = [];
   @State isSelectMode_: boolean = false;
-  private selectedSet_: Set<string> = new Set();
+  @State selectedSet_: Set<string> = new Set();
   private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
