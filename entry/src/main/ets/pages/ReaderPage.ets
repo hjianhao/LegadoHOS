@@ -1482,21 +1482,24 @@ struct ReaderPage {
           .margin({ top: 4, bottom: 4 })
         Row() {
           Text(this.currentTitle || this.bookName)
-            .fontSize(11)
+            .fontSize(13)
+            .fontFamily(this.cfg.fontFamily)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
           Text(this.formatCurTime_())
-            .fontSize(11)
+            .fontSize(13)
+            .fontFamily(this.cfg.fontFamily)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ right: 10 })
           Text(this.footerPageText_())
-            .fontSize(11)
+            .fontSize(13)
+            .fontFamily(this.cfg.fontFamily)
             .fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%')
-        .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight })
+        .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight, bottom: 16 })
       }
       .width('100%')
       .backgroundColor(this.cfg.bgColor)
@@ -1693,17 +1696,14 @@ struct ReaderPage {
         nightMode: this.readNightMode,
         dayBgColor: this.readBgColor,
         dayTextColor: this.readTextColor,
-        showFlowMode: !this.isPdf_ || this.pdfMode === 'reflow',
-        flowMode: this.flowMode,
-        showPdfEnhance: this.isPdf_,
+	        showPdfEnhance: this.isPdf_,
         pdfMode: this.pdfMode,
         pdfOrientation: this.pdfOrientation,
         pdfAutoCrop: this.pdfAutoCrop,
         pdfDarken: this.pdfDarken,
         pdfWhiten: this.pdfWhiten,
-        onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
-        onFlowModeChange: (mode: string) => this.onFlowModeChange_(mode),
-        onPdfModeChange: (mode: string) => this.onPdfModeChange_(mode),
+	        onNightModeToggle: (night: boolean) => this.onNightModeToggle_(night),
+	        onPdfModeChange: (mode: string) => this.onPdfModeChange_(mode),
         onPdfOrientationChange: (mode: string) => this.onPdfOrientationChange_(mode),
         onPdfEnhanceChange: (autoCrop: boolean, darken: number, whiten: number) =>
           this.onPdfEnhanceChange_(autoCrop, darken, whiten),
@@ -1720,13 +1720,15 @@ struct ReaderPage {
   ZoneConfigLayer() {
     Column() {
       Blank().layoutWeight(1).onClick(() => { this.showZoneConfig = false; })
-      ClickActionConfig({
-        onDismiss: () => { this.showZoneConfig = false; },
-        onChanged: (actions: number[]) => {
-          this.zoneActions = actions;
-          this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(actions) + ')');
-        },
-      })
+	      ClickActionConfig({
+	        onDismiss: () => { this.showZoneConfig = false; },
+	        onChanged: (actions: number[]) => {
+	          this.zoneActions = actions;
+	          this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(actions) + ')');
+	        },
+	        flowMode: this.flowMode,
+	        onFlowModeChange: (mode: string) => { this.onFlowModeChange_(mode); },
+	      })
     }
     .width('100%')
     .height('100%')

@@ -13,6 +13,8 @@ import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
 import { getPolyfillScript, getAjaxPolyfill } from './ScriptApi';
 import { NetUtil } from '../../util/NetUtil';
+import { CookieStore } from '../../util/CookieStore';
+import { LoginInfoStore } from '../../util/LoginInfoStore';
 import { isNativeLoaded } from '../../napi/quickjs_bridge';
 
 // Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
@@ -82,6 +84,8 @@ export interface JsEvalContext {
   jsLib?: string;
   /** 书源变量的 JSON 字符串（用于 source.getVariable/setVariable 持久化） */
   variableBlob?: string;
+  /** 书源登录信息的 JSON 字符串（用于 source.getLoginInfo/getLoginInfoMap） */
+  loginInfoJson?: string;
   /** 额外自定义变量 */
   [key: string]: unknown;
 }
@@ -133,6 +137,16 @@ export class JsExpressionEvaluator {
         } else if (msg.type === 'destroy_done') {
           this.workerInstance = null;
           this.workerReady = false;
+        } else if (msg.type === 'cookie_set') {
+          // Worker 侧捕获的 Set-Cookie / cookie.setCookie → 主线程持久化
+          const store = CookieStore.getInstance();
+          if (msg.cookie) {
+            void store.setByHost(String(msg.host || ''), String(msg.cookie));
+          } else {
+            void store.removeByHost(String(msg.host || ''));
+          }
+        } else if (msg.type === 'cookie_remove') {
+          void CookieStore.getInstance().removeByHost(String(msg.host || ''));
         }
       };
 
@@ -161,6 +175,10 @@ export class JsExpressionEvaluator {
         console.info('[JsEval] Worker initialized successfully');
         // 同步网络配置（DNS/Proxy/超时）到 Worker
         this.syncNetworkConfigToWorker();
+        // 同步 Cookie 快照到 Worker（JS 内 cookie.* 与请求注入都依赖它）
+        try {
+          this.workerInstance?.postMessage({ type: 'cookie_sync', cookies: CookieStore.getInstance().getSnapshot() });
+        } catch (_e) { /* ignore */ }
       } else {
         console.warn('[JsEval] Worker init failed (timeout), falling back');
         this.terminateWorker();
@@ -251,7 +269,8 @@ export class JsExpressionEvaluator {
     // let/const → var：引擎复用时 let 重声明会报错，var 不报
     const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
     const fullScript = `${setupCode}\n${safeCode}`;
-    const hasAjax = /java\.ajax\s*\(/.test(fullScript);
+    // java.ajax/post/connect/get、cookie.* 都需要 Worker（同步网络/Cookie 桥只在 Worker 注册完整实现）
+    const hasAjax = /java\.(ajax|post|connect|get)\s*\(|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(/.test(fullScript);
 
     // 有 java.ajax() 时必须用 Worker；主线程原生桥不可用时也必须用 Worker，
     // 否则 mock bridge 只会返回 null，导致 @js: 规则静默失效。
@@ -516,11 +535,39 @@ export class JsExpressionEvaluator {
         `if(typeof source.getVariable==='undefined')source.getVariable=function(){return typeof _vars==='string'?_vars:JSON.stringify(_vars);};` +
         `if(typeof source.setVariable==='undefined')source.setVariable=function(v){_vars=v;};` +
         `})();`);
+
+      // getLoginInfo / getLoginInfoMap / putLoginInfo / removeLoginInfo — 登录凭据（对应 Android BaseSource）
+      // 共享同一承载对象：getLoginInfoMap().put() 的修改直接反映到 getLoginInfo()
+      // 未显式传入 loginInfoJson 时，自动读取该源已保存的登录信息（搜索/目录/正文等 JS 都能拿到）
+      let loginInfoJson = ctx.loginInfoJson;
+      if (loginInfoJson === undefined) {
+        const sourceKey = String(srcObj['sourceUrl'] || srcObj['bookSourceUrl'] || '');
+        if (sourceKey) {
+          try {
+            loginInfoJson = LoginInfoStore.getInstance().get(sourceKey);
+          } catch (_e) { /* Store 未初始化时为空 */ }
+        }
+      }
+      const loginInfoLiteral = JSON.stringify(loginInfoJson || '');
+      parts.push(`(function(){var _obj={};try{var _raw=${loginInfoLiteral};if(_raw){var _p=JSON.parse(_raw);if(_p&&typeof _p==='object')_obj=_p;}}catch(_e){}` +
+        `if(typeof source.getLoginInfo==='undefined')source.getLoginInfo=function(){var s=JSON.stringify(_obj);return s==='{}'?null:s;};` +
+        `if(typeof source.getLoginInfoMap==='undefined')source.getLoginInfoMap=function(){return {` +
+        `get:function(k){return _obj[k]!==undefined?_obj[k]:null;},` +
+        `put:function(k,v){_obj[k]=String(v);return v;},` +
+        `remove:function(k){delete _obj[k];},` +
+        `containsKey:function(k){return _obj[k]!==undefined;},` +
+        `isEmpty:function(){for(var k in _obj)return false;return true;},` +
+        `keySet:function(){return Object.keys(_obj);},` +
+        `toString:function(){return JSON.stringify(_obj);}` +
+        `};};` +
+        `if(typeof source.putLoginInfo==='undefined')source.putLoginInfo=function(info){try{var p=typeof info==='string'?JSON.parse(info):info;_obj=(p&&typeof p==='object')?p:{};}catch(_e){_obj={};}return true;};` +
+        `if(typeof source.removeLoginInfo==='undefined')source.removeLoginInfo=function(){_obj={};};` +
+        `})();`);
     }
 
     // 注入自定义额外变量
     for (const [k, v] of Object.entries(ctx)) {
-      if (['key', 'page', 'baseUrl', 'source'].includes(k)) continue;
+      if (['key', 'page', 'baseUrl', 'source', 'loginInfoJson'].includes(k)) continue;
       if (typeof v === 'string') {
         parts.push(`var ${k}=${JSON.stringify(v)};`);
       } else if (typeof v === 'number') {

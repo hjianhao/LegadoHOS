@@ -106,7 +106,9 @@ function extractFallbackResults(html: string, sourceUrl: string, baseUrl: string
 
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
-  return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
+  // 剥离 # 片段（含 ##webView 标记及源作者加的 #emoji 标记），
+  // 与 SourceExecutor.getBaseUrl 保持一致。
+  return rawUrl.replace(/#.*$/, '').replace(/\/+$/, '');
 }
 
 /**

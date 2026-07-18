@@ -339,18 +339,25 @@ class View {
         this.expand()
     }
     setImageSize() {
-        const { width, height, margin } = this.#layout
+        const { width, height, margin, flow } = this.#layout
         const vertical = this.#vertical
         const doc = this.document
+        const isScrolled = flow === 'scrolled'
+        // 滚动模式下 height 未定义，使用视口高度作为兜底，避免 max-height 出现 NaNpx
+        const viewportHeight = doc.defaultView?.innerHeight || 800
+        const effectiveHeight = Number.isFinite(height) ? height : viewportHeight
+        const effectiveWidth = Number.isFinite(width) ? width : (doc.defaultView?.innerWidth || 360)
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
                 'max-height': vertical
                     ? (maxHeight !== 'none' && maxHeight !== '0px' ? maxHeight : '100%')
-                    : `${height - margin * 2}px`,
+                    : (isScrolled && maxHeight !== 'none' && maxHeight !== '0px'
+                        ? maxHeight
+                        : `${Math.max(0, effectiveHeight - margin * 2)}px`),
                 'max-width': vertical
-                    ? `${width - margin * 2}px`
+                    ? `${Math.max(0, effectiveWidth - margin * 2)}px`
                     : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%'),
                 'object-fit': 'contain',
                 'page-break-inside': 'avoid',
@@ -449,6 +456,7 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    #lastAutoNavAt = 0
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -567,6 +575,7 @@ export class Paginator extends HTMLElement {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
                 else this.#afterScroll('scroll')
+                this.#checkScrollBoundary()
             }
         }, 250))
 
@@ -975,6 +984,33 @@ export class Paginator extends HTMLElement {
             detail.size = 1 / (pages - 2)
         }
         this.dispatchEvent(new CustomEvent('relocate', { detail }))
+    }
+
+    /** 滚动到底部/顶部边界时自动加载下一章/上一章 */
+    #checkScrollBoundary() {
+        if (!this.scrolled || this.#locked || this.#justAnchored) return
+        const now = Date.now()
+        if (now - this.#lastAutoNavAt < 2000) return
+        const threshold = Math.max(80, this.size * 0.08)
+        const remainingBottom = this.viewSize - this.end
+        const remainingTop = this.start
+        if (remainingBottom <= threshold && remainingBottom > -1) {
+            const nextIndex = this.#adjacentIndex(1)
+            if (nextIndex != null) {
+                this.#lastAutoNavAt = now
+                this.#locked = true
+                this.#goTo({ index: nextIndex, anchor: () => 0 })
+                    .finally(() => { this.#locked = false })
+            }
+        } else if (remainingTop <= threshold && remainingTop > -1) {
+            const prevIndex = this.#adjacentIndex(-1)
+            if (prevIndex != null) {
+                this.#lastAutoNavAt = now
+                this.#locked = true
+                this.#goTo({ index: prevIndex, anchor: () => 1 })
+                    .finally(() => { this.#locked = false })
+            }
+        }
     }
     async #display(promise) {
         const { index, src, anchor, onLoad, select } = await promise

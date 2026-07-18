@@ -120,6 +120,8 @@ export class ChapterTable {
         audioUrl: RdbUtil.string(rs, 'audio_url') || '',
         createTime: RdbUtil.long(rs, 'create_time'),
         updateTime: RdbUtil.long(rs, 'update_time'),
+        start: RdbUtil.long(rs, 'start'),
+        end: RdbUtil.long(rs, 'end'),
       });
     }
     RdbUtil.close(rs);
@@ -142,6 +144,8 @@ export class ChapterTable {
       'audio_url': ch.audioUrl,
       'create_time': ch.createTime,
       'update_time': ch.updateTime,
+      'start': ch.start,
+      'end': ch.end,
     };
   }
 }

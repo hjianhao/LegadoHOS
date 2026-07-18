@@ -37,6 +37,7 @@ import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
+import { TxtParser } from '../engine/book/TxtParser';
 
 interface ReadableEpubChapter {
   index: number;
@@ -84,6 +85,7 @@ struct ReadPage {
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
   @State showAloud: boolean = false;
+  @State flowMode: string = 'paginated';
   @State readBgColor: string = '#F5F0E8';
   @State readTextColor: string = '#333333';
   @State readNightMode: boolean = false;
@@ -103,6 +105,10 @@ struct ReadPage {
   private source_: BookSource | null = null;
   private isLocalBook_: boolean = false;
   private isLocalEpub_: boolean = false;
+  private isLocalTxt_: boolean = false;
+  private txtFilePath_: string = '';
+  private txtEncoding_: string = 'utf-8';
+  private txtChapterCache_: Map<number, string> = new Map<number, string>();
   private targetIdx_: number = -1;
   private allChapters_: BookSourceChapter[] = [];
   private totalChapters_: number = 0;
@@ -322,6 +328,16 @@ struct ReadPage {
       // 检测是否为本地书籍（origin 为 "本地"）
       this.isLocalBook_ = this.origin === LOCAL_BOOK_ORIGIN;
       this.isLocalEpub_ = this.isLocalBook_ && localBookKind.toLowerCase() === 'epub';
+      this.isLocalTxt_ = this.isLocalBook_ && localBookKind.toLowerCase() === 'txt';
+      if (this.isLocalTxt_) {
+        this.txtFilePath_ = this.originUrl;
+        try {
+          const bookTable = new BookTable(db);
+          const book = await bookTable.getBookByUrl(this.bookUrl);
+          this.txtEncoding_ = book?.charset || 'utf-8';
+        } catch (_e) { /* ignore */ }
+        this.txtChapterCache_.clear();
+      }
 
 		      let chapters: BookSourceChapter[] = [];
 
@@ -560,6 +576,33 @@ struct ReadPage {
     }
   }
 
+  /** 读取本地 TXT 章节内容（按字节偏移从原始文件读取，带内存缓存） */
+  private async readLocalTxtChapter_(idx: number): Promise<string> {
+    if (!this.isLocalTxt_ || !this.txtFilePath_) return '';
+    const cached = this.txtChapterCache_.get(idx);
+    if (cached !== undefined) return cached;
+    try {
+      const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
+      const ch = await ct.getChapterByIndex(this.bookId_, idx);
+      const start = ch?.start ?? 0;
+      const end = ch?.end ?? 0;
+      if (!ch || end <= start) return '';
+      const content = await TxtParser.readChapterContent(this.txtFilePath_, start, end, this.txtEncoding_);
+      this.txtChapterCache_.set(idx, content);
+      // 缓存控制在最近 5 章，避免内存膨胀
+      if (this.txtChapterCache_.size > 5) {
+        const keys = Array.from(this.txtChapterCache_.keys());
+        for (const k of keys) {
+          if (Math.abs(k - idx) > 2) this.txtChapterCache_.delete(k);
+        }
+      }
+      return content;
+    } catch (e) {
+      console.warn('[ReadPage] readLocalTxtChapter_ failed:', idx, (e as Error).message);
+      return '';
+    }
+  }
+
   private async fetchChapterContent_(idx: number): Promise<string> {
     const ch = this.allChapters_[idx];
     if (!ch) return '';
@@ -569,6 +612,11 @@ struct ReadPage {
 
 			    // 本地书籍：EPUB 从当前解压目录读取，其他本地格式从 DB 读取
 			    if (this.isLocalBook_) {
+			      if (this.isLocalTxt_) {
+			        content = await this.readLocalTxtChapter_(idx);
+			        console.info('[ReadPage] Local TXT content:', content ? content.length : 0, 'bytes');
+			        return content;
+			      }
 			      if (!this.isLocalEpub_) {
 			        content = await this.readChapterCache_(idx);
 			        console.info('[ReadPage] Local book content:', content ? content.length : 0, 'bytes');
@@ -642,7 +690,7 @@ struct ReadPage {
 
     const ch = this.allChapters_[nextIdx];
     const preloadBookUrl = this.bookUrl;
-    const promise = this.readChapterCache_(nextIdx)
+    const promise = (this.isLocalTxt_ ? this.readLocalTxtChapter_(nextIdx) : this.readChapterCache_(nextIdx))
       .then((cached: string): Promise<string> | string => {
         if (cached && cached.length > 50) return cached;
         return this.fetchChapterContent_(nextIdx);
@@ -681,7 +729,7 @@ struct ReadPage {
         }
       }
       if (!content) {
-        content = await this.readChapterCache_(idx);
+        content = this.isLocalTxt_ ? await this.readLocalTxtChapter_(idx) : await this.readChapterCache_(idx);
       }
     }
     if (!content || content.length <= 50) return false;
@@ -1105,6 +1153,67 @@ struct ReadPage {
     });
   }
 
+  /** 切换编码并重新解析 TXT */
+  private async changeTxtEncoding_(encoding: string): Promise<void> {
+    if (!this.isLocalTxt_ || !this.txtFilePath_) return;
+    this.isLoading = true;
+    try {
+      const result = await TxtParser.parse(this.txtFilePath_, undefined, encoding);
+      const db = AppDatabase.getInstance().rdbStore;
+      const bookTable = new BookTable(db);
+      const chapterDao = new ChapterTable(db);
+      const book = await bookTable.getBookByUrl(this.bookUrl);
+      if (!book) throw new Error('书籍不存在');
+
+      // 更新书籍编码
+      book.charset = encoding;
+      await bookTable.updateBook(book);
+
+      // 删除旧章节，写入新目录
+      await chapterDao.deleteChaptersByBookId(book.id);
+      const now = Date.now();
+      const bookChapters: BookChapter[] = result.chapters.map((ch: BookChapter, idx: number): BookChapter => ({
+        id: 0,
+        bookId: book.id,
+        index: ch.index >= 0 ? ch.index : idx,
+        volumeIndex: ch.volumeIndex,
+        title: ch.title,
+        url: ch.url,
+        content: '',
+        contentLength: ch.contentLength,
+        isRead: false,
+        isDownloaded: true,
+        isCached: false,
+        duration: 0,
+        audioUrl: '',
+        createTime: now,
+        updateTime: now,
+        start: ch.start,
+        end: ch.end,
+      }));
+      await chapterDao.insertChapters(bookChapters);
+
+      // 更新章节列表并回到第一章
+      this.allChapters_ = bookChapters.map((ch: BookChapter): BookSourceChapter => ({
+        index: ch.index,
+        title: ch.title,
+        url: ch.url,
+      }));
+      this.totalChapters_ = this.allChapters_.length;
+      this.chapters = this.allChapters_;
+      this.txtEncoding_ = encoding;
+      this.txtChapterCache_.clear();
+      this.currentIndex = 0;
+      this.pageIndex = 0;
+      await this.loadChapter(0);
+      UiUtil.showToast(this.getUIContext(), { message: `已切换编码为 ${encoding}`, duration: 1500 });
+    } catch (e) {
+      console.error('[ReadPage] change encoding failed:', (e as Error).message);
+      UiUtil.showToast(this.getUIContext(), { message: '切换编码失败', duration: 1500 });
+      this.isLoading = false;
+    }
+  }
+
   private resetReadStateForSourceChange_(): void {
     this.source_ = null;
     this.bookId_ = -1;
@@ -1238,7 +1347,9 @@ struct ReadPage {
         const ch = this.allChapters_[n];
         if (ch) {
           let promise: Promise<string>;
-          if (this.isLocalBook_) {
+          if (this.isLocalTxt_) {
+            promise = this.readLocalTxtChapter_(n);
+          } else if (this.isLocalBook_) {
             promise = this.readChapterCache_(n);
           } else {
             const src = this.source_;
@@ -1280,7 +1391,8 @@ struct ReadPage {
     return `${hh}:${mm}`;
   }
 
-  private footerH_(): number { return 20; }
+  // 页脚高度：分割线(4+1+4) + 文本行(~15) + 底部留白(10)，需与页脚布局保持一致
+  private footerH_(): number { return 34; }
 
   private initAloudEngine_(): void {
     if (this.aloudEngine_) {
@@ -1335,6 +1447,33 @@ struct ReadPage {
 	        Column() { LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark)) }
 	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
 	      } else if (this.pages.length > 0) {
+        if (this.flowMode === 'scrolled') {
+          // 滚动阅读模式
+          Scroll() {
+            Text(this.text)
+              .fontSize(this.cfg.fontSize)
+              .fontColor(this.cfg.textColor)
+              .fontFamily(this.cfg.fontFamily)
+              .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
+              .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
+              .letterSpacing(this.cfg.letterSpacing)
+              .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+              .width('100%')
+              .padding({
+                left: this.cfg.paddingLeft,
+                right: this.cfg.paddingRight,
+                top: this.cfg.paddingTop,
+                bottom: this.cfg.paddingBottom,
+              })
+              .onClick(() => { this.showMenu = true; })
+          }
+          .scrollable(ScrollDirection.Vertical)
+          .scrollBar(BarState.Off)
+          .backgroundColor(this.cfg.bgColor)
+          .onReachEnd(() => { this.onNextChapter(); })
+          .onReachStart(() => { this.onPrevChapter(); })
+          .width('100%').height('100%')
+        } else {
 	        PageView({
           pages: this.pages, chapterTitle: this.allChapters_[this.currentIndex]?.title || '',
           chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
@@ -1362,6 +1501,7 @@ struct ReadPage {
           },
         }).width('100%').height('100%')
       }
+      }
       // 页脚：直接渲染在 ReadPage Stack 中，PageView 上方
       if (!this.isLoading && this.pages.length > 0 && this.cfg.showFooter) {
         Stack({ alignContent: Alignment.Bottom }) {
@@ -1370,17 +1510,23 @@ struct ReadPage {
               .margin({ top: 4, bottom: 4 })
             Row() {
               Text(this.allChapters_[this.currentIndex]?.title || '')
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+                .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+                .fontFamily(this.cfg.fontFamily)
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
               Text(this.formatCurTime())
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
-              Text(`${this.pageIndex + 1}/${this.pages.length}` +
-                (this.totalChapters_ > 0 ? ` (${this.getProgressPercent()}%)` : ''))
-                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+                .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+                .fontFamily(this.cfg.fontFamily).margin({ right: 10 })
+              if (this.flowMode !== 'scrolled') {
+                Text(`${this.pageIndex + 1}/${this.pages.length}` +
+                  (this.totalChapters_ > 0 ? ` (${this.getProgressPercent()}%)` : ''))
+                  .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+                  .fontFamily(this.cfg.fontFamily)
+              }
             }.width('100%')
               .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight })
           }
           .width('100%')
+          .padding({ bottom: 10 })
           .backgroundColor(this.cfg.bgColor)
         }
         .width('100%').height('100%')
@@ -1457,6 +1603,11 @@ struct ReadPage {
           ClickActionConfig({
             onDismiss: () => { this.showZoneConfig = false; },
             onChanged: (actions: number[]) => { this.zoneActions = [...actions]; },
+            isLocalTxt: this.isLocalTxt_,
+            txtEncoding: this.txtEncoding_,
+            flowMode: this.flowMode,
+            onEncodingChange: (enc: string) => { this.changeTxtEncoding_(enc); },
+            onFlowModeChange: (mode: string) => { this.flowMode = mode; },
           })
         }.width('100%').height('100%')
       }

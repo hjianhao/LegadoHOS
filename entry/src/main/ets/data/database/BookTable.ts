@@ -230,6 +230,7 @@ export class BookTable {
         createTime: RdbUtil.long(rs, 'create_time'),
         updateTime: RdbUtil.long(rs, 'update_time'),
         syncTime: RdbUtil.long(rs, 'sync_time'),
+        charset: RdbUtil.string(rs, 'charset') || '',
       });
     }
     RdbUtil.close(rs);
@@ -270,6 +271,7 @@ export class BookTable {
       'create_time': book.createTime,
       'update_time': book.lastOpenTime, // 用最后阅读时间同时作为 update_time
       'sync_time': book.syncTime,
+      'charset': book.charset || '',
     };
   }
 

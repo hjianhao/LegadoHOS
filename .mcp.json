@@ -7,6 +7,13 @@
         "PATH": "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
       }
     },
+    "codegraph": {
+      "command": "/Users/hjianhao/.nvm/versions/node/v24.16.0/bin/codegraph",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "PATH": "/Users/hjianhao/.nvm/versions/node/v24.16.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
+    },
     "arkts-lsp": {
       "command": "npx",
       "args": ["-y", "--package", "arkts-lsp-proxy@latest", "arkts-lsp-mcp"],

@@ -65,6 +65,9 @@ export interface Book {
   updateTime: number;
   syncTime: number;        // WebDAV 上次同步时间
 
+  /** 本地 TXT 文件编码（如 utf-8 / gbk / gb18030 / big5 / utf-16le） */
+  charset?: string;
+
   /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
   coverDecodeJs?: string;
 }
@@ -107,5 +110,6 @@ export function createDefaultBook(): Book {
     createTime: 0,
     updateTime: 0,
     syncTime: 0,
+    charset: '',
   };
 }

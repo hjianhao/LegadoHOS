@@ -1,8 +1,7 @@
 /**
- * 触控区域动作配置面板
+ * 阅读设置面板 — 编码(本地TXT) / 阅读模式(分页/滚动) / 触控区域配置
  *
- * 9 宫格 3×3 布局，每个格子可配置点击动作。
- * 参考 Android Legado 的 ClickActionConfigSheet。
+ * 原为触控区域动作配置面板，现合并为综合阅读设置。
  */
 import { ClickAction, ACTION_LABELS, DEFAULT_ZONE_ACTIONS } from './ClickAction';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
@@ -14,9 +13,18 @@ export struct ClickActionConfig {
   @StorageLink('isDark') isDark: boolean = false;
   @State zoneActions: number[] = [];
   @State editZone: number = -1;
+  @State showEncodingOptions: boolean = false;
+
+  // 编码设置（仅本地 TXT 书籍使用）
+  @Prop isLocalTxt: boolean = false;
+  @Prop txtEncoding: string = 'utf-8';
+  // 阅读模式
+  @Prop flowMode: string = 'paginated';
 
   onDismiss?: () => void;
   onChanged?: (actions: number[]) => void;
+  onEncodingChange?: (encoding: string) => void;
+  onFlowModeChange?: (mode: string) => void;
 
   aboutToAppear(): void {
     this.loadActions();
@@ -43,15 +51,62 @@ export struct ClickActionConfig {
     Column() {
       // 顶栏
       Row() {
-        Text('触控区域设置').fontSize(16).fontWeight(FontWeight.Bold)
+        Text('阅读设置').fontSize(16).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         Button('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark))
           .backgroundColor('transparent').onClick(() => { this.onDismiss?.(); })
       }.width('100%').padding({ left: 12, right: 12, top: 8 })
 
+      // ===== 编码设置（仅本地 TXT） =====
+      if (this.isLocalTxt) {
+        Row() {
+          Text('TXT 编码').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+          Text(this.txtEncoding).fontSize(14).fontColor(ThemeColors.primary(this.isDark))
+          Text('▾').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 4 })
+        }
+        .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 6 })
+        .onClick(() => { this.showEncodingOptions = !this.showEncodingOptions; })
+
+        if (this.showEncodingOptions) {
+          Column() {
+            ForEach(['utf-8', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be'], (enc: string) => {
+              Text(enc)
+                .fontSize(14)
+                .fontColor(enc === this.txtEncoding ? ThemeColors.primary(this.isDark) : ThemeColors.onSurface(this.isDark))
+                .width('100%').padding({ left: 24, top: 6, bottom: 6 })
+                .onClick(() => {
+                  this.showEncodingOptions = false;
+                  this.onEncodingChange?.(enc);
+                })
+            })
+          }.width('100%')
+        }
+
+        // 分隔线
+        Row().width('100%').height(1)
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark)).margin({ top: 4, bottom: 2 })
+      }
+
+      // ===== 阅读模式（分页 / 滚动） =====
+      Text('阅读模式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+        .padding({ left: 12, right: 12, top: 6 })
+      Row() {
+        this.flowModeChip('分页', 'paginated')
+        this.flowModeChip('滚动', 'scrolled')
+      }.width('100%').padding({ left: 12, right: 12, bottom: 6 })
+
+      // 分隔线
+      Row().width('100%').height(1)
+        .backgroundColor(ThemeColors.outlineVariant(this.isDark)).margin({ top: 4, bottom: 6 })
+
+      // ===== 触控区域设置 =====
+      Text('触控区域设置').fontSize(14).fontWeight(FontWeight.Bold)
+        .fontColor(ThemeColors.onBackground(this.isDark))
+        .padding({ left: 12, right: 12, bottom: 4 })
+
       Text('点击下方格子，选择该区域点击时触发的动作')
         .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-        .padding({ left: 12, right: 12, top: 4, bottom: 8 }).alignSelf(ItemAlign.Start)
+        .padding({ left: 12, right: 12, bottom: 8 }).alignSelf(ItemAlign.Start)
 
       // 9 宫格
       Column() {
@@ -59,7 +114,7 @@ export struct ClickActionConfig {
         this.buildRow(3, 4, 5)
         this.buildRow(6, 7, 8)
       }
-      .width('100%').padding(12)
+      .width('100%').padding({ left: 12, right: 12 })
 
       // 选择动作列表（当 editZone >= 0 时显示）
       if (this.editZone >= 0) {
@@ -79,6 +134,19 @@ export struct ClickActionConfig {
     .borderRadius({ topLeft: 16, topRight: 16 }).padding({ bottom: 12 })
   }
 
+  // ===== 阅读模式选择项 =====
+  @Builder flowModeChip(label: string, mode: string) {
+    Column() {
+      Text(label).fontSize(13)
+        .fontColor(this.flowMode === mode ? '#FFF' : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 20, right: 20 })
+    }
+    .backgroundColor(this.flowMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(16).margin({ right: 8 })
+    .onClick(() => { this.onFlowModeChange?.(mode); })
+  }
+
+  // ===== 触控区域 =====
   @Builder
   buildRow(z1: number, z2: number, z3: number) {
     Row() {

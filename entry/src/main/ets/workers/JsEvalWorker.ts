@@ -11,11 +11,68 @@ import worker from '@ohos.worker';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
 import http from '@ohos.net.http';
+import { hostOf, normalizeSetCookies, parseSetCookieLine, parseCookieHeader, cookieMapToHeader } from '../util/CookieStore';
 
 // 静态导入 QuickJS 原生模块（Worker 中必须用静态 import 而非 requireNapi）
 import quickjsBridge from 'libquickjs_bridge.so';
 
 declare function requireNapi(name: string): object;
+
+// ============ Worker 侧 Cookie 存储 ============
+// 与主线程 CookieStore 保持同步：主线程快照下发，Worker 本地变更上报
+let workerCookies: Record<string, string> = {};
+
+/** 请求前注入 Cookie 头 */
+function injectCookieHeader(url: string, headers: Record<string, string>): void {
+  const host = hostOf(url);
+  if (!host) return;
+  const cookie = workerCookies[host];
+  if (!cookie) return;
+  const hasCookie = Object.keys(headers).some(k => k.toLowerCase() === 'cookie');
+  if (!hasCookie) {
+    headers['Cookie'] = cookie;
+  }
+}
+
+/** 响应后保存 Set-Cookie，并上报主线程持久化 */
+function captureSetCookies(url: string, setCookieRaw: string | string[] | undefined): void {
+  const host = hostOf(url);
+  if (!host) return;
+  const lines = normalizeSetCookies(setCookieRaw);
+  if (lines.length === 0) return;
+  const existing = parseCookieHeader(workerCookies[host] || '');
+  let changed = false;
+  for (const line of lines) {
+    const pair = parseSetCookieLine(line);
+    if (!pair) continue;
+    if (pair.expired) {
+      if (existing.delete(pair.name)) changed = true;
+    } else {
+      existing.set(pair.name, pair.value);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const header = cookieMapToHeader(existing);
+  if (header) {
+    workerCookies[host] = header;
+  } else {
+    delete workerCookies[host];
+  }
+  try {
+    parentPort.postMessage({ type: 'cookie_set', host: host, cookie: header });
+  } catch (_e) { /* worker 初始化前忽略 */ }
+}
+
+/** 归一化响应头为小写键对象（保留数组，供 JS 侧读取 set-cookie） */
+function headersToJson(headers: Record<string, string | string[] | undefined>): string {
+  const out: Record<string, string | string[]> = {};
+  for (const k of Object.keys(headers || {})) {
+    const v = headers[k];
+    if (v !== undefined) out[k.toLowerCase()] = v;
+  }
+  return JSON.stringify(out);
+}
 
 // ============ RCP HTTP 工具 ============
 
@@ -32,9 +89,16 @@ function isTransientConnectionError(message: string): boolean {
   return /(SSL connect error|connection reset|connection refused|socket|network is unreachable|1007900035|osErr\s*104)/i.test(message);
 }
 
+interface WorkerHttpResult {
+  text: string;
+  statusCode: number;
+  headersJson: string;
+  isError: boolean;
+}
+
 async function systemHttpRequest(
   url: string, method: string, headers: Record<string, string>, body?: string
-): Promise<string> {
+): Promise<WorkerHttpResult> {
   const request = http.createHttp();
   try {
     const response = await request.request(url, {
@@ -45,15 +109,19 @@ async function systemHttpRequest(
       connectTimeout: workerTimeout,
       readTimeout: workerTimeout,
     });
-    if (response.responseCode < 200 || response.responseCode >= 400) {
-      throw new Error('HTTP ' + response.responseCode);
-    }
-    if (typeof response.result === 'string') return response.result;
-    if (response.result instanceof ArrayBuffer) {
-      return util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>)
+    const respHeaders = (response.header || {}) as Record<string, string | string[] | undefined>;
+    captureSetCookies(url, respHeaders['set-cookie']);
+    let text = '';
+    if (typeof response.result === 'string') {
+      text = response.result;
+    } else if (response.result instanceof ArrayBuffer) {
+      text = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>)
         .decodeToString(new Uint8Array(response.result));
+    } else {
+      text = JSON.stringify(response.result);
     }
-    return JSON.stringify(response.result);
+    // 非 2xx 不视为错误（状态码交由脚本判断）
+    return { text: text, statusCode: response.responseCode, headersJson: headersToJson(respHeaders), isError: false };
   } finally {
     request.destroy();
   }
@@ -90,7 +158,7 @@ function getRcpSession(): rcp.Session {
   }
 }
 
-async function httpRequest(url: string, method: string, headers: Record<string, string>, body?: string): Promise<string> {
+async function httpRequest(url: string, method: string, headers: Record<string, string>, body?: string): Promise<WorkerHttpResult> {
   try {
     try {
       url = url.replace(/[^\x00-\x7F]+/g, (part: string): string => encodeURIComponent(part)).replace(/ /g, '%20');
@@ -101,6 +169,7 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
     if (method === 'POST' && body && !headers['Content-Type'] && !headers['content-type']) {
       headers['Content-Type'] = 'application/x-www-form-urlencoded';
     }
+    injectCookieHeader(url, headers);
     const reqHeaders = headers as rcp.RequestHeaders;
     const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
     let response: rcp.Response;
@@ -112,12 +181,19 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
       console.warn('[JsWorker] RCP connection failed, falling back to system HTTP:', message);
       return await systemHttpRequest(url, method, headers, body);
     }
-    if (response.body === undefined || response.body === null) return '';
-    const uint8 = new Uint8Array(response.body);
-    const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
-    return decoder.decodeToString(uint8);
+    const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+    captureSetCookies(url, respHeaders['set-cookie']);
+    const statusCode = response.statusCode || 0;
+    let text = '';
+    if (response.body !== undefined && response.body !== null) {
+      const uint8 = new Uint8Array(response.body);
+      const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
+      text = decoder.decodeToString(uint8);
+    }
+    // 非 2xx 不视为错误（与 Android OkHttp 一致：状态码由脚本自行判断，如 WAF 401 验证页）
+    return { text: text, statusCode: statusCode, headersJson: headersToJson(respHeaders), isError: false };
   } catch (e) {
-    return 'HTTP Error: ' + String(e);
+    return { text: 'HTTP Error: ' + String(e), statusCode: 0, headersJson: '{}', isError: true };
   }
 }
 
@@ -147,6 +223,13 @@ async function initEngine(): Promise<boolean> {
       }
     );
 
+    quickjsBridge.registerCookieHandler(
+      engineId,
+      (requestId: number, op: string, url: string, value: string): void => {
+        handleCookieOp(requestId, op, url, value);
+      }
+    );
+
     return true;
   } catch (e) {
     console.error('[JsWorker] Engine init error:', e);
@@ -161,12 +244,44 @@ async function handleHttpRequest(
 ): Promise<void> {
   try {
     const headers = JSON.parse(headersJson || '{}') as Record<string, string>;
-    const responseText = await httpRequest(url, method, headers, body);
-    const isError = responseText.startsWith('HTTP Error:');
-    quickjsBridge.onHttpResponse(requestId, isError ? '' : responseText, isError);
+    const result = await httpRequest(url, method, headers, body);
+    if (result.isError) {
+      quickjsBridge.onHttpResponse(requestId, result.text, true, result.headersJson, result.statusCode);
+    } else {
+      quickjsBridge.onHttpResponse(requestId, result.text, false, result.headersJson, result.statusCode);
+    }
   } catch (_e) {
-    quickjsBridge.onHttpResponse(requestId, '', true);
+    quickjsBridge.onHttpResponse(requestId, '', true, '{}', 0);
   }
+}
+
+// ============ Cookie 操作处理器（JS cookie.* 同步桥） ============
+
+function handleCookieOp(requestId: number, op: string, url: string, value: string): void {
+  let result = '';
+  try {
+    const host = hostOf(url);
+    if (host) {
+      if (op === 'get') {
+        result = workerCookies[host] || '';
+      } else if (op === 'set') {
+        const existing = parseCookieHeader(workerCookies[host] || '');
+        const incoming = parseCookieHeader(value);
+        incoming.forEach((v, k) => { existing.set(k, v); });
+        const header = cookieMapToHeader(existing);
+        if (header) {
+          workerCookies[host] = header;
+        } else {
+          delete workerCookies[host];
+        }
+        parentPort.postMessage({ type: 'cookie_set', host: host, cookie: header });
+      } else if (op === 'remove') {
+        delete workerCookies[host];
+        parentPort.postMessage({ type: 'cookie_remove', host: host });
+      }
+    }
+  } catch (_e) { /* ignore */ }
+  quickjsBridge.onCookieResponse(requestId, result);
 }
 
 // ============ JS 执行 ============
@@ -230,6 +345,13 @@ try {
           rcpSession = null;
         }
         console.info('[JsWorker] Network config updated: dns=', workerDnsEnabled, 'proxy=', workerProxyHost || 'none', 'timeout=', workerTimeout);
+      }
+    } else if (msg.type === 'cookie_sync') {
+      // 主线程下发的 Cookie 全量快照
+      const cookies = msg.cookies as Record<string, string>;
+      if (cookies && typeof cookies === 'object') {
+        workerCookies = { ...cookies };
+        console.info('[JsWorker] Cookie snapshot synced,', Object.keys(workerCookies).length, 'hosts');
       }
     }
   };

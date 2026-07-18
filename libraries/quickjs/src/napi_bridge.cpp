@@ -33,6 +33,7 @@ struct ScriptEngineContext {
   std::mutex mutex;
   napi_env env = nullptr;             // 创建该引擎的线程的 napi_env
   napi_ref http_callback = nullptr;   // 该引擎的 HTTP 回调
+  napi_ref cookie_callback = nullptr; // 该引擎的 Cookie 操作回调
 };
 
 static std::unordered_map<int64_t, ScriptEngineContext*> g_engines;
@@ -51,6 +52,8 @@ struct HttpRequest {
   std::string body;
   std::string headers;   // JSON string
   std::string result;
+  std::string respHeaders; // 响应头 JSON string（含 set-cookie）
+  int statusCode = 0;
   bool completed;
   bool error;
   std::string errorMsg;
@@ -60,7 +63,104 @@ static std::unordered_map<int64_t, HttpRequest*> g_pending_requests;
 static int64_t g_next_request_id = 1;
 static std::mutex g_request_mutex;
 
+// ============================================================
+// Cookie 操作桥（JS __cookieOp → ArkTS CookieStore）
+// ============================================================
+
+struct CookieOpRequest {
+  int64_t requestId;
+  std::string result;
+  bool completed;
+};
+
+static std::unordered_map<int64_t, CookieOpRequest*> g_pending_cookie_ops;
+static int64_t g_next_cookie_op_id = 1;
+static std::mutex g_cookie_op_mutex;
+
+/**
+ * JS 全局函数: __cookieOp(op, url, value) → string
+ * op: "get" / "set" / "remove"
+ * 同步阻塞等待 ArkTS 侧处理（与 http.get/post 同一模式）
+ */
+static JSValue js_cookie_op(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv) {
+  if (argc < 2) return JS_NewString(ctx, "");
+
+  const char *op = JS_ToCString(ctx, argv[0]);
+  const char *url = JS_ToCString(ctx, argv[1]);
+  const char *value = nullptr;
+  if (argc >= 3 && JS_IsString(argv[2])) {
+    value = JS_ToCString(ctx, argv[2]);
+  }
+
+  auto req = new CookieOpRequest();
+  {
+    std::lock_guard<std::mutex> lock(g_cookie_op_mutex);
+    req->requestId = g_next_cookie_op_id++;
+    req->completed = false;
+    g_pending_cookie_ops[req->requestId] = req;
+  }
+  int64_t req_id = req->requestId;
+
+  ScriptEngineContext* engine = (ScriptEngineContext*)JS_GetContextOpaque(ctx);
+  bool dispatched = false;
+  if (engine && engine->cookie_callback && engine->env) {
+    napi_env env = engine->env;
+    napi_value cb;
+    napi_get_reference_value(env, engine->cookie_callback, &cb);
+
+    napi_value args[4];
+    napi_create_int64(env, req_id, &args[0]);
+    napi_create_string_utf8(env, op ? op : "", NAPI_AUTO_LENGTH, &args[1]);
+    napi_create_string_utf8(env, url ? url : "", NAPI_AUTO_LENGTH, &args[2]);
+    napi_create_string_utf8(env, value ? value : "", NAPI_AUTO_LENGTH, &args[3]);
+
+    napi_value global;
+    napi_get_global(env, &global);
+    napi_value result;
+    napi_call_function(env, global, cb, 4, args, &result);
+    dispatched = true;
+  }
+
+  // ArkTS 侧是同步处理（读内存缓存），正常会在进入循环前完成
+  int waited = 0;
+  while (dispatched && !req->completed && waited < 5000) {
+    uv_loop_t *loop = nullptr;
+    if (engine && engine->env && napi_get_uv_event_loop(engine->env, &loop) == napi_ok && loop) {
+      uv_run(loop, UV_RUN_NOWAIT);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    waited += 1;
+  }
+
+  JSValue out = JS_NewString(ctx, req->result.c_str());
+  {
+    std::lock_guard<std::mutex> lock(g_cookie_op_mutex);
+    g_pending_cookie_ops.erase(req_id);
+  }
+  delete req;
+  if (op) JS_FreeCString(ctx, op);
+  if (url) JS_FreeCString(ctx, url);
+  if (value) JS_FreeCString(ctx, value);
+  return out;
+}
+
 // ArkTS 侧注册的回调函数（已移至 per-engine，见 ScriptEngineContext）
+
+// 从响应头 JSON 构建 JS headers 对象（含 set-cookie，供 java.post/connect 读取）
+static JSValue build_headers_js(JSContext *ctx, const std::string& headers_json) {
+  if (!headers_json.empty()) {
+    JSValue parsed = JS_ParseJSON(ctx, headers_json.c_str(), headers_json.size(), "<resp-headers>");
+    if (!JS_IsException(parsed) && JS_IsObject(parsed)) {
+      return parsed;
+    }
+    if (JS_IsException(parsed)) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+    JS_FreeValue(ctx, parsed);
+  }
+  return JS_NewObject(ctx);
+}
 
 /**
  * JS 函数: http.get(url, options)
@@ -154,8 +254,9 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, resp_obj, "errorMsg",
                       JS_NewString(ctx, req->errorMsg.c_str()));
   } else {
+    int sc = req->statusCode > 0 ? req->statusCode : 200;
     JS_SetPropertyStr(ctx, resp_obj, "statusCode",
-                      JS_NewInt32(ctx, 200));
+                      JS_NewInt32(ctx, sc));
 
     // body.text() 方法
     JSValue body_obj = JS_NewObject(ctx);
@@ -198,10 +299,8 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, resp_obj, "baseUrl",
                       JS_NewString(ctx, req->url.c_str()));
 
-    // headers 对象
-    JSValue headers_obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, headers_obj, "content-type",
-                      JS_NewString(ctx, "text/html; charset=utf-8"));
+    // headers 对象（真实响应头；无数据时退化为空对象）
+    JSValue headers_obj = build_headers_js(ctx, req->respHeaders);
     JS_SetPropertyStr(ctx, resp_obj, "headers", headers_obj);
   }
 
@@ -292,7 +391,8 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
   }
 
   JSValue resp_obj = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, resp_obj, "statusCode", JS_NewInt32(ctx, 200));
+  int post_sc = req->statusCode > 0 ? req->statusCode : (req->error ? 0 : 200);
+  JS_SetPropertyStr(ctx, resp_obj, "statusCode", JS_NewInt32(ctx, post_sc));
 
   JSValue body_obj = JS_NewObject(ctx);
   std::string body_text = req->result;
@@ -300,6 +400,7 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val,
                     JS_NewStringLen(ctx, body_text.c_str(), body_text.length()));
   JS_SetPropertyStr(ctx, resp_obj, "body", body_obj);
   JS_SetPropertyStr(ctx, resp_obj, "baseUrl", JS_NewString(ctx, url));
+  JS_SetPropertyStr(ctx, resp_obj, "headers", build_headers_js(ctx, req->respHeaders));
 
   {
     std::lock_guard<std::mutex> lock(g_request_mutex);
@@ -403,6 +504,10 @@ static napi_value CreateEngine(napi_env env, napi_callback_info info) {
   // 注册到全局: globalThis.http = {get, post, ...}
   JSValue global = JS_GetGlobalObject(ctx->ctx);
   JS_SetPropertyStr(ctx->ctx, global, "http", http_obj);
+
+  // ---- 注入 Cookie 操作桥 ----
+  JS_SetPropertyStr(ctx->ctx, global, "__cookieOp",
+                    JS_NewCFunction(ctx->ctx, js_cookie_op, "__cookieOp", 3));
 
   // ---- 注入 Base64 ----
   JSValue base64_obj = JS_NewObject(ctx->ctx);
@@ -639,11 +744,12 @@ static napi_value CallFunction(napi_env env, napi_callback_info info) {
 }
 
 /**
- * 注册 HTTP 请求完成的回调（由 ArkTS 侧调用）
+ * HTTP 请求完成回调（由 ArkTS 侧调用）
+ * 参数: requestId, body, isError[, headersJson, statusCode]
  */
 static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 5;
+  napi_value argv[5];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
 
   int64_t request_id;
@@ -656,6 +762,18 @@ static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
   bool is_error;
   napi_get_value_bool(env, argv[2], &is_error);
 
+  char headers_json[16384];
+  size_t headers_len = 0;
+  headers_json[0] = '\0';
+  if (argc >= 4) {
+    napi_get_value_string_utf8(env, argv[3], headers_json, sizeof(headers_json), &headers_len);
+  }
+
+  int32_t status_code = 0;
+  if (argc >= 5) {
+    napi_get_value_int32(env, argv[4], &status_code);
+  }
+
   std::lock_guard<std::mutex> lock(g_request_mutex);
   auto it = g_pending_requests.find(request_id);
   if (it != g_pending_requests.end()) {
@@ -665,7 +783,71 @@ static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
     } else {
       it->second->result = response_body;
     }
+    if (headers_len > 0) {
+      it->second->respHeaders.assign(headers_json, headers_len);
+    }
+    it->second->statusCode = status_code;
     it->second->completed = true;
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
+ * Cookie 操作完成回调（由 ArkTS 侧调用）
+ * 参数: requestId, result(string)
+ */
+static napi_value OnCookieResponse(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t request_id;
+  napi_get_value_int64(env, argv[0], &request_id);
+
+  char result_buf[16384];
+  size_t result_len;
+  napi_get_value_string_utf8(env, argv[1], result_buf, sizeof(result_buf), &result_len);
+
+  std::lock_guard<std::mutex> lock(g_cookie_op_mutex);
+  auto it = g_pending_cookie_ops.find(request_id);
+  if (it != g_pending_cookie_ops.end()) {
+    it->second->result.assign(result_buf, result_len);
+    it->second->completed = true;
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
+ * 注册 ArkTS 侧的 Cookie 操作回调
+ * 参数: engineId, callback(requestId, op, url, value)
+ */
+static napi_value RegisterCookieHandler(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  ScriptEngineContext *engine = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    auto it = g_engines.find(engine_id);
+    if (it != g_engines.end()) engine = it->second;
+  }
+
+  if (engine) {
+    if (engine->cookie_callback) {
+      napi_delete_reference(engine->env, engine->cookie_callback);
+    }
+    napi_create_reference(env, argv[1], 1, &engine->cookie_callback);
+    engine->env = env;
   }
 
   napi_value result;
@@ -719,6 +901,8 @@ static napi_value Init(napi_env env, napi_value exports) {
     { "callFunction", nullptr, CallFunction, nullptr, nullptr, nullptr, napi_default, nullptr },
     { "onHttpResponse", nullptr, OnHttpResponse, nullptr, nullptr, nullptr, napi_default, nullptr },
     { "registerHttpHandler", nullptr, RegisterHttpHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "onCookieResponse", nullptr, OnCookieResponse, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "registerCookieHandler", nullptr, RegisterCookieHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
   };
 
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);

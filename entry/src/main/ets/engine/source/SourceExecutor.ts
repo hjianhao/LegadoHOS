@@ -34,7 +34,10 @@ type TocParseItem = HtmlElement | Record<string, unknown>;
 
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
-  return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
+  // 剥离 # 片段（含 ##webView 标记及源作者加的 #emoji 标记）。
+  // 参照 Android Legado：URL(base, relative) 解析时片段会被丢弃，
+  // 否则相对路径会拼到片段之后，再被 /#.*$/ 剥离导致路径丢失。
+  return rawUrl.replace(/#.*$/, '').replace(/\/+$/, '');
 }
 
 /** @put / @get 变量存储（跨段变量引用） */
@@ -2403,14 +2406,55 @@ export class SourceExecutor {
    * 使用 HtmlParser 解析 HTML，通过 CSS 选择器提取搜索结果
    * 替代之前损坏的 RuleParser 和正则方案
    */
+  /**
+   * 将 @js: 列表规则化简为静态 CSS 选择器。
+   * Legado 常见写法：bookList 整段 @js 脚本，核心就是
+   * java.getElement('css')（或先赋给变量再传入），其余分支多为浏览器验证兜底。
+   * 参照 Android AnalyzeRule.getElement：对响应体做 JSoup CSS 查询，
+   * 因此取脚本中第一个 java.getElement(s)(...) 的选择器即等价。
+   * 无法化简时返回空串（调用方按 0 条处理，走兜底逻辑）。
+   */
+  private reduceJsListRule(rule: string): string {
+    const code = rule.trimStart().replace(/^@js:/i, '');
+    // 收集简单变量赋值：path = '.search-card'
+    const varAssigns = new Map<string, string>();
+    const assignRe = /(?:var\s+)?(\w+)\s*=\s*['"`]([^'"`]+)['"`]/g;
+    let am: RegExpExecArray | null;
+    while ((am = assignRe.exec(code)) !== null) {
+      varAssigns.set(am[1], am[2]);
+    }
+    // 找第一个 java.getElement(...) / java.getElements(...)（字面量或变量）
+    const cm = code.match(/java\.getElements?\(\s*([^)]+)\)/);
+    if (cm) {
+      const arg = cm[1].trim();
+      const lit = arg.match(/^['"`]([^'"`]+)['"`]$/);
+      if (lit) return lit[1];
+      const fromVar = varAssigns.get(arg);
+      if (fromVar) return fromVar;
+    }
+    return '';
+  }
+
   private extractWithParser(body: string, source: BookSource, baseUrl: string): SearchResult[] {
     if (!body || !source.ruleSearchList) return [];
+
+    // bookList 为 @js: 脚本时，化简为其中的 java.getElement CSS 选择器
+    let listRule = source.ruleSearchList;
+    if (/^@js:/i.test(listRule.trimStart())) {
+      const reduced = this.reduceJsListRule(listRule);
+      if (!reduced) {
+        console.warn('[SrcEx] @js: list rule not reducible to CSS for', source.sourceName);
+        return [];
+      }
+      console.info('[SrcEx] Reduced @js: list rule to CSS "' + reduced + '" for', source.sourceName);
+      listRule = reduced;
+    }
 
     const parser = getHtmlParser();
     const doc = parser.parse(body);
 
     // 用 ruleSearchList 查找结果列表（规则标准化，支持 || 连接器拆分）
-    const listParts = splitConnectorRules(source.ruleSearchList || '');
+    const listParts = splitConnectorRules(listRule);
     let items: HtmlElement[] = [];
     for (const part of listParts.rules) {
       const candidates = this.buildCssRuleCandidates(part);

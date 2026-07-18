@@ -6,8 +6,21 @@ import rcp from '@hms.collaboration.rcp';
 import http from '@ohos.net.http';
 import util from '@ohos.util';
 import zlib from '@ohos.zlib';
+import { CookieStore } from './CookieStore';
 
 export class NetUtil {
+  /** 请求前注入持久化的 Cookie 头（不覆盖显式设置的 Cookie） */
+  private static injectCookie_(url: string, headers: Record<string, string>): void {
+    try {
+      const cookie = CookieStore.getInstance().getCookie(url);
+      if (!cookie) return;
+      const hasCookie = Object.keys(headers).some(k => k.toLowerCase() === 'cookie');
+      if (!hasCookie) {
+        headers['Cookie'] = cookie;
+      }
+    } catch (_e) { /* CookieStore 未初始化时忽略 */ }
+  }
+
   // ========== DNS 配置 ==========
 
   /** 自定义 DNS 服务器列表（逗号分隔的 IP），为空则使用系统 DNS */
@@ -81,6 +94,7 @@ export class NetUtil {
     try {
       const requestUrl = NetUtil.normalizeUrl(url);
       const h = NetUtil.buildHeaders(headers);
+      NetUtil.injectCookie_(requestUrl, h);
       const reqHeaders = h as rcp.RequestHeaders;
       const request = new rcp.Request(requestUrl, 'GET', reqHeaders, '');
 
@@ -93,6 +107,8 @@ export class NetUtil {
       const session = rcp.createSession({ requestConfiguration: cfg } as rcp.SessionConfiguration);
 
       const response = await session.fetch(request);
+      const binHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+      CookieStore.getInstance().setCookiesFromResponse(requestUrl, binHeaders['set-cookie']);
       console.info('[NetUtil] GET(binary)', requestUrl.substring(0, 80), '->', response.statusCode,
         '(' + (Date.now() - startMs) + 'ms)');
       if (response.statusCode < 200 || response.statusCode >= 400) {
@@ -232,6 +248,7 @@ export class NetUtil {
   ): Promise<string> {
     const request = http.createHttp();
     try {
+      NetUtil.injectCookie_(requestUrl, headers);
       const response = await request.request(requestUrl, {
         method: method.toUpperCase() as http.RequestMethod,
         header: headers,
@@ -240,6 +257,8 @@ export class NetUtil {
         connectTimeout: timeout,
         readTimeout: timeout,
       });
+      const respHeaders = (response.header || {}) as Record<string, string | string[] | undefined>;
+      CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
       console.info('[NetUtil] System HTTP', method, requestUrl, '→', response.responseCode);
       if (response.responseCode < 200 || response.responseCode >= 400) {
         const errorText = await NetUtil.httpResultToText(response.result, requestUrl);
@@ -266,10 +285,13 @@ export class NetUtil {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const h = NetUtil.buildHeaders(headers);
+        NetUtil.injectCookie_(requestUrl, h);
         const reqHeaders = h as rcp.RequestHeaders;
         const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
         const session = NetUtil.getSession(timeout);
         const response = await session.fetch(request);
+        const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+        CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
         console.info('[NetUtil]', method, requestUrl, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
         if (response.statusCode < 200 || response.statusCode >= 400) {
           let errorText = '';

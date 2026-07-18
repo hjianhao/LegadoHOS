@@ -12,6 +12,8 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
 import { GlobalConfig } from '../data/preferences/GlobalConfig';
 import { WebDavService } from '../service/WebDavService';
+import { CookieStore } from '../util/CookieStore';
+import { LoginInfoStore } from '../util/LoginInfoStore';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -49,6 +51,13 @@ export default class MainAbility extends UIAbility {
       console.info('[MainAbility] GlobalConfig loaded');
     } catch (err) {
       console.warn('[MainAbility] GlobalConfig load failed:', err);
+    }
+    try {
+      await CookieStore.getInstance().init(this.context);
+      await LoginInfoStore.getInstance().init(this.context);
+      console.info('[MainAbility] CookieStore/LoginInfoStore initialized');
+    } catch (err) {
+      console.warn('[MainAbility] Cookie/LoginInfo store init failed:', err);
     }
     // 启动时批量同步云端阅读进度
     this.syncProgressFromCloud();

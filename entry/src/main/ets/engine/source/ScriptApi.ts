@@ -53,6 +53,134 @@ export function getAjaxPolyfill(): string {
       return "";
     };
     _j.ajax._isMock = false;
+
+    // ---- StrResponse / Jsoup Response 兼容包装（java.post/connect/get 返回值） ----
+    // Android: connect() → StrResponse（.body()/.url()/.code()/.headers().get(name)）
+    //          get/post() → Jsoup Connection.Response（.body()/.statusCode()/.header(name)/.cookie(name)/.cookies()）
+    // 这里合并两种接口表面到一个对象上
+    function __wrapResp(resp, url) {
+      var bodyText = extractBody(resp);
+      var h = (resp && resp.headers) || {};
+      var statusCode = (resp && resp.statusCode) || 0;
+      function lookupRaw(name) {
+        var n = String(name).toLowerCase();
+        for (var k in h) {
+          if (Object.prototype.hasOwnProperty.call(h, k) && String(k).toLowerCase() === n) return h[k];
+        }
+        return null;
+      }
+      function lookupStr(name) {
+        var v = lookupRaw(name);
+        if (v === null || v === undefined) return null;
+        return Array.isArray(v) ? v.join(', ') : String(v);
+      }
+      function parseSetCookies() {
+        var raw = lookupRaw('set-cookie');
+        if (!raw) return [];
+        var arr = Array.isArray(raw) ? raw : String(raw).split(/,(?=\\s*[^\\s;,=]+=)/);
+        var out = [];
+        for (var i = 0; i < arr.length; i++) {
+          var seg = String(arr[i]).split(';')[0];
+          var eq = seg.indexOf('=');
+          if (eq > 0) out.push([seg.substring(0, eq).trim(), seg.substring(eq + 1).trim()]);
+        }
+        return out;
+      }
+      var headersFn = function(name) {
+        if (name === undefined) return { get: headersFn.get, values: headersFn.values, raw: h };
+        var v = lookupStr(name);
+        return v === null ? '' : v;
+      };
+      headersFn.get = function(n) { return lookupStr(n); };
+      headersFn.values = function(n) {
+        var r = lookupRaw(n);
+        return r === null || r === undefined ? [] : (Array.isArray(r) ? r.slice() : [String(r)]);
+      };
+      return {
+        body: function() { return bodyText; },
+        text: function() { return bodyText; },
+        url: function() { return url; },
+        code: function() { return statusCode; },
+        statusCode: function() { return statusCode; },
+        statusMessage: function() { return ''; },
+        headers: headersFn,
+        header: function(name) { var v = lookupStr(name); return v === null ? '' : v; },
+        cookie: function(name) {
+          var cs = parseSetCookies();
+          for (var i = 0; i < cs.length; i++) if (cs[i][0] === name) return cs[i][1];
+          return null;
+        },
+        cookies: function() {
+          var cs = parseSetCookies(); var m = {};
+          for (var i = 0; i < cs.length; i++) m[cs[i][0]] = cs[i][1];
+          return m;
+        },
+        raw: function() { return resp; },
+        toString: function() { return bodyText; }
+      };
+    }
+    _j.__wrapResp = __wrapResp;
+
+    // java.post(url, body, headers?) — headers 为 JS 对象（对应 Rhino 的 Map）
+    if (!_j.post) {
+      _j.post = function(url, body, headers) {
+        if (typeof http === "undefined" || !http.post) throw new Error("http.post 不可用");
+        var h = headers || {};
+        if (typeof h === 'string') { try { h = JSON.parse(h); } catch(_) { h = {}; } }
+        var resp = http.post(String(url), body === undefined || body === null ? '' : String(body), { headers: h });
+        return __wrapResp(resp, String(url));
+      };
+    }
+    // java.connect(url, headerJson?) — GET，header 为 JSON 字符串
+    if (!_j.connect) {
+      _j.connect = function(url, header) {
+        if (typeof http === "undefined" || !http.get) throw new Error("http.get 不可用");
+        var h = {};
+        if (typeof header === 'string' && header) { try { h = JSON.parse(header); } catch(_) { h = {}; } }
+        else if (header && typeof header === 'object') { h = header; }
+        var resp = http.get(String(url), { headers: h });
+        return __wrapResp(resp, String(url));
+      };
+    }
+    // java.get(url, headers?) — GET，headers 为 JS 对象（Jsoup 语义）
+    if (!_j.get) {
+      _j.get = function(url, headers) {
+        if (typeof http === "undefined" || !http.get) throw new Error("http.get 不可用");
+        var h = headers || {};
+        if (typeof h === 'string') { try { h = JSON.parse(h); } catch(_) { h = {}; } }
+        var resp = http.get(String(url), { headers: h });
+        return __wrapResp(resp, String(url));
+      };
+    }
+  }
+})();
+
+// --- cookie 对象（对应 Android AnalyzeUrl 绑定的 CookieStore） ---
+(function() {
+  if (typeof cookie === 'undefined' && typeof __cookieOp === 'function') {
+    globalThis.cookie = {
+      getCookie: function(url) {
+        try { return __cookieOp('get', String(url), '') || ''; } catch(_) { return ''; }
+      },
+      setCookie: function(url, c) {
+        try { __cookieOp('set', String(url), String(c === null || c === undefined ? '' : c)); } catch(_) {}
+      },
+      replaceCookie: function(url, c) {
+        try { __cookieOp('set', String(url), String(c === null || c === undefined ? '' : c)); } catch(_) {}
+      },
+      removeCookie: function(url) {
+        try { __cookieOp('remove', String(url), ''); } catch(_) {}
+      },
+      getKey: function(url, key) {
+        var c = this.getCookie(url);
+        var parts = c.split(';');
+        for (var i = 0; i < parts.length; i++) {
+          var kv = parts[i].split('=');
+          if (kv.length >= 2 && kv[0].trim() === String(key)) return kv.slice(1).join('=').trim();
+        }
+        return '';
+      }
+    };
   }
 })();
 `;

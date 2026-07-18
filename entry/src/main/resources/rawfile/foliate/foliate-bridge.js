@@ -243,7 +243,8 @@ const applyDocumentStyle = doc => {
   const bodyFontCss = v.useBookFont ? '' : `font-family:${v.familyCss} !important;`
   const bodyAllFontCss = v.useBookFont ? '' : `font-family:${v.familyCss} !important;`
   style.textContent = fontFaceCss() +
-    `html,body{background:${v.bg} !important;color:${v.color} !important;}` +
+    `html,body{background:${v.bg} !important;color:${v.color} !important;` +
+    `height:100% !important;min-height:100% !important;}` +
     `body{${bodyFontCss}font-size:${v.fontSize}px !important;font-weight:${v.weight} !important;` +
     `line-height:${v.lineHeight} !important;letter-spacing:${v.letterSpacing}px !important;` +
     `text-align:${v.textAlign} !important;box-sizing:border-box !important;` +

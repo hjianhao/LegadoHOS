@@ -154,6 +154,7 @@ export class LocalBookEngine {
 		      let meta: LocalBookMeta;
 		      let chapters: BookChapter[];
 		      let epubDirForToc = '';
+		      let bookCharset = '';
 			      if (typeInfo.parser === 'epub') {
 			        // EPUB：TaskPool 已在前面完成解压，直接解析目录
 			        const epubDir = epubDirArg || (this.getSandboxDir(context) + '/epub/' + Date.now().toString(36));
@@ -194,6 +195,7 @@ export class LocalBookEngine {
 			        const fallback = await this.parseFile_(filePath, typeInfo.parser);
 			        meta = fallback.meta;
 			        chapters = fallback.chapters;
+			        bookCharset = fallback.charset || '';
 			      }
       console.info('[LocalBookEngine] parsed:', meta.title, chapters.length, 'chapters');
 
@@ -231,6 +233,7 @@ export class LocalBookEngine {
       book.canUpdate = false;
       book.introduce = HtmlUtil.stripHtml(meta.description || meta.subject);
       book.kind = ext.toUpperCase();
+      book.charset = bookCharset;
       book.customCoverPath = meta.coverPath;
       book.coverUrl = meta.coverPath ? 'file://' + meta.coverPath : '';
       book.wordCount = chapters.reduce((sum, ch) => sum + (ch.contentLength || 0), 0).toString();
@@ -239,9 +242,10 @@ export class LocalBookEngine {
       book.id = await bookDao.insertBook(book);
       console.info('[LocalBookEngine] book created, id=' + book.id);
 
-	      // 设置 bookId 并批量写入章节（EPUB 内容已解压到目录，DB 不存全文）
+	      // 设置 bookId 并批量写入章节（EPUB/TXT 内容不存 DB，按需从文件读取）
 	      const now = Date.now();
 	      const bookChapters: BookChapter[] = chapters.map((ch: BookChapter, idx: number): BookChapter => {
+	        const isStreamed = typeInfo.parser === 'epub' || typeInfo.parser === 'txt';
 	        return {
 	          id: 0,
 	          bookId: book.id,
@@ -249,15 +253,17 @@ export class LocalBookEngine {
 	          volumeIndex: ch.volumeIndex,
 	          title: ch.title,
 	          url: ch.url,
-	          content: typeInfo.parser === 'epub' ? '' : ch.content,
+	          content: isStreamed ? '' : ch.content,
 	          contentLength: ch.contentLength,
 	          isRead: false,
 	          isDownloaded: true,
-	          isCached: true,
+	          isCached: !isStreamed,
 	          duration: 0,
 	          audioUrl: '',
 	          createTime: now,
 	          updateTime: now,
+	          start: ch.start,
+	          end: ch.end,
 	        };
 	      });
       await chapterDao.insertChapters(bookChapters);
@@ -351,13 +357,13 @@ export class LocalBookEngine {
   private async parseFile_(
     filePath: string,
     parser: 'txt' | 'mobi' | 'pdf'
-  ): Promise<{ meta: LocalBookMeta; chapters: BookChapter[] }> {
+  ): Promise<{ meta: LocalBookMeta; chapters: BookChapter[]; charset?: string }> {
     switch (parser) {
       case 'txt': {
         const result = await TxtParser.parse(filePath);
         const title = this.getFileName_(filePath).replace(/\.[^.]+$/, '');
         const meta: LocalBookMeta = { title, author: '', description: '', subject: '', coverPath: '' };
-        return { meta, chapters: result.chapters };
+        return { meta, chapters: result.chapters, charset: result.encoding };
       }
       case 'mobi': {
         const result = MobiProbeParser.probe(filePath);

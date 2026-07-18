@@ -23,6 +23,11 @@ export interface BookChapter {
   // 时间
   createTime: number;
   updateTime: number;
+
+  /** 本地 TXT 章节在原始文件中的起始字节偏移 */
+  start?: number;
+  /** 本地 TXT 章节在原始文件中的结束字节偏移 */
+  end?: number;
 }
 
 export function createDefaultChapter(): BookChapter {
@@ -42,5 +47,7 @@ export function createDefaultChapter(): BookChapter {
     audioUrl: '',
     createTime: 0,
     updateTime: 0,
+    start: 0,
+    end: 0,
   };
 }

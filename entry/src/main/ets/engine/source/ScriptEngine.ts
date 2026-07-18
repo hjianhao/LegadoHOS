@@ -8,6 +8,7 @@
  * 兼容现存的所有 Legado 书源。
  */
 import quickjsBridge, { tryLoadNative, getBridge, isNativeLoaded } from '../../napi/quickjs_bridge';
+import { CookieStore } from '../../util/CookieStore';
 
 export class ScriptEngine {
   private engineId: number = -1;
@@ -40,6 +41,12 @@ export class ScriptEngine {
         this.handleHttpRequest(requestId, url, method, headersJson, body);
       };
       bridge.registerHttpHandler(this.engineId, handler);
+
+      // 注册 Cookie 操作处理器（JS cookie.* → CookieStore）
+      bridge.registerCookieHandler(this.engineId,
+        (requestId: number, op: string, url: string, value: string): void => {
+          this.handleCookieOp(requestId, op, url, value);
+        });
     } catch (err) {
       console.error('[ScriptEngine] Failed to create engine:', err);
       throw err;
@@ -159,6 +166,25 @@ export class ScriptEngine {
     } catch (err) {
       getBridge().onHttpResponse(requestId, err.message, true);
     }
+  }
+
+  /**
+   * 处理 Cookie 操作（由 NAPI 桥调用，同步返回结果）
+   * op: get / set / remove；写操作持久化为异步（fire-and-forget），读操作走内存缓存同步返回
+   */
+  private handleCookieOp(requestId: number, op: string, url: string, value: string): void {
+    let result = '';
+    try {
+      const store = CookieStore.getInstance();
+      if (op === 'get') {
+        result = store.getCookie(url);
+      } else if (op === 'set') {
+        void store.setCookie(url, value);
+      } else if (op === 'remove') {
+        void store.removeCookie(url);
+      }
+    } catch (_e) { /* ignore */ }
+    getBridge().onCookieResponse(requestId, result);
   }
 
   private checkReady(): void {

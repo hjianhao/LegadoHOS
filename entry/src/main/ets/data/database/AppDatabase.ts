@@ -147,6 +147,9 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN latest_chapter_title TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN remark TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN sync_time INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN charset TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN start INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN end INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN cover_decode_js TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN variable_comment TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }

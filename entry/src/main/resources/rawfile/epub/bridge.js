@@ -15,6 +15,7 @@
   var rendition = null;
   var eventQueue = [];
   var currentStyle = {};
+  var currentBookUrl = '';
   var zoneActions = [4, 2, 3, 2, 0, 1, 2, 1, 1];
   var lastHandledTapAt = 0;
   var ACTION_NONE = -1;
@@ -115,6 +116,62 @@
     }
   }
 
+  // TOC 章节映射：把 spine index 映射为目录 chapter index，
+  // 避免图片等独立 spine 项导致章节名显示错误
+  var tocChapterMap = [];
+
+  function buildTocChapterMap() {
+    tocChapterMap = [];
+    if (!book || !book.navigation || !book.spine) return;
+    var flat = [];
+    function walk(items) {
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        flat.push(items[i]);
+        if (items[i].subitems && items[i].subitems.length) walk(items[i].subitems);
+      }
+    }
+    walk(book.navigation.toc || []);
+    for (var i = 0; i < flat.length; i++) {
+      var item = flat[i];
+      var href = (item.href || '').split('#')[0];
+      if (!href) continue;
+      var spineIndex = -1;
+      try {
+        var section = book.spine.get(href);
+        if (section && typeof section.index === 'number') spineIndex = section.index;
+      } catch (e) {}
+      if (spineIndex < 0) {
+        try {
+          for (var j = 0; j < book.spine.length; j++) {
+            var s = book.spine.get(j);
+            if (s && s.href && s.href.split('#')[0] === href) {
+              spineIndex = j;
+              break;
+            }
+          }
+        } catch (e2) {}
+      }
+      if (spineIndex >= 0) {
+        tocChapterMap.push({ spineIndex: spineIndex, chapterIndex: i, href: href });
+      }
+    }
+    tocChapterMap.sort(function (a, b) { return a.spineIndex - b.spineIndex; });
+  }
+
+  function chapterIndexFromSpineIndex(spineIndex) {
+    if (tocChapterMap.length === 0) return spineIndex;
+    var result = 0;
+    for (var i = 0; i < tocChapterMap.length; i++) {
+      if (tocChapterMap[i].spineIndex <= spineIndex) {
+        result = tocChapterMap[i].chapterIndex;
+      } else {
+        break;
+      }
+    }
+    return result;
+  }
+
   function cssValue(value, fallback) {
     return value === undefined || value === null || value === '' ? fallback : value;
   }
@@ -187,6 +244,7 @@
     var pl = Number(cssValue(currentStyle.paddingLeft, 20));
     var pr = Number(cssValue(currentStyle.paddingRight, 20));
     var textAlign = cssValue(currentStyle.textAlign, 'justify');
+    var flowMode = cssValue(currentStyle.flowMode, 'paginated');
     return {
       bg: bg,
       color: color,
@@ -203,7 +261,8 @@
       pb: pb,
       pl: pl,
       pr: pr,
-      textAlign: textAlign
+      textAlign: textAlign,
+      flowMode: flowMode
     };
   }
 
@@ -261,10 +320,10 @@
       },
       'img,svg': {
         'max-width': '100% !important',
-        'max-height': '85vh !important',
+        'max-height': v.flowMode === 'scrolled' ? 'none !important' : '85vh !important',
         'object-fit': 'contain !important',
-        'page-break-inside': 'avoid !important',
-        'break-inside': 'avoid !important'
+        'page-break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important',
+        'break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important'
       },
       'table': {
         'max-width': '100% !important'
@@ -309,8 +368,8 @@
       'letter-spacing:' + v.letterSpacing + 'px !important;}' +
       'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
       'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
-      'img,svg{max-width:100% !important;max-height:85vh !important;object-fit:contain !important;' +
-      'page-break-inside:avoid !important;break-inside:avoid !important;}' +
+      'img,svg{max-width:100% !important;max-height:' + (v.flowMode === 'scrolled' ? 'none' : '85vh') + ' !important;object-fit:contain !important;' +
+      'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
       'table{max-width:100% !important;}a{color:inherit !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
@@ -736,7 +795,8 @@
       if (!location) return;
       var start = location.start || {};
       var displayed = start.displayed || {};
-      var chapterIndex = typeof start.index === 'number' ? start.index : 0;
+      var spineIndex = typeof start.index === 'number' ? start.index : 0;
+      var chapterIndex = chapterIndexFromSpineIndex(spineIndex);
       emit('location', {
         cfi: start.cfi || '',
         href: hrefFromLocation(location),
@@ -762,9 +822,10 @@
           var top = Number(container.scrollTop || 0);
           var page = Math.max(1, Math.min(total, Math.floor((top + height / 2) / height) + 1));
           var key = page + '/' + total;
-          if (key === lastLivePageKey) return;
-          lastLivePageKey = key;
-          emit('page', { page: page, totalPages: total });
+          if (key !== lastLivePageKey) {
+            lastLivePageKey = key;
+            emit('page', { page: page, totalPages: total });
+          }
         });
       });
     }
@@ -772,6 +833,7 @@
 
   function emitBookInfo() {
     book.ready.then(function () {
+      buildTocChapterMap();
       var meta = (book.package && book.package.metadata) || {};
       emit('metadata', {
         title: meta.title || '',
@@ -808,6 +870,7 @@
     loading(true, '加载中...');
     try {
       emit('debug', { message: 'loadBook ' + bookUrl + ' target=' + (target || '') });
+      currentBookUrl = bookUrl;
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
@@ -820,7 +883,7 @@
         minSpreadWidth: 999999,
         evenSpreads: false,
         gap: PAGE_GAP,
-        flow: 'paginated'
+        flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();
       applyRenditionTheme();
@@ -842,28 +905,73 @@
     }
   };
 
+  function alignScrollToLine_(container, direction) {
+    var v = currentStyleValues();
+    var lineHeight = Number(v.fontSize) * Number(v.lineHeight);
+    if (!lineHeight || lineHeight <= 0) return;
+    var scrollTop = Number(container.scrollTop || 0);
+    var remainder = scrollTop % lineHeight;
+    if (Math.abs(remainder) < 1) return;
+    // 向下翻页对齐到下一行，向上翻页对齐到上一行
+    if (direction > 0) {
+      container.scrollTop = scrollTop + (lineHeight - remainder);
+    } else {
+      container.scrollTop = scrollTop - remainder;
+    }
+  }
+
+  function scrollCurrentBy_(direction) {
+    if (!rendition || !rendition.manager || !rendition.manager.container) return false;
+    var container = rendition.manager.container;
+    var scrollTop = Number(container.scrollTop || 0);
+    var scrollHeight = Number(container.scrollHeight || 0);
+    var clientHeight = Number(container.clientHeight || 0);
+    if (scrollHeight <= 0 || clientHeight <= 0) return false;
+    var v = currentStyleValues();
+    var lineHeight = Number(v.fontSize) * Number(v.lineHeight);
+    if (lineHeight <= 0) lineHeight = 24;
+    // 滚动距离 = 一屏 - 一行，让上一页的最后一行在下一页完整显示（重叠一行）
+    var distance = Math.max(120, clientHeight - lineHeight);
+    var target = direction > 0 ? scrollTop + distance : scrollTop - distance;
+    if (direction > 0 && scrollTop + clientHeight >= scrollHeight - 4) {
+      return true; // 已到底部，需要翻章
+    }
+    if (direction < 0 && scrollTop <= 4) {
+      return true; // 已到顶部，需要翻章
+    }
+    container.scrollTop = target;
+    alignScrollToLine_(container, direction);
+    return false;
+  }
+
   window.nextPage = function () {
     clearSelections();
-    if (rendition) {
-      var result = rendition.next();
-      Promise.resolve(result).then(function () {
-        applyToCurrentContentsSoon();
-      }).catch(function (err) {
-        emit('debug', { message: 'nextPage failed: ' + errorMessage(err) });
-      });
+    if (!rendition) return;
+    if (cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') {
+      var needNextChapter = scrollCurrentBy_(1);
+      if (!needNextChapter) return;
     }
+    var result = rendition.next();
+    Promise.resolve(result).then(function () {
+      applyToCurrentContentsSoon();
+    }).catch(function (err) {
+      emit('debug', { message: 'nextPage failed: ' + errorMessage(err) });
+    });
   };
 
   window.prevPage = function () {
     clearSelections();
-    if (rendition) {
-      var result = rendition.prev();
-      Promise.resolve(result).then(function () {
-        applyToCurrentContentsSoon();
-      }).catch(function (err) {
-        emit('debug', { message: 'prevPage failed: ' + errorMessage(err) });
-      });
+    if (!rendition) return;
+    if (cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') {
+      var needPrevChapter = scrollCurrentBy_(-1);
+      if (!needPrevChapter) return;
     }
+    var result = rendition.prev();
+    Promise.resolve(result).then(function () {
+      applyToCurrentContentsSoon();
+    }).catch(function (err) {
+      emit('debug', { message: 'prevPage failed: ' + errorMessage(err) });
+    });
   };
 
   window.goTo = function (cfi) {

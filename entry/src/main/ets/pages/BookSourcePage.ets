@@ -6,6 +6,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ImportSourceDialog } from './ImportSourceDialog';
 import { SourceChecker, CheckResult, CheckDetail } from '../service/SourceChecker';
+import { SourceLoginDialog } from '../components/source/SourceLoginDialog';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
@@ -36,10 +37,31 @@ struct BookSourcePage {
   @State checkResults: CheckResult[] = [];
   @State checkResByUrl: Map<string, CheckResult> = new Map();
   @State showCheckSummary: boolean = false;
+  private loginDlgController: CustomDialogController | null = null;
 
   private dao_: BookSourceTable | null = null;
   private groups_: string[] = [];
   private sortLabels_: string[] = ['手动','名称','URL','权重','更新时间','响应','启用'];
+
+  /** 打开书源登录对话框（WebView 手动登录 或 loginUi 表单登录） */
+  private openLoginDialog(s: BookSource): void {
+    this.loginDlgController = new CustomDialogController({
+      builder: SourceLoginDialog({
+        controller: this.loginDlgController!,
+        sourceId: s.id,
+        sourceUrl: s.sourceUrl,
+        sourceName: s.sourceName,
+        loginUrl: s.loginUrl,
+        loginUi: s.loginUi,
+        jsLib: s.jsLib || '',
+        variableComment: s.variableComment || '',
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center,
+    });
+    this.loginDlgController.open();
+  }
 
   aboutToAppear(): void { this.load(); }
 
@@ -288,6 +310,10 @@ struct BookSourcePage {
     // 更多菜单
     if (this.contextMenuIdx === idx) {
       Column() {
+        if (s.loginUrl) {
+          Text('登录').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(ThemeColors.primary(this.isDark))
+            .onClick(()=>{this.contextMenuIdx=-1;this.openLoginDialog(s)})
+        }
         Text('置顶').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(ThemeColors.onBackground(this.isDark))
           .onClick(()=>{this.contextMenuIdx=-1;this.applyFilters()})
         Text('置底').fontSize(13).padding({left:14,right:14,top:10,bottom:10}).width('100%').fontColor(ThemeColors.onBackground(this.isDark))
