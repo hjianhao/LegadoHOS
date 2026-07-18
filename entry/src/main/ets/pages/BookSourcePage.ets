@@ -29,6 +29,7 @@ struct BookSourcePage {
   @State selectedUrls: string[] = [];
   @State isSelectMode_: boolean = false;
   @State selectedSet_: Set<string> = new Set();
+  @State enabledStateVersion_: number = 0;
   private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
@@ -141,6 +142,9 @@ struct BookSourcePage {
 
   private isSelectMode(): boolean { return this.isSelectMode_; }
   private isSelected(url: string): boolean { return this.selectedSet_.has(url); }
+  private isSourceEnabled(source: BookSource): boolean {
+    return this.enabledStateVersion_ >= 0 && source.enabled;
+  }
 
   private setSelected(url: string, selected: boolean): void {
     // Checkbox 的 select 属性变化也可能触发 onChange，因此按目标值更新，避免程序性选中后又被反转取消。
@@ -198,13 +202,16 @@ struct BookSourcePage {
   }
 
   private async batchEnable(enabled: boolean): Promise<void> {
-    const ids = this.selectedSources().map((source: BookSource): number => source.id);
+    const selected = this.selectedSources();
+    const ids = selected.map((source: BookSource): number => source.id);
     if (!this.dao_ || ids.length === 0) return;
     await this.dao_.batchSetEnabled(ids, enabled);
+    selected.forEach((source: BookSource) => { source.enabled = enabled; });
+    this.enabledStateVersion_++;
+    this.applyFilters();
     this.selectedUrls = [];
     this.syncSelectedSet_();
     this.isSelectMode_ = false;
-    await this.load();
   }
 
   private async batchExplore(enabled: boolean): Promise<void> {
@@ -518,8 +525,11 @@ struct BookSourcePage {
           Row() {
             Text(source.sourceName || '未命名书源').fontSize(16).fontWeight(FontWeight.Medium)
               .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            Toggle({ type: ToggleType.Switch, isOn: source.enabled }).onChange(async (enabled: boolean) => {
-              await this.dao_?.toggleByUrl(source.sourceUrl, enabled); await this.load();
+            Toggle({ type: ToggleType.Switch, isOn: this.isSourceEnabled(source) }).onChange(async (enabled: boolean) => {
+              await this.dao_?.toggleByUrl(source.sourceUrl, enabled);
+              source.enabled = enabled;
+              this.enabledStateVersion_++;
+              this.applyFilters();
             }).visibility(this.isSelectMode() ? Visibility.None : Visibility.Visible)
           }.width('100%')
           Text(source.sourceUrl).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
