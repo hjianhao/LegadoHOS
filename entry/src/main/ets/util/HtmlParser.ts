@@ -188,7 +188,23 @@ export class HtmlParser {
       }
     }
 
-    const elements = this.findElements(root, cssSel);
+    const selectorGroups = this.splitSelectorGroups(cssSel);
+    let elements: HtmlElement[];
+    if (selectorGroups.length <= 1) {
+      elements = this.findElements(root, cssSel);
+    } else {
+      // CSS 分组选择器应按文档顺序返回，而不是按每个分组拼接。
+      const matched = new Set<HtmlElement>();
+      for (const group of selectorGroups) {
+        for (const element of this.findElements(root, group)) matched.add(element);
+      }
+      elements = [];
+      const visit = (element: HtmlElement): void => {
+        if (element.tagName !== '#root' && matched.has(element)) elements.push(element);
+        for (const child of element.children) visit(child);
+      };
+      visit(root);
+    }
 
     // 根据需要提取不同内容
     if (attrSuffix !== 'text') {
@@ -201,6 +217,46 @@ export class HtmlParser {
     }
 
     return elements;
+  }
+
+  /** 按不在引号、属性选择器或括号内的逗号拆分 CSS 分组。 */
+  private splitSelectorGroups(selector: string): string[] {
+    const groups: string[] = [];
+    let current = '';
+    let quote = '';
+    let squareDepth = 0;
+    let roundDepth = 0;
+    for (let i = 0; i < selector.length; i++) {
+      const ch = selector[i];
+      if (quote) {
+        current += ch;
+        if (ch === quote && selector[i - 1] !== '\\') quote = '';
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        current += ch;
+      } else if (ch === '[') {
+        squareDepth++;
+        current += ch;
+      } else if (ch === ']') {
+        squareDepth = Math.max(0, squareDepth - 1);
+        current += ch;
+      } else if (ch === '(') {
+        roundDepth++;
+        current += ch;
+      } else if (ch === ')') {
+        roundDepth = Math.max(0, roundDepth - 1);
+        current += ch;
+      } else if (ch === ',' && squareDepth === 0 && roundDepth === 0) {
+        if (current.trim()) groups.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim()) groups.push(current.trim());
+    return groups;
   }
 
   /**

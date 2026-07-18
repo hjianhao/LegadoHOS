@@ -20,6 +20,18 @@ import { WebViewFetcher } from '../web/WebViewFetcher';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { BookSourceTable } from '../../data/database/BookSourceTable';
 
+interface JsDomNode {
+  tagName: string;
+  attributes: Record<string, string>;
+  ownText: string;
+  text: string;
+  innerHtml: string;
+  outerHtml: string;
+  children: JsDomNode[];
+}
+
+type TocParseItem = HtmlElement | Record<string, unknown>;
+
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   return rawUrl.replace(/##.*$/, '').replace(/\/+$/, '');
@@ -1122,15 +1134,34 @@ export class SourceExecutor {
       const extractField = (rule: string): string => {
         if (!rule) return '';
         return resolveFieldRule(rule, (subRule: string) => {
+          const extractSingle = (singleRule: string): string => {
+            const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(singleRule);
+            const normalized = this.normalizeCssRule(ruleBeforeJs);
+            const value = parser.extractAttr(doc, normalized);
+            if (!jsCode || !value) return value;
+            return JsExpressionEvaluator.processJsResult(singleRule, value, {
+              source: source,
+              baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
+            });
+          };
+
+          // Android Legado 支持 `{{提取规则}}固定文本`，模板内也可放简单 JS 表达式。
+          if (subRule.includes('{{')) {
+            return subRule.replace(/\{\{([\s\S]*?)\}\}/g, (_match: string, expression: string): string => {
+              const expr = expression.trim();
+              const looksLikeRule = expr.startsWith('@@') || expr.startsWith('.') || expr.startsWith('#') ||
+                expr.startsWith('[') || expr.startsWith('//') || expr.startsWith('class.') ||
+                expr.startsWith('id.') || expr.startsWith('tag.') || /@(text|html|ownText|textNodes|href|src|value)$/i.test(expr);
+              if (looksLikeRule) return extractSingle(expr);
+              const value = JsExpressionEvaluator.evaluateSync(expr, {
+                source: source,
+                baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
+              });
+              return value && value !== 'null' && value !== 'undefined' ? value.replace(/^['"`]|['"`]$/g, '') : '';
+            });
+          }
           // @js: 是字段提取后的处理器，不能作为 CSS/正则替换文本交给 HtmlParser。
-          const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(subRule);
-          const normalized = this.normalizeCssRule(ruleBeforeJs);
-          const value = parser.extractAttr(doc, normalized);
-          if (!jsCode || !value) return value;
-          return JsExpressionEvaluator.processJsResult(subRule, value, {
-            source: source,
-            baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
-          });
+          return extractSingle(subRule);
         });
       };
 
@@ -2000,6 +2031,7 @@ export class SourceExecutor {
         toc: tocListRule,
         tocTitle: source.ruleTocTitle || '',
         tocUrlItem: source.ruleTocUrlItem || '',
+        isVolume: source.ruleTocIsVolume || '',
       };
       if (tocRules.toc) {
         let chapters: BookSourceChapter[] = [];
@@ -2116,6 +2148,7 @@ export class SourceExecutor {
               toc: retryTocListRule,
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
+              isVolume: source.ruleTocIsVolume || '',
             };
             if (retryTocRules.toc) {
               let retryChapters = await this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
@@ -2139,6 +2172,7 @@ export class SourceExecutor {
               toc: source.ruleToc || '',
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
+              isVolume: source.ruleTocIsVolume || '',
             };
             const wvChapters = await this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
@@ -2319,7 +2353,8 @@ export class SourceExecutor {
     normalized = normalized.replace(/\btag\.(\w[\w-]*)/g, '$1');
     // 0.5. Legado id.xxx -> #xxx
     normalized = normalized.replace(/\bid\.([\w-]+)/g, '#$1');
-    // 2. @@class →  .class (Legado 简写)
+    // 2. @@.class / @@class → .class (Legado 从当前内容选择 class 的简写)
+    normalized = normalized.replace(/@@\./g, '.');
     normalized = normalized.replace(/@@([\w-]+)/g, '.$1');
     // 2.4. Legado 范围选择器: tag.N:M → tag.N||tag.M, tag.N:M:O → tag.N||tag.M||tag.O
     normalized = normalized.replace(/(\.[\w-]+|\w[\w-]*)\.(\d+)((?::\d+)+)/g,
@@ -3254,6 +3289,86 @@ export class SourceExecutor {
   /**
    * 从规则解析目录列表
    */
+  private serializeDomForJs_(element: HtmlElement): JsDomNode {
+    const children: JsDomNode[] = [];
+    for (const child of element.children) children.push(this.serializeDomForJs_(child));
+    return {
+      tagName: element.tagName,
+      attributes: element.attributes,
+      ownText: element.ownText,
+      text: element.text,
+      innerHtml: element.innerHtml,
+      outerHtml: element.outerHtml,
+      children: children,
+    };
+  }
+
+  /**
+   * 执行 Legado 列表规则的 @js 后处理。
+   * Android 会把 Jsoup Element/Elements 作为 result 注入；这里提供等价的常用只读 DOM API。
+   */
+  private async processTocListJs_(elements: HtmlElement[], jsCode: string, source?: BookSource): Promise<Record<string, unknown>[] | null> {
+    if (!jsCode) return null;
+    const serialized: JsDomNode[] = [];
+    for (const element of elements) serialized.push(this.serializeDomForJs_(element));
+    const domAdapter = `
+(function(){
+  function def(o,k,v){Object.defineProperty(o,k,{value:v,enumerable:false,configurable:true});}
+  function match(n,s){
+    s=String(s||'').trim();if(!s)return false;
+    var am=s.match(/\\[([\\w-]+)(?:[~|^$*]?=['\"]?([^'\"\\]]*)['\"]?)?\\]/);
+    if(am){var av=(n.attributes&&n.attributes[am[1]])||'';if(am[2]!==undefined&&av!==am[2]&&String(av).split(/\\s+/).indexOf(am[2])<0)return false;s=s.replace(am[0],'');}
+    var idm=s.match(/#([\\w-]+)/);if(idm&&((n.attributes&&n.attributes.id)||'')!==idm[1])return false;
+    var cms=s.match(/\\.([\\w-]+)/g)||[];var cv=' '+((n.attributes&&n.attributes.class)||'')+' ';
+    for(var ci=0;ci<cms.length;ci++)if(cv.indexOf(' '+cms[ci].slice(1)+' ')<0)return false;
+    var tm=s.match(/^[\\w*-]+/);return !tm||tm[0]==='*'||String(n.tagName).toLowerCase()===tm[0].toLowerCase();
+  }
+  function wrapNode(n){
+    var o={};def(o,'__node',n);
+    def(o,'select',function(s){return select([n],s);});
+    def(o,'attr',function(k){return (n.attributes&&n.attributes[k])||'';});
+    def(o,'text',function(){return n.text||'';});
+    def(o,'ownText',function(){return n.ownText||'';});
+    def(o,'html',function(){return n.innerHtml||'';});
+    def(o,'toString',function(){return n.outerHtml||'';});
+    def(o,'toJSON',function(){return n;});return o;
+  }
+  function wrapList(ns){
+    var a=[];for(var i=0;i<ns.length;i++)a.push(wrapNode(ns[i]));
+    def(a,'attr',function(k){return a.length?a[0].attr(k):'';});
+    def(a,'text',function(){var r='';for(var j=0;j<a.length;j++)r+=a[j].text();return r;});
+    def(a,'html',function(){var r='';for(var j=0;j<a.length;j++)r+=a[j].html();return r;});
+    def(a,'toString',function(){var r='';for(var j=0;j<a.length;j++)r+=String(a[j]);return r;});return a;
+  }
+  function select(ns,selector){
+    var groups=String(selector||'').split(',');var out=[];
+    function walk(n){var cs=n.children||[];for(var i=0;i<cs.length;i++){var c=cs[i];for(var g=0;g<groups.length;g++){if(match(c,groups[g])){out.push(c);break;}}walk(c);}}
+    for(var i=0;i<ns.length;i++)walk(ns[i]);return wrapList(out);
+  }
+  result=wrapList(result||[]);
+})();
+`;
+    try {
+      const evaluated = await JsExpressionEvaluator.evaluate(domAdapter + '\n' + jsCode, {
+        result: serialized,
+        source: source,
+        jsLib: source?.jsLib || '',
+        variableBlob: source?.variableComment || '',
+      });
+      if (!evaluated) return null;
+      const parsed = JSON.parse(evaluated) as unknown;
+      if (!Array.isArray(parsed)) return null;
+      const output: Record<string, unknown>[] = [];
+      for (const item of parsed) {
+        if (item && typeof item === 'object' && !Array.isArray(item)) output.push(item as Record<string, unknown>);
+      }
+      return output;
+    } catch (e) {
+      console.warn('[SrcEx] Toc list @js failed:', e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
   private async parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string, source?: BookSource): Promise<BookSourceChapter[]> {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
@@ -3265,32 +3380,38 @@ export class SourceExecutor {
     // &&: 合并所有子规则的结果（去重）
     // %%: 按顺序逐个尝试（类似 ||）
     const { rules: tocRuleParts, connector } = splitConnectorRules(tocRule.trim());
-    let items: HtmlElement[] = [];
+    let items: TocParseItem[] = [];
     for (const part of tocRuleParts) {
       // 剥离 \n<js>...</js> 或 @js:... 后缀，只用 CSS 部分查询元素
       let cssPart = part;
+      let listJsCode = '';
       const jsBlockMatch = cssPart.match(/\n?<js>[\s\S]*?<\/js>/i);
       if (jsBlockMatch) {
+        const codeMatch = jsBlockMatch[0].match(/<js>([\s\S]*?)<\/js>/i);
+        listJsCode = codeMatch ? codeMatch[1].trim() : '';
         cssPart = cssPart.substring(0, cssPart.indexOf(jsBlockMatch[0])).trim();
       } else {
-        const { rule: stripped } = JsExpressionEvaluator.stripJsSuffix(cssPart);
+        const { rule: stripped, jsCode } = JsExpressionEvaluator.stripJsSuffix(cssPart);
         cssPart = stripped;
+        listJsCode = jsCode;
       }
       const normalized = this.normalizeCssRule(cssPart);
       const found = parser.querySelectorAll(doc, normalized);
       if (found && found.length > 0) {
         console.info('[SrcEx] parseToc CSS matched: rule="' + cssPart + '" norm="' + normalized + '" count=' + found.length);
-        if (connector === '&&') {
-          // && : 合并所有子规则结果（按 href 去重）
-          for (const el of found) {
-            const href = el.attributes['href'] || '';
-            if (!href || !items.some(existing => (existing.attributes['href'] || '') === href)) {
-              items.push(el);
-            }
+        let partItems: TocParseItem[] = found;
+        if (listJsCode) {
+          const transformed = await this.processTocListJs_(found, listJsCode, source);
+          if (transformed && transformed.length > 0) {
+            partItems = transformed;
+            console.info('[SrcEx] parseToc list @js returned ' + transformed.length + ' items');
           }
+        }
+        if (connector === '&&') {
+          items.push(...partItems);
         } else {
           // || 或 %%：取第一个非空结果
-          items = found;
+          items = partItems;
           break;
         }
       }
@@ -3303,7 +3424,9 @@ export class SourceExecutor {
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
-    return Promise.all(items.map(async (item: HtmlElement, index: number): Promise<BookSourceChapter> => {
+    return Promise.all(items.map(async (item: TocParseItem, index: number): Promise<BookSourceChapter> => {
+      const htmlItem: HtmlElement | null = (item as HtmlElement).tagName !== undefined ? item as HtmlElement : null;
+      const objectItem: Record<string, unknown> | null = htmlItem ? null : item as Record<string, unknown>;
       const parseField = async (rule: string): Promise<string> => {
         if (!rule) return '';
         // 剥离 ## 后缀 post-processing（例如 $.serialName##正文卷. ）
@@ -3331,19 +3454,22 @@ export class SourceExecutor {
         // Legado 规则用 @ 前缀表示提取属性（如 @href、@text、@src、@data-title），去掉前缀再匹配
         const ruleKey = (cleanRule.startsWith('@') && cleanRule.length > 1 && !cleanRule.startsWith('@@'))
           ? cleanRule.substring(1) : cleanRule;
-        if (ruleKey === 'text') {
-          result = item.text || '';
+        if (objectItem) {
+          const value = objectItem[ruleKey];
+          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result = String(value);
+        } else if (ruleKey === 'text') {
+          result = htmlItem?.text || '';
         } else if (ruleKey === 'ownText' || ruleKey === 'textNodes') {
-          result = item.ownText || '';
+          result = htmlItem?.ownText || '';
         } else if (ruleKey === 'href' || ruleKey === 'src') {
-          result = parser.getAttr(item, ruleKey);
+          result = htmlItem ? parser.getAttr(htmlItem, ruleKey) : '';
         } else if (ruleKey === 'html') {
-          result = item.innerHtml || '';
+          result = htmlItem?.innerHtml || '';
         } else if (cleanRule !== ruleKey && ruleKey) {
           // @attrName — 提取任意 HTML 属性（如 @data-title、@title、@data-src）
-          result = parser.getAttr(item, ruleKey) || '';
-        } else if (cleanRule) {
-          result = parser.extractAttr(item, this.normalizeCssRule(cleanRule));
+          result = htmlItem ? parser.getAttr(htmlItem, ruleKey) || '' : '';
+        } else if (cleanRule && htmlItem) {
+          result = parser.extractAttr(htmlItem, this.normalizeCssRule(cleanRule));
         }
         // 应用 @js: 后处理（通过 JsExpressionEvaluator.processJsResult）
         if (jsPostProcess && result) {
@@ -3412,9 +3538,12 @@ export class SourceExecutor {
       if (title) {
         if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
       } else {
-        title = HtmlUtil.stripHtml(item.text || '').trim();
+        title = htmlItem ? HtmlUtil.stripHtml(htmlItem.text || '').trim() : '';
       }
       let chapterUrl = await resolveTocField(urlItemRule) || '';
+      const isVolumeValue = await resolveTocField(rules['isVolume'] || '');
+      const isVolume = /^(true|1)$/i.test(isVolumeValue);
+      if (!chapterUrl) chapterUrl = isVolume ? (title + index) : tocUrl;
       if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
       if (chapterUrl && !chapterUrl.startsWith('http://') && !chapterUrl.startsWith('https://')) {
         chapterUrl = this.resolvePageUrl(chapterUrl, tocUrl);
@@ -3423,6 +3552,7 @@ export class SourceExecutor {
         title: title || `第${index + 1}章`,
         url: chapterUrl,
         index: index,
+        isVolume: isVolume,
       };
     }));
   }
