@@ -2,6 +2,7 @@
 
 > 漫画书源规则解析与漫画阅读器功能设计文档。
 > 对标安卓 Legado 的 `ReadMangaActivity` + `ReadManga` + `MangaAdapter` 等模块。
+> 更新日期：2026-07-18
 
 ## 1. 功能概述
 

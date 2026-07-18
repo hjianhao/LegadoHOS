@@ -2,7 +2,9 @@
 
 > 离线神经 TTS（sherpa-onnx + Kokoro）集成方案设计文档。
 > 参考资料见 `doc/ref/tts.md`。
-> 更新日期：2026-07-12
+> 更新日期：2026-07-18
+>
+> **实施状态**：Phase 1（MVP）已完成 ✅，Phase 2（体验优化）进行中 🔄
 
 ---
 
@@ -10,17 +12,24 @@
 
 ### 1.1 现状
 
-当前 LegadoHOS 已有一套基于鸿蒙系统 TTS 的朗读引擎：
+当前 LegadoHOS 已有一套基于鸿蒙系统 TTS 的朗读引擎，并已实现双后端架构：
 
-| 文件 | 职责 |
-|------|------|
-| `service/ReadAloudEngine.ets` | 核心引擎：分句队列 + 双缓冲 PCM 播放 + 跨章节续读 |
-| `components/reader/ReadAloudPanel.ets` | 朗读控制面板 UI（引擎/音色/语速/播放控制） |
-| `pages/ReadPage.ets` | ReadPage 集成：章节提供器 + 位置同步 |
-| `data/preferences/SettingsStore.ts` | TTS 偏好持久化（音色/语速） |
-| `engine/audio/TTSPlayer.ts` | 旧版 TTS 播放器（已废弃，未使用） |
-| `service/ReadAloudService.ts` | 旧版朗读服务（已废弃，未使用） |
-| `components/reader/TtsControlPanel.ets` | 旧版控制面板（已废弃，未使用） |
+| 文件 | 职责 | 状态 |
+|------|------|------|
+| `service/ReadAloudEngine.ets` | 核心引擎：分句队列 + 双缓冲 PCM 播放 + 跨章节续读 | ✅ 已实现 |
+| `service/tts/ITtsBackend.ets` | TTS 后端接口抽象 | ✅ 已实现 |
+| `service/tts/SherpaOnnxTtsBackend.ets` | sherpa-onnx 离线神经 TTS 后端 | ✅ 已实现 |
+| `service/tts/AzureTtsBackend.ets` | Azure 云端 TTS 后端 | ✅ 已实现 |
+| `service/tts/WorkerTtsBackend.ets` | Worker 线程 TTS | ✅ 已实现 |
+| `service/tts/TextNormalizer.ets` | 中文文本规范化 | ✅ 已实现 |
+| `service/tts/TtsModelManager.ets` | 模型下载/校验/解压/版本管理 | ✅ 已实现 |
+| `service/tts/TtsWorkerMsg.ets` | TTS Worker 通信协议 | ✅ 已实现 |
+| `components/reader/ReadAloudPanel.ets` | 朗读控制面板 UI（引擎/音色/语速/播放控制） | ✅ 已实现 |
+| `pages/ReadPage.ets` | ReadPage 集成：章节提供器 + 位置同步 | ✅ 已实现 |
+| `data/preferences/SettingsStore.ts` | TTS 偏好持久化（音色/语速/引擎选择） | ✅ 已实现 |
+| `engine/audio/TTSPlayer.ts` | 旧版 TTS 播放器（已废弃，未引用） | ❌ 废弃 |
+| `service/ReadAloudService.ts` | 旧版朗读服务（已废弃，未引用） | ❌ 废弃 |
+| `components/reader/TtsControlPanel.ets` | 旧版控制面板（零引用） | ❌ 废弃 |
 
 系统 TTS 的局限性：
 
@@ -628,20 +637,18 @@ cacheKey = modelId + sid + speed + hash(normalizedText)
 
 ## 10. 实施计划
 
-### Phase 1：MVP（约 3-5 天）
+### Phase 1：MVP（已完成 ✅）
 
-目标：在一个 Kokoro 音色下完成离线朗读，与系统 TTS 可切换。
-
-| 步骤 | 内容 | 预估 |
+| 步骤 | 内容 | 状态 |
 |------|------|------|
-| 1 | `ohpm install sherpa_onnx`（方式一） | 0.5h |
-| 2 | 定义 `ITtsBackend` 接口 | 0.5h |
-| 3 | 实现 `SherpaOnnxTtsBackend`（init + synthesize + float32→int16） | 1d |
-| 4 | `ReadAloudEngine` 双引擎改造（`setBackend` + 动态采样率 + `speakNext_` 改 async） | 1d |
-| 5 | `TtsModelManager`（下载 + 校验 + 解压） | 1d |
-| 6 | `ReadAloudPanel` UI 适配（引擎切换 + 下载入口 + 离线音色列表） | 0.5d |
+| 1 | `ohpm install sherpa_onnx`（方式一） | ✅ 已完成 |
+| 2 | 定义 `ITtsBackend` 接口 | ✅ 已完成 |
+| 3 | 实现 `SherpaOnnxTtsBackend`（init + synthesize + float32→int16） | ✅ 已完成 |
+| 4 | `ReadAloudEngine` 双引擎改造（`setBackend` + 动态采样率 + `speakNext_` 改 async） | ✅ 已完成 |
+| 5 | `TtsModelManager`（下载 + 校验 + 解压） | ✅ 已完成 |
+| 6 | `ReadAloudPanel` UI 适配（引擎切换 + 下载入口 + 离线音色列表） | ✅ 已完成 |
 
-验证标准：
+验证标准（均已通过）：
 - 手动放置模型到沙箱后，能完成一章节的离线朗读；
 - 引擎切换不崩溃，采样率正确切换；
 - 暂停/恢复/跳句/调速正常工作。

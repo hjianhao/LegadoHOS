@@ -4,7 +4,7 @@
 > 目标：提供与 Android 版 Legado 功能对等的鸿蒙阅读体验。
 >
 > **编写目的**：便于 AI / 后续开发者快速理解已实现的功能范围、设计取舍和待完善项。
-> **更新日期**：2026-07-01（全面审计后更新，新增 RSS / AI 书源生成 / 书架分组 / 阅读朗读等模块）
+> **更新日期**：2026-07-18（全面审计后更新，新增 PDF/漫画/TTS 后端/AI 智能导入/搜索增强/字体管理等模块）
 
 ---
 
@@ -15,7 +15,7 @@
 | 应用名称 | LegadoHOS（鸿蒙版 Legado 阅读器） |
 | 开发框架 | HarmonyOS ArkTS + ArkUI |
 | 目标设备 | Phone / Tablet |
-| 最低 API | API 9+（兼容 API 12 推荐方式） |
+| 最低 API | API 9+（兼容 API 12 推荐方式；真机需 API 12+ 启动 WebView 兜底） |
 | 包名 / module | `entry` |
 | 数据库 | RDB（`@ohos.data.relationalStore`，17 张核心表） |
 | JS 引擎 | QuickJS（通过 NAPI 桥接，支持降级 Mock） |
@@ -86,6 +86,9 @@
 | R-039d | 章节缓存管理 | ✅ 完成 | 查看/预缓存章节（CacheDialog） |
 | R-039e | 繁简转换 | ✅ 完成 | 阅读内容简繁体转换（ChineseConverter） |
 | R-039f | 阅读换源 | ✅ 完成 | 阅读中切换其他书源查看同一章节 |
+| R-039g | 滚动阅读模式 | ✅ 完成 | 全文连续滚动，onReachStart/End 自动加载章节 |
+| R-039h | 内容替换规则实时应用 | ✅ 完成 | 阅读时应用 ReplaceRule 替换正则 |
+| R-039i | 绑定选择菜单 | ✅ 完成 | 阅读页文字选中弹出自定义菜单（复制/问Kimi/问小艺） |
 
 ### 2.5 书源管理（BookSourcePage / ImportSourceDialog）
 
@@ -109,15 +112,18 @@
 | R-053 | Web 服务入口 | ✅ 完成 | 启动/关闭 HTTP 服务 |
 | R-054 | 深色主题切换 | ✅ 完成 | 跟随系统或手动切换 |
 | R-055 | 关于页面 | ✅ 完成 | 版本信息等 |
+| R-055a | 备份与恢复页面 | ✅ 完成 | BackupSettingsPage 支持本地/WebDAV 备份恢复 |
+| R-055b | 字体管理 | ✅ 完成 | FontManagerPage 导入/预览/删除自定义字体 |
 
 ### 2.7 本地书籍解析
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
 | R-060 | TXT 解析（TxtParser） | ✅ 完成 | 支持章节分割、编码检测、大文件分页读取 |
-| R-061 | EPUB 解析（DirEpubParser） | ✅ 完成 | `@ohos.zlib` 解压到目录后解析 OPF + NCX、manifest 资源 |
-| R-062 | MOBI/AZW/AZW3 图文阅读（foliate-js） | ✅ 完成 | 轻量 PDB/MOBI/EXTH 导入探测；foliate-js 解析 KF6/KF8、HUFF/CDIC、目录与图文资源；Range 随机读取；拒绝 DRM/KFX |
-| R-063 | PDF 解析（PdfParser） | ⚠️ 部分 | 元数据提取、目录结构（PDF 页面渲染待集成） |
+| R-061 | EPUB 解析（DirEpubParser + EpubJsParser） | ✅ 完成 | 双引擎：DirEpubParser 解析 OPF/NCX + EpubJsParser/EpubParserWebView 调用 EPUB.js |
+| R-062 | MOBI/AZW/AZW3 图文阅读（MobiParser + MobiProbeParser） | ✅ 完成 | 轻量 PDB/MOBI/EXTH 导入探测；foliate-js 解析 KF6/KF8、HUFF/CDIC；Range 随机读取；拒绝 DRM/KFX |
+| R-063 | PDF 解析与阅读（PdfParser + 原生 WebView） | ✅ 完成 | 元数据提取、目录结构、横竖屏切换、裁边显示、双页模式（WebView 加载 PDF） |
+| R-064 | 本地书籍导入引擎 | ✅ 完成 | LocalBookEngine 统一导入 TXT/EPUB/MOBI/PDF，TaskPool 并发解压 EPUB |
 
 ### 2.8 书源引擎（SourceExecutor / ScriptEngine）
 
@@ -165,18 +171,22 @@
 | R-104 | 朗读面板（ReadAloudPanel） | ✅ 完成 | 阅读页朗读控制面板（511 行），暂停/继续/语速/音色 |
 | R-105 | 朗读引擎（ReadAloudEngine） | ✅ 完成 | 后台朗读引擎（352 行），状态管理（播放/暂停/停止/完成） |
 | R-106 | TTS 控制面板（TtsControlPanel） | ✅ 完成 | 语速/音色配置浮层 |
+| R-107 | TTS 双后端架构 | ✅ 完成 | ITtsBackend 接口，系统 TTS + sherpa-onnx + Azure TTS 三种后端 |
+| R-108 | sherpa-onnx 离线 TTS | ✅ 完成 | SherpaOnnxTtsBackend，Kokoro 多音色，102 种音色，模型需下载 ~215MB |
+| R-109 | 文本规范化（TextNormalizer） | ✅ 完成 | 数字/日期/标点的中文朗读优化 |
+| R-110 | TTS 模型管理（TtsModelManager） | ✅ 完成 | 模型下载/校验/解压/版本管理 |
 
 ### 2.11 服务
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-110 | 备份/恢复（BackupService） | ✅ 完成 | 导出/导入书架、书源、替换规则、RSS、设置 |
-| R-111 | WebDAV 同步（WebDavService） | ✅ 完成 | 远程备份/同步到 WebDAV 服务器 |
-| R-112 | 下载管理（DownloadService） | ✅ 完成 | 章节批量下载，断点续传，队列管理 |
-| R-113 | 朗读服务（ReadAloudService） | ✅ 完成 | 后台朗读服务（RemoteObject，支持跨 Ability 通信） |
-| R-114 | Web 服务（WebService） | ✅ 完成 | HTTP 服务器，提供阅读内容远程访问 |
-| R-115 | 控制器服务（ControllerService） | ✅ 完成 | 全局播放控制、通知管理 |
-| R-116 | 书架传输服务（BookshelfTransferService） | ✅ 完成 | 导入时自动匹配书源、下载目录、upsert 书籍 |
+| R-111 | 备份/恢复（BackupService） | ✅ 完成 | 导出/导入书架、书源、替换规则、RSS、设置 |
+| R-112 | WebDAV 同步（WebDavService） | ✅ 完成 | 远程备份/同步到 WebDAV 服务器 |
+| R-113 | 下载管理（DownloadService） | ✅ 完成 | 章节批量下载，断点续传，队列管理 |
+| R-114 | 朗读服务（ReadAloudService） | ✅ 完成 | 后台朗读服务（RemoteObject，支持跨 Ability 通信） |
+| R-115 | Web 服务（WebService） | ✅ 完成 | HTTP 服务器，提供阅读内容远程访问 |
+| R-116 | 控制器服务（ControllerService） | ✅ 完成 | 全局播放控制、通知管理 |
+| R-117 | 书架传输服务（BookshelfTransferService） | ✅ 完成 | 导入时自动匹配书源、下载目录、upsert 书籍 |
 
 ### 2.12 书架管理（BookshelfManagePage）
 
@@ -271,6 +281,8 @@
 | R-201 | AI 源生成（AiSourceGeneratePage） | ✅ 完成 | 多步 UI 引导生成书源（221 行） |
 | R-202 | AI 生成引擎（AiSourceAgent） | ✅ 完成 | 6 步 LLM 驱动分析（382 行）：首页→搜索→详情→目录→正文→汇总 |
 | R-203 | WebView 兜底 | ✅ 完成 | AI 生成时 Cloudflare 站点走 WebView 渲染 |
+| R-204 | AI 智能导入书籍（AiImportBookPage） | ✅ 完成 | 抓取页面→LLM 分析→生成书源→批量下载章节 |
+| R-205 | AI 书籍导入引擎（AiBookImporter） | ✅ 完成 | 引擎层 4 步导入：抓取→分析→存源→下载 |
 
 ### 2.19 Web 取内容
 
@@ -292,17 +304,20 @@
 | R-225 | 换源页（ChangeSourcePage） | ✅ 完成 | 搜索其他书源 |
 | R-226 | 章节列表（ChapterListPage） | ✅ 完成 | 全章节目录列表 |
 | R-227 | 规则订阅页（RuleSubPage） | ✅ 完成 | 书源规则远程订阅管理 |
+| R-228 | 书内搜索（SearchContentPage） | ✅ 完成 | 阅读页内搜索关键词，支持正则/替换/历史范围 |
+| R-229 | 备份设置页（BackupSettingsPage） | ✅ 完成 | 本地/WebDAV 备份恢复配置 |
+| R-230 | 字体管理页（FontManagerPage） | ✅ 完成 | 导入/预览/删除自定义 .ttf/.otf 字体 |
 
-### 2.21 QuickJS NAPI 桥接
+### 2.22 QuickJS NAPI 桥接
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-230 | 多方式加载 | ✅ 完成 | `import('libquickjs_bridge.so')` / `requireNapi('quickjs_bridge')` / Mock 降级 |
-| R-231 | 引擎生命周期管理 | ✅ 完成 | createEngine / destroyEngine |
-| R-232 | JS 脚本执行 | ✅ 完成 | executeScript |
-| R-233 | JS 函数调用 | ✅ 完成 | callFunction（传参/返回 JSON 字符串） |
-| R-234 | HTTP 请求委托 | ✅ 完成 | registerHttpHandler / onHttpResponse |
-| R-235 | 原生 C++ 实现 | ✅ 完成 | libraries/quickjs/src/napi_bridge.cpp |
+| R-231 | 多方式加载 | ✅ 完成 | `import('libquickjs_bridge.so')` / `requireNapi('quickjs_bridge')` / Mock 降级 |
+| R-232 | 引擎生命周期管理 | ✅ 完成 | createEngine / destroyEngine |
+| R-233 | JS 脚本执行 | ✅ 完成 | executeScript |
+| R-234 | JS 函数调用 | ✅ 完成 | callFunction（传参/返回 JSON 字符串） |
+| R-235 | HTTP 请求委托 | ✅ 完成 | registerHttpHandler / onHttpResponse |
+| R-236 | 原生 C++ 实现 | ✅ 完成 | libraries/quickjs/src/napi_bridge.cpp |
 
 ---
 
@@ -310,13 +325,13 @@
 
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
-| R-300 | 漫画阅读 | 📋 规划 | ComicReader 引擎就绪，ComicReadPage 为占位页面（17 行，"功能开发中"） |
-| R-301 | 本地文件导入 | 📋 规划 | 本地 TXT/EPUB 文件的导入 UI 尚未实现 |
-| R-302 | PDF 渲染 | 📋 规划 | PdfParser 元数据解析完成，PDF 页面渲染待集成 |
-| R-303 | Web 服务完善 | ⚠️ 部分 | WebServer/WebServicePage 基础实现，远程管理功能待完善 |
+| R-300 | 漫画阅读完整实现 | ✅ 完成 | ComicReadPage 支持四种阅读模式、缩放手势、图片缓存、自动阅读 |
+| R-301 | PDF 渲染 | ✅ 完成 | WebView 加载 PDF，支持横竖屏/裁边/双页/翻页 |
+| R-302 | MOBI 图文混排阅读 | ✅ 完成 | foliate-js 集成，支持 KF6/KF8 格式 |
+| R-303 | 有声书完整支持 | ⚠️ 部分 | AudioPlayer 引擎就绪，UI 层待接入 |
 | R-304 | 多设备阅读进度同步 | 📋 规划 | WebDAV 已有，设备间自动同步待完成 |
-| R-305 | 有声书完整支持 | ⚠️ 部分 | AudioPlayer 引擎就绪，UI 层待接入 |
-| R-306 | 漫画阅读完整实现 | 📋 规划 | ComicReader 模型就绪，需完整实现阅读器 |
+| R-305 | Web 远程管理完善 | ⚠️ 部分 | WebServer 路由就绪，监听功能需启用 |
+| R-306 | 漫画本地文件导入 | 📋 规划 | 本地 CBZ/CBR 文件导入 UI 未实现 |
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **目标读者**：AI Agent / LLM / 后续开发者
 > **编写原则**：结构化的架构、模块划分、数据流描述，减少歧义，便于 AI 理解和维护
-> **更新日期**：2026-07-01（全面审计：新增 RSS/AI/分组/朗读/WebViewFetcher 等模块）
+> **更新日期**：2026-07-18（全面审计：新增 RSS/AI/分组/朗读/WebViewFetcher/TTS 后端/PDF/漫画等模块）
 
 ---
 
@@ -51,9 +51,9 @@ LegadoHOS/
 │   │       │   ├── preferences/       # 偏好设置（SettingsStore / GlobalConfig）
 │   │       │   └── repository/        # 仓储（组合 Dao 的高阶操作）
 │   │       ├── engine/                # ★ 引擎层（核心逻辑）
-│   │       │   ├── source/            # 书源引擎（12 个文件）
+│   │       │   ├── source/            # 书源引擎（9 个文件）
 │   │       │   ├── search/            # 搜索引擎（降级方案）
-│   │       │   ├── book/              # 书籍解析（8 个文件）
+│   │       │   ├── book/              # 书籍解析（14 个文件）
 │   │       │   ├── audio/             # 音频 / TTS（4 个文件）
 │   │       │   ├── cache/             # 缓存
 │   │       │   ├── download/          # 下载
@@ -62,14 +62,14 @@ LegadoHOS/
 │   │       │   ├── ai/                # AI 书源生成
 │   │       │   └── translation/       # 翻译
 │   │       ├── service/               # 后台服务（9 个）
-│   │       ├── pages/                 # 页面（42 个 .ets/.ts 文件）
+│   │       ├── pages/                 # 页面（49 个 .ets/.ts 文件）
 │   │       ├── components/            # 可复用组件
 │   │       │   ├── reader/            # 阅读器组件（8 个文件）
 │   │       │   ├── ui/                # 通用 UI 组件
 │   │       │   └── common/            # 公共组件
 │   │       ├── napi/                  # QuickJS NAPI 桥接
-│   │       ├── theme/                 # 主题系统
-│   │       ├── util/                  # 工具类（16 个文件）
+│   │       ├── theme/                 # 主题系统（4 个文件）
+│   │       ├── util/                  # 工具类（18 个文件）
 │   │       ├── widget/                # 桌面小部件
 │   │       └── workers/               # Worker 线程（JsEvalWorker）
 │   └── src/mock/                      # Mock 数据
@@ -90,9 +90,9 @@ LegadoHOS/
 ets/
 ├── Application/MyApplication.ts       # 应用入口：初始化数据库、主题
 ├── MainAbility/MainAbility.ts         # UIAbility：生命周期管理，加载首页
-├── model/                             # 纯数据模型（15 个文件，15 个 interface/enum/class）
+├── model/                             # 纯数据模型（16 个文件）
 ├── data/
-│   ├── database/                      # Dao 层：14 个表类，管理 17 张 SQL 表
+    │   ├── database/                      # Dao 层：12 个表类 + RdbUtil + AppDatabase，管理 17 张 SQL 表
 │   │   ├── AppDatabase.ts             # 单例数据库管理器（建表 + 迁移）
 │   │   ├── BookTable.ts               # 书籍表
 │   │   ├── ChapterTable.ts            # 章节表
@@ -105,7 +105,8 @@ ets/
 │   │   ├── CacheTable.ts              # 缓存表（含 txt_toc_rules 子表）
 │   │   ├── SearchResultTable.ts       # 搜索结果表
 │   │   ├── BookGroupTable.ts          # 书架分组表（NEW）
-│   │   └── SearchKeywordTable.ts      # 搜索关键词表（NEW）
+│   │   ├── SearchKeywordTable.ts      # 搜索关键词表（NEW）
+│   │   └── RdbUtil.ts                 # RDB 工具类（建表辅助）
 │   ├── preferences/                   # KV 存储封装（@ohos.data.preferences）
 │   │   ├── SettingsStore.ts           # 全局设置（AI 端点、WebDAV 配置等）
 │   │   └── GlobalConfig.ts            # 书架配置开关
@@ -125,15 +126,21 @@ ets/
 │   │   └── JsExpressionEvaluator.ts   # JS 表达式独立求值（NEW）
 │   ├── search/                        # 搜索（降级方案）
 │   │   └── SearchEngine.ts
-│   ├── book/                          # 书籍格式解析
-│   │   ├── TxtParser.ts
-│   │   ├── DirEpubParser.ts
-│   │   ├── MobiParser.ts
-│   │   ├── PdfParser.ts               # 元数据提取（渲染未集成）
-│   │   ├── ComicReader.ts             # 漫画阅读器模型
-│   │   ├── ChapterManager.ts          # 章节管理器（预加载 + 排序）
-│   │   ├── ContentReplace.ts          # 内容替换引擎
-│   │   └── TextLayout.ts              # 文字排版（分页 + 分行，基于 MeasureText）
+    │   ├── book/                          # 书籍格式解析（14 个文件）
+    │   │   ├── TxtParser.ts               # TXT 解析（章节分割 + 编码检测）
+    │   │   ├── DirEpubParser.ts           # EPUB 目录解析（从 zlib 解压目录读取 OPF/NCX）
+    │   │   ├── MobiParser.ts              # MOBI 解析（PDB 格式，foliate-js 集成）
+    │   │   ├── MobiProbeParser.ts         # MOBI 探测（头部解析 + DRM 检查）
+    │   │   ├── PdfParser.ts               # PDF 解析（元数据 + 目录结构）
+    │   │   ├── ComicReader.ts             # 漫画阅读器模型
+    │   │   ├── ChapterManager.ts          # 章节管理器（预加载 + 排序）
+    │   │   ├── ContentReplace.ts          # 内容替换引擎
+    │   │   ├── TextLayout.ts              # 文字排版（分页 + 分行，基于 MeasureText）
+    │   │   ├── LocalBookEngine.ts         # 本地书籍导入引擎
+    │   │   ├── LocalBookFileUtil.ts       # 本地书文件名工具
+    │   │   ├── EpubJsParser.ts            # EPUB.js 解析器逻辑
+    │   │   ├── EpubParserWebView.ets      # EPUB 隐藏 WebView 解析组件
+    │   │   └── ZipExtractTask.ets         # TaskPool 并发解压任务
 │   ├── audio/                         # 音频播放 + TTS
 │   │   ├── TTSPlayer.ts               # 文字转语音朗读
 │   │   ├── AudioPlayer.ts             # 有声书音频播放
@@ -150,32 +157,43 @@ ets/
 │   │   ├── RssService.ets             # RSS 服务协调（270 行）
 │   │   ├── RssParserByRule.ets        # 规则式 RSS 解析（399 行）
 │   │   └── RssParserDefault.ts        # 标准 RSS/Atom feed 解析
-│   ├── ai/                            # AI 书源生成（NEW）
-│   │   └── AiSourceAgent.ts           # 6 步 LLM 分析引擎（382 行）
+    │   ├── ai/                            # AI 书源生成 + 智能导入（NEW）
+    │   │   ├── AiSourceAgent.ts           # AI 书源生成引擎（6 步 LLM 分析，382 行）
+    │   │   └── AiBookImporter.ts          # AI 书籍导入引擎（抓取 + LLM 分析 + 批量下载）
 │   └── translation/                   # 翻译
 │       └── TranslationEngine.ts
-├── service/                           # 有状态后台服务（9 个）
+├── service/                           # 有状态后台服务（9 个根目录 + 7 个 tts/ 子模块）
 │   ├── BackupService.ts               # 完整备份/恢复
 │   ├── WebDavService.ts               # WebDAV 远程同步
 │   ├── DownloadService.ts             # 下载任务管理
 │   ├── ReadAloudService.ts            # 后台朗读（RemoteObject）
-│   ├── ReadAloudEngine.ets            # 朗读引擎（NEW，352 行）
+│   ├── ReadAloudEngine.ets            # 朗读引擎（双后端：系统 TTS + sherpa-onnx）
 │   ├── WebService.ts                  # HTTP 服务管理
 │   ├── ControllerService.ts           # 全局播放控制
 │   ├── BookshelfTransferService.ts    # 书架导入导出传输（NEW，323 行）
-│   └── SourceChecker.ts               # 书源校验服务（NEW，275 行）
-├── pages/                             # ArkUI 页面组件（42 个文件）
+│   ├── SourceChecker.ts               # 书源校验服务（NEW，275 行）
+│   └── tts/                           # ★ TTS 后端模块（NEW）
+│       ├── ITtsBackend.ets            # TTS 后端接口抽象
+│       ├── SherpaOnnxTtsBackend.ets   # sherpa-onnx 离线神经 TTS
+│       ├── AzureTtsBackend.ets        # Azure 云端 TTS
+│       ├── WorkerTtsBackend.ets       # Worker 线程 TTS
+│       ├── TextNormalizer.ets         # 中文文本规范化
+│       ├── TtsModelManager.ets        # TTS 模型下载/校验/解压管理
+│       └── TtsWorkerMsg.ets           # TTS Worker 通信协议
+├── pages/                             # ArkUI 页面组件（49 个文件）
 ├── components/                        # 可复用 UI 组件
-│   ├── reader/                        # 阅读器组件（8 个）
-│   │   ├── PageView.ets               # 分页视图（翻页动画）
-│   │   ├── StylePanel.ets             # 样式面板
-│   │   ├── ReadBottomMenu.ets         # 底部菜单
-│   │   ├── ReadAloudPanel.ets         # 朗读面板（511 行）
-│   │   ├── TtsControlPanel.ets        # TTS 控制面板
-│   │   ├── ClickAction.ets            # 点击动作定义
-│   │   ├── ClickActionConfig.ets      # 点击区域配置
-│   │   ├── PageTouchHandler.ets       # 触摸事件处理
-│   │   └── CacheDialog.ets            # 缓存管理对话框
+│   ├── reader/                        # 阅读器组件（11 个）
+    │   │   ├── PageView.ets               # 分页视图（翻页动画）
+    │   │   ├── StylePanel.ets             # 样式面板
+    │   │   ├── ReadBottomMenu.ets         # 底部菜单
+    │   │   ├── ReadAloudPanel.ets         # 朗读面板（511 行）
+    │   │   ├── TtsControlPanel.ets        # TTS 控制面板
+    │   │   ├── ClickAction.ts             # 点击动作定义
+    │   │   ├── ClickActionConfig.ets      # 点击区域配置
+    │   │   ├── PageTouchHandler.ets       # 触摸事件处理
+    │   │   ├── CacheDialog.ets            # 缓存管理对话框
+    │   │   ├── CloudflareDialog.ets       # Cloudflare 检测对话框（NEW）
+    │   │   └── LoginDialog.ets            # 书源登录对话框（NEW）
 │   ├── ui/                            # 通用 UI 组件
 │   │   └── BookItem.ets
 │   ├── BookCover.ets                  # 书籍封面
@@ -183,24 +201,30 @@ ets/
 │   ├── WebViewEngine.ets              # 可复用 WebView 引擎组件
 │   └── common/                        # 公共组件
 │       └── LoadingView.ets
-├── theme/                             # 主题/色彩管理
-│   ├── AppTheme.ts                    # 主题管理器（单例）
-│   ├── ColorScheme.ts                 # MD3 色彩方案
-│   └── ThemeMode.ts                   # 主题模式枚举
-├── util/                              # 工具类（16 个文件）
-│   ├── HtmlParser.ts                  # ★ HTML 解析器（951 行，自研）
-│   ├── HtmlUtil.ts                    # HTML 清理
-│   ├── NetUtil.ts                     # 网络请求封装
-│   ├── FileUtil.ts                    # 文件操作
-│   ├── StrUtil.ts                     # 字符串处理
-│   ├── CryptoUtil.ts                  # 加密（MD5/SHA/Base64）
-│   ├── BookCoverUtil.ts               # 封面生成
-│   ├── ChineseConverter.ts            # 繁简转换（NEW，260 行）
-│   ├── ContentCache.ts                # 内容内存缓存（NEW）
-│   ├── ContentCleaner.ts              # 内容清理（NEW，248 行）
-│   ├── ChapterCache.ts                # 章节缓存助手（NEW）
-│   ├── SourceSwitchStore.ts           # 源切换存储（NEW）
-│   └── AppContext.ts                  # 应用上下文单例（NEW）
+├── theme/                             # 主题/色彩管理（4 个文件）
+    │   ├── AppTheme.ts                    # 主题管理器（单例，亮/暗切换，色板持久化）
+    │   ├── ColorScheme.ts                 # MD3 色彩方案（光源/暗源色板）
+    │   ├── ThemeColors.ets                # 统一语义化 Token（background/onBackground/surface 等）
+    │   └── ThemeMode.ts                   # 主题模式枚举 + 配置接口
+├── util/                              # 工具类（18 个文件）
+    │   ├── HtmlParser.ts                  # ★ HTML 解析器（951 行，自研）
+    │   ├── HtmlUtil.ts                    # HTML 清理
+    │   ├── NetUtil.ts                     # 网络请求封装
+    │   ├── FileUtil.ts                    # 文件操作
+    │   ├── StrUtil.ts                     # 字符串处理
+    │   ├── CryptoUtil.ts                  # 加密（MD5/SHA/Base64）
+    │   ├── BookCoverUtil.ts               # 封面生成
+    │   ├── ChineseConverter.ts            # 繁简转换（260 行）
+    │   ├── ContentCache.ts                # 内容内存缓存
+    │   ├── ContentCleaner.ts              # 内容清理（248 行）
+    │   ├── ChapterCache.ts                # 章节缓存助手
+    │   ├── SourceSwitchStore.ts           # 源切换存储
+    │   ├── AppContext.ts                  # 应用上下文单例
+    │   ├── CookieStore.ts                 # Cookie 持久化存储（NEW）
+    │   ├── LoginInfoStore.ts              # 登录信息存储（NEW）
+    │   ├── MangaImageLoader.ts            # 漫画图片加载/缓存/解密（NEW）
+    │   ├── CoverDecoder.ts                # 封面图片解码（NEW）
+    │   └── UiUtil.ets                     # UI 工具函数（NEW）
 ├── napi/                              # NAPI 桥接（ArkTS 侧）
 │   └── quickjs_bridge.ts
 ├── widget/                            # 桌面小部件
@@ -337,7 +361,7 @@ class BookTable {
 
 ## 4. 模型层
 
-### 4.1 核心模型（15 个文件）
+### 4.1 核心模型（16 个文件）
 
 ```
 model/
@@ -355,6 +379,7 @@ model/
 ├── RSSSource.ts      # RSS 源和文章
 ├── RSSImport.ts      # RSS 导入数据模型（Legado 备份格式）
 ├── CacheEntry.ts     # 缓存条目
+├── AudioSource.ts    # 有声书/音频源（NEW）
 └── BookSource.ts     # 书源脚本接口（BookSourceScript）
 ```
 
@@ -417,15 +442,15 @@ interface BookGroupItem {
 
 ```
 engine/source/
-├── SourceExecutor.ts       # ★ 书源执行器（核心协调者，2369 行）
+├── SourceExecutor.ts       # ★ 书源执行器（核心协调者）
 ├── ScriptEngine.ts         # QuickJS 脚本引擎封装
-├── ScriptApi.ts            # JS polyfill + 规则执行器脚本生成（1073 行）
+├── ScriptApi.ts            # JS polyfill + 规则执行器脚本生成
 ├── RuleParser.ts           # 规则解析器（JSONPath / CSS / XPath / 正则）
 ├── RuleAnalyzer.ts         # 规则编排
 ├── AnalyzeByRegex.ts       # 正则 AllInOne 分析
 ├── ExploreEngine.ts        # 发现页引擎
 ├── SourceSwitcher.ts       # 书源切换器
-└── JsExpressionEvaluator.ts # JS 表达式独立求值（NEW）
+└── JsExpressionEvaluator.ts # JS 表达式独立求值
 ```
 
 #### 5.1.1 SourceExecutor — 核心协调者
@@ -468,25 +493,33 @@ SourceExecutor 职责链：
 
 ```
 engine/book/
-├── TxtParser.ts           # TXT 解析（章节分割 + 编码检测）
-├── DirEpubParser.ts       # EPUB 目录解析（从 zlib 解压目录读取 OPF/NCX）
-├── MobiParser.ts          # MOBI 解析（PDB 格式）
-├── PdfParser.ts           # PDF 解析（元数据提取，渲染待集成）
-├── ComicReader.ts         # 漫画阅读器（页面模式 + 缩放模式）
-├── ChapterManager.ts      # 章节管理器（预加载 + 排序）
-├── ContentReplace.ts      # 内容替换引擎（正则替换规则，作用域 + 排序）
-└── TextLayout.ts          # 文字排版（分页 + 分行，基于 MeasureText API）
+├── TxtParser.ts             # TXT 解析（章节分割 + 编码检测）
+├── DirEpubParser.ts         # EPUB 目录解析（从 zlib 解压目录读取 OPF/NCX）
+├── MobiParser.ts            # MOBI/AZW/AZW3 全文解析（foliate-js 集成）
+├── MobiProbeParser.ts       # MOBI 头部探测 + DRM 检查（轻量）
+├── PdfParser.ts             # PDF 解析（元数据 + 目录结构 + 页面渲染）
+├── ComicReader.ts           # 漫画阅读器模型（ComicPageMode/ComicScaleMode）
+├── ChapterManager.ts        # 章节管理器（预加载 + 排序）
+├── ContentReplace.ts        # 内容替换引擎（正则替换规则，作用域 + 排序）
+├── TextLayout.ts            # 文字排版（分页 + 分行，基于 MeasureText API）
+├── LocalBookEngine.ts       # ★ 本地书籍导入引擎（TXT/EPUB/MOBI/PDF/漫画）
+├── LocalBookFileUtil.ts     # 本地书文件名工具（路径→书名提取）
+├── EpubJsParser.ts          # EPUB.js 解析器（通过隐藏 WebView 调用）
+├── EpubParserWebView.ets    # EPUB 解析隐藏 WebView 组件
+└── ZipExtractTask.ets       # TaskPool @Concurrent 解压任务
 ```
 
 ### 5.3 音频引擎（`engine/audio/`）
 
 ```
 engine/audio/
-├── TTSPlayer.ts            # 文字转语音朗读
+├── TTSPlayer.ts            # 文字转语音朗读（旧版，已被 ReadAloudEngine 取代）
 ├── AudioPlayer.ts          # 有声书音频播放
 ├── PlaylistManager.ts      # 播放列表与模式管理
 └── ReadTimer.ts            # 定时关闭（15/30/45/60/90 分钟）
 ```
+
+> TTS 朗读已迁移至 `service/ReadAloudEngine.ets` + `service/tts/` 双后端架构，详见 6.2 节。
 
 ### 5.4 RSS 引擎（`engine/rss/`）— 新增
 
@@ -514,9 +547,11 @@ sourceUrl → HTTP GET
 
 ```
 engine/ai/
-└── AiSourceAgent.ts        # AI 书源生成引擎（382 行）
+├── AiSourceAgent.ts        # AI 书源生成引擎（6 步 LLM 分析）
+└── AiBookImporter.ts       # AI 智能书籍导入引擎（抓取→LLM 分析→源生成→批量下载）
+```
 
-分析流程（6 步）：
+**AiSourceAgent 分析流程（6 步）**：
   1. HOMEPAGE  → 获取首页 HTML，分析页面结构
   2. SEARCH    → 发送搜索请求，分析搜索结果页
   3. BOOK_INFO → 访问书籍详情页，分析信息提取规则
@@ -524,12 +559,17 @@ engine/ai/
   5. CONTENT   → 分析正文页规则
   6. COMPILE   → 汇总生成完整书源 JSON
 
+**AiBookImporter 流程（4 步）**：
+  1. 抓取目标页面 HTML
+  2. LLM 分析页面结构并提取规则
+  3. 自动存入 BookSource 表
+  4. 批量下载章节 → 写入 RDB
+
 依赖：
   - SettingsStore (AI 配置)
   - NetUtil (HTTP 请求)
   - HtmlUtil (HTML 清理)
   - WebViewFetcher (Cloudflare 兜底)
-```
 
 ### 5.6 Web 引擎（`engine/web/`）
 
@@ -570,21 +610,28 @@ TranslationEngine:
 
 ## 6. 服务层
 
-### 6.1 服务总览（9 个服务）
+### 6.1 服务总览（9 个根目录服务 + 6 个 tts/ 子模块）
 
 | 服务 | 文件 | 类型 | 说明 |
 |------|------|------|------|
 | BackupService | service/BackupService.ts | 工具类 | 完整备份/恢复（书架+书源+规则+RSS+设置） |
-| WebDavService | service/WebDavService.ts | 工具类 | WebDAV 远程同步 |
+| WebDavService | service/WebDavService.ts | 工具类 | WebDAV 远程同步（备份+阅读进度） |
 | DownloadService | service/DownloadService.ts | 后台 | 下载任务管理（前台+后台） |
-| ReadAloudService | service/ReadAloudService.ts | 后台+Remote | TTS 朗读服务（跨 Ability 通信） |
-| ReadAloudEngine | service/ReadAloudEngine.ets | 引擎 | 朗读引擎（状态机：播放/暂停/停止/完成，352 行） |
+| ReadAloudService | service/ReadAloudService.ts | 后台+Remote | TTS 朗读服务（跨 Ability 通信，**旧版废弃**） |
+| ReadAloudEngine | service/ReadAloudEngine.ets | 引擎 | ★ 朗读引擎（双后端架构，状态机：播放/暂停/停止/完成） |
 | WebService | service/WebService.ts | 后台 | HTTP 服务管理 |
 | ControllerService | service/ControllerService.ts | 后台 | 全局播放控制、通知 |
-| BookshelfTransferService | service/BookshelfTransferService.ts | 工具类 | 书架导入导出（自动匹配书源、下载目录，323 行） |
-| SourceChecker | service/SourceChecker.ts | 工具类 | 书源校验（搜索/发现/详情/目录/正文多步检查，275 行） |
+| BookshelfTransferService | service/BookshelfTransferService.ts | 工具类 | 书架导入导出（自动匹配书源、下载目录） |
+| SourceChecker | service/SourceChecker.ts | 工具类 | 书源校验（多步检查） |
+| **TTS 后端模块** | service/tts/ | | |
+| ITtsBackend | service/tts/ITtsBackend.ets | 接口 | TTS 后端接口抽象（synthesize/listVoices/setVoice） |
+| SherpaOnnxTtsBackend | service/tts/SherpaOnnxTtsBackend.ets | 实现 | sherpa-onnx + Kokoro 离线神经 TTS |
+| AzureTtsBackend | service/tts/AzureTtsBackend.ets | 实现 | Azure 云端 TTS |
+| WorkerTtsBackend | service/tts/WorkerTtsBackend.ets | 实现 | Worker 线程 TTS |
+| TextNormalizer | service/tts/TextNormalizer.ets | 工具 | 中文文本规范化（数字/日期/标点） |
+| TtsModelManager | service/tts/TtsModelManager.ets | 工具 | TTS 模型下载/校验/解压/版本管理 |
 
-### 6.2 ReadAloudEngine — 朗读引擎（新增）
+### 6.2 ReadAloudEngine — 朗读引擎（双后端架构）
 
 ```
 class ReadAloudEngine {
@@ -597,10 +644,24 @@ class ReadAloudEngine {
   stop(): void                   → 停止
   setSpeed(speed): void          → 动态调整语速
   getCurrentPosition(): number   → 获取当前朗读位置
+  setBackend(backend): void      → 切换 TTS 后端（系统/sherpa-onnx/Azure）
 }
 ```
 
-### 6.3 BookshelfTransferService — 书架传输服务（新增）
+**双后端架构**：
+```
+ITtsBackend 接口 ← 调度层 (ReadAloudEngine)
+  ├── 系统 TTS（兜底，低功耗，无需下载）
+  └── sherpa-onnx + Kokoro（离线神经 TTS，多音色，需下载模型 ~215MB）
+       └── 102 种音色，支持中英文混读
+```
+
+**关键对接**：
+- `synthesize()` 返回 Int16 PCM → `AudioRenderer` writeData 驱动播放
+- 动态采样率切换（16000 / 24000 Hz）
+- 分句队列 + 双缓冲 + 跨章节续读
+
+### 6.3 BookshelfTransferService — 书架传输服务
 
 ```
 exportBookshelf(books?): string           → 导出书架为 JSON
@@ -611,7 +672,7 @@ importBookshelf(json): TransferResult     → 导入书架（批量）
   └── 返回 success/skipped/failed 统计
 ```
 
-### 6.4 SourceChecker — 书源校验服务（新增）
+### 6.4 SourceChecker — 书源校验服务
 
 ```
 check(source, config): CheckResult    → 执行多步校验
@@ -631,7 +692,7 @@ check(source, config): CheckResult    → 执行多步校验
 ```
 MainPage (Tabs)
 ├── Tab 0: BookshelfPage               (书架)
-│   ├── 分组标签切换（全部/未分组/本地/自定义）
+│   ├── 分组标签切换（全部/未分组/本地/漫画/自定义）
 │   ├── 书架配置 (BookshelfConfigDialog)
 │   ├── 分组管理 (BookGroupManageDialog)
 │   ├── URL添加 (AddBookUrlDialog)
@@ -639,15 +700,17 @@ MainPage (Tabs)
 │   ├── 书架导出 (BookshelfExportDialog)
 │   ├── 书架管理 (BookshelfManagePage)
 │   │   └── 批量选择 / 分组筛选 / 导出导入 / 传输
-│   └── click → ReadPage               (阅读)
+│   ├── 本地书籍导入（文件选择器）
+│   └── click → ReadPage (文本) / ComicReadPage (漫画) / ReaderPage (EPUB图文)
 ├── Tab 1: ExplorePage                 (发现/搜索)
 │   ├── ExploreBookPage                (发现书单)
-│   ├── SearchPage                     (搜索历史)
+│   ├── SearchPage                     (搜索页：历史/书架建议/多源并发/精确模式)
+│   ├── SearchContentPage              (书内搜索)
 │   ├── WebViewFetchDialog             (WebView 兜底)
 │   └── click → BookInfoPage           (书籍详情)
 │       ├── ChangeSourceSheet          (切换书源)
 │       ├── "加入书架" → 数据库更新
-│       └── "开始阅读" → ReadPage      (阅读)
+│       └── "开始阅读" → ReadPage/ComicReadPage (阅读)
 ├── Tab 2: RssMainPage                 (RSS 主页)
 │   ├── RssArticlesPage                (文章列表)
 │   │   └── RssReadPage                (文章阅读)
@@ -663,8 +726,11 @@ MainPage (Tabs)
     │   ├── BookSourceEditPage         (编辑书源)
     │   └── RuleSubPage                (规则订阅)
     ├── SettingsPage                   (设置)
+    │   ├── BackupSettingsPage         (备份与恢复)
+    │   └── FontManagerPage            (字体管理)
     ├── AiConfigPage                   (AI 配置)
     ├── AiSourceGeneratePage           (AI 生成书源)
+    ├── AiImportBookPage               (AI 智能导入书籍)
     ├── BookmarkPage                   (书签)
     ├── AboutPage                      (关于)
     ├── WebServicePage                 (Web 服务)
@@ -672,72 +738,81 @@ MainPage (Tabs)
 
 独立页面（通过 router.pushUrl 跳转）：
   ReadPage / BookInfoPage / BookSourcePage / SettingsPage
-  ComicReadPage / SearchPage / ErrorPage / SimplePage
+  ComicReadPage / EpubReadPage / SearchPage / ErrorPage / SimplePage
   WebFetchPage / WebViewFetchDialog / ChangeSourcePage
-  ChapterListPage / ChangeSourcePage
+  ChapterListPage / SearchContentPage / FontManagerPage
+  BackupSettingsPage / AiImportBookPage
 ```
 
-### 7.2 页面文件总览（42 个）
+### 7.2 页面文件总览（49 个）
 
-| 分类 | 文件 | 行数 | 说明 |
-|------|------|------|------|
-| 书架 | BookshelfPage.ets | 789 | 书架主页（分组标签/配置/导入导出） |
-| 书架 | BookshelfManagePage.ets | 320 | 批量管理（选择/筛选/导出导入/传输） |
-| 书架 | BookshelfConfigDialog.ets | — | 书架显示配置 |
-| 书架 | BookshelfExportDialog.ets | — | 导出书架 JSON |
-| 书架 | BookshelfImportDialog.ets | — | 导入书架 JSON |
-| 书架 | AddBookUrlDialog.ets | — | URL 添加书籍 |
-| 书架 | BookGroupManageDialog.ets | — | 分组管理 |
-| 书架 | GroupManageDialog.ets | — | 移动书籍到分组 |
-| 发现 | ExplorePage.ets | 526 | 搜索 + 发现 |
-| 发现 | ExploreBookPage.ets | — | 发现书单列表 |
-| 发现 | SearchPage.ets | — | 搜索历史入口 |
-| 阅读 | ReadPage.ets | 849 | 阅读主页面 |
-| 阅读 | ComicReadPage.ets | 17 | 漫画阅读（占位） |
-| 阅读 | SimplePage.ets | — | 简版阅读视图 |
-| 阅读 | BookmarkPage.ets | — | 书签管理 |
-| 阅读 | ChapterListPage.ets | — | 章节目录 |
-| 阅读 | ChangeSourcePage.ets | — | 换源搜索 |
-| 阅读 | ReadRecordPage.ets | — | 阅读记录 |
-| 详情 | BookInfoPage.ets | — | 书籍详情 |
-| RSS | RssMainPage.ets | 122 | RSS 订阅主页 |
-| RSS | RssArticlesPage.ets | 148 | RSS 文章列表 |
-| RSS | RssReadPage.ets | 309 | RSS 文章阅读 |
-| RSS | RssFavoritesPage.ets | 285 | RSS 收藏 |
-| RSS | RssSortPage.ets | 442 | RSS 排序规则 |
-| RSS | RssSourceManagePage.ets | 228 | RSS 源管理 |
-| RSS | RssSourceEditPage.ets | 229 | RSS 源编辑 |
-| RSS | RssImportDialog.ets | 236 | RSS 源导入 |
-| RSS | RSSPage.ets | — | 旧版 RSS（保留） |
-| 书源 | BookSourcePage.ets | — | 书源列表 |
-| 书源 | BookSourceEditPage.ets | — | 书源编辑 |
-| 书源 | ImportSourceDialog.ets | — | 导入书源 |
-| 书源 | RuleSubPage.ets | — | 规则订阅 |
-| AI | AiConfigPage.ets | — | AI 配置 |
-| AI | AiSourceGeneratePage.ets | 221 | AI 生成书源 |
-| 设置 | SettingsPage.ets | — | 设置 |
-| 设置 | AboutPage.ets | — | 关于 |
-| Web | WebServicePage.ets | — | Web 服务 |
-| Web | WebFetchPage.ets | — | WebView 取内容 |
-| Web | WebViewFetchDialog.ets | — | WebView 兜底对话框 |
-| 通用 | MainPage.ets | — | 4 Tab 主页 |
-| 通用 | MyPage.ets | — | "我的"页面 |
-| 通用 | ErrorPage.ets | — | 错误页面 |
-| Worker | JsEvalWorker.ts | — | Worker 线程 JS 执行 |
+| 分类 | 文件 | 说明 |
+|------|------|------|
+| 书架 | BookshelfPage.ets | 书架主页（分组标签/配置/导入导出） |
+| 书架 | BookshelfManagePage.ets | 批量管理（选择/筛选/导出导入/传输） |
+| 书架 | BookshelfConfigDialog.ets | 书架显示配置 |
+| 书架 | BookshelfExportDialog.ets | 导出书架 JSON |
+| 书架 | BookshelfImportDialog.ets | 导入书架 JSON |
+| 书架 | AddBookUrlDialog.ets | URL 添加书籍 |
+| 书架 | BookGroupManageDialog.ets | 分组管理 |
+| 书架 | GroupManageDialog.ets | 移动书籍到分组 |
+| 发现 | ExplorePage.ets | 搜索 + 发现 |
+| 发现 | ExploreBookPage.ets | 发现书单列表 |
+| 发现 | SearchPage.ets | 搜索页（历史/书架建议/多源并发/精确模式） |
+| 发现 | SearchContentPage.ets | 书内搜索 |
+| 阅读 | ReadPage.ets | 阅读主页面（文本/分页/滚动模式） |
+| 阅读 | ReaderPage.ets | 图文混排阅读页（EPUB/MOBI WebView） |
+| 阅读 | ComicReadPage.ets | 漫画阅读器（缩放手势/阅读方向/自动阅读） |
+| 阅读 | EpubReadPage.ets | EPUB 阅读页（WebView 方案，框架） |
+| 阅读 | SimplePage.ets | 简版阅读视图 |
+| 阅读 | BookmarkPage.ets | 书签管理 |
+| 阅读 | ChapterListPage.ets | 章节目录 |
+| 阅读 | ChangeSourcePage.ets | 换源搜索 |
+| 阅读 | ReadRecordPage.ets | 阅读记录 |
+| 详情 | BookInfoPage.ets | 书籍详情 |
+| RSS | RssMainPage.ets | RSS 订阅主页 |
+| RSS | RssArticlesPage.ets | RSS 文章列表 |
+| RSS | RssReadPage.ets | RSS 文章阅读 |
+| RSS | RssFavoritesPage.ets | RSS 收藏 |
+| RSS | RssSortPage.ets | RSS 排序规则 |
+| RSS | RssSourceManagePage.ets | RSS 源管理 |
+| RSS | RssSourceEditPage.ets | RSS 源编辑 |
+| RSS | RssImportDialog.ets | RSS 源导入 |
+| RSS | RSSPage.ets | 旧版 RSS（保留） |
+| 书源 | BookSourcePage.ets | 书源列表 |
+| 书源 | BookSourceEditPage.ets | 书源编辑 |
+| 书源 | ImportSourceDialog.ets | 导入书源 |
+| 书源 | RuleSubPage.ets | 规则订阅 |
+| AI | AiConfigPage.ets | AI 配置 |
+| AI | AiSourceGeneratePage.ets | AI 生成书源 |
+| AI | AiImportBookPage.ets | AI 智能导入书籍 |
+| 设置 | SettingsPage.ets | 设置（含备份恢复/字体管理入口） |
+| 设置 | BackupSettingsPage.ets | 备份与恢复（WebDAV + 本地） |
+| 设置 | FontManagerPage.ets | 字体管理（导入/预览/批量删除） |
+| 设置 | AboutPage.ets | 关于 |
+| Web | WebServicePage.ets | Web 服务 |
+| Web | WebFetchPage.ets | WebView 取内容 |
+| Web | WebViewFetchDialog.ets | WebView 兜底对话框 |
+| 通用 | MainPage.ets | 4 Tab 主页 |
+| 通用 | MyPage.ets | "我的"页面 |
+| 通用 | ErrorPage.ets | 错误页面 |
+| Worker | JsEvalWorker.ts | Worker 线程 JS 执行 |
 
 ### 7.3 阅读器组件（`components/reader/`）
 
-| 组件 | 文件 | 行数 | 用途 |
-|------|------|------|------|
-| PageView | PageView.ets | 252 | 分页视图 + 翻页动画（滑动/覆盖/无） |
-| StylePanel | StylePanel.ets | 236 | 阅读样式配置面板 |
-| ReadBottomMenu | ReadBottomMenu.ets | 55 | 底部菜单栏 |
-| ReadAloudPanel | ReadAloudPanel.ets | 511 | 朗读控制面板 |
-| TtsControlPanel | TtsControlPanel.ets | 102 | TTS 语速/音色配置浮层 |
-| ClickAction | ClickAction.ts | 81 | 点击动作定义（菜单/翻页前/翻页后/无） |
-| ClickActionConfig | ClickActionConfig.ets | 182 | 点击区域配置面板 |
-| PageTouchHandler | PageTouchHandler.ets | 81 | 触摸事件处理（单击/长按/滑动方向） |
-| CacheDialog | CacheDialog.ets | 322 | 章节缓存管理对话框 |
+| 组件 | 文件 | 用途 |
+|------|------|------|
+| PageView | PageView.ets | 分页视图 + 翻页动画（滑动/覆盖/无） |
+| StylePanel | StylePanel.ets | 阅读样式配置面板 |
+| ReadBottomMenu | ReadBottomMenu.ets | 底部菜单栏 |
+| ReadAloudPanel | ReadAloudPanel.ets | 朗读控制面板（引擎切换/音色/语速/播放控制） |
+| TtsControlPanel | TtsControlPanel.ets | TTS 语速/音色配置浮层 |
+| ClickAction | ClickAction.ts | 点击动作定义（菜单/翻页前/翻页后/无） |
+| ClickActionConfig | ClickActionConfig.ets | 点击区域配置面板 |
+| PageTouchHandler | PageTouchHandler.ets | 触摸事件处理（单击/长按/滑动方向） |
+| CacheDialog | CacheDialog.ets | 章节缓存管理对话框 |
+| CloudflareDialog | CloudflareDialog.ets | Cloudflare 检测对话框 |
+| LoginDialog | LoginDialog.ets | 书源登录对话框 |
 
 ### 7.4 Widget
 
@@ -792,30 +867,51 @@ MainPage (Tabs)
 
 ```
 theme/
-├── AppTheme.ts        # 主题管理器（单例，亮/暗切换，持久化）
+├── AppTheme.ts        # 主题管理器（单例，亮/暗切换，色板持久化）
 ├── ColorScheme.ts     # MD3 色彩方案（光源/暗源色板，A11Y）
+├── ThemeColors.ets    # ★ 统一语义化 Token（background/onBackground/surface 等）
 └── ThemeMode.ts       # 主题类型枚举 + 配置接口
 ```
 
+### 9.2 语义化 Token
+
+所有页面和组件**必须**通过 `ThemeColors` 获取颜色，禁止硬编码。核心 Token：
+
+| Token | 用法 |
+|-------|------|
+| `ThemeColors.background(isDark)` | 页面背景 |
+| `ThemeColors.onBackground(isDark)` | 正文文字 |
+| `ThemeColors.surface(isDark)` | 卡片/浮层背景 |
+| `ThemeColors.onSurface(isDark)` | 卡片上文字 |
+| `ThemeColors.outlineVariant(isDark)` | 分割线/边框 |
+| `ThemeColors.secondaryText(isDark)` | 次要说明文字 |
+| `ThemeColors.primary(isDark)` | 主色调/链接 |
+| `ThemeColors.error(isDark)` | 错误/删除色 |
+
 ---
 
-## 10. 工具层（16 个文件）
+## 10. 工具层（18 个文件）
 
-| 工具 | 文件 | 行数 | 核心能力 |
-|------|------|------|---------|
-| HtmlParser | util/HtmlParser.ts | 951 | 自研 HTML/CSS 解析器，支持 Default 规则、位置索引、排除索引、属性选择器、CSS 伪类 |
-| HtmlUtil | util/HtmlUtil.ts | — | HTML 标签剥离，实体解码，纯文本提取 |
-| NetUtil | util/NetUtil.ts | — | HTTP GET/POST/PUT，UA/编码检测，超时控制 |
-| FileUtil | util/FileUtil.ts | — | 文件读写，目录操作 |
-| StrUtil | util/StrUtil.ts | — | 字符串相似度（Levenshtein/Cosine） |
-| CryptoUtil | util/CryptoUtil.ts | — | MD5/SHA1/SHA256/Base64 |
-| BookCoverUtil | util/BookCoverUtil.ts | — | 文字封面 Canvas 生成，颜色映射 |
-| ChineseConverter | util/ChineseConverter.ts | 260 | 简繁双向转换（OpenCC 词表） |
-| ContentCache | util/ContentCache.ts | 95 | 章节内容内存缓存 |
-| ContentCleaner | util/ContentCleaner.ts | 248 | 广告/脚本/空行清理 |
-| ChapterCache | util/ChapterCache.ts | 17 | 章节内容缓存助手 |
-| SourceSwitchStore | util/SourceSwitchStore.ts | 13 | 换源结果持久化 |
-| AppContext | util/AppContext.ts | 17 | 全局 Context 单例 |
+| 工具 | 文件 | 核心能力 |
+|------|------|---------|
+| HtmlParser | util/HtmlParser.ts | 自研 HTML/CSS 解析器，支持 Default 规则、位置索引、排除索引、属性选择器、CSS 伪类 |
+| HtmlUtil | util/HtmlUtil.ts | HTML 标签剥离，实体解码，纯文本提取 |
+| NetUtil | util/NetUtil.ts | HTTP GET/POST/PUT，UA/编码检测，超时控制 |
+| FileUtil | util/FileUtil.ts | 文件读写，目录操作 |
+| StrUtil | util/StrUtil.ts | 字符串相似度（Levenshtein/Cosine） |
+| CryptoUtil | util/CryptoUtil.ts | MD5/SHA1/SHA256/Base64 |
+| BookCoverUtil | util/BookCoverUtil.ts | 文字封面 Canvas 生成，颜色映射 |
+| ChineseConverter | util/ChineseConverter.ts | 简繁双向转换（OpenCC 词表） |
+| ContentCache | util/ContentCache.ts | 章节内容内存缓存 |
+| ContentCleaner | util/ContentCleaner.ts | 广告/脚本/空行清理，formatKeepImg 图片保留 |
+| ChapterCache | util/ChapterCache.ts | 章节内容缓存助手 |
+| SourceSwitchStore | util/SourceSwitchStore.ts | 换源结果持久化 |
+| AppContext | util/AppContext.ts | 全局 Context 单例 |
+| CookieStore | util/CookieStore.ts | Cookie 持久化存储 |
+| LoginInfoStore | util/LoginInfoStore.ts | 登录信息存储 |
+| MangaImageLoader | util/MangaImageLoader.ts | 漫画图片加载/缓存/解密/进度回调 |
+| CoverDecoder | util/CoverDecoder.ts | 封面图片解码 |
+| UiUtil | util/UiUtil.ets | UI 工具函数（颜色/布局/设备信息） |
 
 ---
 
@@ -1013,6 +1109,30 @@ BookshelfTransferService.importBookshelf(json)
 **问题**：Legado RSS 源有标准 RSS 和规则式两种格式。
 **决策**：RssService 根据 ruleArticles 字段自动选择 RssParserDefault（标准 XML 解析）或 RssParserByRule（基于 Legado 规则提取）。
 **影响**：完整兼容 Legado RSS 源生态。
+
+### D-011: TTS 双后端架构
+
+**问题**：系统 TTS 音色少、自然度受限、离线不可控。
+**决策**：ReadAloudEngine 引入 `ITtsBackend` 接口抽象，系统 TTS 为基础后端，sherpa-onnx + Kokoro 为高品质后端。切换时动态重建 AudioRenderer（采样率 16000/24000）。
+**影响**：保留低功耗兜底 + 离线高质量双选择，但模型 ~215MB 需用户主动下载。
+
+### D-012: 漫画整页/条漫双模式
+
+**问题**：漫画书源有页模式和条漫（长图滚动）两种阅读方式。
+**决策**：ComicReadPage 支持 4 种阅读模式（条漫/左→右/右→左/单页全屏），通过 SettingsStore 持久化。图片下载缓存到沙箱，支持防盗链 Referer。
+**影响**：对齐安卓版漫画阅读体验，但图片缓存增加了沙箱空间占用。
+
+### D-013: TaskPool 替代 Worker 做解压
+
+**问题**：EPUB 解压在主线程执行导致 ANR，Worker 创建需要 EAWorker 被 WebView 占用。
+**决策**：改用 TaskPool `@Concurrent` 函数进行 ZIP 解压，不消耗 EAWorker 资源。
+**影响**：避免主线程卡顿，但 `@Concurrent` 函数限制不能调用同文件的其他函数。
+
+### D-014: PDF 原生渲染（WebView）
+
+**问题**：鸿蒙无原生 PDF 渲染 API。
+**决策**：利用 WebView 加载 PDF 文件实现渲染，支持横竖屏切换、裁边显示、双页模式。
+**影响**：无需第三方库，但依赖 WebView 能力和 PDF 的浏览器兼容性。
 
 ---
 

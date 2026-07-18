@@ -1,7 +1,7 @@
 # 备份与同步模块设计
 
 > 目标：沉淀 Android 版 Legado 备份/恢复和 WebDAV 同步的产品规格，并对照当前 LegadoHOS 鸿蒙实现，明确已实现、部分实现和未实现范围。
-> 更新日期：2026-07-03
+> 更新日期：2026-07-18
 
 ---
 
@@ -96,7 +96,7 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 | W-006 | Basic Auth | HTTP Basic 认证（base64） | 已实现 | `getAuthHeader()` |
 | W-007 | 云端备份列表 | 列出 webdav 目录下所有 `.zip` 文件 | 已实现 | `listBackups()` |
 | W-008 | 云端备份恢复 | 下载备份 → 解压 → 恢复 | 已实现 | `BackupService.restoreFromWebDav()` |
-| W-009 | 备份目录结构 | `{root}/legado/backup*.zip` | 已实现 | `BACKUP_DIR = 'legado'` |
+| W-009 | 备份目录结构 | `{root}/legado/backup*.zip` | 已实现 | 用户可配置路径，不再硬编码 `legado` 子目录 |
 | W-010 | 阅读进度上传 | 上传 `progress_{name}_{author}.json` | 已实现 | `uploadBookProgress()` |
 | W-011 | 阅读进度下载 | 下载单书进度 | 已实现 | `downloadBookProgress()` |
 | W-012 | 全量进度同步 | 遍历所有书籍双向合并（时间戳/进度对比） | 已实现 | `syncAllProgress()` |
@@ -174,12 +174,14 @@ Android 参考实现来自 `/Users/hjianhao/code/ai/legado-with-MD3`：
 ### 4.2 WebDAV 数据结构
 
 ```
-{serverUrl}/{path}/legado/
+{serverUrl}/{path}/
   ├── backup_2026-07-03.zip
   ├── backup_2026-07-02.zip
   ├── progress_书名_作者.json
   ├── progress_书名_作者.json
   └── ...
+
+（路径前缀 `path` 可配置，默认 `legado`）
 ```
 
 ### 4.3 设置存储键

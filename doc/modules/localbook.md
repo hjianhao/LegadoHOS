@@ -14,7 +14,8 @@
              ├→ [EPUB] DirEpubParser.parse() 从目录解析
              ├→ [TXT]  TxtParser.parse()
              ├→ [MOBI/AZW/AZW3] MobiProbeParser.probe()（只解析头部并检查 DRM）
-             └→ [PDF]  PdfParser.parse()
+             ├→ [MOBI/AZW/AZW3] MobiParser.parse()（foliate-js 解析 KF6/KF8 全文）
+             └→ [PDF]  PdfParser.parse() + WebView 渲染（PdfRenderPage.ets）
                    ↓
              BookTable.insertBook()      ← books 表
              ChapterTable.insertChapters() ← chapters 表（EPUB 不存 content）
@@ -241,15 +242,24 @@ ChapterListPage 的 `ensureAscendingOrder()` 对本地书（`origin='本地'`）
 | 文件 | 说明 |
 |------|------|
 | `engine/book/LocalBookEngine.ts` | 导入引擎入口 |
+| `engine/book/LocalBookFileUtil.ts` | 本地书文件名工具（路径→书名） |
 | `engine/book/DirEpubParser.ts` | 目录解析器（从解压目录读取 OPF/NCX） |
+| `engine/book/EpubJsParser.ts` | EPUB.js 解析器逻辑（通过隐藏 WebView 调用） |
+| `engine/book/EpubParserWebView.ets` | EPUB 隐藏 WebView 解析组件 |
+| `engine/book/MobiParser.ts` | MOBI/AZW/AZW3 全文解析（foliate-js 集成） |
+| `engine/book/MobiProbeParser.ts` | MOBI 头部探测 + DRM 检查 |
+| `engine/book/PdfParser.ts` | PDF 元数据/目录解析 |
+| `engine/book/TxtParser.ts` | TXT 解析 |
 | `engine/book/ZipExtractTask.ets` | TaskPool `@Concurrent` 解压任务 |
 | `engine/book/EpubParser.ts` | **已移除**（旧 ZIP 解析器） |
 | `workers/ZipExtractWorker.ts` | **已移除**（改用 TaskPool） |
 | `engine/EpubEngineConfig.ets` | 双引擎配置 |
 | `util/HtmlUtil.ts` | HTML 清洗（`toPlainText`/`stripHtml`） |
 | `pages/ReadPage.ets` | 小说阅读页 |
-| `pages/ReaderPage.ets` | 图文混排阅读页（框架） |
-| `utils/EpubServer.ets` | HTTP 服务器（框架） |
+| `pages/ReaderPage.ets` | 图文混排阅读页（WebView + EPUB.js/foliate-js） |
+| `pages/EpubReadPage.ets` | EPUB 阅读页（占位，开发中） |
+| `pages/PdfRenderPage.ets` | PDF 渲染阅读页（WebView） |
+| `util/EpubServer.ets` | HTTP 服务器（框架） |
 | `pages/ChapterListPage.ets` | 章节目录列表 |
 | `pages/BookshelfPage.ets` | 书架页（导入入口） |
 | `components/BookCover.ets` | 封面组件（支持本地 `file://` 路径） |
@@ -320,8 +330,9 @@ ChapterListPage 的 `ensureAscendingOrder()` 对本地书（`origin='本地'`）
 - [x] **EpubServer**：TCP Socket HTTP 服务，支持 EPUB 目录和 MOBI/AZW Range 请求
 - [x] **ReaderPage**：EPUB.js 与 foliate-js 双引擎，复用目录、翻页、样式和进度 UI
 - [x] **双向通信**：通过事件轮询同步目录、元数据、定位、点击区域和错误
-- [ ] **MOBI/AZW 朗读**：从 foliate 当前/相邻 section 提取纯文本并接入鸿蒙 TTS
-- [ ] **MOBI/AZW 封面落盘**：首次解析后把 `getCover()` 结果写入书架封面缓存
+- [x] **PDF 阅读**：WebView 原生 PDF 渲染 + 横竖屏切换 + 裁边 + 双页模式
+- [x] **MOBI/AZW 朗读**：从 foliate 当前/相邻 section 提取纯文本并接入鸿蒙 TTS
+- [x] **MOBI/AZW 封面落盘**：首次解析后把 `getCover()` 结果写入书架封面缓存
 
 ### P2 - 清理
 
