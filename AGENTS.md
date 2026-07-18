@@ -128,6 +128,13 @@ cd <repo-root>
 - **书源引擎**: `ets/engine/source/`
 
 - **临时目录**: 所有中间过程生成的临时文件放到临时目录下。`tmp`
+- **文档目录**: 所有文档放在 `doc`
+
+### 文档说明
+'doc/source.md' : 书源规则
+'doc/verified_source.json' : 用于测试过的书源配置
+'doc/ref' : 参考文档
+'doc/modules' : 具体功能的设计
 
 ## 参考项目
 - **Android 版 Legado（参考实现）**: `/Users/hjianhao/code/ai/legado-with-MD3`

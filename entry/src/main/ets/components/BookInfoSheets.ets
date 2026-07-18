@@ -12,7 +12,7 @@
  *
  * 使用 CustomDialog + DialogAlignment.Bottom 模拟 BottomSheet 效果
  */
-import { BookSource } from '../model/BookSource';
+import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { AppDatabase } from '../data/database/AppDatabase';
@@ -139,10 +139,16 @@ export struct ChangeSourceSheet {
   bookName: string = '';
   bookAuthor: string = '';
   currentOriginUrl: string = '';
+  /** 单章换源模式：仅改变标题提示与点击行为（直接回调，不弹"作为新书"选项） */
+  singleChapterMode: boolean = false;
+  /** 是否允许"作为新书加入书架"（阅读页关闭） */
+  allowAddAsNew: boolean = true;
   @State keyword: string = '';
   @State results: SearchResult[] = [];
   @State isSearching: boolean = false;
   @State searchProgress: string = '';
+  /** 对齐 Legado "校验作者" 开关 */
+  @State checkAuthor: boolean = true;
   onReplace?: (result: SearchResult) => void;
   onAddAsNew?: (result: SearchResult) => void;
 
@@ -186,9 +192,10 @@ export struct ChangeSourceSheet {
     const matched = expandedSources.filter((r: SearchResult) => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (rname !== targetName) return false;
-      if (targetAuthor) {
+      // 对齐 Legado: !checkAuthor || fAuthor.contains(author)
+      if (this.checkAuthor && targetAuthor) {
         const rauthor = (r.author || '').replace(/\s/g, '');
-        if (!rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
+        if (rauthor && !rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
       }
       return true;
     });
@@ -286,6 +293,7 @@ export struct ChangeSourceSheet {
 	          // 检查是否已取消
 	          if (!this.searching) return;
 	          this.searchProgress = '已搜 ' + processed + '/' + total + ' 个源，找到 ' + merged.length + ' 条';
+          this.rawResults_ = merged;
 	          // 增量更新结果列表：筛选 + 展开逐源展示
 	          const filtered = this.filterResults(merged);
 	          if (filtered.length > 0) {
@@ -304,11 +312,15 @@ export struct ChangeSourceSheet {
 	              return sb - sa;
 	            });
 	          }
-	        }
+	        },
+	        1,
+	        // 关闭面板时真正取消底层搜索任务（对齐 Legado searchJob?.cancel()）
+	        () => !this.searching
 	      );
 
       // 对齐 Legado：搜索结果中只保留同书名/同作者的
       const filtered = this.filterResults(rawResults);
+      this.rawResults_ = rawResults;
 
       // 展开合并结果：一条 SearchResult 可能包含多个源（sourceOrigins），换源面板需要逐源展示
       this.results = this.expandCachedSources(filtered).sort((a: SearchResult, b: SearchResult) => {
@@ -340,24 +352,37 @@ export struct ChangeSourceSheet {
   private filterResults(raw: SearchResult[]): SearchResult[] {
     const targetName = this.bookName.replace(/\s/g, '');
     if (!targetName) return raw;
+    const targetAuthor = this.bookAuthor.replace(/\s/g, '');
     return raw.filter(r => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (!rname) return false;
       // 放宽匹配：精确匹配 + 互相包含（含最小长度门限），防止残缺书名被误匹配
-      if (rname === targetName) return true;
-      // rname 完全包含 targetName（搜索结果书名包含完整的目标书名）
-      if (rname.includes(targetName)) return true;
-      // targetName 包含 rname：仅当 rname 长度 ≥ 4 个非英文且 ≥ targetName 的 80% 才通过
-      if (targetName.includes(rname)) {
+      let nameMatched = false;
+      if (rname === targetName) {
+        nameMatched = true;
+      } else if (rname.includes(targetName)) {
+        // rname 完全包含 targetName（搜索结果书名包含完整的目标书名）
+        nameMatched = true;
+      } else if (targetName.includes(rname)) {
+        // targetName 包含 rname：仅当 rname 长度 ≥ 4 个非英文且 ≥ targetName 的 80% 才通过
         const cnLen = (s: string): number => s.replace(/[a-zA-Z0-9]/g, '').length;
         const rl = cnLen(rname);
         const tl = cnLen(targetName);
-        if (rl >= 4 && rl >= tl * 0.8) return true;
+        if (rl >= 4 && rl >= tl * 0.8) nameMatched = true;
       }
-      // 去核心分隔符后的精确匹配
-      const rcore = rname.replace(/[的之·•\-—\s（(）)]/g, '');
-      const tcore = targetName.replace(/[的之·•\-—\s（(）)]/g, '');
-      return rcore === tcore;
+      if (!nameMatched) {
+        // 去核心分隔符后的精确匹配
+        const rcore = rname.replace(/[的之·•\-—\s（(）)]/g, '');
+        const tcore = targetName.replace(/[的之·•\-—\s（(）)]/g, '');
+        nameMatched = rcore === tcore;
+      }
+      if (!nameMatched) return false;
+      // 校验作者（对齐 Legado checkAuthor 开关）；结果无作者信息时保留
+      if (this.checkAuthor && targetAuthor) {
+        const rauthor = (r.author || '').replace(/\s/g, '');
+        if (rauthor && !rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
+      }
+      return true;
     });
   }
 
@@ -365,7 +390,7 @@ export struct ChangeSourceSheet {
     Column() {
       // 标题栏
       Row() {
-        Text('更换书源').fontSize(16).fontWeight(FontWeight.Bold)
+        Text(this.singleChapterMode ? '单章换源' : '更换书源').fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text('✕').fontSize(16).fontColor('#666') }
           .width(32).height(32).backgroundColor('transparent')
@@ -390,6 +415,24 @@ export struct ChangeSourceSheet {
           .backgroundColor(ThemeColors.outlineVariant(this.isDark))
           .fontColor(ThemeColors.onBackground(this.isDark)).borderRadius(18)
           .onClick(() => { this.cachedSources = []; this.searchSources(); })
+      }
+      .width('100%').padding({ left: 16, right: 16, bottom: 4 })
+
+      // 校验作者开关（对齐 Legado checkAuthor）
+      Row() {
+        Text('校验作者').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+        Toggle({ type: ToggleType.Checkbox, isOn: this.checkAuthor })
+          .selectedColor('#0078D7')
+          .margin({ left: 6 })
+          .onChange((isOn: boolean) => {
+            this.checkAuthor = isOn;
+            // 已有结果按新开关重新过滤
+            if (this.cachedSources.length > 0) {
+              this.showCachedSources();
+            } else if (this.rawResults_.length > 0) {
+              this.results = this.sortResults_(this.expandCachedSources(this.filterResults(this.rawResults_)));
+            }
+          })
       }
       .width('100%').padding({ left: 16, right: 16, bottom: 4 })
 
@@ -445,32 +488,68 @@ export struct ChangeSourceSheet {
               .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
             }
             .border({ width: { bottom: 0.5 }, color: '#EEEEEE' })
-            .onClick(() => {
-              if (this.onReplace) this.onReplace(item);
-              this.searching = false;
-              this.controller.close();
-            })
+            .onClick(() => { this.onResultClick_(item); })
           })
         }
         .layoutWeight(1).width('100%')
-      }
-
-      // 底部"作为新书"按钮
-      if (!this.isSearching && this.results.length > 0) {
-        Button('作为新书加入书架').fontSize(14).fontColor('#0078D7')
-          .backgroundColor(Color.Transparent).width('100%').height(44)
-          .margin({ top: 4 })
-          .onClick(() => {
-            if (this.results.length > 0) {
-              // 用第一个结果（或其他方式让用户选择）作为新书
-              UiUtil.showToast(this.getUIContext(), { message: '长按列表项可作为新书加入', duration: 2000 });
-            }
-          })
       }
     }
     .width('100%').height('70%')
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
+  }
+
+  /** 网络搜索的原始结果（用于"校验作者"开关切换后本地重过滤） */
+  private rawResults_: SearchResult[] = [];
+
+  /** 点击候选源：对齐 Legado —— 可选择替换当前书籍或作为新书添加 */
+  private onResultClick_(item: SearchResult): void {
+    if (this.singleChapterMode || !this.allowAddAsNew) {
+      this.confirmReplace_(item);
+      return;
+    }
+    ActionSheet.show({
+      title: item.name || '',
+      message: (item.origin || '') + (item.author ? ' · ' + item.author : ''),
+      sheets: [
+        {
+          title: '替换当前书籍',
+          action: () => { this.confirmReplace_(item); }
+        },
+        {
+          title: '作为新书加入书架',
+          action: () => {
+            if (this.onAddAsNew) this.onAddAsNew(item);
+            this.searching = false;
+            this.controller.close();
+          }
+        },
+      ]
+    });
+  }
+
+  private confirmReplace_(item: SearchResult): void {
+    if (this.onReplace) this.onReplace(item);
+    this.searching = false;
+    this.controller.close();
+  }
+
+  /** 候选源排序：当前源置底，书名精确匹配与多来源优先 */
+  private sortResults_(list: SearchResult[]): SearchResult[] {
+    return list.sort((a: SearchResult, b: SearchResult) => {
+      let sa = 0;
+      let sb = 0;
+      if (a.originUrl === this.currentOriginUrl) sa -= 1000;
+      if (b.originUrl === this.currentOriginUrl) sb -= 1000;
+      const na = (a.name || '').replace(/\s/g, '');
+      const nb = (b.name || '').replace(/\s/g, '');
+      const bn = this.bookName.replace(/\s/g, '');
+      if (na === bn) sa += 50;
+      if (nb === bn) sb += 50;
+      sa += (a.sourceCount || 1);
+      sb += (b.sourceCount || 1);
+      return sb - sa;
+    });
   }
 }
 
@@ -794,6 +873,67 @@ export struct RemarkEditDialog {
     }
     .width('100%').height(280)
     .backgroundColor('#FFFFFF')
+    .borderRadius({ topLeft: 16, topRight: 16 })
+  }
+}
+
+
+// =====================================================================
+// ChapterPickSheet — 单章换源的目标章节选择弹窗
+// 对齐 Legado ChangeChapterSource: 选中源后展示其目录，用户挑选要加载的章节
+// =====================================================================
+@CustomDialog
+export struct ChapterPickSheet {
+  controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
+  /** 新源的目录 */
+  chapters: BookSourceChapter[] = [];
+  /** 预选章节（按原阅读位置匹配） */
+  currentIndex: number = 0;
+  onPick?: (index: number) => void;
+  private scroller: Scroller = new Scroller();
+
+  aboutToAppear(): void {
+    // 滚动到预选章节附近
+    if (this.currentIndex > 2) {
+      setTimeout(() => { this.scroller.scrollToIndex(this.currentIndex - 2); }, 100);
+    }
+  }
+
+  build() {
+    Column() {
+      Row() {
+        Text('选择章节').fontSize(16).fontWeight(FontWeight.Bold)
+        Blank()
+        Button() { Text('✕').fontSize(16).fontColor('#666') }
+          .width(32).height(32).backgroundColor('transparent')
+          .onClick(() => { this.controller.close(); })
+      }
+      .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
+
+      List({ scroller: this.scroller }) {
+        ForEach(this.chapters, (ch: BookSourceChapter, index: number) => {
+          ListItem() {
+            Text(ch.title || ('第 ' + (index + 1) + ' 节'))
+              .fontSize(14)
+              .fontColor(index === this.currentIndex ? '#0078D7' : ThemeColors.onBackground(this.isDark))
+              .fontWeight(index === this.currentIndex ? FontWeight.Bold : FontWeight.Normal)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+          }
+          .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
+          .onClick(() => {
+            if (this.onPick) this.onPick(index);
+            this.controller.close();
+          })
+        }, (ch: BookSourceChapter, index: number) => index + '|' + (ch.url || ''))
+      }
+      .layoutWeight(1).width('100%')
+    }
+    .width('100%').height('70%')
+    .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

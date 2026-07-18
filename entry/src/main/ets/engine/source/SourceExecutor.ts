@@ -293,7 +293,8 @@ export class SourceExecutor {
   async search(
     keyword: string, sources: BookSource[],
     onProgress?: (merged: SearchResult[], processed: number, total: number) => void,
-    page: number = 1
+    page: number = 1,
+    isAborted?: () => boolean
   ): Promise<SearchResult[]> {
     if (!this.engineInitialized) await this.initialize();
     if (sources.length === 0) return [];
@@ -448,19 +449,20 @@ export class SourceExecutor {
         // 单个源失败/超时不影响其他源
       } finally {
         processedCount++;
-        // 每完成一个源都回调（无论是否有结果）
-        if (onProgress) {
+        // 每完成一个源都回调（无论是否有结果）；已取消时不再回调
+        if (onProgress && !(isAborted && isAborted())) {
           onProgress(Array.from(mergedMap.values()), processedCount, total);
         }
       }
     };
 
-    // 并发池：逐个启动源，每完成一个就立即回调
+    // 并发池：逐个启动源，每完成一个就立即回调；isAborted 为 true 时停止派发新源
     const workerCount = Math.min(concurrency, total);
     const workers: Promise<void>[] = [];
 
     const worker = async (): Promise<void> => {
       while (nextIdx < total) {
+        if (isAborted && isAborted()) break;
         const i = nextIdx++;
         await runOneSource(sources[i]);
       }
@@ -731,7 +733,7 @@ export class SourceExecutor {
           const bodyText = wvResult.html;
           if (bodyText && bodyText.length > 100) {
             console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
-            return this.parseResponse(bodyText, source, baseUrl, 0);
+            return await this.parseResponse(bodyText, source, baseUrl, 0, finalUrl);
           }
         } catch (_wv) { /* WebView failed, try direct */ }
       } else {
@@ -768,7 +770,7 @@ export class SourceExecutor {
       const hexDecoded = this.tryHexDecode_(bodyText);
       const parsedBody = hexDecoded || bodyText;
 
-      const httpResults = this.parseResponse(parsedBody, source, baseUrl, 0);
+      const httpResults = await this.parseResponse(parsedBody, source, baseUrl, 0, finalUrl);
 
       // HTTP 返回 200 但 CSS 提取 0 条且响应不是 JSON → WebView 兜底（JS 动态渲染的站点）
       if (httpResults.length === 0 && !parsedBody.trim().startsWith('{') && !parsedBody.trim().startsWith('[')
@@ -778,7 +780,7 @@ export class SourceExecutor {
           const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
           if (wvResult.html && wvResult.html.length > 100) {
             const wvParsed = this.tryHexDecode_(wvResult.html) || wvResult.html;
-            const wvResults = this.parseResponse(wvParsed, source, baseUrl, 0);
+            const wvResults = await this.parseResponse(wvParsed, source, baseUrl, 0, finalUrl);
             if (wvResults.length > 0) {
               console.info('[SrcEx] WebView fallback got', wvResults.length, 'results for', source.sourceName);
               return wvResults;
@@ -805,7 +807,8 @@ export class SourceExecutor {
           const wvHtml = wvResult.html;
           if (wvHtml && wvHtml.length > 100) {
             console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);
-            return this.parseResponse(this.tryHexDecode_(wvHtml) || wvHtml, source, baseUrl, Date.now() - Date.now());
+            return await this.parseResponse(this.tryHexDecode_(wvHtml) || wvHtml, source, baseUrl,
+              Date.now() - Date.now(), finalUrl);
           }
         } catch (_wv) { /* WebView fallback also failed */ }
       }
@@ -910,7 +913,9 @@ export class SourceExecutor {
 
   /** 将搜索 HTML dump 到日志（用于诊断） */
   /** 解析搜索响应：先 JSON，再 HTML，再 Fallback */
-  private parseResponse(bodyText: string, source: BookSource, baseUrl: string, duration: number): SearchResult[] {
+  private async parseResponse(
+    bodyText: string, source: BookSource, baseUrl: string, duration: number, ruleUrl: string = baseUrl
+  ): Promise<SearchResult[]> {
     // JSON 直接解析（API 类书源）
     try {
       const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
@@ -928,25 +933,38 @@ export class SourceExecutor {
 
     // HtmlParser + CSS 选择器
     if (source.ruleSearchList) {
-      const results = this.extractWithParser(bodyText, source, baseUrl);
+      const results = await this.extractWithParser(bodyText, source, baseUrl, ruleUrl);
       if (results.length > 0) {
         console.info('[SrcEx] Parser CSS:', results.length, 'from', source.sourceName);
         return results;
       }
     }
 
-    // Fallback: CSS 规则未命中时（可能是网站改版），尝试通用提取
+    // 发现页有明确的书籍列表规则。规则未命中时不能把页面导航链接当成书籍，
+    // 否则分类页会混入“首页、榜单、帮助”等无关条目。返回空列表后，调用方
+    // 仍会按既有流程尝试 WebView；这也更接近 Android 版按 bookList 解析的语义。
+    if (source.isExploreRequest) {
+      console.warn('[SrcEx] Explore list rule matched 0 items for', source.sourceName,
+        '- skipping generic link fallback');
+      return [];
+    }
+
+    // Fallback: 普通搜索 CSS 规则未命中时（可能是网站改版），尝试通用提取
     if (source.ruleSearchList) {
       console.warn('[SrcEx] CSS rule found 0 items for configured source', source.sourceName,
         'ruleSearchList=' + source.ruleSearchList + ', trying fallback extraction');
       // 先用通用表格提取（table.grid@tr!0 / table@tr!0），再用 <a> 标签兜底
-      const tableResults = this.extractWithParser(bodyText, { ...source, ruleSearchList: 'table.grid@tr!0' }, baseUrl);
+      const tableResults = await this.extractWithParser(
+        bodyText, { ...source, ruleSearchList: 'table.grid@tr!0' }, baseUrl, ruleUrl
+      );
       if (tableResults.length > 0) {
         console.info('[SrcEx] Table fallback:', tableResults.length, 'items from', source.sourceName);
         return tableResults;
       }
       // 再尝试不带 .grid 限定
-      const tableResults2 = this.extractWithParser(bodyText, { ...source, ruleSearchList: 'table@tr!0' }, baseUrl);
+      const tableResults2 = await this.extractWithParser(
+        bodyText, { ...source, ruleSearchList: 'table@tr!0' }, baseUrl, ruleUrl
+      );
       if (tableResults2.length > 0) {
         console.info('[SrcEx] Table fallback (no grid):', tableResults2.length, 'items from', source.sourceName);
         return tableResults2;
@@ -2411,7 +2429,8 @@ export class SourceExecutor {
    * Legado 常见写法：bookList 整段 @js 脚本，核心就是
    * java.getElement('css')（或先赋给变量再传入），其余分支多为浏览器验证兜底。
    * 参照 Android AnalyzeRule.getElement：对响应体做 JSoup CSS 查询，
-   * 因此取脚本中第一个 java.getElement(s)(...) 的选择器即等价。
+   * 只有脚本内恰好一个 java.getElement(s)(...) 时，静态取该选择器才等价。
+   * 多分支脚本必须先执行分支条件，不能固定取第一个选择器。
    * 无法化简时返回空串（调用方按 0 条处理，走兜底逻辑）。
    */
   private reduceJsListRule(rule: string): string {
@@ -2423,8 +2442,10 @@ export class SourceExecutor {
     while ((am = assignRe.exec(code)) !== null) {
       varAssigns.set(am[1], am[2]);
     }
-    // 找第一个 java.getElement(...) / java.getElements(...)（字面量或变量）
-    const cm = code.match(/java\.getElements?\(\s*([^)]+)\)/);
+    // 仅允许唯一调用做静态兜底；多个调用通常属于条件分支。
+    const calls = code.match(/java\.getElements?\s*\([^)]*\)/g) || [];
+    if (calls.length !== 1) return '';
+    const cm = calls[0].match(/java\.getElements?\s*\(\s*([^)]+)\)/);
     if (cm) {
       const arg = cm[1].trim();
       const lit = arg.match(/^['"`]([^'"`]+)['"`]$/);
@@ -2435,13 +2456,94 @@ export class SourceExecutor {
     return '';
   }
 
-  private extractWithParser(body: string, source: BookSource, baseUrl: string): SearchResult[] {
+  /**
+   * 执行 Android Legado 常见的 @js: 列表规则。
+   *
+   * Android JS 可直接返回 java.getElements(selector) 得到的元素集合。QuickJS
+   * 无法跨 NAPI 传递 HtmlElement，因此把字面量 getElement(s) 调用替换为其
+   * 选择器字符串，再执行原有 JS 条件表达式，最后由本地 HtmlParser 查询。
+   * 只有单一 getElement(s) 调用才允许静态化兜底，避免条件分支选错。
+   */
+  private async resolveJsListRule(rule: string, source: BookSource, ruleUrl: string): Promise<string> {
+    const code = rule.trimStart().replace(/^@js:/i, '').trim();
+    if (!code) return '';
+    let replacements = 0;
+    const selectorCode = code.replace(
+      /java\.getElements?\s*\(\s*(['"`])([^'"`]*)\1\s*\)/g,
+      (_match: string, _quote: string, selector: string): string => {
+        replacements++;
+        return JSON.stringify(selector);
+      }
+    );
+    const raw = replacements > 0 ? await JsExpressionEvaluator.evaluate(selectorCode, {
+      baseUrl: ruleUrl,
+      source: source,
+      jsLib: source.jsLib || '',
+      variableBlob: source.variableComment || '',
+    }) : '';
+    if (raw && raw !== 'null' && raw !== 'undefined') {
+      try {
+        const parsed = JSON.parse(raw) as Object;
+        const selector = typeof parsed === 'string' ? parsed as string : String(parsed);
+        if (selector.trim()) return selector.trim();
+      } catch (_e) {
+        const selector = raw.replace(/^['"`]|['"`]$/g, '').trim();
+        if (selector) return selector;
+      }
+    }
+    const reduced = this.reduceJsListRule(rule);
+    if (!reduced && replacements > 1) {
+      console.warn('[SrcEx] Failed to evaluate conditional @js: list rule for', source.sourceName,
+        'baseUrl=' + ruleUrl.substring(0, 160));
+    }
+    return reduced;
+  }
+
+  /**
+   * 解析 Android Legado 字段规则中的整段 {{JS表达式}} 动态规则。
+   *
+   * Android AnalyzeRule.SourceRule.makeUpRule 会先以当前响应 URL 作为 baseUrl
+   * 求值 {{...}}，再把返回的字符串作为真正的字段规则执行。这里仅处理
+   * 整段模板，避免误改 {{@@规则}}固定文本 等已有的复合提取语法。
+   */
+  private async resolveDynamicRuleTemplate(
+    rule: string, source: BookSource, ruleUrl: string
+  ): Promise<string> {
+    if (!rule) return '';
+    const match = rule.trim().match(/^\{\{([\s\S]*)\}\}$/);
+    if (!match) return rule;
+
+    const expression = match[1].trim();
+    // {{@@...}} 是 Default 提取规则，不是返回规则字符串的 JS 表达式。
+    if (expression.startsWith('@@')) return rule;
+
+    const raw = await JsExpressionEvaluator.evaluate(expression, {
+      baseUrl: ruleUrl,
+      source: source,
+      jsLib: source.jsLib || '',
+      variableBlob: source.variableComment || '',
+    });
+    if (!raw || raw === 'null' || raw === 'undefined') return '';
+    try {
+      const parsed = JSON.parse(raw) as Object;
+      return typeof parsed === 'string' ? parsed as string : String(parsed);
+    } catch (_e) {
+      return raw.replace(/^['"`]|['"`]$/g, '');
+    }
+  }
+
+  private async extractWithParser(
+    body: string, source: BookSource, baseUrl: string, ruleUrl: string = baseUrl
+  ): Promise<SearchResult[]> {
     if (!body || !source.ruleSearchList) return [];
 
-    // bookList 为 @js: 脚本时，化简为其中的 java.getElement CSS 选择器
-    let listRule = source.ruleSearchList;
+    // 字段规则可使用 {{JS}} 动态模板；列表规则则按 Android 语义执行 @js:。
+    let listRule = await this.resolveDynamicRuleTemplate(source.ruleSearchList, source, ruleUrl);
+    if (!listRule) return [];
+
+    // bookList 为 @js: 时执行条件逻辑并取得 java.getElement(s) 的选择器。
     if (/^@js:/i.test(listRule.trimStart())) {
-      const reduced = this.reduceJsListRule(listRule);
+      const reduced = await this.resolveJsListRule(listRule, source, ruleUrl);
       if (!reduced) {
         console.warn('[SrcEx] @js: list rule not reducible to CSS for', source.sourceName);
         return [];
@@ -2477,14 +2579,32 @@ export class SourceExecutor {
     }
     console.info('[SrcEx] CSS list rule found', items.length, 'items for', source.sourceName);
 
-    const nameRule = source.ruleSearchName || '';
-    const authorRule = source.ruleSearchAuthor || '';
-    const coverRule = source.ruleSearchCover || '';
-    const noteUrlRule = source.ruleSearchNoteUrl || '';
-    const kindRule = (source as unknown as Record<string, string>).ruleSearchKind || '';
-    const wordCountRule = (source as unknown as Record<string, string>).ruleSearchWordCount || '';
-    const introRule = (source as unknown as Record<string, string>).ruleSearchIntroduce || '';
-    const lastChapterRule = (source as unknown as Record<string, string>).ruleSearchLastChapter || '';
+    const dynamicRules = await Promise.all([
+      this.resolveDynamicRuleTemplate(source.ruleSearchName || '', source, ruleUrl),
+      this.resolveDynamicRuleTemplate(source.ruleSearchAuthor || '', source, ruleUrl),
+      this.resolveDynamicRuleTemplate(source.ruleSearchCover || '', source, ruleUrl),
+      this.resolveDynamicRuleTemplate(source.ruleSearchNoteUrl || '', source, ruleUrl),
+      this.resolveDynamicRuleTemplate(
+        (source as unknown as Record<string, string>).ruleSearchKind || '', source, ruleUrl
+      ),
+      this.resolveDynamicRuleTemplate(
+        (source as unknown as Record<string, string>).ruleSearchWordCount || '', source, ruleUrl
+      ),
+      this.resolveDynamicRuleTemplate(
+        (source as unknown as Record<string, string>).ruleSearchIntroduce || '', source, ruleUrl
+      ),
+      this.resolveDynamicRuleTemplate(
+        (source as unknown as Record<string, string>).ruleSearchLastChapter || '', source, ruleUrl
+      ),
+    ]);
+    const nameRule = dynamicRules[0];
+    const authorRule = dynamicRules[1];
+    const coverRule = dynamicRules[2];
+    const noteUrlRule = dynamicRules[3];
+    const kindRule = dynamicRules[4];
+    const wordCountRule = dynamicRules[5];
+    const introRule = dynamicRules[6];
+    const lastChapterRule = dynamicRules[7];
 
     // 编译 || && 后的子规则
     const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {

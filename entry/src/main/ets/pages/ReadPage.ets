@@ -27,7 +27,8 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
-import { ChangeSourceSheet } from '../components/BookInfoSheets';
+import { ChangeSourceSheet, ChapterPickSheet } from '../components/BookInfoSheets';
+import * as ChapterMatcher from '../util/ChapterMatcher';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
 import window from '@ohos.window';
@@ -115,6 +116,7 @@ struct ReadPage {
   private lastProviderIdx_: number = -1;
   private aloudEngine_: ReadAloudEngine | null = null;
   private sourceDlg?: CustomDialogController;
+  private chapterPickDlg?: CustomDialogController;
   private loginDlg?: CustomDialogController;
   private pendingStyleSave_: ReadStyleSaveSnapshot | null = null;
   private styleSavePromise_: Promise<void> = Promise.resolve();
@@ -1214,26 +1216,22 @@ struct ReadPage {
     }
   }
 
-  private resetReadStateForSourceChange_(): void {
-    this.source_ = null;
-    this.bookId_ = -1;
-    this.targetIdx_ = 0;
-    this.currentIndex = 0;
-    this.pageIndex = 0;
+  /** 清理换源时的瞬态阅读状态（不重置章节位置） */
+  private clearTransientReadState_(): void {
     this.text = '';
     this.pages = [];
-    this.chapters = [];
-    this.allChapters_ = [];
-    this.totalChapters_ = 0;
     this.nextChapterContent_ = '';
     this.nextChapterIdx_ = -1;
     this.isPreloading_ = false;
     this.preloadingChapterPromises_.clear();
-    ChapterCache.bookUrl = '';
-    ChapterCache.chapters = [];
-    ChapterCache.targetIndex = -1;
   }
 
+  /**
+   * 整本换源（对齐 Legado ReadBookViewModel.applyChangeSource）：
+   * 1. 先加载新源详情 + 目录并校验，目录为空则失败回退（不动数据库）
+   * 2. 按章节标题/章节号匹配新目录中的当前章节（BookHelp.getDurChapter）
+   * 3. 校验通过后才更新书架记录、替换目录、迁移阅读进度
+   */
   private async applySourceChange(result: SearchResult): Promise<void> {
     const newBookUrl = result.noteUrl || '';
     const newOriginUrl = result.originUrl || '';
@@ -1247,62 +1245,120 @@ struct ReadPage {
     }
 
     this.showMenu = false;
-    const oldBookUrl = this.bookUrl;
-    try {
-      this.saveProgress();
-    } catch (_e) {
-      /* ignore */
-    }
-
-    UiUtil.showToast(this.getUIContext(), { message: '正在更换书源...', duration: 1000 });
+    this.isLoading = true;
+    UiUtil.showToast(this.getUIContext(), { message: '正在校验新书源...', duration: 1500 });
     try {
       await AppDatabase.getInstance().waitForInit();
-      const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-      const shelfBook = oldBookUrl ? await bookTable.getBookByUrl(oldBookUrl) : null;
+      const db = AppDatabase.getInstance().rdbStore;
 
-      this.origin = result.origin || this.origin;
-      this.originUrl = newOriginUrl;
-      this.bookUrl = newBookUrl;
-      this.tocUrl = '';
-      this.resetReadStateForSourceChange_();
-      this.isLoading = true;
+      // 1. 定位新源
+      const srcDao = new BookSourceTable(db);
+      const sources = await srcDao.getAllSources();
+      const norm = newOriginUrl.replace(/\/+$/, '');
+      const newSource = sources.find(s => s.sourceUrl === newOriginUrl) ||
+        sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
+        sources.find(s => s.sourceName === result.origin) || null;
+      if (!newSource) throw new Error('未找到对应书源');
 
+      // 2. 加载书籍详情获取目录 URL
+      let newTocUrl = '';
+      try {
+        const info = await globalSourceExecutor.getBookInfo(newSource, newBookUrl);
+        newTocUrl = info.tocUrl || '';
+      } catch (_e) { /* 详情失败时用 bookUrl 兜底拉目录 */ }
+
+      // 3. 加载新目录并校验（关键：先验证成功，再动数据库）
+      const primaryTocUrl = newTocUrl || newBookUrl;
+      let newToc = await globalSourceExecutor.getToc(newSource, primaryTocUrl);
+      if (newToc.length === 0 && primaryTocUrl !== newBookUrl) {
+        newToc = await globalSourceExecutor.getToc(newSource, newBookUrl);
+      }
+      if (newToc.length === 0) throw new Error('新源目录为空');
+
+      // 4. 在新目录中匹配当前阅读章节（保留阅读进度）
+      const oldChapterTitle = this.allChapters_[this.currentIndex]?.title || '';
+      const matchedIdx = ChapterMatcher.getDurChapterIndex(
+        this.currentIndex, oldChapterTitle, newToc, this.totalChapters_);
+
+      // 5. 校验通过：迁移书架数据库记录
+      const bookTable = new BookTable(db);
+      const shelfBook = this.bookUrl ? await bookTable.getBookByUrl(this.bookUrl) : null;
       if (shelfBook) {
-        shelfBook.bookUrl = this.bookUrl;
-        shelfBook.origin = this.origin;
-        shelfBook.originUrl = this.originUrl;
-        shelfBook.tocUrl = '';
-        if (result.coverUrl) shelfBook.coverUrl = result.coverUrl;
+        shelfBook.bookUrl = newBookUrl;
+        shelfBook.origin = result.origin || newSource.sourceName || this.origin;
+        shelfBook.originUrl = newOriginUrl;
+        shelfBook.tocUrl = primaryTocUrl;
+        if (result.coverUrl && !shelfBook.customCoverPath) shelfBook.coverUrl = result.coverUrl;
         if (result.kind) shelfBook.kind = result.kind;
         if (result.wordCount) shelfBook.wordCount = result.wordCount;
         if (result.introduce) shelfBook.introduce = result.introduce;
-        shelfBook.latestChapterTitle = result.latestChapterTitle || '';
-        shelfBook.chapterCount = 0;
-        shelfBook.totalChapterNum = 0;
-        shelfBook.durChapterTitle = '';
-        shelfBook.durChapterIndex = 0;
+        shelfBook.latestChapterTitle = newToc[newToc.length - 1]?.title || '';
+        shelfBook.chapterCount = newToc.length;
+        shelfBook.totalChapterNum = newToc.length;
+        shelfBook.durChapterIndex = matchedIdx;
+        shelfBook.durChapterTitle = newToc[matchedIdx]?.title || '';
         shelfBook.durChapterPos = 0;
-        shelfBook.durChapterProgress = 0;
-        shelfBook.lastUpdateTime = result.lastUpdateTime || shelfBook.lastUpdateTime;
+        shelfBook.durChapterProgress = newToc.length > 0 ? matchedIdx / newToc.length : 0;
         shelfBook.lastOpenTime = Date.now();
         shelfBook.updateTime = Date.now();
         await bookTable.updateBook(shelfBook);
-        this.bookId_ = shelfBook.id;
-        const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
+        // 替换目录（旧章节 URL 全部失效，内容缓存一并清除）
+        const chapterTable = new ChapterTable(db);
         await chapterTable.deleteChaptersByBookId(shelfBook.id);
+        const now = Date.now();
+        const rows: BookChapter[] = newToc.map((ch: BookSourceChapter, idx: number): BookChapter => ({
+          id: 0,
+          bookId: shelfBook.id,
+          index: ch.index >= 0 ? ch.index : idx,
+          volumeIndex: 0,
+          title: ch.title || '',
+          url: ch.url || '',
+          content: '',
+          contentLength: 0,
+          isRead: false,
+          isDownloaded: false,
+          isCached: false,
+          duration: 0,
+          audioUrl: '',
+          createTime: now,
+          updateTime: now,
+        }));
+        await chapterTable.insertChapters(rows);
+        this.bookId_ = shelfBook.id;
         AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
       }
 
-      await this.loadContent();
-      UiUtil.showToast(this.getUIContext(), { message: '已更换书源', duration: 1500 });
+      // 6. 更新内存状态并加载匹配章节
+      this.origin = result.origin || newSource.sourceName || this.origin;
+      this.originUrl = newOriginUrl;
+      this.bookUrl = newBookUrl;
+      this.tocUrl = primaryTocUrl;
+      this.source_ = newSource;
+      this.allChapters_ = newToc;
+      this.totalChapters_ = newToc.length;
+      this.chapters = newToc;
+      this.targetIdx_ = matchedIdx;
+      this.currentIndex = matchedIdx;
+      this.pageIndex = 0;
+      this.clearTransientReadState_();
+      ChapterCache.bookUrl = newBookUrl;
+      ChapterCache.chapters = newToc;
+      ChapterCache.targetIndex = matchedIdx;
+
+      await this.loadChapter(matchedIdx);
+      UiUtil.showToast(this.getUIContext(), {
+        message: '已更换书源：' + (newToc[matchedIdx]?.title || '第 ' + (matchedIdx + 1) + ' 章'),
+        duration: 2000
+      });
     } catch (e) {
       console.error('[ReadPage] applySourceChange failed:', (e as Error).message);
+      // 校验失败：旧源数据未被破坏，保持当前阅读状态
       this.isLoading = false;
-      UiUtil.showToast(this.getUIContext(), { message: '换源失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '换源失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
-  private openSourceSheet(): void {
+  private openSourceSheet(singleChapter: boolean = false): void {
     // 读取保存的搜索结果缓存（从 BookInfoPage 进入时写入了 router params）
     let cachedForSheet: SearchResult[] = [];
     try {
@@ -1319,16 +1375,132 @@ struct ReadPage {
         bookAuthor: this.bookAuthor,
         currentOriginUrl: this.originUrl,
         cachedSources: cachedForSheet,
-        onReplace: (result: SearchResult) => { this.applySourceChange(result); },
-        onAddAsNew: (_result: SearchResult) => {
-          UiUtil.showToast(this.getUIContext(), { message: '阅读页暂不支持作为新书加入', duration: 1500 });
-        }
+        singleChapterMode: singleChapter,
+        allowAddAsNew: false,
+        onReplace: (result: SearchResult) => {
+          if (singleChapter) {
+            this.applySingleChapterSource_(result);
+          } else {
+            this.applySourceChange(result);
+          }
+        },
       }),
       autoCancel: true,
       alignment: DialogAlignment.Bottom,
       customStyle: true
     });
     this.sourceDlg.open();
+  }
+
+  /** 长按换源按钮：选择整本换源或单章换源（对齐 Legado ReadBookMenuBar） */
+  private showChangeSourceMenu_(): void {
+    this.showMenu = false;
+    ActionSheet.show({
+      title: '换源方式',
+      message: '长按可再次打开本菜单',
+      sheets: [
+        {
+          title: '整本换源',
+          action: () => { this.openSourceSheet(false); }
+        },
+        {
+          title: '单章换源',
+          action: () => { this.openSourceSheet(true); }
+        },
+      ]
+    });
+  }
+
+  /**
+   * 单章换源（对齐 Legado ChangeChapterSourceViewModel）：
+   * 只替换当前章节的正文，不改变整本书的书源和目录。
+   * 选中源 → 加载其目录 → 按当前章节匹配预选 → 用户确认章节 → 加载正文替换。
+   */
+  private async applySingleChapterSource_(result: SearchResult): Promise<void> {
+    const newBookUrl = result.noteUrl || '';
+    const newOriginUrl = result.originUrl || '';
+    if (!newBookUrl || !newOriginUrl) {
+      UiUtil.showToast(this.getUIContext(), { message: '书源信息不完整', duration: 1500 });
+      return;
+    }
+    this.showMenu = false;
+    this.isLoading = true;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      const srcDao = new BookSourceTable(db);
+      const sources = await srcDao.getAllSources();
+      const norm = newOriginUrl.replace(/\/+$/, '');
+      const newSource = sources.find(s => s.sourceUrl === newOriginUrl) ||
+        sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
+        sources.find(s => s.sourceName === result.origin) || null;
+      if (!newSource) throw new Error('未找到对应书源');
+
+      let tocUrl = '';
+      try {
+        const info = await globalSourceExecutor.getBookInfo(newSource, newBookUrl);
+        tocUrl = info.tocUrl || '';
+      } catch (_e) { /* 用 bookUrl 兜底 */ }
+      const primaryTocUrl = tocUrl || newBookUrl;
+      let toc = await globalSourceExecutor.getToc(newSource, primaryTocUrl);
+      if (toc.length === 0 && primaryTocUrl !== newBookUrl) {
+        toc = await globalSourceExecutor.getToc(newSource, newBookUrl);
+      }
+      if (toc.length === 0) throw new Error('该源目录为空');
+      this.isLoading = false;
+
+      // 按当前章节标题在新目录中预选（同一套 getDurChapter 匹配算法）
+      const curTitle = this.allChapters_[this.currentIndex]?.title || '';
+      const matched = ChapterMatcher.getDurChapterIndex(
+        this.currentIndex, curTitle, toc, this.totalChapters_);
+      this.chapterPickDlg = new CustomDialogController({
+        builder: ChapterPickSheet({
+          controller: this.chapterPickDlg!,
+          chapters: toc,
+          currentIndex: matched,
+          onPick: (idx: number) => { this.fetchAndReplaceChapter_(newSource, newBookUrl, toc, idx); },
+        }),
+        autoCancel: true,
+        alignment: DialogAlignment.Bottom,
+        customStyle: true
+      });
+      this.chapterPickDlg.open();
+    } catch (e) {
+      console.error('[ReadPage] singleChapterSource failed:', (e as Error).message);
+      this.isLoading = false;
+      UiUtil.showToast(this.getUIContext(), { message: '单章换源失败：' + (e as Error).message, duration: 2000 });
+    }
+  }
+
+  /** 单章换源：加载目标章节正文并替换当前章节缓存 */
+  private async fetchAndReplaceChapter_(
+    source: BookSource, bookUrl: string, toc: BookSourceChapter[], idx: number
+  ): Promise<void> {
+    const ch = toc[idx];
+    if (!ch || !ch.url) {
+      UiUtil.showToast(this.getUIContext(), { message: '章节信息不完整', duration: 1500 });
+      return;
+    }
+    this.isLoading = true;
+    try {
+      let content = await globalSourceExecutor.getContent(source, ch.url, bookUrl);
+      if (!content || content.length <= 50) throw new Error('正文为空');
+      if (this.cfg.chineseMode !== 'original') {
+        content = convertChinese(content, this.cfg.chineseMode);
+      }
+      const target = this.currentIndex;
+      this.applyChapterContent_(target, content);
+      this.isLoading = false;
+      // 覆盖数据库中本章的内容缓存，后续翻页不再回退到旧源内容
+      await this.saveToDbCache_(target, content);
+      this.preloadNextChapter_(target);
+      this.cacheSurrounding_(target);
+      UiUtil.showToast(this.getUIContext(), { message: '已替换本章内容', duration: 1500 });
+    } catch (e) {
+      console.error('[ReadPage] fetchAndReplaceChapter failed:', (e as Error).message);
+      this.isLoading = false;
+      UiUtil.showToast(this.getUIContext(), { message: '单章换源失败：' + (e as Error).message, duration: 2000 });
+    }
   }
 
   private getNextChapterForAloud_(): Promise<import('../service/ReadAloudEngine').AloudChapterText | null> {
@@ -1543,7 +1715,8 @@ struct ReadPage {
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
-            onSource: () => { this.showMenu = false; this.openSourceSheet(); },
+            onSource: () => { this.showMenu = false; this.openSourceSheet(false); },
+            onSourceLongPress: () => { this.showChangeSourceMenu_(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
 	            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex, true); UiUtil.showToast(this.getUIContext(), {message:'已刷新',duration:1500}); },
           })

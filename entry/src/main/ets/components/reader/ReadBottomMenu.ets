@@ -15,6 +15,8 @@ export struct ReadBottomMenu {
   onSettings?: () => void;
   onSearch?: () => void;
   onSource?: () => void;
+  /** 长按换源：选择整本换源/单章换源（对齐 Legado ReadBookMenuBar） */
+  onSourceLongPress?: () => void;
   onCache?: () => void;
   onRefresh?: () => void;
 
@@ -48,7 +50,12 @@ export struct ReadBottomMenu {
         Column() {
           Text('🔄').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
           Text('换源').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
-        }.onClick(() => { this.onSource?.() })
+        }
+        .onClick(() => { this.onSource?.() })
+        .gesture(
+          LongPressGesture({ repeat: false })
+            .onAction(() => { this.onSourceLongPress?.(); })
+        )
         Column() {
           Text('📥').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
           Text('缓存').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
