@@ -29,9 +29,7 @@
 *.log
 /full_dump_hos_*.json
 /simple_dump_hos_*.txt
-/screenshot/*.png
-/screenshot/*.jpg
-/screenshot/*.jpeg
+/screenshot
 
 # Codex workspace config
 /.codex
@@ -42,4 +40,7 @@ CLAUDE.md
 .harmonyos-ai-workspace.manifest
 
 # ZCode workspace config
-.zcode
+/.zcode
+
+# CodeEngine workspace config
+/.codeengine
