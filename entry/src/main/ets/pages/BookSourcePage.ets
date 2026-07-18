@@ -140,13 +140,16 @@ struct BookSourcePage {
   private isSelected(url: string): boolean { return this.selectedSet_.has(url); }
 
   private toggleSelect(url: string): void {
-    if (this.selectedSet_.has(url)) {
-      this.selectedUrls = this.selectedUrls.filter((item: string): boolean => item !== url);
-    } else {
-      this.selectedUrls = [...this.selectedUrls, url];
-    }
-    this.syncSelectedSet_();
-    this.contextMenuUrl = '';
+    // 延迟到下一个事件循环，避免在 render 过程中修改 state 导致 "State variable has changed during render" 错误
+    setTimeout(() => {
+      if (this.selectedSet_.has(url)) {
+        this.selectedUrls = this.selectedUrls.filter((item: string): boolean => item !== url);
+      } else {
+        this.selectedUrls = [...this.selectedUrls, url];
+      }
+      this.syncSelectedSet_();
+      this.contextMenuUrl = '';
+    }, 0);
   }
 
   private selectedSources(): BookSource[] {
@@ -154,10 +157,12 @@ struct BookSourcePage {
   }
 
   private toggleSelectAll(): void {
-    const visibleUrls = this.filtered.map((source: BookSource): string => source.sourceUrl);
-    const all = visibleUrls.length > 0 && visibleUrls.every((url: string): boolean => this.selectedSet_.has(url));
-    this.selectedUrls = all ? [] : visibleUrls;
-    this.syncSelectedSet_();
+    setTimeout(() => {
+      const visibleUrls = this.filtered.map((source: BookSource): string => source.sourceUrl);
+      const all = visibleUrls.length > 0 && visibleUrls.every((url: string): boolean => this.selectedSet_.has(url));
+      this.selectedUrls = all ? [] : visibleUrls;
+      this.syncSelectedSet_();
+    }, 0);
   }
 
   private async batchEnable(enabled: boolean): Promise<void> {
@@ -332,18 +337,21 @@ struct BookSourcePage {
           Text(this.sources.length + ' 个书源' + (this.selectedUrls.length > 0 ? ' · 已选 ' + this.selectedUrls.length : ''))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         }.layoutWeight(1)
-        if (this.selectedUrls.length > 0) {
-          Button('取消').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-            .onClick(() => { this.selectedUrls = []; this.syncSelectedSet_(); })
-        } else {
-          Button('+').fontSize(24).width(40).height(40).borderRadius(20)
-            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
-            .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
-          Button('导入').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-            .onClick(() => { this.importDlg?.open(); })
-          Button('分组').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
-            .onClick(() => { this.groupManageDlg?.open(); })
-        }
+        // 选择模式：显示"取消"按钮；非选择模式：显示"+"/导入/分组按钮
+        // 使用 visibility 避免条件渲染导致组件重建
+        Button('取消').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+          .visibility(this.selectedUrls.length > 0 ? Visibility.Visible : Visibility.Hidden)
+          .onClick(() => { this.selectedUrls = []; this.syncSelectedSet_(); })
+        Button('+').fontSize(24).width(40).height(40).borderRadius(20)
+          .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
+          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
+        Button('导入').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .onClick(() => { this.importDlg?.open(); })
+        Button('分组').height(40).backgroundColor('transparent').fontColor(ThemeColors.primary(this.isDark))
+          .visibility(this.selectedUrls.length > 0 ? Visibility.Hidden : Visibility.Visible)
+          .onClick(() => { this.groupManageDlg?.open(); })
       }.height(64).padding({ left: 8, right: 8 }).width('100%')
 
       Row() {
@@ -411,24 +419,24 @@ struct BookSourcePage {
         }.layoutWeight(1).padding({ left: 12, right: 12, bottom: this.selectedUrls.length > 0 ? 4 : 12 })
       }
 
-      if (this.selectedUrls.length > 0) {
-        Scroll() {
-          Row() {
-            this.actionButton('全选', () => { this.toggleSelectAll(); })
-            this.actionButton('启用', () => { this.batchEnable(true); })
-            this.actionButton('禁用', () => { this.batchEnable(false); })
-            this.actionButton('启用发现', () => { this.batchExplore(true); })
-            this.actionButton('停用发现', () => { this.batchExplore(false); })
-            this.actionButton('分组', () => { this.openAssignGroup(); })
-            this.actionButton('校验', () => { this.openCheckConfig(); })
-            this.actionButton('导出', () => { this.doExport(); })
-            Button('删除').height(40).borderRadius(20).padding({ left: 16, right: 16 })
-              .backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
-              .onClick(() => { this.confirmDelete(); })
-          }.padding({ left: 12, right: 12, top: 8, bottom: 8 })
-        }.height(56).width('100%').scrollable(ScrollDirection.Horizontal)
-          .backgroundColor(ThemeColors.surface(this.isDark)).scrollBar(BarState.Off)
-      }
+      // 操作栏常驻 DOM，通过 visibility 控制显隐，避免选择/退出选择时大量组件创建/销毁阻塞主线程
+      Scroll() {
+        Row() {
+          this.actionButton('全选', () => { this.toggleSelectAll(); })
+          this.actionButton('启用', () => { this.batchEnable(true); })
+          this.actionButton('禁用', () => { this.batchEnable(false); })
+          this.actionButton('启用发现', () => { this.batchExplore(true); })
+          this.actionButton('停用发现', () => { this.batchExplore(false); })
+          this.actionButton('分组', () => { this.openAssignGroup(); })
+          this.actionButton('校验', () => { this.openCheckConfig(); })
+          this.actionButton('导出', () => { this.doExport(); })
+          Button('删除').height(40).borderRadius(20).padding({ left: 16, right: 16 })
+            .backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
+            .onClick(() => { this.confirmDelete(); })
+        }.padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      }.height(this.selectedUrls.length > 0 ? 56 : 0).width('100%').scrollable(ScrollDirection.Horizontal)
+        .backgroundColor(ThemeColors.surface(this.isDark)).scrollBar(BarState.Off)
+        .visibility(this.selectedUrls.length > 0 ? Visibility.Visible : Visibility.Hidden)
 
       if (this.isChecking) {
         Row() {
@@ -468,7 +476,7 @@ struct BookSourcePage {
         // Checkbox 常驻 DOM，通过 visibility 控制显隐，避免选择模式切换时大量组件创建/销毁导致主线程阻塞
         Checkbox({ name: source.sourceUrl, group: 'book_sources' }).select(this.isSelected(source.sourceUrl))
           .selectedColor(ThemeColors.primary(this.isDark)).margin({ right: 10 })
-          .visibility(this.isSelectMode() ? Visibility.Visible : Visibility.None)
+          .visibility(this.isSelectMode() ? Visibility.Visible : Visibility.Hidden)
           .onChange(() => { this.toggleSelect(source.sourceUrl); })
         Column() {
           Row() {
