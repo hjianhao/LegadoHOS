@@ -555,6 +555,7 @@ export struct ExplorePage {
         ruleExploreCover: source.ruleExploreCover || source.ruleSearchCover || '',
         ruleExploreKind: source.ruleExploreKind || source.ruleSearchKind || '',
         ruleExploreWordCount: source.ruleExploreWordCount || source.ruleSearchWordCount || '',
+        ruleExploreIntroduce: source.ruleExploreIntroduce || source.ruleSearchIntroduce || '',
         ruleExploreLastChapter: source.ruleExploreLastChapter || source.ruleSearchLastChapter || '',
         ruleExploreLastUpdateTime: source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime || '',
         ruleExploreNoteUrl: source.ruleExploreNoteUrl || source.ruleSearchNoteUrl || '',

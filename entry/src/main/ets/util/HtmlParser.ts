@@ -227,8 +227,8 @@ export class HtmlParser {
       postProcessors = parts.slice(1);
     }
 
-   let attrSuffix = 'text';
-   let cssSel = cleanSelector;
+    let attrSuffix = 'text';
+    let cssSel = cleanSelector;
    const attrMatch = cleanSelector.match(/^(.*?)@(text|href|src|html|ownText|textNodes|value)$/i);
    if (attrMatch) {
      cssSel = attrMatch[1].trim();
@@ -239,8 +239,13 @@ export class HtmlParser {
      if (genericMatch) {
        cssSel = genericMatch[1].trim();
        attrSuffix = genericMatch[2].toLowerCase();
-     }
-   }
+      }
+    }
+
+    // Legado 的 `@.class` / `@#id` 表示逐级选择子元素，例如
+    // `.author@.name.0@text`。SourceExecutor 会处理 @tag，这里补齐
+    // class/id 形式，避免把整段交给 CSS 匹配器而得不到字段值。
+    cssSel = cssSel.replace(/@(?=[.#])/g, ' ');
 
     // 处理 Legado 扩展 @@
     if (cssSel.includes('@@')) {
@@ -731,6 +736,13 @@ export class HtmlParser {
     let s = selector.trim();
     s = s.replace(/!(-?\d+)(?::(-?\d+))?$/, '');  // 去掉 !N
     s = s.replace(/\.(-?\d+)$/, '');               // 去掉 .N 位置
+
+    // Legado 扩展选择器 text.xxx：匹配自身文本包含 xxx 的元素。
+    // 典型规则 `text.总字数@p@text` 依赖该语义。
+    if (s.startsWith('text.')) {
+      const expectedText = s.substring(5);
+      return expectedText.length > 0 && el.ownText.includes(expectedText);
+    }
 
     // CSS 伪类: :nth-of-type(n), :eq(n), :first, :last
     // 先提取伪类，再从选择器中去掉

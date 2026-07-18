@@ -26,6 +26,7 @@ struct ExploreBookPage {
   @State ruleExploreCover: string = '';
   @State ruleExploreKind: string = '';
   @State ruleExploreWordCount: string = '';
+  @State ruleExploreIntroduce: string = '';
   @State ruleExploreLastChapter: string = '';
   @State ruleExploreLastUpdateTime: string = '';
   @State ruleExploreNoteUrl: string = '';
@@ -57,6 +58,7 @@ struct ExploreBookPage {
       this.ruleExploreCover = String(params['ruleExploreCover'] || '');
       this.ruleExploreKind = String(params['ruleExploreKind'] || '');
       this.ruleExploreWordCount = String(params['ruleExploreWordCount'] || '');
+      this.ruleExploreIntroduce = String(params['ruleExploreIntroduce'] || '');
       this.ruleExploreLastChapter = String(params['ruleExploreLastChapter'] || '');
       this.ruleExploreLastUpdateTime = String(params['ruleExploreLastUpdateTime'] || '');
       this.ruleExploreNoteUrl = String(params['ruleExploreNoteUrl'] || '');
@@ -85,7 +87,7 @@ struct ExploreBookPage {
       ruleSearchWordCount: this.ruleExploreWordCount,
       ruleSearchLastUpdateTime: this.ruleExploreLastUpdateTime || '',
       ruleSearchLastChapter: this.ruleExploreLastChapter,
-      ruleSearchIntroduce: '', ruleSearchCheckKeyWord: '',
+      ruleSearchIntroduce: this.ruleExploreIntroduce, ruleSearchCheckKeyWord: '',
       ruleBookInfoInit: '', ruleBookInfoName: '', ruleBookInfoAuthor: '', ruleBookInfoCover: '',
       ruleBookInfoIntroduce: '', ruleBookInfoKind: '', ruleBookInfoWordCount: '',
       ruleBookInfoLastUpdateTime: '', ruleBookInfoFrom: '', ruleBookInfoTocUrl: '',
@@ -212,17 +214,23 @@ struct ExploreBookPage {
           ForEach(this.books, (item: SearchResult) => {
             ListItem() {
               Row() {
-                BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 44, coverHeight: 62, coverDecodeJs: item.coverDecodeJs || '' })
+                BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 56, coverHeight: 80, coverDecodeJs: item.coverDecodeJs || '' })
                   .margin({ right: 12 })
                 Column() {
                   Text(item.name).fontSize(15).fontWeight(FontWeight.Bold)
                     .fontColor(ThemeColors.onBackground(this.isDark))
                     .alignSelf(ItemAlign.Start).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(item.author || '未知作者').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+                  Text((item.author || '未知作者') + (item.wordCount ? '  ·  ' + item.wordCount : ''))
+                    .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
                   Text(item.kind || '').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                     .alignSelf(ItemAlign.Start).margin({ top: 2 })
-                }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(62).justifyContent(FlexAlign.Center)
+                  if (item.introduce) {
+                    Text(item.introduce).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+                      .alignSelf(ItemAlign.Start).margin({ top: 2 }).maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(80).justifyContent(FlexAlign.Center)
               }.padding(12).width('100%')
               .onClick((): void => { this.openBookDetail(item); })
             }.border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
