@@ -703,6 +703,15 @@ export class SourceExecutor {
       return [];
     }
 
+    const headers: Record<string, string> = {
+      'Accept': 'text/html,application/json,*/*',
+      'Referer': source.sourceUrl || '',
+      ...parseHeader(source.header)
+    };
+    if (charset) {
+      headers['Accept-Charset'] = charset;
+    }
+
     // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
     if (finalWebView && finalMethod !== 'POST') {
       // controller 可能尚未注册（搜索在 SearchPage.aboutToAppear 阶段触发时，
@@ -715,7 +724,7 @@ export class SourceExecutor {
       if (WebViewFetcher.isReady()) {
         console.info('[SrcEx] WebView request (source config) for', source.sourceName);
         try {
-          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
+          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
           const bodyText = wvResult.html;
           if (bodyText && bodyText.length > 100) {
             console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
@@ -728,15 +737,6 @@ export class SourceExecutor {
     }
 
     try {
-      const headers: Record<string, string> = {
-        'Accept': 'text/html,application/json,*/*',
-        'Referer': source.sourceUrl || '',
-        ...parseHeader(source.header)
-      };
-      if (charset) {
-        headers['Accept-Charset'] = charset;
-      }
-
       console.info('[SrcEx] Fetching:', (finalMethod || 'GET'), finalUrl.substring(0, 80));
 
       let bodyText = '';
@@ -772,7 +772,7 @@ export class SourceExecutor {
         && WebViewFetcher.isReady()) {
         console.info('[SrcEx] CSS 0 results, trying WebView fallback for', source.sourceName);
         try {
-          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000);
+          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
           if (wvResult.html && wvResult.html.length > 100) {
             const wvParsed = this.tryHexDecode_(wvResult.html) || wvResult.html;
             const wvResults = this.parseResponse(wvParsed, source, baseUrl, 0);
@@ -798,7 +798,7 @@ export class SourceExecutor {
         this.lastBlockedUrl = url;
         console.info('[SrcEx] HTTP block/error detected, trying WebView for', source.sourceName, ':', msg);
         try {
-          const wvResult = await WebViewFetcher.fetch(url, 20000);
+          const wvResult = await WebViewFetcher.fetch(url, 20000, headers);
           const wvHtml = wvResult.html;
           if (wvHtml && wvHtml.length > 100) {
             console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);

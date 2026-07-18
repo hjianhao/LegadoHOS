@@ -23,15 +23,23 @@ export class WebViewFetcher {
   private static timeoutId: number = -1;
   // 追踪页面加载次数（处理重定向场景）
   private static loadCount: number = 0;
+  /** 最近一次页面结束时间；重载时重置，用于避免过早提取 WAF 探针页。 */
+  private static lastPageEndAt: number = 0;
   // 轮询定时器
   private static pollIntervalId: number = -1;
   // 请求队列：排队等待的 fetch（WebView 同时只能处理一个）
   private static requestQueue: Array<{
     url: string;
     timeoutMs: number;
+    headers: Record<string, string>;
     resolve: (result: WebViewFetchResult) => void;
     reject: (err: Error) => void;
   }> = [];
+
+  /** 与 Android Legado 后台 WebView 一致的默认桌面 UA。 */
+  private static readonly DEFAULT_USER_AGENT: string =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
   /** 等待 controller 注册的回调列表（waitForReady 使用） */
   private static readyWaiters: Array<() => void> = [];
@@ -141,6 +149,7 @@ export class WebViewFetcher {
     if (!WebViewFetcher.pendingResolve) return;
 
     WebViewFetcher.loadCount++;
+    WebViewFetcher.lastPageEndAt = Date.now();
     const currentUrl = event?.url || '';
     if (currentUrl) {
       WebViewFetcher.pendingUrl = currentUrl;
@@ -166,7 +175,8 @@ export class WebViewFetcher {
   // ========== 核心 fetch 方法 ==========
 
   /** 提取页面内容，返回 Promise */
-  static fetch(url: string, timeoutMs: number = 30000): Promise<WebViewFetchResult> {
+  static fetch(url: string, timeoutMs: number = 30000,
+    headers: Record<string, string> = {}): Promise<WebViewFetchResult> {
     if (!WebViewFetcher.controller) {
       return Promise.reject(new Error('WebView not registered'));
     }
@@ -175,20 +185,22 @@ export class WebViewFetcher {
     if (WebViewFetcher.pendingReject) {
       console.info('[WebViewFetcher] Previous fetch still pending, queueing request');
       return new Promise((resolve, reject) => {
-        WebViewFetcher.requestQueue.push({ url, timeoutMs, resolve, reject });
+        WebViewFetcher.requestQueue.push({ url, timeoutMs, headers, resolve, reject });
       });
     }
 
-    return WebViewFetcher.startFetch(url, timeoutMs);
+    return WebViewFetcher.startFetch(url, timeoutMs, headers);
   }
 
   /** 实际的 fetch 逻辑 */
-  private static startFetch(url: string, timeoutMs: number): Promise<WebViewFetchResult> {
+  private static startFetch(url: string, timeoutMs: number,
+    headers: Record<string, string>): Promise<WebViewFetchResult> {
     return new Promise((resolve: (result: WebViewFetchResult) => void, reject: (err: Error) => void) => {
       WebViewFetcher.pendingResolve = resolve;
       WebViewFetcher.pendingReject = reject;
       WebViewFetcher.pendingUrl = url;
       WebViewFetcher.loadCount = 0;
+      WebViewFetcher.lastPageEndAt = 0;
       WebViewFetcher.initialRequestUrl = url;
       WebViewFetcher.redirectCount = 0;
 
@@ -203,7 +215,17 @@ export class WebViewFetcher {
 
       // 加载 URL
       console.info('[WebViewFetcher] Loading:', url.substring(0, 80));
-      WebViewFetcher.controller!.loadUrl(url);
+      let userAgent = WebViewFetcher.DEFAULT_USER_AGENT;
+      const webHeaders: Array<web_webview.WebHeader> = [];
+      Object.keys(headers).forEach((key: string) => {
+        if (key.toLowerCase() === 'user-agent') {
+          userAgent = headers[key] || userAgent;
+        } else {
+          webHeaders.push({ headerKey: key, headerValue: headers[key] });
+        }
+      });
+      WebViewFetcher.controller!.setCustomUserAgent(userAgent);
+      WebViewFetcher.controller!.loadUrl(url, webHeaders);
     });
   }
 
@@ -382,6 +404,20 @@ export class WebViewFetcher {
 
   // ========== 私有方法 ==========
 
+  /**
+   * ArkWeb 会把 runJavaScript 的字符串结果再编码成 JSON 字符串。
+   * 例如 outerHTML 返回 "\u003Chtml..."，需先反序列化后才能交给 HTML 解析器。
+   */
+  private static decodeJavaScriptString(value: string): string {
+    if (!value) return '';
+    try {
+      const decoded = JSON.parse(value) as unknown;
+      return typeof decoded === 'string' ? decoded : value;
+    } catch (_e) {
+      return value;
+    }
+  }
+
   /** 开始轮询 document.readyState */
   private static startPolling(): void {
     WebViewFetcher.stopPolling();
@@ -395,8 +431,12 @@ export class WebViewFetcher {
         'JSON.stringify({readyState: document.readyState, title: document.title})'
       ).then((json: string) => {
         try {
-        const state = JSON.parse(json) as { readyState: string; title: string };
-        if (state.readyState === 'complete') {
+        const decoded = WebViewFetcher.decodeJavaScriptString(json);
+        const state = JSON.parse(decoded) as { readyState: string; title: string };
+        // readyState complete 可能只是 WAF 探针页，探针随后会触发重载。
+        // 页面结束后稳定 1.5 秒再提取；若发生 onPageEnd，稳定窗口会重新计时。
+        if (state.readyState === 'complete' &&
+          WebViewFetcher.lastPageEndAt > 0 && Date.now() - WebViewFetcher.lastPageEndAt >= 1500) {
           console.info('[WebViewFetcher] readyState=complete, extracting');
           WebViewFetcher.clearTimers();
           WebViewFetcher.extractAndResolve();
@@ -451,12 +491,13 @@ export class WebViewFetcher {
     const finalUrl = WebViewFetcher.pendingUrl;
     WebViewFetcher.controller.runJavaScript('document.documentElement.outerHTML')
       .then((html: string) => {
+        const decodedHtml = WebViewFetcher.decodeJavaScriptString(html);
         const resolve = WebViewFetcher.pendingResolve;
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
         if (resolve) {
-          console.info('[WebViewFetcher] Extracted', html.length, 'chars from', finalUrl.substring(0, 60));
-          resolve({ html, finalUrl });
+          console.info('[WebViewFetcher] Extracted', decodedHtml.length, 'chars from', finalUrl.substring(0, 60));
+          resolve({ html: decodedHtml, finalUrl });
         }
         // 处理队列中的下一个请求
         WebViewFetcher.processNext();
@@ -487,6 +528,6 @@ export class WebViewFetcher {
     const next = WebViewFetcher.requestQueue.shift();
     if (!next) return;
     console.info('[WebViewFetcher] Processing next queued request');
-    WebViewFetcher.startFetch(next.url, next.timeoutMs).then(next.resolve).catch(next.reject);
+    WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers).then(next.resolve).catch(next.reject);
   }
 }
