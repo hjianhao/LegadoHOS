@@ -4,10 +4,8 @@
  * - 获取模型列表 + 选择
  * - 连通性测试
  */
-import { SettingsStore } from '../data/preferences/SettingsStore';
+import { AiProviderProfile, SettingsStore, upsertAiProfile } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
-import router from '@ohos.router';
-import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 
@@ -30,6 +28,11 @@ struct AiConfigPage {
   @State endpoint: string = 'https://api.openai.com/v1/chat/completions';
   @State apiKey: string = '';
   @State model: string = 'gpt-4o';
+  @State timeoutSecondsText: string = '120';
+  @State profileName: string = '默认配置';
+  @State profiles: AiProviderProfile[] = [];
+  @State activeProfileId: string = '';
+  @State editingProfileId: string = '';
   @State showKey: boolean = false;
   @State activePreset: string = 'openai';
   @State models: string[] = [];
@@ -43,10 +46,15 @@ struct AiConfigPage {
   async load(): Promise<void> {
     const s = SettingsStore.getInstance();
     await s.init(UiUtil.getHostContext(this.getUIContext()));
-    this.endpoint = await s.getAiEndpoint();
-    this.apiKey = await s.getAiApiKey();
-    this.model = await s.getAiModel();
-    this.detectPreset_();
+    this.profiles = await s.getAiProfiles();
+    this.activeProfileId = await s.getActiveAiProfileId();
+    let active = this.profiles.find((item: AiProviderProfile): boolean => item.id === this.activeProfileId);
+    if (!active && this.profiles.length > 0) {
+      active = this.profiles[0];
+      await s.activateAiProfile(active);
+      this.activeProfileId = active.id;
+    }
+    if (active) this.editProfile(active);
   }
 
   detectPreset_(): void {
@@ -60,12 +68,97 @@ struct AiConfigPage {
   }
 
   async save(): Promise<void> {
+    const name = this.profileName.trim();
+    const endpoint = this.endpoint.trim();
+    const model = this.model.trim();
+    const timeoutSeconds = Number(this.timeoutSecondsText.trim());
+    if (!name || !endpoint || !model) {
+      UiUtil.showToast(this.getUIContext(), { message: '请填写配置名称、API 地址和模型', duration: 1800 });
+      return;
+    }
+    if (isNaN(timeoutSeconds) || timeoutSeconds <= 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '超时时间必须是大于 0 的秒数', duration: 1800 });
+      return;
+    }
     const s = SettingsStore.getInstance();
     await s.init(UiUtil.getHostContext(this.getUIContext()));
-    await s.setAiEndpoint(this.endpoint);
-    await s.setAiApiKey(this.apiKey);
-    await s.setAiModel(this.model);
-    UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
+    const id = this.editingProfileId || ('ai_' + Date.now().toString());
+    const profile: AiProviderProfile = {
+      id: id,
+      name: name,
+      provider: this.activePreset,
+      endpoint: endpoint,
+      apiKey: this.apiKey.trim(),
+      model: model,
+      timeoutSeconds: Math.floor(timeoutSeconds),
+    };
+    this.profiles = upsertAiProfile(this.profiles, profile);
+    await s.saveAiProfiles(this.profiles);
+    await s.activateAiProfile(profile);
+    this.activeProfileId = id;
+    this.editingProfileId = id;
+    UiUtil.showToast(this.getUIContext(), { message: '已保存并设为当前配置', duration: 1500 });
+  }
+
+  private editProfile(profile: AiProviderProfile): void {
+    this.editingProfileId = profile.id;
+    this.profileName = profile.name;
+    this.endpoint = profile.endpoint;
+    this.apiKey = profile.apiKey;
+    this.model = profile.model;
+    this.timeoutSecondsText = (profile.timeoutSeconds || 120).toString();
+    this.activePreset = profile.provider || 'custom';
+    this.models = [];
+    this.showModelPicker = false;
+    this.testResult = '';
+    this.detectPreset_();
+  }
+
+  private async selectProfile(profile: AiProviderProfile): Promise<void> {
+    const s = SettingsStore.getInstance();
+    await s.activateAiProfile(profile);
+    this.activeProfileId = profile.id;
+    this.editProfile(profile);
+    UiUtil.showToast(this.getUIContext(), { message: '已切换到 ' + profile.name, duration: 1200 });
+  }
+
+  private createProfile(): void {
+    this.editingProfileId = '';
+    this.profileName = '新配置';
+    this.endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+    this.apiKey = '';
+    this.model = 'openrouter/free';
+    this.timeoutSecondsText = '120';
+    this.activePreset = 'openrouter';
+    this.models = [];
+    this.showModelPicker = false;
+    this.testResult = '';
+  }
+
+  private deleteCurrentProfile(): void {
+    if (!this.editingProfileId || this.profiles.length <= 1) return;
+    const deletingId = this.editingProfileId;
+    UiUtil.showAlertDialog(this.getUIContext(), {
+      title: '删除 AI 配置', message: '确定删除“' + this.profileName + '”吗？',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: { value: '删除', fontColor: ThemeColors.error(this.isDark), action: (): void => {
+        void this.confirmDelete(deletingId);
+      } }
+    });
+  }
+
+  private async confirmDelete(id: string): Promise<void> {
+    const next = this.profiles.filter((item: AiProviderProfile): boolean => item.id !== id);
+    if (next.length === 0) return;
+    const s = SettingsStore.getInstance();
+    await s.saveAiProfiles(next);
+    this.profiles = next;
+    let active = next.find((item: AiProviderProfile): boolean => item.id === this.activeProfileId);
+    if (!active || id === this.activeProfileId) active = next[0];
+    await s.activateAiProfile(active);
+    this.activeProfileId = active.id;
+    this.editProfile(active);
+    UiUtil.showToast(this.getUIContext(), { message: '配置已删除', duration: 1200 });
   }
 
   onPresetTap(p: PresetItem): void {
@@ -110,7 +203,9 @@ struct AiConfigPage {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + this.apiKey,
       };
-      const resp = await NetUtil.httpPost(this.endpoint, body, headers, 20000);
+      const configuredTimeout = Number(this.timeoutSecondsText.trim());
+      const timeoutMs = (!isNaN(configuredTimeout) && configuredTimeout > 0 ? Math.floor(configuredTimeout) : 120) * 1000;
+      const resp = await NetUtil.httpPost(this.endpoint, body, headers, timeoutMs);
       const json = JSON.parse(resp) as Record<string, Object>;
       if (json['choices']) {
         this.testResult = '✅ 连接成功';
@@ -144,12 +239,39 @@ struct AiConfigPage {
     .onClick(() => { this.model = m; this.showModelPicker = false; })
   }
 
+  @Builder profileCard(profile: AiProviderProfile) {
+    Column() {
+      Row() {
+        Text(profile.name).fontSize(14).fontWeight(FontWeight.Medium)
+          .fontColor(this.activeProfileId === profile.id ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        if (this.activeProfileId === profile.id) {
+          Text('当前').fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).margin({ left: 8 })
+        }
+      }.width('100%')
+      Text(profile.model || '未设置模型').fontSize(11).margin({ top: 5 })
+        .fontColor(this.activeProfileId === profile.id ? ThemeColors.onPrimary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      Text('超时 ' + (profile.timeoutSeconds || 120) + ' 秒').fontSize(10).margin({ top: 3 })
+        .fontColor(this.activeProfileId === profile.id ? ThemeColors.onPrimary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+        .width('100%')
+    }
+    .width(168).padding(12).margin({ right: 8 })
+    .backgroundColor(this.activeProfileId === profile.id ? ThemeColors.primary(this.isDark) : ThemeColors.surface(this.isDark))
+    .borderRadius(10).border({ width: 1,
+      color: this.editingProfileId === profile.id ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
+    .onClick((): void => { void this.selectProfile(profile); })
+  }
+
   build() {
     Column() {
       Row() {
         Button('←').fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
           .backgroundColor('transparent').onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text('AI 配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text('大模型配置').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+          .fontColor(ThemeColors.onBackground(this.isDark))
+        Button('新增').fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
+          .height(32).padding({ left: 10, right: 10 }).onClick((): void => { this.createProfile(); })
         Button('保存').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
           .height(32).padding({ left: 14, right: 14 }).borderRadius(16)
           .onClick(() => { this.save(); })
@@ -157,20 +279,45 @@ struct AiConfigPage {
 
       Scroll() {
         Column() {
+          Text('已保存配置').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            .alignSelf(ItemAlign.Start).margin({ top: 12, bottom: 6 })
+          Scroll() {
+            Row() {
+              ForEach(this.profiles, (profile: AiProviderProfile) => {
+                this.profileCard(profile)
+              }, (profile: AiProviderProfile): string => profile.id)
+            }.padding({ bottom: 3 })
+          }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+
+          Row() {
+            Text(this.editingProfileId ? '编辑配置' : '新增配置').fontSize(15).fontWeight(FontWeight.Medium)
+              .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
+            if (this.editingProfileId && this.profiles.length > 1) {
+              Text('删除').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+                .onClick((): void => { this.deleteCurrentProfile(); })
+            }
+          }.width('100%').margin({ top: 18, bottom: 6 })
+
+          Text('配置名称').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            .alignSelf(ItemAlign.Start).margin({ top: 6, bottom: 4 })
+          TextInput({ text: this.profileName, placeholder: '例如：OpenRouter 免费' })
+            .fontSize(14).width('100%').fontColor(ThemeColors.onBackground(this.isDark))
+            .onChange((v: string): void => { this.profileName = v; })
+
           // ===== 常用 API 预设 =====
-          Text('常用 API').fontSize(13).fontColor('#888').alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
+          Text('供应商预设').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
           Row() {
             ForEach(PRESETS, (p: PresetItem) => { this.presetChip(p); })
           }.width('100%')
 
           // ===== API 地址 =====
-          Text('API 地址').fontSize(13).fontColor('#888').alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          Text('API 地址').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           TextInput({ text: this.endpoint, placeholder: 'https://api.openai.com/v1/chat/completions' })
             .fontSize(14).width('100%')
             .onChange((v: string) => { this.endpoint = v; this.detectPreset_(); })
 
           // ===== API Key =====
-          Text('API Key').fontSize(13).fontColor('#888').alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          Text('API Key').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
             TextInput({ text: this.apiKey, placeholder: 'sk-...' })
               .fontSize(14).layoutWeight(1).type(this.showKey ? InputType.Normal : InputType.Password)
@@ -181,7 +328,7 @@ struct AiConfigPage {
           }.width('100%')
 
           // ===== 模型 =====
-          Text('模型').fontSize(13).fontColor('#888').alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          Text('模型').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
             TextInput({ text: this.model, placeholder: 'gpt-4o' })
               .fontSize(14).layoutWeight(1)
@@ -192,7 +339,7 @@ struct AiConfigPage {
           }.width('100%')
 
           if (this.showModelPicker && this.models.length > 0) {
-            Text('选择模型 (' + this.models.length + ' 个)').fontSize(12).fontColor('#888')
+            Text('选择模型 (' + this.models.length + ' 个)').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
               .padding({ top: 8, bottom: 4 }).alignSelf(ItemAlign.Start)
             List() {
               ForEach(this.models, (m: string) => {
@@ -203,6 +350,15 @@ struct AiConfigPage {
             .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(8)
           }
 
+          Text('请求超时（秒）').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            .alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
+          TextInput({ text: this.timeoutSecondsText, placeholder: '120' })
+            .fontSize(14).width('100%').type(InputType.Number)
+            .onChange((v: string): void => { this.timeoutSecondsText = v; })
+          Text('默认 120 秒；OpenRouter 免费模型可设为 300 秒或更高')
+            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+            .alignSelf(ItemAlign.Start).margin({ top: 4 })
+
           // ===== 测试连通性 =====
           Button(this.isTesting ? '测试中...' : '🧪 测试连通性').fontSize(14)
             .fontColor(ThemeColors.onBackground(this.isDark))
@@ -212,7 +368,7 @@ struct AiConfigPage {
 
           if (this.testResult) {
             Text(this.testResult).fontSize(12)
-              .fontColor(this.testResult.startsWith('✅') ? '#28A745' : '#FF4444')
+              .fontColor(this.testResult.startsWith('✅') ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
               .margin({ top: 8 }).alignSelf(ItemAlign.Start)
           }
         }

@@ -101,6 +101,18 @@ export class ChapterTable {
     return count;
   }
 
+  /** 已缓存章节数（content_length > 10，只查 id 列不加载内容，供列表页轮询） */
+  async getCachedChapterCount(bookId: number): Promise<number> {
+    const predicates = new relationalStore.RdbPredicates(ChapterTable.TABLE_NAME);
+    predicates.equalTo('book_id', bookId);
+    predicates.greaterThan('content_length', 10);
+    const rs = await RdbUtil.query(this.rdbStore, predicates, ['id']);
+    let count = 0;
+    try { while (RdbUtil.next(rs)) { count++; } } catch (_catchErr) {}
+    RdbUtil.close(rs);
+    return count;
+  }
+
   private toChapters(rs: relationalStore.ResultSet): BookChapter[] {
     const chapters: BookChapter[] = [];
     while (RdbUtil.next(rs)) {

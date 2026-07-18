@@ -35,7 +35,7 @@
         "startWindowBackground": "$color:start_window_background",
         "visible": true,
         "exported": true,
-        "backgroundModes": ["audioPlayback"],
+        "backgroundModes": ["audioPlayback", "dataTransfer"],
         "skills": [
           {
             "entities": ["entity.system.home"],

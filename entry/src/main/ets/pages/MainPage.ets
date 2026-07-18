@@ -2,7 +2,7 @@
  * 主页面 — Tab 框架
  */
 import { BookshelfPage } from './BookshelfPage';
-import { ExplorePage } from './ExplorePage';
+import { DiscoverPage } from './DiscoverPage';
 import { MyPage } from './MyPage';
 import { RssMainPage } from './RssMainPage';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -29,7 +29,7 @@ struct MainPage {
     Column() {
       Stack() {
         if (this.currentTab === 0) { BookshelfPage() }
-        else if (this.currentTab === 1) { ExplorePage() }
+        else if (this.currentTab === 1) { DiscoverPage() }
         else if (this.currentTab === 2) { RssMainPage() }
         else if (this.currentTab === 3) { MyPage() }
       }

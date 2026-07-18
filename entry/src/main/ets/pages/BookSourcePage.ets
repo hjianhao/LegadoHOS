@@ -30,6 +30,7 @@ struct BookSourcePage {
   @State isSelectMode_: boolean = false;
   @State selectedSet_: Set<string> = new Set();
   @State enabledStateVersion_: number = 0;
+  @State exploreStateVersion_: number = 0;
   private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
@@ -145,6 +146,9 @@ struct BookSourcePage {
   private isSourceEnabled(source: BookSource): boolean {
     return this.enabledStateVersion_ >= 0 && source.enabled;
   }
+  private isExploreEnabled(source: BookSource): boolean {
+    return this.exploreStateVersion_ >= 0 && source.enabledExplore;
+  }
 
   private setSelected(url: string, selected: boolean): void {
     // Checkbox 的 select 属性变化也可能触发 onChange，因此按目标值更新，避免程序性选中后又被反转取消。
@@ -215,13 +219,16 @@ struct BookSourcePage {
   }
 
   private async batchExplore(enabled: boolean): Promise<void> {
-    const ids = this.selectedSources().map((source: BookSource): number => source.id);
+    const selected = this.selectedSources();
+    const ids = selected.map((source: BookSource): number => source.id);
     if (!this.dao_ || ids.length === 0) return;
     await this.dao_.batchSetExploreEnabled(ids, enabled);
+    selected.forEach((source: BookSource) => { source.enabledExplore = enabled; });
+    this.exploreStateVersion_++;
+    this.applyFilters();
     this.selectedUrls = [];
     this.syncSelectedSet_();
     this.isSelectMode_ = false;
-    await this.load();
   }
 
   private openAssignGroup(): void {
@@ -314,9 +321,12 @@ struct BookSourcePage {
 
   private async toggleExplore(source: BookSource): Promise<void> {
     if (!this.dao_) return;
-    await this.dao_.batchSetExploreEnabled([source.id], !source.enabledExplore);
+    const enabled = !this.isExploreEnabled(source);
+    await this.dao_.batchSetExploreEnabled([source.id], enabled);
+    source.enabledExplore = enabled;
+    this.exploreStateVersion_++;
+    this.applyFilters();
     this.contextMenuUrl = '';
-    await this.load();
   }
 
   private openCheckConfig(): void {
@@ -538,7 +548,9 @@ struct BookSourcePage {
             if (source.group) Text(source.group).fontSize(11).fontColor(ThemeColors.primary(this.isDark)).maxLines(1)
             Text('权重 ' + (source.weight || 0)).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: source.group ? 10 : 0 })
             if (source.respondTime > 0) Text(source.respondTime + ' ms').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 })
-            if (!source.enabledExplore) Text('发现停用').fontSize(11).fontColor(ThemeColors.error(this.isDark)).margin({ left: 10 })
+            Text(this.isExploreEnabled(source) ? '发现启用' : '发现停用').fontSize(11)
+              .fontColor(this.isExploreEnabled(source) ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
+              .margin({ left: 10 })
           }.width('100%').margin({ top: 6 })
           if (this.checkResByUrl.has(source.sourceUrl)) {
             Row() {
@@ -570,7 +582,7 @@ struct BookSourcePage {
           if (source.loginUrl || source.loginUi) this.menuItem('登录', false, () => { this.contextMenuUrl = ''; this.openLogin(source); })
           this.menuItem('置顶', false, () => { this.moveToEdge(source, true); })
           this.menuItem('置底', false, () => { this.moveToEdge(source, false); })
-          this.menuItem(source.enabledExplore ? '停用发现' : '启用发现', false, () => { this.toggleExplore(source); })
+          this.menuItem(this.isExploreEnabled(source) ? '停用发现' : '启用发现', false, () => { this.toggleExplore(source); })
           this.menuItem('搜索测试', false, () => { this.contextMenuUrl = ''; this.openSearch(source); })
           this.menuItem('规则调试', false, () => { this.contextMenuUrl = ''; this.openDebug(source); })
           this.menuItem('删除', true, () => { this.selectedUrls = [source.sourceUrl]; this.syncSelectedSet_(); this.isSelectMode_ = false; this.contextMenuUrl = ''; this.confirmDelete(); })

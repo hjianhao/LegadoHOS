@@ -17,7 +17,7 @@ import { JsExpressionEvaluator } from '../../engine/source/JsExpressionEvaluator
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { BookSourceTable } from '../../data/database/BookSourceTable';
 import { BookSource } from '../../model/BookSource';
-import { promptAction } from '@kit.ArkUI';
+import { UiUtil } from '../../util/UiUtil';
 
 interface LoginUiRow {
   name: string;
@@ -46,8 +46,11 @@ export struct SourceLoginDialog {
   @State private busy: boolean = false;
   @State private pageLoading: boolean = true;
   private webController: web_webview.WebviewController = new web_webview.WebviewController();
+  private isActive: boolean = false;
+  private actionRequestId: number = 0;
 
   aboutToAppear(): void {
+    this.isActive = true;
     // 解析 loginUi；loginUrl 是纯 URL 时走 WebView 模式
     const rows = this.parseLoginUi_();
     const isPlainUrl = /^https?:\/\//i.test(this.loginUrl.trim());
@@ -78,6 +81,11 @@ export struct SourceLoginDialog {
         console.warn('[SourceLogin] push cookies to WebView failed:', (e as Error).message);
       }
     }
+  }
+
+  aboutToDisappear(): void {
+    this.isActive = false;
+    this.actionRequestId++;
   }
 
   private parseLoginUi_(): LoginUiRow[] {
@@ -111,17 +119,17 @@ export struct SourceLoginDialog {
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.webViewMode) {
-          Button('完成').fontSize(13).fontColor('#FFF')
-            .height(32).padding({ left: 12, right: 12 })
-            .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(16)
-            .onClick(() => { this.finishWebViewLogin(); })
+          Button('完成').fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
+            .height(44).padding({ left: 12, right: 12 })
+            .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(22)
+            .onClick(() => { void this.finishWebViewLogin(); })
         }
         Button('关闭').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark))
-          .height(32).padding({ left: 8, right: 8 })
+          .height(44).padding({ left: 10, right: 10 })
           .backgroundColor(Color.Transparent)
           .onClick(() => { this.controller.close(); })
       }
-      .width('100%').height(44).padding({ left: 12, right: 8 })
+      .width('100%').height(52).padding({ left: 12, right: 8 })
 
       if (this.webViewMode) {
         // ===== WebView 登录 =====
@@ -130,8 +138,8 @@ export struct SourceLoginDialog {
             .javaScriptAccess(true)
             .domStorageAccess(true)
             .zoomAccess(false)
-            .onPageBegin(() => { this.pageLoading = true; })
-            .onPageEnd(() => { this.pageLoading = false; })
+            .onPageBegin(() => { if (this.isActive) this.pageLoading = true; })
+            .onPageEnd(() => { if (this.isActive) this.pageLoading = false; })
             .width('100%').layoutWeight(1)
           if (this.pageLoading) {
             LoadingProgress().color(ThemeColors.primary(this.isDark))
@@ -143,7 +151,8 @@ export struct SourceLoginDialog {
           .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 8 })
       } else {
         // ===== 表单登录 =====
-        Column() {
+        Scroll() {
+          Column() {
           ForEach(this.inputRows, (row: LoginUiRow, idx: number) => {
             TextInput({ placeholder: row.name, text: this.inputValues[idx] || '' })
               .type(row.type === 'password' ? InputType.Password : InputType.Normal)
@@ -152,26 +161,32 @@ export struct SourceLoginDialog {
               .borderRadius(8).fontSize(14)
               .fontColor(ThemeColors.onBackground(this.isDark))
               .placeholderColor(ThemeColors.secondaryText(this.isDark))
-              .onChange((v: string) => { this.inputValues[idx] = v; })
+              .onChange((v: string) => {
+                const next = this.inputValues.slice();
+                next[idx] = v;
+                this.inputValues = next;
+              })
           }, (row: LoginUiRow, idx: number): string => idx + row.name)
 
           if (this.statusText) {
             Text(this.statusText).fontSize(13)
-              .fontColor(this.statusText.includes('成功') || this.statusText.includes('完成') ? '#4CAF50' : ThemeColors.error(this.isDark))
+              .fontColor(this.statusText.includes('成功') || this.statusText.includes('完成') ?
+                ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
               .margin({ bottom: 10 })
           }
 
           Row() {
             ForEach(this.buttonRows, (row: LoginUiRow) => {
-              Button(this.busy ? '执行中...' : row.name).fontSize(14).fontColor('#FFF')
-                .height(40).layoutWeight(1).margin({ right: 8 })
+              Button(this.busy ? '执行中...' : row.name).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
+                .height(44).layoutWeight(1).margin({ right: 8 })
                 .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
                 .enabled(!this.busy)
-                .onClick(() => { this.runLoginAction(row); })
+                .onClick(() => { void this.runLoginAction(row); })
             }, (row: LoginUiRow): string => row.name)
           }.width('100%').margin({ top: 4, bottom: 8 })
-        }
-        .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+          }
+          .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        }.width('100%').constraintSize({ maxHeight: '80%' }).scrollBar(BarState.Auto)
       }
     }
     .width(this.webViewMode ? '96%' : '85%')
@@ -182,19 +197,22 @@ export struct SourceLoginDialog {
 
   /** WebView 模式：把 WebView 的 Cookie 拉回 CookieStore 持久化 */
   private async finishWebViewLogin(): Promise<void> {
+    const runId = ++this.actionRequestId;
     try {
       const wc = web_webview.WebCookieManager.fetchCookieSync(this.loginUrl);
       if (wc && wc.trim()) {
         await CookieStore.getInstance().setCookie(this.loginUrl, wc);
-        console.info('[SourceLogin] pulled cookies from WebView:', wc.substring(0, 60));
-        promptAction.showToast({ message: '登录凭据已保存' });
+        if (!this.isActive || runId !== this.actionRequestId) return;
+        console.info('[SourceLogin] pulled cookies from WebView');
+        UiUtil.showToast(this.getUIContext(), { message: '登录凭据已保存' });
       } else {
-        promptAction.showToast({ message: '未获取到 Cookie，请确认已在页面中登录' });
+        UiUtil.showToast(this.getUIContext(), { message: '未获取到 Cookie，请确认已在页面中登录' });
         return;
       }
     } catch (e) {
+      if (!this.isActive || runId !== this.actionRequestId) return;
       console.warn('[SourceLogin] pull cookies failed:', (e as Error).message);
-      promptAction.showToast({ message: '读取 Cookie 失败：' + (e as Error).message });
+      UiUtil.showToast(this.getUIContext(), { message: '读取 Cookie 失败：' + (e as Error).message });
       return;
     }
     this.controller.close();
@@ -204,6 +222,7 @@ export struct SourceLoginDialog {
   private async runLoginAction(row: LoginUiRow): Promise<void> {
     if (this.busy || !row.action) return;
     this.busy = true;
+    const runId = ++this.actionRequestId;
     this.statusText = '';
     try {
       // 收集表单值 → 登录信息
@@ -213,6 +232,7 @@ export struct SourceLoginDialog {
       }
       const infoJson = JSON.stringify(infoMap);
       await LoginInfoStore.getInstance().put(this.sourceUrl, infoJson);
+      if (!this.isActive || runId !== this.actionRequestId) return;
 
       // 追加 dump：把登录后的 loginInfo / variable 带回来持久化
       const script = this.loginUrl + '\n' + row.action +
@@ -228,6 +248,7 @@ export struct SourceLoginDialog {
         variableBlob: this.variableComment,
         loginInfoJson: infoJson,
       });
+      if (!this.isActive || runId !== this.actionRequestId) return;
 
       // 解析 dump 结果并持久化
       let persisted = false;
@@ -246,13 +267,14 @@ export struct SourceLoginDialog {
         } catch (_e) { /* dump 解析失败仅记录 */ }
       }
       this.statusText = row.name + '已执行' + (persisted ? '，凭据已保存' : '');
-      promptAction.showToast({ message: row.name + '完成' });
+      UiUtil.showToast(this.getUIContext(), { message: row.name + '完成' });
       this.controller.close();
     } catch (e) {
+      if (!this.isActive || runId !== this.actionRequestId) return;
       console.error('[SourceLogin] action failed:', (e as Error).message);
       this.statusText = row.name + '失败：' + (e as Error).message;
     } finally {
-      this.busy = false;
+      if (this.isActive && runId === this.actionRequestId) this.busy = false;
     }
   }
 }

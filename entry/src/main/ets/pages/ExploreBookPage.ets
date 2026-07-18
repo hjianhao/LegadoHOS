@@ -2,14 +2,14 @@
  * 发现书籍列表页
  * 直接走 SourceExecutor 引擎解析，复用搜索/发现规则。
  */
-import { AppTheme } from '../theme/AppTheme';
 import { ThemeColors } from '../theme/ThemeColors';
 import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
-import router from '@ohos.router';
 import { UiUtil } from '../util/UiUtil';
+import { AppDatabase } from '../data/database/AppDatabase';
+import { BookSourceTable } from '../data/database/BookSourceTable';
 
 @Entry
 @Component
@@ -19,115 +19,61 @@ struct ExploreBookPage {
   @State sourceUrl: string = '';
   @State categoryName: string = '';
   @State categoryUrl: string = '';
-  @State header: string = '';
-  @State ruleExploreList: string = '';
-  @State ruleExploreName: string = '';
-  @State ruleExploreAuthor: string = '';
-  @State ruleExploreCover: string = '';
-  @State ruleExploreKind: string = '';
-  @State ruleExploreWordCount: string = '';
-  @State ruleExploreIntroduce: string = '';
-  @State ruleExploreLastChapter: string = '';
-  @State ruleExploreLastUpdateTime: string = '';
-  @State ruleExploreNoteUrl: string = '';
-  // 脚本式书源字段
-  @State rawJson: string = '';
-  @State jsLib: string = '';
-  @State script: string = '';
-  @State loginUrl: string = '';
-  @State coverDecodeJs: string = '';
-  @State variableComment: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
   @State books: SearchResult[] = [];
   @State isLoading: boolean = true;
   @State errorMsg: string = '';
 
+  private requestId: number = 0;
+  private isActive: boolean = false;
+
   aboutToAppear(): void {
+    this.isActive = true;
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
       this.sourceId = Number(params['sourceId'] || 0);
-      this.sourceName = String(params['sourceName'] || '');
-      this.sourceUrl = String(params['sourceUrl'] || '');
       this.categoryName = String(params['categoryName'] || '');
       this.categoryUrl = String(params['categoryUrl'] || '');
-      this.header = String(params['header'] || '');
-      this.ruleExploreList = String(params['ruleExploreList'] || '');
-      this.ruleExploreName = String(params['ruleExploreName'] || '');
-      this.ruleExploreAuthor = String(params['ruleExploreAuthor'] || '');
-      this.ruleExploreCover = String(params['ruleExploreCover'] || '');
-      this.ruleExploreKind = String(params['ruleExploreKind'] || '');
-      this.ruleExploreWordCount = String(params['ruleExploreWordCount'] || '');
-      this.ruleExploreIntroduce = String(params['ruleExploreIntroduce'] || '');
-      this.ruleExploreLastChapter = String(params['ruleExploreLastChapter'] || '');
-      this.ruleExploreLastUpdateTime = String(params['ruleExploreLastUpdateTime'] || '');
-      this.ruleExploreNoteUrl = String(params['ruleExploreNoteUrl'] || '');
-      this.rawJson = String(params['rawJson'] || '');
-      this.jsLib = String(params['jsLib'] || '');
-      this.script = String(params['script'] || '');
-      this.loginUrl = String(params['loginUrl'] || '');
-      this.coverDecodeJs = String(params['coverDecodeJs'] || '');
-      this.variableComment = String(params['variableComment'] || '');
     }
     void this.loadBooks();
   }
 
-  private makeSource(catUrl: string): BookSource {
-    return {
-      id: this.sourceId, sourceName: this.sourceName, sourceUrl: this.sourceUrl,
-      sourceType: 0, group: '', enabled: true, weight: 0, customOrder: 0,
-      isExploreRequest: true,
-      ruleSearchUrl: catUrl,
-      ruleSearchList: this.ruleExploreList,
-      ruleSearchName: this.ruleExploreName,
-      ruleSearchAuthor: this.ruleExploreAuthor,
-      ruleSearchCover: this.ruleExploreCover,
-      ruleSearchNoteUrl: this.ruleExploreNoteUrl,
-      ruleSearchKind: this.ruleExploreKind,
-      ruleSearchWordCount: this.ruleExploreWordCount,
-      ruleSearchLastUpdateTime: this.ruleExploreLastUpdateTime || '',
-      ruleSearchLastChapter: this.ruleExploreLastChapter,
-      ruleSearchIntroduce: this.ruleExploreIntroduce, ruleSearchCheckKeyWord: '',
-      ruleBookInfoInit: '', ruleBookInfoName: '', ruleBookInfoAuthor: '', ruleBookInfoCover: '',
-      ruleBookInfoIntroduce: '', ruleBookInfoKind: '', ruleBookInfoWordCount: '',
-      ruleBookInfoLastUpdateTime: '', ruleBookInfoFrom: '', ruleBookInfoTocUrl: '',
-      ruleBookInfoLastChapter: '', ruleBookInfoCanReName: '', ruleBookInfoDownloadUrls: '',
-      ruleBookInfoRelatedBooks: '',
-      ruleTocUrl: '', ruleToc: '', ruleTocTitle: '', ruleTocUrlItem: '',
-      ruleTocPreUpdateJs: '', ruleTocFormatJs: '', ruleTocIsVolume: '',
-      ruleTocIsVip: '', ruleTocIsPay: '', ruleTocUpdateTime: '', ruleTocNextTocUrl: '',
-      ruleBookContentUrl: '', ruleBookContent: '', ruleBookContentNext: '',
-      ruleBookContentSubContent: '', ruleBookContentTitle: '', ruleBookContentWebJs: '',
-      ruleBookContentSourceRegex: '', ruleBookContentReplaceRegex: '',
-      ruleBookContentImageStyle: '', ruleBookContentImageDecode: '',
-      ruleBookContentPayAction: '', ruleBookContentCallBackJs: '',
-      ruleExplores: '', ruleReview: '', ruleReviewUrl: '', ruleReviewAvatar: '',
-      ruleReviewContent: '', ruleReviewPostTime: '', ruleReviewQuoteUrl: '',
-      script: this.script, header: this.header,
-      jsLib: this.jsLib, loginUrl: this.loginUrl,
-      rawJson: this.rawJson,
-      respondTime: 0, respond: 0, concurrentRate: '', bookSourceComment: '',
-      variableComment: this.variableComment, coverDecodeJs: this.coverDecodeJs, loginCheckJs: '', bookUrlPattern: '',
-      ruleExploreScreen: '', ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '',
-      ruleExploreCover: '', ruleExploreKind: '', ruleExploreWordCount: '',
-      ruleExploreLastChapter: '', ruleExploreLastUpdateTime: '', ruleExploreNoteUrl: '',
-      ruleExploreIntroduce: '', exploreUrl: '', loginUi: '',
-      eventListener: false, customButton: false, homepageModules: '',
-      enabledCookieJar: false, enabledExplore: true, exploreScreen: '',
-      review: '', reviewUrl: '', reviewAvatar: '', reviewContent: '',
-      reviewPostTime: '', reviewQuoteUrl: '',
-      createTime: 0, updateTime: 0,
-      isAiGenerated: false,
-    };
+  aboutToDisappear(): void {
+    this.isActive = false;
+    this.requestId++;
+  }
+
+  private makeExploreSource(source: BookSource, catUrl: string): BookSource {
+    source.isExploreRequest = true;
+    source.ruleSearchUrl = catUrl;
+    source.ruleSearchList = source.ruleExploreList || source.ruleSearchList;
+    source.ruleSearchName = source.ruleExploreName || source.ruleSearchName;
+    source.ruleSearchAuthor = source.ruleExploreAuthor || source.ruleSearchAuthor;
+    source.ruleSearchCover = source.ruleExploreCover || source.ruleSearchCover;
+    source.ruleSearchNoteUrl = source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
+    source.ruleSearchKind = source.ruleExploreKind || source.ruleSearchKind;
+    source.ruleSearchWordCount = source.ruleExploreWordCount || source.ruleSearchWordCount;
+    source.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
+    source.ruleSearchLastChapter = source.ruleExploreLastChapter || source.ruleSearchLastChapter;
+    source.ruleSearchIntroduce = source.ruleExploreIntroduce || source.ruleSearchIntroduce;
+    return source;
   }
 
   async loadBooks(): Promise<void> {
+    const runId = ++this.requestId;
     this.isLoading = true;
     this.errorMsg = '';
     this.books = [];
     console.info('[ExploreBook] Loading: ' + this.categoryName + ', url: ' + this.categoryUrl);
 
     try {
+      await AppDatabase.getInstance().waitForInit();
+      const source = await new BookSourceTable(AppDatabase.getInstance().rdbStore).getSourceById(this.sourceId);
+      if (!source) throw new Error('书源已被删除或不存在');
+      if (!this.isActive || runId !== this.requestId) return;
+      this.sourceName = source.sourceName;
+      this.sourceUrl = source.sourceUrl;
       let catUrl: string = this.categoryUrl || '';
       if (!catUrl) {
         this.isLoading = false;
@@ -153,15 +99,17 @@ struct ExploreBookPage {
       catUrl = catUrl.replace(/[&?]sub=[^&]*/g, '');
       console.info('[ExploreBook] Full URL: ' + catUrl);
 
-      const source: BookSource = this.makeSource(catUrl);
-      const results: SearchResult[] = await globalSourceExecutor.search(this.categoryName || '', [source]);
+      const exploreSource: BookSource = this.makeExploreSource(source, catUrl);
+      const results: SearchResult[] = await globalSourceExecutor.search(this.categoryName || '', [exploreSource]);
+      if (!this.isActive || runId !== this.requestId) return;
       console.info('[ExploreBook] Engine: ' + results.length + ' books');
       this.books = results;
     } catch (e) {
+      if (!this.isActive || runId !== this.requestId) return;
       this.errorMsg = '加载失败: ' + (e instanceof Error ? e.message : String(e));
       console.error('[ExploreBook] Error: ' + JSON.stringify(e));
     } finally {
-      this.isLoading = false;
+      if (this.isActive && runId === this.requestId) this.isLoading = false;
     }
   }
 
@@ -179,14 +127,15 @@ struct ExploreBookPage {
   build() {
     Column() {
       Row() {
-        Text('\u2190').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+        Button('\u2190').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('返回')
           .onClick((): void => { UiUtil.back(this.getUIContext()); })
         Text(this.categoryName || this.sourceName)
           .fontSize(18).fontWeight(FontWeight.Medium)
           .fontColor(ThemeColors.onBackground(this.isDark))
           .margin({ left: 12 }).layoutWeight(1).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text('').width(20)
+        Blank().width(44)
       }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
 
       if (this.isLoading) {

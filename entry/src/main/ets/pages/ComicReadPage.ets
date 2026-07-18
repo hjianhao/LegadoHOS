@@ -116,6 +116,8 @@ struct ComicReadPage {
   private prevChapterContent_: string = '';
   private prevChapterIdx_: number = -1;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
+  /** 章节切换代次，用于丢弃已经过期的图片异步结果。 */
+  private imageLoadGeneration_: number = 0;
   // 图片本地路径缓存：url -> localPath
   @State imagePaths: Map<string, string> = new Map<string, string>();
   // 图片加载失败标记
@@ -288,6 +290,7 @@ struct ComicReadPage {
     }
     // 设置标记，防止 onReachEnd/onReachStart 在章节切换时连锁触发
     this.justLoadedChapter_ = true;
+    this.imageLoadGeneration_++;
     if (!boundarySwitch) {
       this.isLoading = true;
     }
@@ -339,7 +342,7 @@ struct ComicReadPage {
         this.imageUrls = urls;
         this.isLoading = false;
         // 以目标页为中心向两侧扩散预加载，确保目标页优先下载
-        this.preloadImages_(urls, this.preloadNum_, targetPage);
+        this.preloadImages_(urls, Math.min(this.preloadNum_, 6), targetPage);
         // 下一帧滚动到目标位置（等待 List 渲染新数据后再滚动）
         setTimeout(() => {
           if (this.readMode === READ_MODE_WEBTOON) {
@@ -363,8 +366,8 @@ struct ComicReadPage {
     this.saveProgress();
     this.preloadNextChapter_(idx);
     this.preloadPrevChapter_(idx);
-    // 多章图片预下载（前后各 2 章）
-    this.preloadSurroundingChapters_(idx, 2);
+    // 相邻章节只预取首图，避免整章图片在后台堆积。
+    this.preloadSurroundingChapters_(idx, 1);
     // 延迟清除标记，确保 List 渲染完成后再允许 onReachEnd/onReachStart
     setTimeout(() => {
       this.justLoadedChapter_ = false;
@@ -499,10 +502,9 @@ struct ComicReadPage {
       const baseUrl: string = ch?.url || this.bookUrl || this.source_?.sourceUrl || '';
       const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
       if (urls.length === 0) return;
-      console.info('[ComicRead] Preloading', urls.length, 'images for chapter', idx);
-      for (const url of urls) {
-        MangaImageLoader.preload(url, this.source_);
-      }
+      // 相邻章节只预取封面页；进入章节后再以当前页为中心按需加载。
+      console.info('[ComicRead] Preloading first image for chapter', idx);
+      MangaImageLoader.preload(urls[0], this.source_);
     } catch (_) { /* ignore */ }
   }
 
@@ -570,6 +572,7 @@ struct ComicReadPage {
 
     // 设置标记，防止 onReachEnd 连锁触发
     this.justLoadedChapter_ = true;
+    this.imageLoadGeneration_++;
     this.currentIndex = idx;
     this.chapterTitle = ch?.title || '';
     this.failedImages = new Set<string>();
@@ -592,7 +595,7 @@ struct ComicReadPage {
     this.saveProgress();
     this.preloadNextChapter_(idx);
     this.preloadPrevChapter_(idx);
-    this.preloadImages_(urls, this.preloadNum_, targetPage);
+    this.preloadImages_(urls, Math.min(this.preloadNum_, 6), targetPage);
     // 条漫模式需要手动滚动到正确位置；翻页模式由 .index(swiperIndex) 声明式绑定处理
     setTimeout(() => {
       if (this.readMode === READ_MODE_WEBTOON) {
@@ -662,6 +665,7 @@ struct ComicReadPage {
   }
 
   async aboutToDisappear(): Promise<void> {
+    this.imageLoadGeneration_++;
     // 停止自动阅读
     this.stopAutoRead();
     const ch = this.allChapters_[this.currentIndex];
@@ -763,21 +767,22 @@ struct ComicReadPage {
   }
 
   /** 异步加载图片：先下载到本地，再更新 state 触发渲染 */
-  private async loadImage_(url: string): Promise<void> {
+  private async loadImage_(url: string, generation: number = this.imageLoadGeneration_): Promise<void> {
     if (this.imagePaths.has(url) || this.failedImages.has(url)) return;
     // 检查 url 是否属于当前章节（章节切换后旧 promise 的结果应丢弃）
     if (this.imageUrls.indexOf(url) < 0) return;
     try {
       const localPath: string = await MangaImageLoader.load(url, this.source_, (percent: number) => {
         // 更新进度
-        if (this.imageUrls.indexOf(url) >= 0 && !this.imagePaths.has(url)) {
+        if (generation === this.imageLoadGeneration_ && this.imageUrls.indexOf(url) >= 0 &&
+          !this.imagePaths.has(url)) {
           const newProg = new Map<string, number>(this.imageProgress);
           newProg.set(url, percent);
           this.imageProgress = newProg;
         }
       });
       // 异步返回后再次检查：章节可能已切换
-      if (this.imageUrls.indexOf(url) < 0) return;
+      if (generation !== this.imageLoadGeneration_ || this.imageUrls.indexOf(url) < 0) return;
       // 清除进度
       const newProg = new Map<string, number>(this.imageProgress);
       newProg.delete(url);
@@ -793,7 +798,7 @@ struct ComicReadPage {
         this.imagePaths = newMap;
       }
     } catch (err) {
-      if (this.imageUrls.indexOf(url) < 0) return;
+      if (generation !== this.imageLoadGeneration_ || this.imageUrls.indexOf(url) < 0) return;
       const newSet = new Set<string>(this.failedImages);
       newSet.add(url);
       this.failedImages = newSet;
@@ -1634,6 +1639,7 @@ struct ComicReadPage {
 
     if (sourceChanged) {
       // 清空缓存
+      this.imageLoadGeneration_++;
       this.allChapters_ = [];
       this.chapters = [];
       this.imageUrls = [];
@@ -1698,7 +1704,7 @@ struct ComicReadPage {
     try {
       // 获取本地缓存路径
       const localPath: string = MangaImageLoader.getLocalPath(url);
-      if (!localPath || !fileFs.accessSync(localPath)) {
+      if (!localPath || !await fileFs.access(localPath)) {
         UiUtil.showToast(this.getUIContext(), { message: '图片未缓存，无法保存', duration: 1500 });
         return;
       }

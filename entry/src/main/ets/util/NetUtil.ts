@@ -8,6 +8,12 @@ import util from '@ohos.util';
 import zlib from '@ohos.zlib';
 import { CookieStore } from './CookieStore';
 
+interface PooledSession {
+  session: rcp.Session;
+  activeRequests: number;
+  retired: boolean;
+}
+
 export class NetUtil {
   /** 请求前注入持久化的 Cookie 头（不覆盖显式设置的 Cookie） */
   private static injectCookie_(url: string, headers: Record<string, string>): void {
@@ -137,6 +143,22 @@ export class NetUtil {
     return NetUtil.httpRequest('POST', url, body, h, timeout || NetUtil.getDefaultTimeout());
   }
 
+  /**
+   * 使用 HarmonyOS 系统 HTTP 栈提交表单。
+   * 用于少数拒绝 RCP HTTP/2 POST、强制要求 Content-Length 的旧站点。
+   */
+  static async httpPostSystem(url: string, body: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
+    const h = NetUtil.buildHeaders(headers);
+    if (!h['Content-Type'] && !h['content-type']) {
+      h['Content-Type'] = 'application/x-www-form-urlencoded';
+    }
+    if (!h['Content-Length'] && !h['content-length']) {
+      h['Content-Length'] = body.length.toString();
+    }
+    return await NetUtil.systemHttpRequest('POST', NetUtil.normalizeUrl(url), body, h,
+      timeout || NetUtil.getDefaultTimeout());
+  }
+
   static async httpPut(url: string, body: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
     return NetUtil.httpRequest('PUT', url, body, NetUtil.buildHeaders(headers), timeout || NetUtil.getDefaultTimeout());
   }
@@ -150,17 +172,24 @@ export class NetUtil {
 
   // ========== 内部实现 ==========
 
-  private static session_: rcp.Session | null = null;
-  private static sessionTimeout_: number = 0;
+  /** 不同超时配置使用独立 Session，避免并发请求因 Session 重建而互相取消。 */
+  private static sessionPool_: Map<number, PooledSession> = new Map();
 
-  private static getSession(timeout: number): rcp.Session {
+  private static acquireSession(timeout: number): PooledSession {
     try {
-      // 超时或 DNS/Proxy 配置变更时重建 session
-      if (NetUtil.session_ && (NetUtil.sessionTimeout_ !== timeout || NetUtil.sessionConfigVersion !== NetUtil.configVersion)) {
-        try { NetUtil.session_.close(); } catch (_) { /* ignore */ }
-        NetUtil.session_ = null;
+      // DNS/Proxy 配置变化后淘汰旧池；仍有请求的 Session 等请求结束后再关闭。
+      if (NetUtil.sessionConfigVersion !== NetUtil.configVersion) {
+        NetUtil.sessionPool_.forEach((entry: PooledSession) => {
+          entry.retired = true;
+          if (entry.activeRequests === 0) {
+            try { entry.session.close(); } catch (_) { /* ignore */ }
+          }
+        });
+        NetUtil.sessionPool_.clear();
+        NetUtil.sessionConfigVersion = NetUtil.configVersion;
       }
-      if (!NetUtil.session_) {
+      let entry = NetUtil.sessionPool_.get(timeout);
+      if (!entry) {
         const secCfg: rcp.SecurityConfiguration = {
           remoteValidation: 'system',
           tlsRange: {
@@ -196,24 +225,37 @@ export class NetUtil {
         const sessionCfg: rcp.SessionConfiguration = {
           requestConfiguration: cfg
         };
-        NetUtil.session_ = rcp.createSession(sessionCfg);
-        NetUtil.sessionTimeout_ = timeout;
-        NetUtil.sessionConfigVersion = NetUtil.configVersion;
+        entry = {
+          session: rcp.createSession(sessionCfg),
+          activeRequests: 0,
+          retired: false
+        };
+        NetUtil.sessionPool_.set(timeout, entry);
         console.info('[NetUtil] Session created, timeout:', timeout, 'ms');
       }
-      return NetUtil.session_;
+      entry.activeRequests++;
+      return entry;
     } catch (err) {
       throw err;
     }
   }
 
-  /** 丢弃发生连接错误的会话，避免后续请求继续复用异常连接。 */
-  private static resetSession(): void {
-    if (NetUtil.session_) {
-      try { NetUtil.session_.close(); } catch (_) { /* ignore */ }
+  private static releaseSession(entry: PooledSession): void {
+    entry.activeRequests = Math.max(0, entry.activeRequests - 1);
+    if (entry.retired && entry.activeRequests === 0) {
+      try { entry.session.close(); } catch (_) { /* ignore */ }
     }
-    NetUtil.session_ = null;
-    NetUtil.sessionTimeout_ = 0;
+  }
+
+  /** 淘汰发生连接错误的会话；等待其余并发请求结束后再关闭。 */
+  private static retireSession(timeout: number, entry: PooledSession): void {
+    if (NetUtil.sessionPool_.get(timeout) === entry) {
+      NetUtil.sessionPool_.delete(timeout);
+    }
+    entry.retired = true;
+    if (entry.activeRequests === 0) {
+      try { entry.session.close(); } catch (_) { /* ignore */ }
+    }
   }
 
   /** 仅重试 TLS/连接重置等瞬时网络错误，不重试 HTTP 状态码错误。 */
@@ -283,13 +325,14 @@ export class NetUtil {
     const requestUrl = NetUtil.normalizeUrl(url);
     let lastError: string = '';
     for (let attempt = 0; attempt < 2; attempt++) {
+      let sessionEntry: PooledSession | null = null;
       try {
         const h = NetUtil.buildHeaders(headers);
         NetUtil.injectCookie_(requestUrl, h);
         const reqHeaders = h as rcp.RequestHeaders;
         const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
-        const session = NetUtil.getSession(timeout);
-        const response = await session.fetch(request);
+        sessionEntry = NetUtil.acquireSession(timeout);
+        const response = await sessionEntry.session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
         CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
         console.info('[NetUtil]', method, requestUrl, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
@@ -308,10 +351,12 @@ export class NetUtil {
         lastError = (e as Error).message || String(e);
         if (attempt === 0 && NetUtil.isTransientConnectionError(lastError)) {
           console.warn('[NetUtil] Transient connection error, rebuilding session and retrying:', lastError);
-          NetUtil.resetSession();
+          if (sessionEntry) NetUtil.retireSession(timeout, sessionEntry);
           continue;
         }
         break;
+      } finally {
+        if (sessionEntry) NetUtil.releaseSession(sessionEntry);
       }
     }
     if (NetUtil.isTransientConnectionError(lastError) && !NetUtil.proxyHost) {

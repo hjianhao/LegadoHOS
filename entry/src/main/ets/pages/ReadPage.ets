@@ -25,6 +25,7 @@ import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
+import { Book } from '../model/Book';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
 import { ChangeSourceSheet, ChapterPickSheet, OptionSelectSheet } from '../components/BookInfoSheets';
@@ -1231,7 +1232,9 @@ struct ReadPage {
    * 整本换源（对齐 Legado ReadBookViewModel.applyChangeSource）：
    * 1. 先加载新源详情 + 目录并校验，目录为空则失败回退（不动数据库）
    * 2. 按章节标题/章节号匹配新目录中的当前章节（BookHelp.getDurChapter）
-   * 3. 校验通过后才更新书架记录、替换目录、迁移阅读进度
+   * 3. 预验证匹配章节正文可读，避免换到一个目录有效但正文不可用的源
+   * 4. 数据库迁移放在事务中执行；提交后若出现意外，用快照明确恢复
+   * 5. 迁移阅读进度：保留匹配章节和章节内位置（durChapterPos）
    */
   private async applySourceChange(result: SearchResult): Promise<void> {
     const newBookUrl = result.noteUrl || '';
@@ -1248,6 +1251,10 @@ struct ReadPage {
     this.showMenu = false;
     this.isLoading = true;
     UiUtil.showToast(this.getUIContext(), { message: '正在校验新书源...', duration: 1500 });
+    // 回滚快照
+    let bookBackup: Book | null = null;
+    let chaptersBackup: BookChapter[] = [];
+    let migrated = false;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
@@ -1281,10 +1288,34 @@ struct ReadPage {
       const matchedIdx = ChapterMatcher.getDurChapterIndex(
         this.currentIndex, oldChapterTitle, newToc, this.totalChapters_);
 
-      // 5. 校验通过：迁移书架数据库记录
+      // 5. 目标 URL 查重：已是另一书架记录则拒绝，避免产生重复 bookUrl
       const bookTable = new BookTable(db);
       const shelfBook = this.bookUrl ? await bookTable.getBookByUrl(this.bookUrl) : null;
+      const dupBook = await bookTable.getBookByUrl(newBookUrl);
+      if (dupBook && (!shelfBook || dupBook.id !== shelfBook.id)) {
+        if (dupBook.isShelf) throw new Error('目标源的书籍已在书架中');
+        await bookTable.deleteBook(dupBook.id);
+      }
+
+      // 6. 预验证匹配章节正文可读（loadChapter 内部会吞异常，这里主动验证）
+      const matchedChapter = newToc[matchedIdx];
+      let verifiedContent = '';
+      if (matchedChapter?.url) {
+        try {
+          verifiedContent = await globalSourceExecutor.getContent(newSource, matchedChapter.url, newBookUrl);
+        } catch (_e) {
+          verifiedContent = '';
+        }
+      }
+      if (!verifiedContent || verifiedContent.length <= 50) throw new Error('新源正文加载失败');
+
+      // 7. 事务迁移：更新书籍记录 + 替换目录（旧章节内容缓存一并清除）
+      const chapterTable = new ChapterTable(db);
       if (shelfBook) {
+        // 快照旧记录，供提交后异常时明确恢复（ArkTS 禁止对象展开，用 JSON 深拷贝）
+        bookBackup = JSON.parse(JSON.stringify(shelfBook)) as Book;
+        chaptersBackup = await chapterTable.getChaptersByBookId(shelfBook.id);
+
         shelfBook.bookUrl = newBookUrl;
         shelfBook.origin = result.origin || newSource.sourceName || this.origin;
         shelfBook.originUrl = newOriginUrl;
@@ -1298,14 +1329,11 @@ struct ReadPage {
         shelfBook.totalChapterNum = newToc.length;
         shelfBook.durChapterIndex = matchedIdx;
         shelfBook.durChapterTitle = newToc[matchedIdx]?.title || '';
-        shelfBook.durChapterPos = 0;
+        shelfBook.durChapterPos = this.pageIndex; // 保留章节内位置
         shelfBook.durChapterProgress = newToc.length > 0 ? matchedIdx / newToc.length : 0;
         shelfBook.lastOpenTime = Date.now();
         shelfBook.updateTime = Date.now();
-        await bookTable.updateBook(shelfBook);
-        // 替换目录（旧章节 URL 全部失效，内容缓存一并清除）
-        const chapterTable = new ChapterTable(db);
-        await chapterTable.deleteChaptersByBookId(shelfBook.id);
+
         const now = Date.now();
         const rows: BookChapter[] = newToc.map((ch: BookSourceChapter, idx: number): BookChapter => ({
           id: 0,
@@ -1324,12 +1352,22 @@ struct ReadPage {
           createTime: now,
           updateTime: now,
         }));
-        await chapterTable.insertChapters(rows);
+        db.beginTransaction();
+        try {
+          await bookTable.updateBook(shelfBook);
+          await chapterTable.deleteChaptersByBookId(shelfBook.id);
+          await chapterTable.insertChapters(rows);
+          db.commit();
+          migrated = true;
+        } catch (txErr) {
+          db.rollBack();
+          throw new Error('数据库迁移失败: ' + (txErr as Error).message);
+        }
         this.bookId_ = shelfBook.id;
         AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
       }
 
-      // 6. 更新内存状态并加载匹配章节
+      // 8. 更新内存状态（保留 pageIndex，即章节内阅读位置）
       this.origin = result.origin || newSource.sourceName || this.origin;
       this.originUrl = newOriginUrl;
       this.bookUrl = newBookUrl;
@@ -1340,20 +1378,40 @@ struct ReadPage {
       this.chapters = newToc;
       this.targetIdx_ = matchedIdx;
       this.currentIndex = matchedIdx;
-      this.pageIndex = 0;
       this.clearTransientReadState_();
       ChapterCache.bookUrl = newBookUrl;
       ChapterCache.chapters = newToc;
       ChapterCache.targetIndex = matchedIdx;
 
-      await this.loadChapter(matchedIdx);
+      // 9. 直接应用已验证的正文（pageIndex 由 layoutText 收敛到合法范围）
+      if (this.cfg.chineseMode !== 'original') {
+        verifiedContent = convertChinese(verifiedContent, this.cfg.chineseMode);
+      }
+      this.applyChapterContent_(matchedIdx, verifiedContent);
+      this.isLoading = false;
+      await this.saveToDbCache_(matchedIdx, verifiedContent);
+      this.saveProgress();
+      this.preloadNextChapter_(matchedIdx);
+      this.cacheSurrounding_(matchedIdx);
       UiUtil.showToast(this.getUIContext(), {
         message: '已更换书源：' + (newToc[matchedIdx]?.title || '第 ' + (matchedIdx + 1) + ' 章'),
         duration: 2000
       });
     } catch (e) {
       console.error('[ReadPage] applySourceChange failed:', (e as Error).message);
-      // 校验失败：旧源数据未被破坏，保持当前阅读状态
+      // 已提交事务后出现意外：用快照明确恢复旧书籍记录和旧目录
+      if (migrated && bookBackup) {
+        try {
+          const db = AppDatabase.getInstance().rdbStore;
+          const bookTable = new BookTable(db);
+          const chapterTable = new ChapterTable(db);
+          await bookTable.updateBook(bookBackup);
+          await chapterTable.deleteChaptersByBookId(bookBackup.id);
+          if (chaptersBackup.length > 0) await chapterTable.insertChapters(chaptersBackup);
+        } catch (rbErr) {
+          console.error('[ReadPage] rollback failed:', (rbErr as Error).message);
+        }
+      }
       this.isLoading = false;
       UiUtil.showToast(this.getUIContext(), { message: '换源失败：' + (e as Error).message, duration: 2000 });
     }
@@ -1378,6 +1436,7 @@ struct ReadPage {
         cachedSources: cachedForSheet,
         singleChapterMode: singleChapter,
         allowAddAsNew: false,
+        currentSourceType: this.source_ ? this.source_.sourceType : -1,
         onReplace: (result: SearchResult) => {
           if (singleChapter) {
             this.applySingleChapterSource_(result);

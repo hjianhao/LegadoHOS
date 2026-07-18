@@ -721,7 +721,7 @@
   {
     "bookSourceComment": "//20240223By_zhbyjm7783 制作\n//20240224By_遇知 修改目录规则，加上分卷，完善VIP标识\n//202501022By_聆听月与悦 完善目录规则+简介规则（💎为付费章节，💮为免费章节）\n//\t发现除排行榜外均为免费分类\n搜索和发现为空时，点击登录一次\n必须勾选CookieJar",
     "bookSourceGroup": "《☃ 自用》",
-    "bookSourceName": "🎉起点中文网(修复搜索只有一页的问题)",
+    "bookSourceName": "🎉起点中文网",
     "bookSourceType": 0,
     "bookSourceUrl": "https://www.qidian.com",
     "customButton": false,

@@ -9,7 +9,11 @@ import { Book } from '../model/Book';
 import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookGroup';
 import { BookCover } from '../components/BookCover';
 import { BookshelfTransferService } from '../service/BookshelfTransferService';
-import { DownloadService } from '../service/DownloadService';
+import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
+import { BookExportService, ExportBookInfo, ExportOptions } from '../service/BookExportService';
+import { BookSourceTable } from '../data/database/BookSourceTable';
+import { BookChapter } from '../model/BookChapter';
+import { BookSource } from '../model/BookSource';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
@@ -147,15 +151,46 @@ struct BookshelfManagePage {
     if (!this.requireSelection()) return;
     try {
       const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
-      const download = DownloadService.getInstance();
+      const sourceDao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      const sources = await sourceDao.getAllSources();
+      const cacheService = BookCacheService.getInstance();
+      let startedBooks = 0;
       let queued = 0;
       for (const book of this.selectedBooks()) {
         const chapters = await chapterDao.getChaptersByBookId(book.id);
         if (chapters.length === 0) continue;
-        await download.downloadBook(book, chapters);
+        const source = sources.find((s: BookSource): boolean =>
+          s.sourceUrl === book.originUrl || s.sourceName === book.origin);
+        if (!source || cacheService.isRunning(book.id)) continue;
+        startedBooks++;
         queued += chapters.length;
+        // 后台执行，不等待完成；进度在通知栏展示
+        cacheService.cacheBook({
+          bookId: book.id,
+          bookName: book.name,
+          bookUrl: book.bookUrl,
+          source: source,
+          chapters: chapters.map((ch: BookChapter): CacheChapterItem => {
+            return { index: ch.index, title: ch.title, url: ch.url };
+          }),
+          startIndex: 0,
+          endIndex: chapters.length - 1,
+          context: UiUtil.getHostContext(this.getUIContext()),
+        }).then((result) => {
+          if (result) {
+            console.info('[BookshelfManage] cache done: ' + book.name
+              + ' success=' + result.success + ' failed=' + result.failed);
+          }
+        }).catch((e: Error) => {
+          console.warn('[BookshelfManage] cache fail: ' + book.name + ' - ' + e.message);
+        });
       }
-      UiUtil.showToast(this.getUIContext(), { message: queued > 0 ? '已加入缓存队列 ' + queued + ' 章' : '选中书籍暂无目录', duration: 1800 });
+      UiUtil.showToast(this.getUIContext(), {
+        message: startedBooks > 0
+          ? '已开始缓存 ' + startedBooks + ' 本书（共 ' + queued + ' 章）'
+          : '选中书籍无可用书源或目录为空',
+        duration: 1800
+      });
     } catch (_e) {
       UiUtil.showToast(this.getUIContext(), { message: '加入缓存失败', duration: 1500 });
     }
@@ -174,6 +209,74 @@ struct BookshelfManagePage {
     } catch (_e) {
       UiUtil.showToast(this.getUIContext(), { message: '导出失败', duration: 1500 });
     }
+  }
+
+  /** 批量导出：先选格式（TXT / EPUB），再选目录，每本书导出一个文件 */
+  chooseExportFormat(): void {
+    if (!this.requireSelection()) return;
+    UiUtil.showAlertDialog(this.getUIContext(), {
+      title: '批量导出',
+      message: '选择导出格式（每本书导出一个文件，自动下载缺失章节）',
+      primaryButton: { value: 'TXT', action: (): void => { this.exportSelectedBooks('txt'); } },
+      secondaryButton: { value: 'EPUB', action: (): void => { this.exportSelectedBooks('epub'); } },
+    });
+  }
+
+  /** 批量导出到用户选择的目录 */
+  async exportSelectedBooks(format: string): Promise<void> {
+    const books = this.selectedBooks();
+    const ext = format === 'epub' ? '.epub' : '.txt';
+    let dirUri = '';
+    try {
+      const uris = await new picker.DocumentViewPicker().select({
+        selectMode: picker.DocumentSelectMode.FOLDER,
+      });
+      if (!uris || uris.length === 0) return;
+      dirUri = uris[0];
+    } catch (_e) {
+      UiUtil.showToast(this.getUIContext(), { message: '选择导出目录失败', duration: 1500 });
+      return;
+    }
+    UiUtil.showToast(this.getUIContext(), { message: '开始导出 ' + books.length + ' 本书...', duration: 1500 });
+    let success = 0;
+    let failed = 0;
+    for (const book of books) {
+      try {
+        const info: ExportBookInfo = {
+          id: book.id,
+          name: book.name,
+          author: book.author,
+          introduce: book.introduce,
+          coverUrl: book.coverUrl,
+          bookUrl: book.bookUrl,
+          origin: book.origin,
+          originUrl: book.originUrl,
+        };
+        const fileName = BookExportService.suggestFileName(info, ext);
+        const options: ExportOptions = {
+          includeTitle: true,
+          useReplace: true,
+          downloadMissing: true,
+          context: UiUtil.getHostContext(this.getUIContext()),
+        };
+        const result = format === 'epub'
+          ? await BookExportService.exportBookEpub(info, dirUri + '/' + fileName, options)
+          : await BookExportService.exportBookTxt(info, dirUri + '/' + fileName, options);
+        if (result.success) {
+          success++;
+        } else {
+          failed++;
+          console.warn('[BookshelfManage] export fail: ' + book.name + ' - ' + result.error);
+        }
+      } catch (e) {
+        failed++;
+        console.warn('[BookshelfManage] export error: ' + book.name + ' - ' + (e as Error).message);
+      }
+    }
+    UiUtil.showToast(this.getUIContext(), {
+      message: '导出完成：成功 ' + success + ' 本，失败 ' + failed + ' 本',
+      duration: 2500
+    });
   }
 
   async moveSelectedToGroup(groupId: number): Promise<void> {
@@ -238,8 +341,10 @@ struct BookshelfManagePage {
             .height(34).padding({ left: 8, right: 8 }).onClick(() => { this.invertSelect(); })
           Button('移动').fontSize(13).fontColor('#0078D7').backgroundColor(Color.Transparent)
             .height(34).padding({ left: 8, right: 8 }).onClick(() => { if (this.requireSelection()) this.showGroupChooser = true; })
-          Button('导出').fontSize(13).fontColor('#0078D7').backgroundColor(Color.Transparent)
+          Button('书单').fontSize(13).fontColor('#0078D7').backgroundColor(Color.Transparent)
             .height(34).padding({ left: 8, right: 8 }).onClick(() => { this.exportSelected(); })
+          Button('导出').fontSize(13).fontColor('#0078D7').backgroundColor(Color.Transparent)
+            .height(34).padding({ left: 8, right: 8 }).onClick(() => { this.chooseExportFormat(); })
           Button('缓存').fontSize(13).fontColor('#0078D7').backgroundColor(Color.Transparent)
             .height(34).padding({ left: 8, right: 8 }).onClick(() => { this.cacheSelected(); })
           Button('清缓存').fontSize(13).fontColor('#FF9800').backgroundColor(Color.Transparent)

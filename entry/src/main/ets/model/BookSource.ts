@@ -250,7 +250,7 @@ export function parseBookSource(json: any): BookSource {
     sourceName: json.sourceName || json.bookSourceName || '',
     sourceUrl: json.sourceUrl || json.bookSourceUrl || '',
     sourceType: json.bookSourceType ?? json.sourceType ?? 0,
-    group: json.group || '',
+    group: json.bookSourceGroup || json.group || '',
     enabled: json.enabled !== false,
     weight: json.weight || 0,
     customOrder: json.customOrder || 0,
@@ -285,13 +285,13 @@ export function parseBookSource(json: any): BookSource {
     ruleReview: toRuleString(json.ruleReview),
     script: toRuleString(json.script),
     header: toRuleString(json.header || ''),
-    ruleSearchCheckKeyWord: json.ruleSearchCheckKeyWord || json.checkKeyWord || '',
+    ruleSearchCheckKeyWord: json.ruleSearchCheckKeyWord || rs.checkKeyWord || json.checkKeyWord || '',
     ruleSearchLastChapter: json.ruleSearchLastChapter || rs.lastChapter || '',
     ruleBookInfoLastChapter: json.ruleBookInfoLastChapter || bi.lastChapter || '',
     ruleBookInfoTocUrl: json.ruleBookInfoTocUrl || bi.tocUrl || '',
-    ruleBookInfoCanReName: json.ruleBookInfoCanReName || '',
-    ruleBookInfoDownloadUrls: json.ruleBookInfoDownloadUrls || '',
-    ruleBookInfoRelatedBooks: json.ruleBookInfoRelatedBooks || '',
+    ruleBookInfoCanReName: json.ruleBookInfoCanReName || bi.canReName || '',
+    ruleBookInfoDownloadUrls: json.ruleBookInfoDownloadUrls || bi.downloadUrls || '',
+    ruleBookInfoRelatedBooks: json.ruleBookInfoRelatedBooks || bi.relatedBooks || '',
     ruleTocPreUpdateJs: json.ruleTocPreUpdateJs || rt.preUpdateJs || '',
     ruleTocFormatJs: json.ruleTocFormatJs || rt.formatJs || '',
     ruleTocIsVolume: json.ruleTocIsVolume || rt.isVolume || '',
@@ -299,15 +299,15 @@ export function parseBookSource(json: any): BookSource {
     ruleTocIsPay: json.ruleTocIsPay || rt.isPay || '',
     ruleTocUpdateTime: json.ruleTocUpdateTime || rt.updateTime || '',
     ruleTocNextTocUrl: json.ruleTocNextTocUrl || rt.nextTocUrl || '',
-    ruleBookContentSubContent: json.ruleBookContentSubContent || '',
-    ruleBookContentTitle: json.ruleBookContentTitle || '',
-    ruleBookContentWebJs: json.ruleBookContentWebJs || '',
-    ruleBookContentSourceRegex: json.ruleBookContentSourceRegex || '',
+    ruleBookContentSubContent: json.ruleBookContentSubContent || rc.subContent || '',
+    ruleBookContentTitle: json.ruleBookContentTitle || rc.title || '',
+    ruleBookContentWebJs: json.ruleBookContentWebJs || rc.webJs || '',
+    ruleBookContentSourceRegex: json.ruleBookContentSourceRegex || rc.sourceRegex || '',
     ruleBookContentReplaceRegex: json.ruleBookContentReplaceRegex || rc.replaceRegex || '',
     ruleBookContentImageStyle: json.ruleBookContentImageStyle || rc.imageStyle || '',
     ruleBookContentImageDecode: json.ruleBookContentImageDecode || rc.imageDecode || '',
-    ruleBookContentPayAction: json.ruleBookContentPayAction || '',
-    ruleBookContentCallBackJs: json.ruleBookContentCallBackJs || '',
+    ruleBookContentPayAction: json.ruleBookContentPayAction || rc.payAction || '',
+    ruleBookContentCallBackJs: json.ruleBookContentCallBackJs || rc.callBackJs || '',
     respondTime: json.respondTime || 0,
     concurrentRate: json.concurrentRate || '',
     bookSourceComment: json.bookSourceComment || '',
@@ -354,4 +354,122 @@ export function parseBookSource(json: any): BookSource {
     updateTime: json.lastUpdateTime ?? json.updateTime ?? 0,
     isAiGenerated: json.isAiGenerated || false,
   };
+}
+
+/**
+ * 转换为 Android Legado 可直接导入的标准 JSON 对象。
+ *
+ * 先保留 rawJson 中未知的扩展字段，再用当前模型覆盖标准字段。这样编辑一个
+ * 已导入书源时，不会丢掉尚未拆列、或由新版 Legado 新增的配置。
+ */
+export function bookSourceToJsonObject(source: BookSource): Record<string, Object> {
+  let result: Record<string, Object> = {};
+  if (source.rawJson) {
+    try {
+      const raw = JSON.parse(source.rawJson) as Record<string, Object>;
+      if (raw && !Array.isArray(raw)) result = raw;
+    } catch (_e) { /* 无效原始 JSON 不影响按模型重新生成 */ }
+  }
+
+  result['bookSourceName'] = source.sourceName;
+  result['bookSourceUrl'] = source.sourceUrl;
+  result['bookSourceType'] = source.sourceType;
+  result['bookSourceGroup'] = source.group;
+  result['enabled'] = source.enabled;
+  result['enabledExplore'] = source.enabledExplore;
+  result['enabledCookieJar'] = source.enabledCookieJar;
+  result['weight'] = source.weight;
+  result['customOrder'] = source.customOrder;
+  result['lastUpdateTime'] = source.updateTime;
+  result['respondTime'] = source.respondTime;
+  result['concurrentRate'] = source.concurrentRate;
+  result['header'] = source.header;
+  result['loginUrl'] = source.loginUrl;
+  result['loginUi'] = source.loginUi;
+  result['loginCheckJs'] = source.loginCheckJs;
+  result['coverDecodeJs'] = source.coverDecodeJs;
+  result['jsLib'] = source.jsLib;
+  result['bookUrlPattern'] = source.bookUrlPattern;
+  result['bookSourceComment'] = source.bookSourceComment;
+  result['variableComment'] = source.variableComment;
+  result['exploreUrl'] = source.exploreUrl;
+  result['exploreScreen'] = source.exploreScreen;
+  result['homepageModules'] = source.homepageModules;
+  result['eventListener'] = source.eventListener;
+  result['customButton'] = source.customButton;
+
+  result['searchUrl'] = source.ruleSearchUrl;
+  result['ruleSearch'] = {
+    'checkKeyWord': source.ruleSearchCheckKeyWord,
+    'bookList': source.ruleSearchList,
+    'name': source.ruleSearchName,
+    'author': source.ruleSearchAuthor,
+    'kind': source.ruleSearchKind,
+    'wordCount': source.ruleSearchWordCount,
+    'lastChapter': source.ruleSearchLastChapter,
+    'lastUpdateTime': source.ruleSearchLastUpdateTime,
+    'intro': source.ruleSearchIntroduce,
+    'coverUrl': source.ruleSearchCover,
+    'bookUrl': source.ruleSearchNoteUrl
+  };
+  result['ruleExplore'] = {
+    'bookList': source.ruleExploreList,
+    'name': source.ruleExploreName,
+    'author': source.ruleExploreAuthor,
+    'kind': source.ruleExploreKind,
+    'wordCount': source.ruleExploreWordCount,
+    'lastChapter': source.ruleExploreLastChapter,
+    'lastUpdateTime': source.ruleExploreLastUpdateTime,
+    'intro': source.ruleExploreIntroduce,
+    'coverUrl': source.ruleExploreCover,
+    'bookUrl': source.ruleExploreNoteUrl
+  };
+  result['ruleBookInfo'] = {
+    'init': source.ruleBookInfoInit,
+    'name': source.ruleBookInfoName,
+    'author': source.ruleBookInfoAuthor,
+    'kind': source.ruleBookInfoKind,
+    'wordCount': source.ruleBookInfoWordCount,
+    'lastChapter': source.ruleBookInfoLastChapter,
+    'lastUpdateTime': source.ruleBookInfoLastUpdateTime,
+    'intro': source.ruleBookInfoIntroduce,
+    'coverUrl': source.ruleBookInfoCover,
+    'tocUrl': source.ruleBookInfoTocUrl,
+    'canReName': source.ruleBookInfoCanReName,
+    'downloadUrls': source.ruleBookInfoDownloadUrls,
+    'relatedBooks': source.ruleBookInfoRelatedBooks,
+    'from': source.ruleBookInfoFrom
+  };
+  result['ruleToc'] = {
+    'tocUrl': source.ruleTocUrl,
+    'chapterList': source.ruleToc,
+    'chapterName': source.ruleTocTitle,
+    'chapterUrl': source.ruleTocUrlItem,
+    'preUpdateJs': source.ruleTocPreUpdateJs,
+    'formatJs': source.ruleTocFormatJs,
+    'isVolume': source.ruleTocIsVolume,
+    'isVip': source.ruleTocIsVip,
+    'isPay': source.ruleTocIsPay,
+    'updateTime': source.ruleTocUpdateTime,
+    'nextTocUrl': source.ruleTocNextTocUrl
+  };
+  result['ruleContent'] = {
+    'contentUrl': source.ruleBookContentUrl,
+    'content': source.ruleBookContent,
+    'subContent': source.ruleBookContentSubContent,
+    'title': source.ruleBookContentTitle,
+    'nextContentUrl': source.ruleBookContentNext,
+    'webJs': source.ruleBookContentWebJs,
+    'sourceRegex': source.ruleBookContentSourceRegex,
+    'replaceRegex': source.ruleBookContentReplaceRegex,
+    'imageStyle': source.ruleBookContentImageStyle,
+    'imageDecode': source.ruleBookContentImageDecode,
+    'payAction': source.ruleBookContentPayAction,
+    'callBackJs': source.ruleBookContentCallBackJs
+  };
+  return result;
+}
+
+export function serializeBookSource(source: BookSource, pretty: boolean = false): string {
+  return JSON.stringify(bookSourceToJsonObject(source), null, pretty ? 2 : 0);
 }

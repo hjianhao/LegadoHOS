@@ -6,14 +6,11 @@
  * 每个书源可展开，通过获取 exploreUrl 返回的 JSON/文本解析分类。
  * 点击分类可跳转到书籍列表页（ExploreBookPage）。
  */
-import { AppTheme } from '../theme/AppTheme';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
 import { JsExpressionEvaluator, JsEvalContext } from '../engine/source/JsExpressionEvaluator';
-import router from '@ohos.router';
-import { promptAction } from '@kit.ArkUI';
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { UiUtil } from '../util/UiUtil';
@@ -47,9 +44,23 @@ export struct ExplorePage {
   @State resolvedFoundSource: BookSource | null = null;
   @State actionSourceUrl: string = '';
   @State sourceActionBusy: boolean = false;
+  @State loadError: string = '';
+  @State categoryError: string = '';
+
+  private sourceRequestId: number = 0;
+  private categoryRequestId: number = 0;
+  private isActive: boolean = false;
+  private lastCategoryError: string = '';
 
   aboutToAppear(): void {
-    void this.loadExploreSources();
+    this.isActive = true;
+    if (this.exploreSources.length === 0) void this.loadExploreSources();
+  }
+
+  aboutToDisappear(): void {
+    this.isActive = false;
+    this.sourceRequestId++;
+    this.categoryRequestId++;
   }
 
   getFilteredSources(): BookSource[] {
@@ -61,6 +72,8 @@ export struct ExplorePage {
   }
 
   async loadExploreSources(): Promise<void> {
+    const runId = ++this.sourceRequestId;
+    this.loadError = '';
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
@@ -83,16 +96,32 @@ export struct ExplorePage {
         console.info('[Explore] Source ' + s.sourceName + ': exploreUrl=' + ((s.exploreUrl || '').substring(0, 100)) + ' rawJson_len=' + ((s.rawJson || '').length));
       }
       // 筛选 exploreUrl 非空的源，或者 ruleExplores 是 :: 格式的（简单兼容）
-      this.exploreSources = allSources.filter((s: BookSource): boolean => {
+      const sources = allSources.filter((s: BookSource): boolean => {
+        // 与 Android 版 Legado 一致：发现页只展示 enabledExplore=true 的书源。
+        // enabled 是搜索开关，与发现开关相互独立。
+        if (!s.enabledExplore) return false;
         if (s.exploreUrl && s.exploreUrl.trim().length > 0) return true;
         // 兼容：检查 ruleExplores 是否为 :: 格式（如 "玄幻::/xuanhuan/"）
         if (s.ruleExplores && s.ruleExplores.trim().length > 0 && s.ruleExplores.includes('::')) return true;
         return false;
       });
+      if (!this.isActive || runId !== this.sourceRequestId) return;
+      this.exploreSources = sources;
       console.info('[Explore] Loaded ' + this.exploreSources.length + ' explore sources');
     } catch (_e) {
       console.error('[Explore] loadExploreSources error: ' + JSON.stringify(_e));
+      if (this.isActive && runId === this.sourceRequestId) {
+        this.loadError = (_e as Error).message || '发现书源加载失败';
+      }
     }
+  }
+
+  private cacheCategories(cacheKey: string, categories: ExploreCategory[]): ExploreCategory[] {
+    const next: Record<string, ExploreCategory[]> = {};
+    for (const key of Object.keys(this.categoryCache)) next[key] = this.categoryCache[key];
+    next[cacheKey] = categories;
+    this.categoryCache = next;
+    return categories;
   }
 
   /**
@@ -104,6 +133,7 @@ export struct ExplorePage {
    * 4. HTTP URL — 请求后解析 JSON 或文本
    */
   async loadCategories(source: BookSource, forceReload: boolean = false): Promise<ExploreCategory[]> {
+    this.lastCategoryError = '';
     const cacheKey = source.sourceUrl;
     if (!forceReload && this.categoryCache[cacheKey]) {
       return this.categoryCache[cacheKey];
@@ -119,7 +149,7 @@ export struct ExplorePage {
     if (exploreTrimmed.startsWith('[') || exploreTrimmed.startsWith('{')) {
       const parsed = this.parseExploreJson(exploreUrl);
       if (parsed.length > 0) {
-        this.categoryCache[cacheKey] = parsed;
+        this.cacheCategories(cacheKey, parsed);
         console.info('[Explore] Parsed ' + parsed.length + ' categories from exploreUrl JSON');
         return parsed;
       }
@@ -156,14 +186,14 @@ export struct ExplorePage {
             // 先 isJsonArray，再 split(&&|\n) + :: 格式）
             const jsonParsed = this.parseExploreJson(result);
             if (jsonParsed.length > 0) {
-              this.categoryCache[cacheKey] = jsonParsed;
+              this.cacheCategories(cacheKey, jsonParsed);
               console.info('[Explore] Parsed ' + jsonParsed.length + ' categories from JS exploreUrl (JSON)');
               return jsonParsed;
             }
             // JS 结果不是 JSON 时，尝试 :: / && 文本格式解析
             const lineParsed = this.parseExploreLines(result);
             if (lineParsed.length > 0) {
-              this.categoryCache[cacheKey] = lineParsed;
+              this.cacheCategories(cacheKey, lineParsed);
               console.info('[Explore] Parsed ' + lineParsed.length + ' categories from JS exploreUrl (lines)');
               return lineParsed;
             }
@@ -171,15 +201,16 @@ export struct ExplorePage {
         }
       } catch (e) {
         console.error('[Explore] JS exploreUrl evaluation failed: ' + JSON.stringify(e));
+        this.lastCategoryError = (e as Error).message || '发现脚本执行失败';
       }
       // JS 执行失败，fallback 到旧版 HOS 的分类字段
       const legacyParsed = this.parseLegacyExploreCategories(source.ruleExplores);
       if (legacyParsed.length > 0) {
-        this.categoryCache[cacheKey] = legacyParsed;
+        this.cacheCategories(cacheKey, legacyParsed);
         return legacyParsed;
       }
       const result: ExploreCategory[] = [];
-      this.categoryCache[cacheKey] = result;
+      this.cacheCategories(cacheKey, result);
       return result;
     }
 
@@ -187,7 +218,7 @@ export struct ExplorePage {
     if (exploreUrl && !exploreUrl.startsWith('http')) {
       const lineParsed = this.parseExploreLines(exploreUrl);
       if (lineParsed.length > 0) {
-        this.categoryCache[cacheKey] = lineParsed;
+        this.cacheCategories(cacheKey, lineParsed);
         return lineParsed;
       }
     }
@@ -195,13 +226,13 @@ export struct ExplorePage {
     // 兼容旧版 HOS 的 ruleExplores 分类字段，但拒绝把 CSS 选择器当分类。
     const legacyParsed = this.parseLegacyExploreCategories(source.ruleExplores);
     if (legacyParsed.length > 0) {
-      this.categoryCache[cacheKey] = legacyParsed;
+      this.cacheCategories(cacheKey, legacyParsed);
       return legacyParsed;
     }
 
     if (!exploreUrl) {
       const result: ExploreCategory[] = [];
-      this.categoryCache[cacheKey] = result;
+      this.cacheCategories(cacheKey, result);
       return result;
     }
 
@@ -212,29 +243,30 @@ export struct ExplorePage {
         if (body) {
           const parsed = this.parseExploreJson(body);
           if (parsed.length > 0) {
-            this.categoryCache[cacheKey] = parsed;
+            this.cacheCategories(cacheKey, parsed);
             return parsed;
           }
           const lineParsed = this.parseExploreLines(body);
           if (lineParsed.length > 0) {
-            this.categoryCache[cacheKey] = lineParsed;
+            this.cacheCategories(cacheKey, lineParsed);
             return lineParsed;
           }
         }
       } catch (e) {
         console.error('[Explore] HTTP get failed: ' + JSON.stringify(e));
+        this.lastCategoryError = (e as Error).message || '分类网络请求失败';
       }
       // HTTP 失败，fallback 到旧版 HOS 的分类字段
       const fallbackParsed = this.parseLegacyExploreCategories(source.ruleExplores);
       if (fallbackParsed.length > 0) {
-        this.categoryCache[cacheKey] = fallbackParsed;
+        this.cacheCategories(cacheKey, fallbackParsed);
         return fallbackParsed;
       }
     }
 
     // 5. 最后尝试按行/&& 解析
     const lineParsed = this.parseExploreLines(exploreUrl);
-    this.categoryCache[cacheKey] = lineParsed;
+    this.cacheCategories(cacheKey, lineParsed);
     return lineParsed;
   }
 
@@ -369,7 +401,7 @@ export struct ExplorePage {
   }
 
   async httpGet(url: string, headerStr: string): Promise<string> {
-    return new Promise<string>((resolve, _reject) => {
+    return new Promise<string>((resolve, reject) => {
       const req = http.createHttp();
       const headers: Record<string, string> = {
         'Accept': 'application/json,text/html,*/*',
@@ -397,8 +429,12 @@ export struct ExplorePage {
         req.destroy();
         if (err) {
           console.error('[Explore] HTTP error: ' + JSON.stringify(err));
-          resolve('');
+          reject(new Error(err.message || '分类网络请求失败'));
         } else {
+          if (data.responseCode >= 400) {
+            reject(new Error('HTTP ' + data.responseCode.toString()));
+            return;
+          }
           if (typeof data.result === 'string') { resolve(data.result); } else { const buf = data.result as ArrayBuffer; const u8 = new Uint8Array(buf); resolve(util.TextDecoder.create('utf-8').decodeToString(u8)); }
         }
       });
@@ -489,12 +525,16 @@ export struct ExplorePage {
       await this.persistSourceVariable(source, result.trim());
       this.categoryCache = this.withoutCategoryCache(source.sourceUrl);
       this.loadingKinds = true;
-      this.resolvedCategories = await this.loadCategories(source, true);
+      const categories = await this.loadCategories(source, true);
+      if (!this.isActive || this.expandedSourceUrl !== source.sourceUrl) return;
+      this.resolvedCategories = categories;
       const line = this.getCurrentSourceLine(source);
-      promptAction.showToast({ message: action.name + '完成' + (line ? '：' + line : '') });
+      UiUtil.showToast(this.getUIContext(), { message: action.name + '完成' + (line ? '：' + line : '') });
     } catch (e) {
       console.error('[Explore] Source action failed: ' + (e as Error).message);
-      promptAction.showToast({ message: action.name + '失败：' + (e as Error).message });
+      if (this.isActive) {
+        UiUtil.showToast(this.getUIContext(), { message: action.name + '失败：' + (e as Error).message });
+      }
     } finally {
       this.loadingKinds = false;
       this.sourceActionBusy = false;
@@ -502,6 +542,8 @@ export struct ExplorePage {
   }
 
   toggleExpand(sourceUrl: string): void {
+    const runId = ++this.categoryRequestId;
+    this.categoryError = '';
     if (this.expandedSourceUrl === sourceUrl) {
       this.expandedSourceUrl = '';
       this.actionSourceUrl = '';
@@ -524,9 +566,17 @@ export struct ExplorePage {
             } catch (_x) { /* ignore */ }
           }
           void this.loadCategories(src).then((cats: ExploreCategory[]) => {
+            if (!this.isActive || runId !== this.categoryRequestId || this.expandedSourceUrl !== src.sourceUrl) return;
             this.resolvedCategories = cats;
+            this.categoryError = cats.length === 0 ? this.lastCategoryError : '';
             this.loadingKinds = false;
             console.info('[Explore] Got ' + cats.length + ' categories for ' + src.sourceName);
+          }).catch((error: Error) => {
+            if (!this.isActive || runId !== this.categoryRequestId || this.expandedSourceUrl !== src.sourceUrl) return;
+            this.loadingKinds = false;
+            this.resolvedCategories = [];
+            this.categoryError = error.message || '分类加载失败';
+            UiUtil.showToast(this.getUIContext(), { message: '分类加载失败：' + (error.message || '网络错误') });
           });
           return;
         }
@@ -547,29 +597,9 @@ export struct ExplorePage {
       url: 'pages/ExploreBookPage',
       params: {
         sourceId: source.id,
-        sourceName: source.sourceName,
-        sourceUrl: source.sourceUrl,
-        ruleExploreList: source.ruleExploreList || source.ruleSearchList || '',
-        ruleExploreName: source.ruleExploreName || source.ruleSearchName || '',
-        ruleExploreAuthor: source.ruleExploreAuthor || source.ruleSearchAuthor || '',
-        ruleExploreCover: source.ruleExploreCover || source.ruleSearchCover || '',
-        ruleExploreKind: source.ruleExploreKind || source.ruleSearchKind || '',
-        ruleExploreWordCount: source.ruleExploreWordCount || source.ruleSearchWordCount || '',
-        ruleExploreIntroduce: source.ruleExploreIntroduce || source.ruleSearchIntroduce || '',
-        ruleExploreLastChapter: source.ruleExploreLastChapter || source.ruleSearchLastChapter || '',
-        ruleExploreLastUpdateTime: source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime || '',
-        ruleExploreNoteUrl: source.ruleExploreNoteUrl || source.ruleSearchNoteUrl || '',
         categoryName: category.name,
         categoryUrl: category.url,
         categoryKeyword: category.keyword,
-        header: source.header || '',
-        // 传递原始 JSON 和 JS 脚本，支持脚本式书源
-        rawJson: source.rawJson || '',
-        jsLib: source.jsLib || '',
-        script: source.script || '',
-        loginUrl: source.loginUrl || '',
-        coverDecodeJs: source.coverDecodeJs || '',
-        variableComment: source.variableComment || '',
       }
     });
   }
@@ -622,18 +652,27 @@ export struct ExplorePage {
       // 搜索框 — 过滤当前显示的发现源
       Row() {
         TextInput({ placeholder: '筛选发现源...' })
-          .height(42).layoutWeight(1)
+          .height(44).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
           .onChange((v: string) => { this.searchKey = v; })
         if (this.searchKey.length > 0) {
-          Text('✕').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(36).height(36)
-            .textAlign(TextAlign.Center).margin({ left: 8 })
+          Button('✕').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)
+            .backgroundColor(Color.Transparent).margin({ left: 4 }).accessibilityText('清空筛选条件')
             .onClick(() => { this.searchKey = ''; })
         }
       }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
 
-      if (this.getFilteredSources().length === 0) {
+      if (this.loadError) {
+        Column() {
+          Text('发现书源加载失败').fontSize(16).fontWeight(FontWeight.Medium)
+            .fontColor(ThemeColors.onBackground(this.isDark))
+          Text(this.loadError).fontSize(12).fontColor(ThemeColors.error(this.isDark))
+            .textAlign(TextAlign.Center).margin({ top: 8 }).padding({ left: 24, right: 24 })
+          Button('重试').height(44).margin({ top: 16 })
+            .onClick((): void => { void this.loadExploreSources(); })
+        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else if (this.getFilteredSources().length === 0) {
         Column() {
           Text('🔍').fontSize(48).margin({ top: 80 })
           Text('暂无可用的发现书源').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
@@ -660,6 +699,7 @@ export struct ExplorePage {
                     .flexShrink(0).margin({ left: 8 })
                 }
                 .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .accessibilityDescription('双击' + (this.expandedSourceUrl === source.sourceUrl ? '收起' : '展开') + source.sourceName + '分类')
                 .onClick((): void => { this.toggleExpand(source.sourceUrl); })
 
                 // 展开：加载中 / 分类网格
@@ -688,6 +728,16 @@ export struct ExplorePage {
                       LoadingProgress().width(20).height(20).color(ThemeColors.primary(this.isDark))
                       Text('加载分类...').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
                     }.padding(16)
+                  } else if (this.categoryError) {
+                    Row() {
+                      Text(this.categoryError).fontSize(12).fontColor(ThemeColors.error(this.isDark))
+                        .layoutWeight(1).maxLines(2)
+                      Button('重试').height(44).fontSize(12)
+                        .onClick((): void => {
+                          this.expandedSourceUrl = '';
+                          this.toggleExpand(source.sourceUrl);
+                        })
+                    }.width('100%').padding({ left: 16, right: 16, bottom: 10 })
                   } else if (this.resolvedCategories.length === 0) {
                     Text('无分类').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
                       .padding({ left: 16, bottom: 12 })
@@ -714,16 +764,14 @@ export struct ExplorePage {
       ForEach(this.calculateKindRows(this.resolvedCategories, 6), (row: ExploreCategory[]) => {
         Row() {
           ForEach(row, (cat: ExploreCategory) => {
-            Text(cat.name)
+            Button(cat.name)
               .fontSize(13)
               .fontColor(ThemeColors.onBackground(this.isDark))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .textAlign(TextAlign.Center)
-              .height(36)
+              .height(44)
               .padding({ left: 6, right: 6 })
               .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
               .borderRadius(8)
+              .accessibilityText('打开分类：' + cat.name)
               .layoutWeight(cat.flexBasisPercent > 0 ? cat.flexBasisPercent : 1)
               .margin({ left: 3, right: 3, bottom: 4 })
               .onClick((): void => { this.openCategory(source, cat); })
@@ -738,14 +786,14 @@ export struct ExplorePage {
   buildSourceActions(source: BookSource) {
     Flex({ wrap: FlexWrap.Wrap }) {
       ForEach(this.getSourceLoginActions(source), (item: SourceLoginAction) => {
-        Text(item.name)
+        Button(item.name)
           .fontSize(12)
           .fontColor(ThemeColors.onSurface(this.isDark))
-          .textAlign(TextAlign.Center)
-          .width('31%').height(38).padding({ left: 4, right: 4 })
+          .width('31%').height(44).padding({ left: 4, right: 4 })
           .margin({ left: '1%', right: '1%', bottom: 8 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .borderRadius(8)
+          .accessibilityText('执行书源操作：' + item.name)
           .opacity(this.sourceActionBusy ? 0.5 : 1)
           .onClick((): void => { void this.runSourceLoginAction(source, item); })
       })

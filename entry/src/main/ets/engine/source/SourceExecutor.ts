@@ -604,7 +604,8 @@ export class SourceExecutor {
   }
 
   private async searchSingle(
-    keyword: string, source: BookSource, page: number = 1, allowLineRetry: boolean = true
+    keyword: string, source: BookSource, page: number = 1,
+    allowLineRetry: boolean = true, throwOnFailure: boolean = false
   ): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
     let baseUrl = getBaseUrl(source.sourceUrl);
@@ -796,7 +797,7 @@ export class SourceExecutor {
         const switched = await this.switchDynamicSourceLine(source, baseUrl);
         if (switched) {
           console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName);
-          return await this.searchSingle(keyword, source, page, false);
+          return await this.searchSingle(keyword, source, page, false, throwOnFailure);
         }
       }
       if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
@@ -813,8 +814,15 @@ export class SourceExecutor {
         } catch (_wv) { /* WebView fallback also failed */ }
       }
       console.warn('[SrcEx] Search failed', source.sourceName, ':', msg);
+      if (throwOnFailure) throw err;
       return [];
     }
+  }
+
+  /** 校验专用单源搜索：保留真实网络/解析异常，供 UI 区分失败与正常零结果。 */
+  async searchForCheck(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
+    if (!this.engineInitialized) await this.initialize();
+    return await this.searchSingle(keyword, source, page, true, true);
   }
 
   /** 带超时的搜索（20s 总超时，兜底 WebView hang 等） */

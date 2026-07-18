@@ -9,9 +9,7 @@
  */
 import { BookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
-import { BookSourceTable, setSourceRawJson } from '../data/database/BookSourceTable';
-import promptAction from '@ohos.promptAction';
-import router from '@ohos.router';
+import { BookSourceTable } from '../data/database/BookSourceTable';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 
@@ -24,6 +22,8 @@ interface FieldGroup {
 const TAB_BASIC: FieldGroup[] = [
   { key: 'sourceName', label: '书源名称', placeholder: '输入书源名称' },
   { key: 'sourceUrl', label: '书源 URL', placeholder: 'https://example.com' },
+  { key: 'sourceType', label: '书源类型', placeholder: '0 小说 / 1 音频 / 2 漫画 / 3 文件' },
+  { key: 'enabled', label: '启用书源', placeholder: 'true/false' },
   { key: 'group', label: '分组', placeholder: '输入分组名' },
   { key: 'bookUrlPattern', label: '书 URL 正则', placeholder: '如 https?://example\\.com/book/\\d+' },
   { key: 'bookSourceComment', label: '注释', placeholder: '可选备注' },
@@ -48,7 +48,6 @@ const TAB_SEARCH: FieldGroup[] = [
   { key: 'ruleSearchKind', label: '分类规则', placeholder: '' },
   { key: 'ruleSearchWordCount', label: '字数规则', placeholder: '' },
   { key: 'ruleSearchLastUpdateTime', label: '最后更新时间规则', placeholder: '' },
-  { key: 'ruleSearchIntroduce', label: '简介规则', placeholder: '' },
   { key: 'ruleSearchIntroduce', label: '简介规则', placeholder: '' },
 ];
 
@@ -138,6 +137,8 @@ struct BookSourceEditPage {
   @State isNew: boolean = false;
   @State sourceUrl: string = '';
   @State loadVersion: number = 0;   // 递增强制 TextInput 重建
+  @State isDirty: boolean = false;
+  @State isSaving: boolean = false;
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -158,6 +159,7 @@ struct BookSourceEditPage {
         if (s) {
           this.editSource = JSON.parse(JSON.stringify(s));
           this.isNew = false;
+          this.isDirty = false;
           this.loadVersion++;
           console.info('[SrcEdit] loaded source:', s.sourceName,
             'searchUrl:', s.ruleSearchUrl ? s.ruleSearchUrl.substring(0,40) : 'EMPTY',
@@ -289,6 +291,7 @@ struct BookSourceEditPage {
       isAiGenerated: false,
     };
     this.isNew = true;
+    this.isDirty = false;
   }
 
 	  getFieldValue(key: string): string {
@@ -327,6 +330,7 @@ struct BookSourceEditPage {
       copy[key] = value;
     }
 	    this.editSource = JSON.parse(JSON.stringify(copy));
+    this.isDirty = true;
   }
 
   async saveSource(): Promise<void> {
@@ -341,7 +345,7 @@ struct BookSourceEditPage {
       const dao = new BookSourceTable(db);
       const source = this.editSource;
       source.updateTime = Date.now();
-      setSourceRawJson(source, '');
+      this.isSaving = true;
       if (this.isNew || source.id === 0) {
         await dao.insertSource(source);
         UiUtil.showToast(this.getUIContext(), { message: '已创建新书源', duration: 1500 });
@@ -349,10 +353,57 @@ struct BookSourceEditPage {
         await dao.updateSource(source);
         UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
       }
+      this.isDirty = false;
       UiUtil.back(this.getUIContext());
     } catch (_e) {
       UiUtil.showToast(this.getUIContext(), { message: '保存失败', duration: 2000 });
+    } finally {
+      this.isSaving = false;
     }
+  }
+
+  private cancelEdit(): void {
+    if (!this.isDirty) {
+      UiUtil.back(this.getUIContext());
+      return;
+    }
+    UiUtil.showDialog(this.getUIContext(), {
+      title: '放弃修改？',
+      message: '尚未保存的书源规则将会丢失。',
+      buttons: [
+        { text: '继续编辑', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '放弃', color: ThemeColors.error(this.isDark) }
+      ]
+    }).then((result) => {
+      if (result.index === 1) UiUtil.back(this.getUIContext());
+    });
+  }
+
+  private openSearchTest(): void {
+    if (!this.editSource || !this.editSource.sourceUrl) return;
+    const scope = '{"type":"source","sources":[{"name":' +
+      JSON.stringify(this.editSource.sourceName) + ',"url":' +
+      JSON.stringify(this.editSource.sourceUrl) + '}]}';
+    UiUtil.pushUrl(this.getUIContext(), {
+      url: 'pages/SearchPage', params: { searchScope: scope }
+    });
+  }
+
+  private openDebug(): void {
+    if (!this.editSource || !this.editSource.sourceUrl) return;
+    UiUtil.pushUrl(this.getUIContext(), {
+      url: 'pages/BookSourceDebugPage', params: { sourceUrl: this.editSource.sourceUrl }
+    });
+  }
+
+  private isBooleanField(key: string): boolean {
+    return ['enabled', 'enabledCookieJar', 'enabledExplore', 'eventListener', 'customButton'].includes(key);
+  }
+
+  private isMultilineField(key: string): boolean {
+    return key.includes('Js') || key.includes('script') || key === 'header' || key === 'loginUi'
+      || key === 'homepageModules' || key === 'bookSourceComment' || key === 'variableComment'
+      || key === 'ruleExplores' || key.includes('Regex') || key.includes('Content');
   }
 
   deleteField(key: string): void {
@@ -367,18 +418,33 @@ struct BookSourceEditPage {
           Row() {
             Text(field.label).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
               .layoutWeight(1)
-            Button() { Text('✕').fontSize(10).fontColor('#F44336') }
+            Button() { Text('✕').fontSize(10).fontColor(ThemeColors.error(this.isDark)) }
               .width(20).height(20).backgroundColor('transparent')
               .onClick(() => { this.deleteField(field.key); })
           }.width('100%')
-          TextInput({
-            placeholder: field.placeholder,
-            text: this.getFieldValue(field.key)
-          })
-            .height(36).fontSize(14).borderRadius(4).width('100%').margin({ top: 2 })
-            .padding({ left: 8 })
-            .onChange((v: string) => { this.setField(field.key, v); })
-            .placeholderColor('#999')
+          if (this.isBooleanField(field.key)) {
+            Row() {
+              Text(this.getFieldValue(field.key) === 'true' ? '已启用' : '已停用')
+                .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.getFieldValue(field.key) === 'true' })
+                .onChange((value: boolean) => { this.setField(field.key, value ? 'true' : 'false'); })
+            }.height(48).width('100%').padding({ left: 12, right: 8 })
+              .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(12)
+          } else if (this.isMultilineField(field.key)) {
+            TextArea({ placeholder: field.placeholder, text: this.getFieldValue(field.key) })
+              .height(112).fontSize(14).borderRadius(12).width('100%').margin({ top: 4 })
+              .padding(12).backgroundColor(ThemeColors.surface(this.isDark))
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .onChange((v: string) => { this.setField(field.key, v); })
+          } else {
+            TextInput({ placeholder: field.placeholder, text: this.getFieldValue(field.key) })
+              .height(48).fontSize(14).borderRadius(12).width('100%').margin({ top: 4 })
+              .padding({ left: 12, right: 12 }).backgroundColor(ThemeColors.surface(this.isDark))
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .onChange((v: string) => { this.setField(field.key, v); })
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+          }
         }
         .width('100%').margin({ top: 8 })
       }, (field: FieldGroup): string => field.key + '_v' + this.loadVersion.toString())
@@ -389,17 +455,25 @@ struct BookSourceEditPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Text(this.isNew ? '新建书源' : '编辑书源').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('取消').fontSize(14).height(32).backgroundColor('transparent').fontColor('#888')
-          .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Button('保存').fontSize(14).height(32).backgroundColor('#0078D7').fontColor('#FFF')
-          .borderRadius(4).padding({ left: 10, right: 10 }).margin({ left: 6 })
+        Button('‹').fontSize(26).width(40).height(40).backgroundColor('transparent')
+          .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { this.cancelEdit(); })
+        Text(this.isNew ? '新建书源' : '编辑书源').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
+        if (!this.isNew) {
+          Button('测试').fontSize(13).height(40).backgroundColor('transparent')
+            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openSearchTest(); })
+          Button('调试').fontSize(13).height(40).backgroundColor('transparent')
+            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openDebug(); })
+        }
+        Button(this.isSaving ? '保存中' : '保存').fontSize(14).height(40)
+          .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
+          .borderRadius(20).padding({ left: 16, right: 16 }).margin({ left: 4 })
           .onClick(() => { this.saveSource(); })
-      }.padding({ left: 16, right: 16, top: 12 }).width('100%')
+          .enabled(!this.isSaving)
+      }.padding({ left: 8, right: 12, top: 8, bottom: 4 }).width('100%').height(56)
 
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 100 })
-        Text('加载中...').fontSize(14).fontColor('#888').margin({ top: 8 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 100 })
+        Text('加载中...').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
           .width('100%').textAlign(TextAlign.Center)
       } else if (this.editSource) {
         // ===== Tab 栏 =====
@@ -408,11 +482,11 @@ struct BookSourceEditPage {
             ForEach(TAB_LABELS, (label: string, idx: number) => {
               Column() {
                 Text(label).fontSize(13)
-                  .fontColor(this.currentTab === idx ? '#0078D7' : ThemeColors.secondaryText(this.isDark))
+                  .fontColor(this.currentTab === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
                   .fontWeight(this.currentTab === idx ? FontWeight.Medium : FontWeight.Regular)
                   .padding({ left: 12, right: 12, top: 8, bottom: 8 })
                 if (this.currentTab === idx) {
-                  Row().width('80%').height(2).backgroundColor('#0078D7').borderRadius(1)
+                  Row().width('80%').height(2).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(1)
                 }
               }
               .onClick(() => { this.currentTab = idx; })
@@ -421,7 +495,7 @@ struct BookSourceEditPage {
         }
         .width('100%').height(40).scrollBar(BarState.Off)
 
-        Divider().height(1).color('#E0E0E0').width('100%')
+        Divider().height(1).color(ThemeColors.outlineVariant(this.isDark)).width('100%')
 
         // ===== Tab 内容 =====
         Scroll() {

@@ -25,6 +25,7 @@ import { BookGroupTable } from '../data/database/BookGroupTable';
 import { ReadRecordTable } from '../data/database/ReadRecordTable';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 
 /** 每日阅读记录数据结构 */
 interface SessionInfo {
@@ -143,11 +144,13 @@ export struct ChangeSourceSheet {
   singleChapterMode: boolean = false;
   /** 是否允许"作为新书加入书架"（阅读页关闭） */
   allowAddAsNew: boolean = true;
+  /** 当前书籍的书源类型（BookSource.sourceType：0 文本 2 漫画；-1 未知），用于类型一致性检查 */
+  currentSourceType: number = -1;
   @State keyword: string = '';
   @State results: SearchResult[] = [];
   @State isSearching: boolean = false;
   @State searchProgress: string = '';
-  /** 对齐 Legado "校验作者" 开关 */
+  /** 对齐 Legado "校验作者" 开关（持久化到 SettingsStore） */
   @State checkAuthor: boolean = true;
   onReplace?: (result: SearchResult) => void;
   onAddAsNew?: (result: SearchResult) => void;
@@ -164,11 +167,20 @@ export struct ChangeSourceSheet {
   private initialized: boolean = false;
   // 搜索去重用（对齐 Legado searchJob?.cancel()）
   private searching: boolean = false;
+  // 每次搜索独立的任务 ID：旧任务回调不得覆盖新任务
+  private searchTaskId_: number = 0;
 
   aboutToAppear(): void {
     if (this.initialized) return;
     this.initialized = true;
     this.keyword = this.bookName;
+    // 读取持久化的"校验作者"设置
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(async () => {
+        this.checkAuthor = await SettingsStore.getInstance().getChangeSourceCheckAuthor();
+      })
+      .catch(() => {});
     // 对齐 Legado ChangeBookSourceComposeViewModel.initData():
     // 1) getDbSearchBooks() → 展示缓存
     // 2) 缓存空 → startSearch()
@@ -192,10 +204,10 @@ export struct ChangeSourceSheet {
     const matched = expandedSources.filter((r: SearchResult) => {
       const rname = (r.name || '').replace(/\s/g, '');
       if (rname !== targetName) return false;
-      // 对齐 Legado: !checkAuthor || fAuthor.contains(author)
+      // 对齐 Legado: !checkAuthor || fAuthor.contains(author)；结果无作者信息视为不匹配
       if (this.checkAuthor && targetAuthor) {
         const rauthor = (r.author || '').replace(/\s/g, '');
-        if (rauthor && !rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
+        if (!this.authorMatches_(rauthor, targetAuthor)) return false;
       }
       return true;
     });
@@ -262,7 +274,8 @@ export struct ChangeSourceSheet {
   /** 对齐 Legado startSearch() — 网络搜索 */
   async searchSources(): Promise<void> {
     if (!this.keyword.trim()) return;
-    // 对齐 Legado searchJob?.cancel() — 取消前一次搜索
+    // 对齐 Legado searchJob?.cancel() — 取消前一次搜索（任务 ID 递增使旧任务失效）
+    const myTaskId = ++this.searchTaskId_;
     this.searching = true;
     this.isSearching = true;
     this.results = [];
@@ -291,7 +304,7 @@ export struct ChangeSourceSheet {
 	        this.keyword.trim(), enabled,
 	        (merged: SearchResult[], processed: number, total: number) => {
 	          // 检查是否已取消
-	          if (!this.searching) return;
+	          if (!this.searching || myTaskId !== this.searchTaskId_) return;
 	          this.searchProgress = '已搜 ' + processed + '/' + total + ' 个源，找到 ' + merged.length + ' 条';
           this.rawResults_ = merged;
 	          // 增量更新结果列表：筛选 + 展开逐源展示
@@ -315,8 +328,11 @@ export struct ChangeSourceSheet {
 	        },
 	        1,
 	        // 关闭面板时真正取消底层搜索任务（对齐 Legado searchJob?.cancel()）
-	        () => !this.searching
+	        () => !this.searching || myTaskId !== this.searchTaskId_
 	      );
+
+      // 等待期间已有更新的搜索发起，丢弃本次结果
+      if (myTaskId !== this.searchTaskId_) return;
 
       // 对齐 Legado：搜索结果中只保留同书名/同作者的
       const filtered = this.filterResults(rawResults);
@@ -341,8 +357,10 @@ export struct ChangeSourceSheet {
     } catch (err) {
       console.error('[ChangeSrc] searchSources failed:', (err as Error).message);
     }
-    this.isSearching = false;
-    this.searchProgress = '';
+    if (myTaskId === this.searchTaskId_) {
+      this.isSearching = false;
+      this.searchProgress = '';
+    }
   }
 
   /**
@@ -377,13 +395,19 @@ export struct ChangeSourceSheet {
         nameMatched = rcore === tcore;
       }
       if (!nameMatched) return false;
-      // 校验作者（对齐 Legado checkAuthor 开关）；结果无作者信息时保留
+      // 校验作者（对齐 Legado checkAuthor 开关）；结果无作者信息视为不匹配
       if (this.checkAuthor && targetAuthor) {
         const rauthor = (r.author || '').replace(/\s/g, '');
-        if (rauthor && !rauthor.includes(targetAuthor) && !targetAuthor.includes(rauthor)) return false;
+        if (!this.authorMatches_(rauthor, targetAuthor)) return false;
       }
       return true;
     });
+  }
+
+  /** 作者匹配（对齐 Legado fAuthor.contains(author)；空作者视为不匹配） */
+  private authorMatches_(resultAuthor: string, targetAuthor: string): boolean {
+    if (!resultAuthor) return false;
+    return resultAuthor.includes(targetAuthor) || targetAuthor.includes(resultAuthor);
   }
 
   build() {
@@ -427,6 +451,8 @@ export struct ChangeSourceSheet {
           .margin({ left: 6 })
           .onChange((isOn: boolean) => {
             this.checkAuthor = isOn;
+            // 持久化开关状态（对齐 Legado 换源设置）
+            SettingsStore.getInstance().setChangeSourceCheckAuthor(isOn).catch(() => {});
             // 已有结果按新开关重新过滤
             if (this.cachedSources.length > 0) {
               this.showCachedSources();
@@ -504,8 +530,54 @@ export struct ChangeSourceSheet {
   private rawResults_: SearchResult[] = [];
   private optionDlg?: CustomDialogController;
 
-  /** 点击候选源：对齐 Legado —— 可选择替换当前书籍或作为新书添加 */
+  /** 点击候选源：先检查书籍类型是否一致（对齐 Legado），再选择替换或作为新书 */
   private onResultClick_(item: SearchResult): void {
+    this.isTypeMismatch_(item)
+      .then((mismatch: boolean) => {
+        if (!mismatch) {
+          this.proceedWithCandidate_(item);
+          return;
+        }
+        // 类型不一致（如小说换成漫画源）：先弹确认
+        this.optionDlg = new CustomDialogController({
+          builder: OptionSelectSheet({
+            controller: this.optionDlg!,
+            title: '书籍类型不一致',
+            message: '当前书籍与所选书源的类型不同（如小说/漫画），换源后可能无法正常阅读',
+            options: [
+              {
+                title: '仍然换源',
+                action: () => { this.proceedWithCandidate_(item); }
+              },
+            ]
+          }),
+          autoCancel: true,
+          alignment: DialogAlignment.Bottom,
+          customStyle: true
+        });
+        this.optionDlg.open();
+      })
+      .catch(() => { this.proceedWithCandidate_(item); });
+  }
+
+  /** 候选源类型与当前书籍类型是否不一致（无法判定时放行） */
+  private async isTypeMismatch_(item: SearchResult): Promise<boolean> {
+    if (this.currentSourceType < 0 || !item.originUrl) return false;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      const sources = await dao.getAllSources();
+      const norm = item.originUrl.replace(/\/+$/, '');
+      const src = sources.find(s => s.sourceUrl === item.originUrl) ||
+        sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) || null;
+      if (!src) return false;
+      return src.sourceType !== this.currentSourceType;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private proceedWithCandidate_(item: SearchResult): void {
     if (this.singleChapterMode || !this.allowAddAsNew) {
       this.confirmReplace_(item);
       return;

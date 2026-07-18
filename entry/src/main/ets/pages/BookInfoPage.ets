@@ -24,6 +24,7 @@ import {
 } from '../components/BookInfoSheets';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { ExportBookDialog } from '../components/ExportBookDialog';
 import * as ChapterMatcher from '../util/ChapterMatcher';
 
 @Entry
@@ -64,6 +65,7 @@ struct BookInfoPage {
   @State lastReadTime: string = '';
   @State bookId: number = 0;
   @State groupId: number = BookGroup.ALL;
+  @State showExportDialog: boolean = false;
 
   private cachedSearchResults: SearchResult[] = [];
   private sourceTocOriginUrl: string = '';
@@ -669,6 +671,7 @@ struct BookInfoPage {
         bookAuthor: this.bookAuthor,
         currentOriginUrl: this.originUrl,
         cachedSources: cached,
+        currentSourceType: this.currentSource_ ? this.currentSource_.sourceType : -1,
         onReplace: (result: SearchResult) => { this.replaceWithSource(result); },
         onAddAsNew: (result: SearchResult) => { this.addSourceAsNewBook(result); }
       }),
@@ -740,6 +743,10 @@ struct BookInfoPage {
    */
   private async migrateShelfBookToSource_(result: SearchResult, newOriginUrl: string, newNoteUrl: string): Promise<void> {
     UiUtil.showToast(this.getUIContext(), { message: '正在校验新书源...', duration: 1500 });
+    // 回滚快照
+    let bookBackup: Book | null = null;
+    let chaptersBackup: BookChapter[] = [];
+    let migrated = false;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
@@ -768,10 +775,21 @@ struct BookInfoPage {
       const matchedIdx = ChapterMatcher.getDurChapterIndex(
         this.durChapterIndex, this.durChapterTitle, newToc, this.chapterCount);
 
-      // 校验通过：更新书架记录
+      // 目标 URL 查重：已是另一书架记录则拒绝，避免产生重复 bookUrl
       const bookTable = new BookTable(db);
       const book = await bookTable.getBookById(this.bookId);
       if (!book) throw new Error('书籍记录不存在');
+      const dupBook = await bookTable.getBookByUrl(newNoteUrl);
+      if (dupBook && dupBook.id !== book.id) {
+        if (dupBook.isShelf) throw new Error('目标源的书籍已在书架中');
+        await bookTable.deleteBook(dupBook.id);
+      }
+
+      // 快照旧记录，供提交后异常时明确恢复（ArkTS 禁止对象展开，用 JSON 深拷贝）
+      bookBackup = JSON.parse(JSON.stringify(book)) as Book;
+      const ct = new ChapterTable(db);
+      chaptersBackup = await ct.getChaptersByBookId(book.id);
+
       book.bookUrl = newNoteUrl;
       book.origin = result.origin || newSource.sourceName || this.origin;
       book.originUrl = newOriginUrl;
@@ -786,11 +804,8 @@ struct BookInfoPage {
       book.durChapterIndex = matchedIdx;
       book.durChapterTitle = newToc[matchedIdx]?.title || '';
       book.updateTime = Date.now();
-      await bookTable.updateBook(book);
 
-      // 替换目录（旧章节 URL 全部失效，内容缓存一并清除）
-      const ct = new ChapterTable(db);
-      await ct.deleteChaptersByBookId(book.id);
+      // 事务迁移：更新书架记录 + 替换目录（旧章节内容缓存一并清除）
       const now = Date.now();
       const rows: BookChapter[] = newToc.map((ch: BookSourceChapter, idx: number): BookChapter => {
         const item = createDefaultChapter();
@@ -802,7 +817,17 @@ struct BookInfoPage {
         item.updateTime = now;
         return item;
       });
-      await ct.insertChapters(rows);
+      db.beginTransaction();
+      try {
+        await bookTable.updateBook(book);
+        await ct.deleteChaptersByBookId(book.id);
+        await ct.insertChapters(rows);
+        db.commit();
+        migrated = true;
+      } catch (txErr) {
+        db.rollBack();
+        throw new Error('数据库迁移失败: ' + (txErr as Error).message);
+      }
 
       // 更新页面状态
       this.origin = book.origin;
@@ -834,17 +859,33 @@ struct BookInfoPage {
       });
     } catch (e) {
       console.error('[BookInfo] migrateShelfBookToSource failed:', (e as Error).message);
-      // 校验失败：书架记录未被修改，保持原状
+      // 已提交事务后出现意外：用快照明确恢复旧书籍记录和旧目录
+      if (migrated && bookBackup) {
+        try {
+          const db = AppDatabase.getInstance().rdbStore;
+          const bookTable = new BookTable(db);
+          const ct = new ChapterTable(db);
+          await bookTable.updateBook(bookBackup);
+          await ct.deleteChaptersByBookId(bookBackup.id);
+          if (chaptersBackup.length > 0) await ct.insertChapters(chaptersBackup);
+        } catch (rbErr) {
+          console.error('[BookInfo] rollback failed:', (rbErr as Error).message);
+        }
+      }
       UiUtil.showToast(this.getUIContext(), { message: '换源失败：' + (e as Error).message, duration: 2000 });
     }
   }
 
-  /** 作为新书加入书架：真实写入数据库，并后台补全详情与目录（对齐 Legado） */
+  /**
+   * 作为新书加入书架（对齐 Legado：先加载详情+目录，成功后才写入）
+   * 目录加载失败则不加，避免书架上留下没有目录的书
+   */
   private async addSourceAsNewBook(result: SearchResult): Promise<void> {
     if (!result.noteUrl || !result.originUrl) {
       UiUtil.showToast(this.getUIContext(), { message: '书源信息不完整', duration: 1500 });
       return;
     }
+    UiUtil.showToast(this.getUIContext(), { message: '正在加载书籍信息...', duration: 1500 });
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
@@ -860,112 +901,112 @@ struct BookInfoPage {
       const src = sources.find(s => s.sourceUrl === result.originUrl) ||
         sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
         sources.find(s => s.sourceName === result.origin) || null;
-      const isManga = src ? src.sourceType === 2 : false;
+      if (!src) throw new Error('未找到对应书源');
+
+      // 先验证：加载详情 + 目录，目录为空则视为不可用
+      let tocUrl = '';
+      let infoCover = '';
+      let infoIntroduce = '';
+      let infoKind = '';
+      let infoWordCount = '';
+      try {
+        const info = await globalSourceExecutor.getBookInfo(src, result.noteUrl);
+        tocUrl = info.tocUrl || '';
+        infoCover = info.coverUrl || '';
+        infoIntroduce = info.introduce || '';
+        infoKind = info.kind || '';
+        infoWordCount = info.wordCount || '';
+      } catch (_e) { /* 详情失败时用搜索结果自带字段 */ }
+      const toc = await globalSourceExecutor.getToc(src, tocUrl || result.noteUrl);
+      if (toc.length === 0) throw new Error('目录加载失败');
+
+      const isManga = src.sourceType === 2;
       const now = Date.now();
+      const ct = new ChapterTable(db);
+      const chapterRows: BookChapter[] = toc.map((ch: BookSourceChapter, idx: number): BookChapter => {
+        const item = createDefaultChapter();
+        item.index = ch.index >= 0 ? ch.index : idx;
+        item.title = ch.title || '';
+        item.url = ch.url || '';
+        item.createTime = now;
+        item.updateTime = now;
+        return item;
+      });
       let newId = 0;
-      if (existing) {
-        // 已有记录但未入架：标记入架并补全字段
-        existing.isShelf = true;
-        existing.origin = result.origin || existing.origin;
-        existing.originUrl = result.originUrl || existing.originUrl;
-        if (result.coverUrl && !existing.coverUrl) existing.coverUrl = result.coverUrl;
-        if (result.kind && !existing.kind) existing.kind = result.kind;
-        if (result.wordCount && !existing.wordCount) existing.wordCount = result.wordCount;
-        if (result.introduce && !existing.introduce) existing.introduce = result.introduce;
-        existing.updateTime = now;
-        await bookTable.updateBook(existing);
-        newId = existing.id;
-      } else {
-        const book: Book = {
-          id: 0,
-          name: result.name || this.bookName,
-          author: result.author || this.bookAuthor,
-          coverUrl: result.coverUrl || '',
-          customCoverPath: '',
-          bookUrl: result.noteUrl,
-          tocUrl: '',
-          origin: result.origin || '',
-          originUrl: result.originUrl,
-          type: isManga ? BookType.MANGA : BookType.TEXT,
-          groupId: BookGroup.ALL,
-          chapterCount: 0,
-          totalChapterNum: 0,
-          latestChapterTitle: result.latestChapterTitle || '',
-          durChapterTitle: '',
-          durChapterIndex: 0,
-          durChapterPos: 0,
-          durChapterProgress: 0,
-          isRead: false,
-          isAudio: false,
-          isManga: isManga,
-          isShelf: true,
-          order: 0,
-          canUpdate: true,
-          kind: result.kind || '',
-          wordCount: result.wordCount || '',
-          introduce: result.introduce || '',
-          remark: '',
-          lastUpdateTime: result.lastUpdateTime || '',
-          lastOpenTime: 0,
-          createTime: now,
-          updateTime: now,
-          syncTime: 0,
-        };
-        newId = await bookTable.insertBook(book);
+      db.beginTransaction();
+      try {
+        if (existing) {
+          // 已有记录但未入架：标记入架并补全字段
+          existing.isShelf = true;
+          existing.origin = result.origin || existing.origin;
+          existing.originUrl = result.originUrl || existing.originUrl;
+          existing.tocUrl = tocUrl || result.noteUrl;
+          if (infoCover && !existing.coverUrl) existing.coverUrl = infoCover;
+          if (result.coverUrl && !existing.coverUrl) existing.coverUrl = result.coverUrl;
+          if (infoKind && !existing.kind) existing.kind = infoKind;
+          if (result.kind && !existing.kind) existing.kind = result.kind;
+          if (infoWordCount && !existing.wordCount) existing.wordCount = infoWordCount;
+          if (result.wordCount && !existing.wordCount) existing.wordCount = result.wordCount;
+          if (infoIntroduce && !existing.introduce) existing.introduce = infoIntroduce;
+          if (result.introduce && !existing.introduce) existing.introduce = result.introduce;
+          existing.chapterCount = toc.length;
+          existing.totalChapterNum = toc.length;
+          existing.latestChapterTitle = toc[toc.length - 1]?.title || '';
+          existing.updateTime = now;
+          await bookTable.updateBook(existing);
+          newId = existing.id;
+          await ct.deleteChaptersByBookId(newId);
+        } else {
+          const book: Book = {
+            id: 0,
+            name: result.name || this.bookName,
+            author: result.author || this.bookAuthor,
+            coverUrl: infoCover || result.coverUrl || '',
+            customCoverPath: '',
+            bookUrl: result.noteUrl,
+            tocUrl: tocUrl || result.noteUrl,
+            origin: result.origin || '',
+            originUrl: result.originUrl,
+            type: isManga ? BookType.MANGA : BookType.TEXT,
+            groupId: BookGroup.ALL,
+            chapterCount: toc.length,
+            totalChapterNum: toc.length,
+            latestChapterTitle: toc[toc.length - 1]?.title || '',
+            durChapterTitle: '',
+            durChapterIndex: 0,
+            durChapterPos: 0,
+            durChapterProgress: 0,
+            isRead: false,
+            isAudio: false,
+            isManga: isManga,
+            isShelf: true,
+            order: 0,
+            canUpdate: true,
+            kind: infoKind || result.kind || '',
+            wordCount: infoWordCount || result.wordCount || '',
+            introduce: infoIntroduce || result.introduce || '',
+            remark: '',
+            lastUpdateTime: result.lastUpdateTime || '',
+            lastOpenTime: 0,
+            createTime: now,
+            updateTime: now,
+            syncTime: 0,
+          };
+          newId = await bookTable.insertBook(book);
+        }
+        if (newId <= 0) throw new Error('写入书架失败');
+        for (const row of chapterRows) row.bookId = newId;
+        await ct.insertChapters(chapterRows);
+        db.commit();
+      } catch (txErr) {
+        db.rollBack();
+        throw new Error('写入书架事务失败: ' + (txErr as Error).message);
       }
-      if (newId <= 0) throw new Error('写入书架失败');
       AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
       UiUtil.showToast(this.getUIContext(), { message: '已作为新书加入书架', duration: 1500 });
-      // 后台补全详情和目录（不阻塞面板关闭）
-      this.fillNewBookInfoAsync_(newId, src, result.noteUrl);
     } catch (e) {
       console.error('[BookInfo] addSourceAsNewBook failed:', (e as Error).message);
       UiUtil.showToast(this.getUIContext(), { message: '加入书架失败：' + (e as Error).message, duration: 2000 });
-    }
-  }
-
-  /** 新入架书籍：后台拉取详情 + 目录写入数据库 */
-  private async fillNewBookInfoAsync_(bookId: number, src: BookSource | null, noteUrl: string): Promise<void> {
-    if (!src || !noteUrl) return;
-    try {
-      const db = AppDatabase.getInstance().rdbStore;
-      const bookTable = new BookTable(db);
-      let tocUrl = '';
-      try {
-        const info = await globalSourceExecutor.getBookInfo(src, noteUrl);
-        tocUrl = info.tocUrl || '';
-        const book = await bookTable.getBookById(bookId);
-        if (book) {
-          if (info.coverUrl && !book.coverUrl) book.coverUrl = info.coverUrl;
-          if (info.introduce && !book.introduce) book.introduce = info.introduce;
-          if (info.kind && !book.kind) book.kind = info.kind;
-          if (info.wordCount && !book.wordCount) book.wordCount = info.wordCount;
-          if (tocUrl) book.tocUrl = tocUrl;
-          book.updateTime = Date.now();
-          await bookTable.updateBook(book);
-        }
-      } catch (_e) { /* 详情失败不阻塞目录加载 */ }
-      const toc = await globalSourceExecutor.getToc(src, tocUrl || noteUrl);
-      if (toc.length > 0) {
-        const ct = new ChapterTable(db);
-        await ct.deleteChaptersByBookId(bookId);
-        const now = Date.now();
-        const rows: BookChapter[] = toc.map((ch: BookSourceChapter, idx: number): BookChapter => {
-          const item = createDefaultChapter();
-          item.bookId = bookId;
-          item.index = ch.index >= 0 ? ch.index : idx;
-          item.title = ch.title || '';
-          item.url = ch.url || '';
-          item.createTime = now;
-          item.updateTime = now;
-          return item;
-        });
-        await ct.insertChapters(rows);
-        await bookTable.updateTocInfo(bookId, toc.length, toc[toc.length - 1]?.title || '');
-        AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
-      }
-    } catch (e) {
-      console.warn('[BookInfo] fillNewBookInfoAsync failed:', (e as Error).message);
     }
   }
 
@@ -1255,6 +1296,23 @@ struct BookInfoPage {
       if (this.showMoreMenu) {
         this.buildOverflowMenu()
       }
+
+      if (this.showExportDialog) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showExportDialog = false; })
+          ExportBookDialog({
+            bookId: this.bookId,
+            bookName: this.bookName,
+            bookAuthor: this.bookAuthor,
+            introduce: this.introduce,
+            bookCover: this.coverUrl,
+            bookUrl: this.noteUrl,
+            origin: this.origin,
+            originUrl: this.originUrl,
+            onDismiss: () => { this.showExportDialog = false; },
+          })
+        }.width('100%').height('100%')
+      }
     }
     .width('100%')
     .height('100%')
@@ -1441,6 +1499,7 @@ struct BookInfoPage {
       this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })
       this.buildMenuItem('备注', () => { this.showMoreMenu = false; this.showRemarkDialog(); })
       if (this.isInShelf) {
+        this.buildMenuItem('导出', () => { this.showMoreMenu = false; this.showExportDialog = true; })
         this.buildMenuItem('清缓存', () => { this.showMoreMenu = false; this.clearCache(); })
         this.buildMenuItem('移出书架', () => { this.showMoreMenu = false; this.removeFromShelf(); }, true)
       }

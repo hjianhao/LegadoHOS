@@ -45,6 +45,7 @@ export class AiSourceAgent {
   private endpoint_: string = '';
   private apiKey_: string = '';
   private model_: string = '';
+  private timeoutMs_: number = 120000;
   private results_: AiStepResult[] = [];
   private homepageUrl_: string = '';
   private searchKeyword_: string = '';
@@ -60,6 +61,7 @@ export class AiSourceAgent {
     this.endpoint_ = await s.getAiEndpoint();
     this.apiKey_ = await s.getAiApiKey();
     this.model_ = await s.getAiModel();
+    this.timeoutMs_ = (await s.getAiTimeoutSeconds()) * 1000;
 
     // 加载 source.md
     if (!cachedSourceMd_) {
@@ -227,7 +229,7 @@ export class AiSourceAgent {
       'Authorization': 'Bearer ' + this.apiKey_,
     };
 
-    const resp = await NetUtil.httpPost(this.endpoint_, body, headers, 120000);
+    const resp = await NetUtil.httpPost(this.endpoint_, body, headers, this.timeoutMs_);
     const json = JSON.parse(resp) as Record<string, Object>;
     const choices = json['choices'] as Array<Record<string, Object>>;
     if (choices && choices.length > 0) {

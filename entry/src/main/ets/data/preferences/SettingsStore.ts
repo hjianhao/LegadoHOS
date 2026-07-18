@@ -15,6 +15,48 @@ interface EncryptedPayload {
   ciphertext: string;
 }
 
+/** 可切换的 AI 供应商/模型配置（apiKey 仅在内存中为明文）。 */
+export interface AiProviderProfile {
+  id: string;
+  name: string;
+  provider: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  /** 单次模型请求超时（秒）。 */
+  timeoutSeconds: number;
+}
+
+interface StoredAiProviderProfile {
+  id: string;
+  name: string;
+  provider: string;
+  endpoint: string;
+  encryptedApiKey: string;
+  model: string;
+  timeoutSeconds?: number;
+}
+
+export function normalizeAiTimeoutSeconds(value: number | undefined): number {
+  if (value === undefined || isNaN(value) || value <= 0) return 120;
+  return Math.floor(value);
+}
+
+export function detectAiProvider(endpoint: string): string {
+  if (endpoint.includes('deepseek.com')) return 'deepseek';
+  if (endpoint.includes('openrouter.ai')) return 'openrouter';
+  if (endpoint.includes('siliconflow.cn')) return 'silicon';
+  if (endpoint.includes('localhost:11434') || endpoint.includes(':11434/')) return 'ollama';
+  if (endpoint.includes('openai.com')) return 'openai';
+  return 'custom';
+}
+
+export function upsertAiProfile(profiles: AiProviderProfile[], profile: AiProviderProfile): AiProviderProfile[] {
+  const exists = profiles.some((item: AiProviderProfile): boolean => item.id === profile.id);
+  if (!exists) return [...profiles, profile];
+  return profiles.map((item: AiProviderProfile): AiProviderProfile => item.id === profile.id ? profile : item);
+}
+
 export class SettingsStore {
   private static instance: SettingsStore;
   private prefStore_: preferences.Preferences | null = null;
@@ -114,11 +156,13 @@ export class SettingsStore {
   private async encrypt_(plaintext: string): Promise<string> {
     if (!this.cipher_) return plaintext;
     try {
+      // Cipher.doFinal 后实例不可安全复用；每个 Key 使用独立加密实例。
+      const cipher = await this.createCipher_(cryptoFramework.CryptoMode.ENCRYPT_MODE);
       const plainBytes = new Uint8Array(plaintext.length);
       for (let i = 0; i < plaintext.length; i++) {
         plainBytes[i] = plaintext.charCodeAt(i) & 0xFF;
       }
-      const encrypted = await this.cipher_.doFinal({ data: plainBytes });
+      const encrypted = await cipher.doFinal({ data: plainBytes });
       // iv 和 ciphertext 拼接在一起存储
       const result = Array.from(encrypted.data);
       return this.bytesToBase64_(result);
@@ -301,6 +345,86 @@ export class SettingsStore {
   async getAiModel(): Promise<string> { return await this.get('ai_model', 'gpt-3.5-turbo'); }
   async setAiModel(v: string): Promise<void> { await this.put('ai_model', v); }
 
+  async getAiTimeoutSeconds(): Promise<number> {
+    return normalizeAiTimeoutSeconds(await this.get<number>('ai_timeout_seconds', 120));
+  }
+  async setAiTimeoutSeconds(v: number): Promise<void> {
+    await this.put('ai_timeout_seconds', normalizeAiTimeoutSeconds(v));
+  }
+
+  /** 读取全部 AI 配置；首次升级时把原有单配置迁移为第一条记录。 */
+  async getAiProfiles(): Promise<AiProviderProfile[]> {
+    const raw = await this.get<string>('ai_profiles', '');
+    if (raw) {
+      try {
+        const stored = JSON.parse(raw) as StoredAiProviderProfile[];
+        const profiles: AiProviderProfile[] = [];
+        for (const item of stored) {
+          profiles.push({
+            id: item.id,
+            name: item.name,
+            provider: item.provider,
+            endpoint: item.endpoint,
+            apiKey: item.encryptedApiKey ? await this.decrypt_(item.encryptedApiKey) : '',
+            model: item.model,
+            timeoutSeconds: normalizeAiTimeoutSeconds(item.timeoutSeconds),
+          });
+        }
+        if (profiles.length > 0) return profiles;
+      } catch (_e) {
+        console.warn('[SettingsStore] Invalid AI profiles, falling back to legacy config');
+      }
+    }
+
+    const endpoint = await this.getAiEndpoint();
+    const legacy: AiProviderProfile = {
+      id: 'ai_' + Date.now().toString(),
+      name: '默认配置',
+      provider: detectAiProvider(endpoint),
+      endpoint: endpoint,
+      apiKey: await this.getAiApiKey(),
+      model: await this.getAiModel(),
+      timeoutSeconds: await this.getAiTimeoutSeconds(),
+    };
+    await this.saveAiProfiles([legacy]);
+    await this.put('ai_active_profile_id', legacy.id);
+    return [legacy];
+  }
+
+  /** 保存配置列表；每条 API Key 独立加密。 */
+  async saveAiProfiles(profiles: AiProviderProfile[]): Promise<void> {
+    const stored: StoredAiProviderProfile[] = [];
+    for (const profile of profiles) {
+      stored.push({
+        id: profile.id,
+        name: profile.name,
+        provider: profile.provider,
+        endpoint: profile.endpoint,
+        encryptedApiKey: profile.apiKey ? await this.encrypt_(profile.apiKey) : '',
+        model: profile.model,
+        timeoutSeconds: normalizeAiTimeoutSeconds(profile.timeoutSeconds),
+      });
+    }
+    await this.put('ai_profiles', JSON.stringify(stored));
+  }
+
+  async getActiveAiProfileId(): Promise<string> {
+    return await this.get('ai_active_profile_id', '');
+  }
+
+  /** 激活一条配置，并同步旧的全局键，让现有 AI 功能无需改动即可使用。 */
+  async activateAiProfile(profile: AiProviderProfile): Promise<void> {
+    await this.setAiEndpoint(profile.endpoint);
+    await this.setAiApiKey(profile.apiKey);
+    await this.setAiModel(profile.model);
+    await this.setAiTimeoutSeconds(profile.timeoutSeconds);
+    await this.put('ai_active_profile_id', profile.id);
+  }
+
+  /** 龙空推书分析历史（JSON，页面只保留最近 10 次）。 */
+  async getLkongAnalysisHistory(): Promise<string> { return await this.get('lkong_analysis_history', '[]'); }
+  async setLkongAnalysisHistory(json: string): Promise<void> { await this.put('lkong_analysis_history', json); }
+
   // ---- WebDAV 配置（密码使用 HUKS 加密存储） ----
   async getWebDavPassword(): Promise<string> {
     const encoded = await this.get('webdav_pwd', '') as string;
@@ -375,6 +499,10 @@ export class SettingsStore {
 
   async getSearchHistory(): Promise<string[]> { return await this.get<string[]>('search_history', []); }
   async setSearchHistory(history: string[]): Promise<void> { await this.put('search_history', history); }
+
+  // ---- 换源设置 ----
+  async getChangeSourceCheckAuthor(): Promise<boolean> { return await this.get('change_source_check_author', true); }
+  async setChangeSourceCheckAuthor(v: boolean): Promise<void> { await this.put('change_source_check_author', v); }
 
   // ---- 缓存设置 ----
   async getAutoCacheSize(): Promise<number> { return await this.get('auto_cache_size', 10); }

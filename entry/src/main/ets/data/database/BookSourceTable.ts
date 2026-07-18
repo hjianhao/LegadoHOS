@@ -2,7 +2,7 @@
  * 书源表 — 核心表
  */
 import relationalStore from '@ohos.data.relationalStore';
-import { BookSource, parseBookSource } from '../../model/BookSource';
+import { BookSource, bookSourceToJsonObject, parseBookSource, serializeBookSource } from '../../model/BookSource';
 import { RdbUtil } from './RdbUtil';
 
 export const BookSourceTableCreate = `
@@ -165,33 +165,10 @@ export class BookSourceTable {
     return count;
   }
 
-  async exportSources(): Promise<string> {
-    const sources = await this.getAllSources();
-    return JSON.stringify(sources.map(s => ({
-      bookSourceName: s.sourceName,
-      bookSourceUrl: s.sourceUrl,
-      sourceType: s.sourceType,
-      group: s.group,
-      enabled: s.enabled,
-      weight: s.weight,
-      ruleSearchUrl: s.ruleSearchUrl,
-      ruleSearchList: s.ruleSearchList,
-      ruleSearchName: s.ruleSearchName,
-      ruleSearchAuthor: s.ruleSearchAuthor,
-      ruleSearchCover: s.ruleSearchCover,
-      ruleSearchNoteUrl: s.ruleSearchNoteUrl,
-      ruleBookInfoInit: s.ruleBookInfoInit,
-      ruleBookInfoName: s.ruleBookInfoName,
-      ruleBookInfoAuthor: s.ruleBookInfoAuthor,
-      ruleBookInfoCover: s.ruleBookInfoCover,
-      ruleBookInfoIntroduce: s.ruleBookInfoIntroduce,
-      ruleTocUrl: s.ruleTocUrl,
-      ruleToc: s.ruleToc,
-      ruleBookContentUrl: s.ruleBookContentUrl,
-      ruleBookContent: s.ruleBookContent,
-      ruleExplores: s.ruleExplores,
-      script: s.script,
-    })), null, 2);
+  async exportSources(sources?: BookSource[]): Promise<string> {
+    const list = sources || await this.getAllSources();
+    return JSON.stringify(list.map((source: BookSource): Record<string, Object> =>
+      bookSourceToJsonObject(source)), null, 2);
   }
 
   // ---- 预览式导入 ----
@@ -305,12 +282,14 @@ export class BookSourceTable {
   }
 
   async batchSetEnabled(ids: number[], enabled: boolean): Promise<void> {
+    if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
     await RdbUtil.update(this.rdbStore, { 'enabled': enabled ? 1 : 0 }, predicates);
   }
 
   async batchDelete(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
     await RdbUtil.delete(this.rdbStore, predicates);
@@ -323,9 +302,98 @@ export class BookSourceTable {
   }
 
   async batchUpdateGroup(ids: number[], group: string): Promise<void> {
+    if (ids.length === 0) return;
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.in('id', ids);
     await RdbUtil.update(this.rdbStore, { 'source_group': group }, predicates);
+  }
+
+  /** enabledExplore 位于标准 JSON 中，必须连同 raw_json 一起更新。 */
+  async batchSetExploreEnabled(ids: number[], enabled: boolean): Promise<void> {
+    for (const id of ids) {
+      const source = await this.getSourceById(id);
+      if (!source) continue;
+      source.enabledExplore = enabled;
+      await this.updateSource(source);
+    }
+  }
+
+  async updateRespondTime(id: number, respondTime: number): Promise<void> {
+    const source = await this.getSourceById(id);
+    if (!source) return;
+    source.respondTime = respondTime;
+    await this.updateSource(source);
+  }
+
+  /** 把分组作为标签追加，保留书源原有的其他分组。 */
+  async addGroupToSources(ids: number[], group: string): Promise<void> {
+    const value = group.trim();
+    if (!value) return;
+    for (const id of ids) {
+      const source = await this.getSourceById(id);
+      if (!source) continue;
+      const groups = this.splitGroups(source.group);
+      if (!groups.includes(value)) groups.push(value);
+      source.group = groups.join(',');
+      await this.updateSource(source);
+    }
+  }
+
+  /** Android 的分组并无独立表；创建分组时把它分配给当前未分组书源。 */
+  async addGroupToNoGroupSources(group: string): Promise<void> {
+    const sources = await this.getNoGroupSources();
+    await this.addGroupToSources(sources.map((source: BookSource): number => source.id), group);
+  }
+
+  async removeGroupFromSources(ids: number[], group: string): Promise<void> {
+    const value = group.trim();
+    if (!value) return;
+    for (const id of ids) {
+      const source = await this.getSourceById(id);
+      if (!source) continue;
+      source.group = this.splitGroups(source.group)
+        .filter((item: string): boolean => item !== value).join(',');
+      await this.updateSource(source);
+    }
+  }
+
+  async renameGroup(oldName: string, newName: string): Promise<void> {
+    const oldValue = oldName.trim();
+    const newValue = newName.trim();
+    if (!oldValue || !newValue || oldValue === newValue) return;
+    const sources = await this.getAllSources();
+    for (const source of sources) {
+      const groups = this.splitGroups(source.group);
+      if (!groups.includes(oldValue)) continue;
+      const renamed: string[] = [];
+      groups.forEach((item: string) => {
+        const value = item === oldValue ? newValue : item;
+        if (!renamed.includes(value)) renamed.push(value);
+      });
+      source.group = renamed.join(',');
+      await this.updateSource(source);
+    }
+  }
+
+  async deleteGroup(group: string): Promise<void> {
+    const sources = await this.getAllSources();
+    await this.removeGroupFromSources(sources.map((source: BookSource): number => source.id), group);
+  }
+
+  async moveSourceToEdge(id: number, toTop: boolean): Promise<void> {
+    const source = await this.getSourceById(id);
+    if (!source) return;
+    const all = await this.getAllSources();
+    if (all.length === 0) return;
+    const values = all.map((item: BookSource): number => item.customOrder || 0);
+    source.customOrder = toTop ? Math.min(...values) - 1 : Math.max(...values) + 1;
+    await this.updateSource(source);
+  }
+
+  private splitGroups(group: string): string[] {
+    return (group || '').split(/[,，;；|｜\n\r\t]+/)
+      .map((item: string): string => item.trim())
+      .filter((item: string): boolean => item.length > 0);
   }
 
   async getSourceByUrl(url: string): Promise<BookSource | null> {
@@ -671,7 +739,7 @@ export class BookSourceTable {
       'script': source.script,
       'header': source.header,
       'variable_comment': source.variableComment || '',
-      'raw_json': (source as any).rawJson || '',
+      'raw_json': serializeBookSource(source),
       'rule_book_info_toc_url': source.ruleBookInfoTocUrl,
       'cover_decode_js': source.coverDecodeJs || '',
       'is_ai_generated': source.isAiGenerated ? 1 : 0,

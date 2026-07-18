@@ -861,6 +861,7 @@ export struct BookshelfPage {
         this.mi('🤖 AI 智能导入', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiImportBookPage' }); })
         this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
         this.mi('书架管理', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookshelfManagePage' }); })
+        this.mi('缓存/导出', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookCachePage' }); })
         this.mi('导出书架', () => { this.showMenu = false; this.openExportDialog(this.currentTargetBooks()); })
         this.mi('导入书架', () => { this.showMenu = false; this.importDlg?.open(); })
         this.mi('日志', () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), { message: '日志面板待接入', duration: 1500 }); })

@@ -11,10 +11,12 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
+import { ThemeColors } from '../theme/ThemeColors';
 
 @CustomDialog
 export struct GroupManageDialog {
   controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
   @State groups: string[] = [];
   @State isLoading: boolean = true;
   @State editGroupName: string = '';
@@ -101,7 +103,7 @@ export struct GroupManageDialog {
         value: '取消', action: (): void => {}
       },
       secondaryButton: {
-        value: '删除', fontColor: '#E53935',
+        value: '删除', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           try {
             const db = AppDatabase.getInstance().rdbStore;
@@ -122,16 +124,16 @@ export struct GroupManageDialog {
       // ===== 标题栏 =====
       Row() {
         Text('分组管理').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button() { Text('新增').fontSize(14).fontColor('#FFF') }
-          .height(32).backgroundColor('#0078D7').borderRadius(16)
+        Button() { Text('新增').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark)) }
+          .height(40).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(20)
           .padding({ left: 12, right: 12 })
           .onClick(() => {
             this.addGroupName = '';
             this.showAddInput = true;
             this.showEditInput = false;
           })
-        Button() { Text('✕').fontSize(16).fontColor('#888') }
-          .width(32).height(32).backgroundColor('transparent')
+        Button() { Text('✕').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor('transparent')
           .onClick(() => { this.controller.close(); })
       }.padding({ top: 12, bottom: 8 })
 
@@ -139,15 +141,16 @@ export struct GroupManageDialog {
       if (this.showAddInput) {
         Row() {
           TextInput({ placeholder: '输入新分组名称', text: this.addGroupName })
-            .height(36).fontSize(14).layoutWeight(1).borderRadius(4)
+            .height(48).fontSize(14).layoutWeight(1).borderRadius(12)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .padding({ left: 8 })
             .onChange((v: string) => { this.addGroupName = v; })
-          Button('添加').fontSize(13).height(36)
-            .backgroundColor('#4CAF50').fontColor('#FFF').borderRadius(4)
+          Button('添加').fontSize(13).height(48)
+            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 6 })
             .onClick(() => { this.onAddGroup(); })
-          Button('取消').fontSize(13).height(36)
-            .backgroundColor('#E0E0E0').fontColor('#333').borderRadius(4)
+          Button('取消').fontSize(13).height(48)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 4 })
             .onClick(() => { this.showAddInput = false; })
         }.width('100%').margin({ bottom: 8 })
@@ -157,15 +160,16 @@ export struct GroupManageDialog {
       if (this.showEditInput) {
         Row() {
           TextInput({ placeholder: '输入新名称', text: this.editGroupName })
-            .height(36).fontSize(14).layoutWeight(1).borderRadius(4)
+            .height(48).fontSize(14).layoutWeight(1).borderRadius(12)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .padding({ left: 8 })
             .onChange((v: string) => { this.editGroupName = v; })
-          Button('保存').fontSize(13).height(36)
-            .backgroundColor('#4CAF50').fontColor('#FFF').borderRadius(4)
+          Button('保存').fontSize(13).height(48)
+            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 6 })
             .onClick(() => { this.onSaveEdit(); })
-          Button('取消').fontSize(13).height(36)
-            .backgroundColor('#E0E0E0').fontColor('#333').borderRadius(4)
+          Button('取消').fontSize(13).height(48)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24)
             .padding({ left: 12, right: 12 }).margin({ left: 4 })
             .onClick(() => { this.showEditInput = false; })
         }.width('100%').margin({ bottom: 8 })
@@ -173,11 +177,11 @@ export struct GroupManageDialog {
 
       // ===== 分组列表 =====
       if (this.isLoading) {
-        LoadingProgress().color('#0078D7').margin({ top: 40 })
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
       } else if (this.groups.length === 0) {
         Column() {
-          Text('还没有分组').fontSize(16).fontColor('#888').margin({ top: 40 })
-          Text('点击"新增"创建分组').fontSize(13).fontColor('#AAA').margin({ top: 4 })
+          Text('还没有分组').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 40 })
+          Text('新增分组会分配给当前未分组书源').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
         }.width('100%').alignItems(HorizontalAlign.Center).layoutWeight(1)
       } else {
         List() {
@@ -185,31 +189,31 @@ export struct GroupManageDialog {
             ListItem() {
               Row() {
                 Text(group).fontSize(15).layoutWeight(1)
-                Button() { Text('编辑').fontSize(12).fontColor('#0078D7') }
-                  .height(30).backgroundColor('transparent').borderRadius(4)
+                Button() { Text('编辑').fontSize(12).fontColor(ThemeColors.primary(this.isDark)) }
+                  .height(40).backgroundColor('transparent').borderRadius(20)
                   .onClick(() => { this.onEditGroup(group); })
-                Button() { Text('删除').fontSize(12).fontColor('#F44336') }
-                  .height(30).backgroundColor('transparent').borderRadius(4)
+                Button() { Text('删除').fontSize(12).fontColor(ThemeColors.error(this.isDark)) }
+                  .height(40).backgroundColor('transparent').borderRadius(20)
                   .margin({ left: 4 })
                   .onClick(() => { this.confirmDeleteGroup(group); })
               }
               .padding({ left: 8, right: 8, top: 10, bottom: 10 })
               .width('100%')
             }
-            .border({ width: { bottom: 0.5 }, color: '#E8E8E8' })
+            .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
           })
         }
         .width('100%').layoutWeight(1)
       }
 
       // ===== 底部关闭 =====
-      Button('关闭').height(36).fontSize(14)
-        .backgroundColor('#E0E0E0').fontColor('#333').borderRadius(8).width('100%').margin({ top: 8 })
+      Button('关闭').height(48).fontSize(14)
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24).width('100%').margin({ top: 8 })
         .onClick(() => { this.controller.close(); })
     }
     .padding({ left: 16, right: 16, top: 0, bottom: 12 })
     .width('100%').height('70%')
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

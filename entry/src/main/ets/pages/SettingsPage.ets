@@ -183,6 +183,7 @@ struct SettingsPage {
 	        { icon: '\uD83C\uDFA7', title: '语音朗读设置', key: 'tts' },
 	        { icon: '\uD83D\uDCDA', title: '漫画设置', key: 'comic' },
         { icon: '\uD83D\uDD0D', title: '搜索设置', key: 'search' },
+        { icon: '\uD83E\uDD16', title: '大模型配置', key: 'ai' },
         { icon: '\uD83C\uDF10', title: '网络设置', key: 'network' },
         { icon: '\uD83C\uDFA8', title: '主题设置', key: 'theme' },
 	        { icon: '\uD83D\uDD04', title: '备份与恢复', key: 'backup' },
@@ -201,6 +202,8 @@ struct SettingsPage {
 		        .onClick(() => {
 		          if (item.key === 'backup') {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/BackupSettingsPage' }).catch(() => {});
+		          } else if (item.key === 'ai') {
+		            this.getUIContext().getRouter().pushUrl({ url: 'pages/AiConfigPage' }).catch(() => {});
 		          } else if (item.key === 'worker_test') {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkerTestPage' }).catch(() => {});
 		          } else {

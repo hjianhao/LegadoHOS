@@ -8,7 +8,7 @@
  * - 目录：从详情结果取目录 URL，验证目录解析
  * - 正文：取第一章正文，验证内容解析
  */
-import { BookSource, BookSourceChapter } from '../model/BookSource';
+import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 
@@ -124,12 +124,20 @@ export class SourceChecker {
     return this.resultsMap;
   }
 
+  async checkSource(source: BookSource): Promise<CheckResult> {
+    this.cancelFlag = false;
+    const result = await this.checkSingleSource(source);
+    this.resultsMap.set(source.sourceUrl, result);
+    return result;
+  }
+
   private async checkSingleSource(source: BookSource): Promise<CheckResult> {
     const details: CheckDetail[] = [];
     let passedChecks = 0;
     let totalChecks = 0;
 
     let searchResults: SearchResult[] = [];
+    let bookInfo: BookSourceBookInfo | null = null;
     let chapters: BookSourceChapter[] = [];
 
     // 1. 搜索检查 — 跳过未配置搜索规则的书源
@@ -142,7 +150,7 @@ export class SourceChecker {
         const startTime = Date.now();
         try {
           const results: SearchResult[] = await this.runWithTimeout(
-            globalSourceExecutor.search(this.config.keyword, [source]),
+            globalSourceExecutor.searchForCheck(this.config.keyword, source),
             this.config.timeout
           );
           const elapsed = Date.now() - startTime;
@@ -172,12 +180,28 @@ export class SourceChecker {
       }
     }
 
-    // 3. 详情检查（简化：跳过，因为 getBookInfo 暂不可用）
+    // 3. 详情检查
     if (this.config.checkInfo && !this.cancelFlag) {
       totalChecks++;
       if (searchResults.length > 0 && searchResults[0].noteUrl) {
-        passedChecks++;
-        details.push({ name: '详情', passed: true, message: '搜索结果包含详情 URL', duration: 0 });
+        const startTime = Date.now();
+        try {
+          bookInfo = await this.runWithTimeout(
+            globalSourceExecutor.getBookInfo(source, searchResults[0].noteUrl),
+            this.config.timeout
+          );
+          const elapsed = Date.now() - startTime;
+          if (bookInfo.name || bookInfo.author || bookInfo.tocUrl || bookInfo.introduce) {
+            passedChecks++;
+            const summary = [bookInfo.name, bookInfo.author, bookInfo.wordCount]
+              .filter((value: string | undefined): boolean => !!value).join(' · ');
+            details.push({ name: '详情', passed: true, message: summary || '详情解析成功', duration: elapsed });
+          } else {
+            details.push({ name: '详情', passed: false, message: '详情字段均为空', duration: elapsed });
+          }
+        } catch (e) {
+          details.push({ name: '详情', passed: false, message: '失败: ' + getErrorMessage(e), duration: Date.now() - startTime });
+        }
       } else {
         details.push({ name: '详情', passed: false, message: '搜索无结果', duration: 0 });
       }
@@ -186,7 +210,7 @@ export class SourceChecker {
     // 4. 目录检查
     if (this.config.checkCategory && !this.cancelFlag) {
       totalChecks++;
-      const tocUrl: string = searchResults.length > 0 ? searchResults[0].noteUrl :
+      const tocUrl: string = (bookInfo && bookInfo.tocUrl) ? bookInfo.tocUrl : searchResults.length > 0 ? searchResults[0].noteUrl :
         (source.ruleTocUrl || source.sourceUrl || '');
       if (!tocUrl) {
         details.push({ name: '目录', passed: false, message: '无目录 URL', duration: 0 });
@@ -213,8 +237,11 @@ export class SourceChecker {
     }
 
     // 5. 正文检查
-    if (this.config.checkContent && !this.cancelFlag && chapters.length > 0) {
+    if (this.config.checkContent && !this.cancelFlag) {
       totalChecks++;
+      if (chapters.length === 0) {
+        details.push({ name: '正文', passed: false, message: '没有可测试的章节', duration: 0 });
+      } else {
       const startTime = Date.now();
       try {
         const content: string = await this.runWithTimeout(
@@ -232,6 +259,7 @@ export class SourceChecker {
       } catch (e) {
         const elapsed = Date.now() - startTime;
         details.push({ name: '正文', passed: false, message: '失败: ' + getErrorMessage(e), duration: elapsed });
+      }
       }
     }
 

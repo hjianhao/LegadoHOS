@@ -9,10 +9,11 @@
  */
 import rcp from '@hms.collaboration.rcp';
 import fileFs from '@ohos.file.fs';
+import { taskpool } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import image from '@ohos.multimedia.image';
 import { BookSource } from '../model/BookSource';
-import { NetUtil } from './NetUtil';
+import { processMangaImageConcurrent } from './MangaImageProcessTask';
 
 const CACHE_BASE_DIR: string = '/data/storage/el2/base/haps/entry/files/manga_cache/';
 
@@ -66,18 +67,31 @@ function parseSourceHeaders(headerStr: string): Record<string, string> {
 export class MangaImageLoader {
   private static cacheDir: string = CACHE_BASE_DIR;
   private static initialized: boolean = false;
+  private static initPromise: Promise<void> | null = null;
   /** 并发下载控制 */
   private static downloading: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   /** 最大并发下载数 */
   private static readonly MAX_CONCURRENT: number = 3;
   private static activeCount: number = 0;
+  private static downloadWaiters: Array<() => void> = [];
+  /** 解密/像素重排单独串行，避免多张 RGBA 大图同时驻留内存。 */
+  private static readonly MAX_PROCESS_CONCURRENT: number = 1;
+  private static processActiveCount: number = 0;
+  private static processWaiters: Array<() => void> = [];
 
   /** 初始化缓存目录 */
   static async init(): Promise<void> {
     if (MangaImageLoader.initialized) return;
+    if (MangaImageLoader.initPromise) return MangaImageLoader.initPromise;
+    MangaImageLoader.initPromise = MangaImageLoader.initInternal_();
+    try { await MangaImageLoader.initPromise; }
+    finally { MangaImageLoader.initPromise = null; }
+  }
+
+  private static async initInternal_(): Promise<void> {
     try {
-      if (!fileFs.accessSync(MangaImageLoader.cacheDir)) {
-        fileFs.mkdirSync(MangaImageLoader.cacheDir, true);
+      if (!await fileFs.access(MangaImageLoader.cacheDir)) {
+        await fileFs.mkdir(MangaImageLoader.cacheDir, true);
       }
       MangaImageLoader.initialized = true;
     } catch (err) {
@@ -94,9 +108,9 @@ export class MangaImageLoader {
   }
 
   /** 检查图片是否已缓存 */
-  static isCached(url: string): boolean {
+  static async isCached(url: string): Promise<boolean> {
     try {
-      return fileFs.accessSync(MangaImageLoader.getLocalPath(url));
+      return await fileFs.access(MangaImageLoader.getLocalPath(url));
     } catch (_) {
       return false;
     }
@@ -118,12 +132,12 @@ export class MangaImageLoader {
     const localPath: string = MangaImageLoader.getLocalPath(url);
 
     // 已缓存，验证缓存文件是否为有效图片（旧缓存可能存的是加密数据）
-    if (MangaImageLoader.isCached(url)) {
-      if (MangaImageLoader.isValidImageFile(localPath)) {
+    if (await MangaImageLoader.isCached(url)) {
+      if (await MangaImageLoader.isValidImageFile(localPath)) {
         return localPath;
       }
       // 缓存无效 → 删除文件，重新下载
-      try { fileFs.unlinkSync(localPath); } catch (_) { /* ignore */ }
+      try { await fileFs.unlink(localPath); } catch (_) { /* ignore */ }
       console.info('[MangaImg] Invalidated stale cache for', url.substring(0, 60));
     }
 
@@ -134,7 +148,8 @@ export class MangaImageLoader {
     }
 
     // 发起下载
-    const downloadPromise: Promise<string> = MangaImageLoader.downloadWithQueue(url, source, localPath, onProgress);
+    const downloadPromise: Promise<string> =
+      MangaImageLoader.downloadWithQueue(url, source || null, localPath, onProgress);
     MangaImageLoader.downloading.set(url, downloadPromise);
     try {
       const result: string = await downloadPromise;
@@ -145,20 +160,20 @@ export class MangaImageLoader {
   }
 
   /** 检查本地缓存文件是否为有效的图片格式 */
-  private static isValidImageFile(filePath: string): boolean {
+  private static async isValidImageFile(filePath: string): Promise<boolean> {
+    let file: fileFs.File | null = null;
     try {
-      const file: fileFs.File = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
-      try {
-        const buf: ArrayBuffer = new ArrayBuffer(16);
-        const readLen: number = fileFs.readSync(file.fd, buf);
-        if (readLen < 2) return false;
-        const bytes: Uint8Array = new Uint8Array(buf);
-        return MangaImageLoader.isValidImageBytes(bytes);
-      } finally {
-        fileFs.closeSync(file);
-      }
+      file = await fileFs.open(filePath, fileFs.OpenMode.READ_ONLY);
+      const buf: ArrayBuffer = new ArrayBuffer(16);
+      const readLen: number = await fileFs.read(file.fd, buf);
+      if (readLen < 2) return false;
+      return MangaImageLoader.isValidImageBytes(new Uint8Array(buf));
     } catch (_) {
       return false;
+    } finally {
+      if (file) {
+        try { await fileFs.close(file); } catch (_) { /* ignore close error */ }
+      }
     }
   }
 
@@ -173,15 +188,11 @@ export class MangaImageLoader {
 
   /** 带并发队列的下载 */
   private static async downloadWithQueue(url: string, source: BookSource | null, localPath: string, onProgress?: (percent: number) => void): Promise<string> {
-    // 等待并发槽
-    while (MangaImageLoader.activeCount >= MangaImageLoader.MAX_CONCURRENT) {
-      await new Promise<void>((resolve: Function) => setTimeout(resolve, 50));
-    }
-    MangaImageLoader.activeCount++;
+    await MangaImageLoader.acquireDownloadSlot_();
 
     try {
       // 双重检查
-      if (MangaImageLoader.isCached(url)) return localPath;
+      if (await MangaImageLoader.isCached(url)) return localPath;
 
       const success: boolean = await MangaImageLoader.downloadImage(url, source, localPath, onProgress);
       if (success) {
@@ -193,8 +204,38 @@ export class MangaImageLoader {
       console.warn('[MangaImg] Download failed:', url, (err as Error).message);
       return url;
     } finally {
-      MangaImageLoader.activeCount--;
+      MangaImageLoader.releaseDownloadSlot_();
     }
+  }
+
+  private static async acquireDownloadSlot_(): Promise<void> {
+    if (MangaImageLoader.activeCount >= MangaImageLoader.MAX_CONCURRENT) {
+      await new Promise<void>((resolve: () => void): void => {
+        MangaImageLoader.downloadWaiters.push(resolve);
+      });
+    }
+    MangaImageLoader.activeCount++;
+  }
+
+  private static releaseDownloadSlot_(): void {
+    MangaImageLoader.activeCount = Math.max(0, MangaImageLoader.activeCount - 1);
+    const next: (() => void) | undefined = MangaImageLoader.downloadWaiters.shift();
+    if (next) next();
+  }
+
+  private static async acquireProcessSlot_(): Promise<void> {
+    if (MangaImageLoader.processActiveCount >= MangaImageLoader.MAX_PROCESS_CONCURRENT) {
+      await new Promise<void>((resolve: () => void): void => {
+        MangaImageLoader.processWaiters.push(resolve);
+      });
+    }
+    MangaImageLoader.processActiveCount++;
+  }
+
+  private static releaseProcessSlot_(): void {
+    MangaImageLoader.processActiveCount = Math.max(0, MangaImageLoader.processActiveCount - 1);
+    const next: (() => void) | undefined = MangaImageLoader.processWaiters.shift();
+    if (next) next();
   }
 
   /** 下载单张图片到本地 */
@@ -226,20 +267,17 @@ export class MangaImageLoader {
           transfer: {
             timeout: { connectMs: 15000, transferMs: 30000 },
           },
+          tracing: onProgress ? {
+            httpEventsHandler: {
+              onDownloadProgress: (totalSize: number, transferredSize: number): void => {
+                if (totalSize > 0) {
+                  onProgress(Math.min(100, Math.round(transferredSize * 100 / totalSize)));
+                }
+              },
+            } as rcp.HttpEventsHandler,
+          } as rcp.TracingConfiguration : undefined,
         },
       };
-      // 注入进度回调（如果 rcp 支持）
-      if (onProgress) {
-        try {
-          (sessionCfg as Record<string, Object>)['callbacks'] = {
-            onDownloadProgress: (info: Record<string, number>): void => {
-              if (info && info['progress'] >= 0) {
-                onProgress(Math.min(100, Math.round(info['progress'] * 100)));
-              }
-            },
-          };
-        } catch (_) { /* callbacks 字段可能不存在于当前 SDK，忽略 */ }
-      }
       const session: rcp.Session = rcp.createSession(sessionCfg);
 
       try {
@@ -261,47 +299,65 @@ export class MangaImageLoader {
           return false;
         }
 
-        // 写入本地文件（二进制安全）
-        const bodyBytes: Uint8Array = new Uint8Array(response.body);
+        // 先做最小校验；后续整图处理通过 TaskPool 转移所有权，不复制大缓冲。
+        const bodyBuffer: ArrayBuffer = response.body;
+        const bodyLength: number = bodyBuffer.byteLength;
+        const bodyBytes: Uint8Array = new Uint8Array(bodyBuffer);
         // 验证是否为有效图片数据（最小 JPEG 3 字节 / PNG 8 字节 / WebP 12 字节 / GIF 6 字节）
         if (bodyBytes.length < 3) {
           console.warn('[MangaImg] Body too small:', bodyBytes.length, 'for', url.substring(0, 80));
           return false;
         }
 
-        // 尝试解密图片（部分漫画源使用 AES 加密图片，自动检测魔数决定是否解密）
-        let finalBytes: Uint8Array = await MangaImageLoader.tryDecryptImage(bodyBytes);
+        // AES/XOR/Base64/像素重排全部移到 TaskPool；像素处理并发固定为 1。
+        await MangaImageLoader.acquireProcessSlot_();
+        let finalBuffer: ArrayBuffer;
+        try {
+          const task: taskpool.Task = new taskpool.Task('manga-image-process',
+            processMangaImageConcurrent, url, bodyBuffer, source?.ruleBookContentImageDecode || '');
+          task.setTransferList([bodyBuffer]);
+          finalBuffer = await taskpool.execute(task, taskpool.Priority.LOW) as ArrayBuffer;
+        } finally {
+          MangaImageLoader.releaseProcessSlot_();
+        }
 
-        // 尝试竖条重组解密（禁漫天堂等源的图片打乱加密）
-        finalBytes = await MangaImageLoader.tryUnscrambleImage(url, finalBytes);
-
-        // 尝试书源 imageDecode 规则解密
-        if (source && source.ruleBookContentImageDecode) {
-          finalBytes = await MangaImageLoader.tryImageDecodeRule(url, finalBytes, source.ruleBookContentImageDecode);
+        const finalBytes: Uint8Array = new Uint8Array(finalBuffer);
+        if (!MangaImageLoader.isValidImageBytes(finalBytes)) {
+          console.warn('[MangaImg] Processed data is not a supported image:', url.substring(0, 80));
+          return false;
         }
 
         // 确保目录存在
         const dir: string = localPath.substring(0, localPath.lastIndexOf('/'));
-        if (!fileFs.accessSync(dir)) {
-          fileFs.mkdirSync(dir, true);
+        if (!await fileFs.access(dir)) {
+          await fileFs.mkdir(dir, true);
         }
 
         // 写入临时文件再 rename（原子写入）
         const tempPath: string = `${localPath}.${Date.now()}.tmp`;
-        const file: fileFs.File = fileFs.openSync(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+        let file: fileFs.File | null = null;
+        let committed: boolean = false;
         try {
-          // 使用 slice 确保 byteOffset 正确，避免 view 指向大 buffer 的某个切片时写入多余数据
-          const writeBuffer: ArrayBuffer = finalBytes.buffer.slice(finalBytes.byteOffset, finalBytes.byteOffset + finalBytes.byteLength);
-          fileFs.writeSync(file.fd, writeBuffer);
+          file = await fileFs.open(tempPath, fileFs.OpenMode.CREATE | fileFs.OpenMode.WRITE_ONLY);
+          await fileFs.write(file.fd, finalBuffer);
+          await fileFs.close(file);
+          file = null;
+
+          // 检查正式文件是否已存在（并发时可能另一个线程先完成了）
+          try { await fileFs.unlink(localPath); } catch (_) { /* not exist */ }
+          await fileFs.rename(tempPath, localPath);
+          committed = true;
         } finally {
-          fileFs.closeSync(file);
+          if (file) {
+            try { await fileFs.close(file); } catch (_) { /* ignore close error */ }
+          }
+          if (!committed) {
+            try { await fileFs.unlink(tempPath); } catch (_) { /* not exist */ }
+          }
         }
 
-        // 检查正式文件是否已存在（并发时可能另一个线程先完成了）
-        try { fileFs.unlinkSync(localPath); } catch (_) { /* not exist */ }
-        fileFs.renameSync(tempPath, localPath);
-
-        console.info('[MangaImg] Downloaded:', bodyBytes.length, 'bytes ->', localPath.substring(localPath.lastIndexOf('/') + 1));
+        console.info('[MangaImg] Downloaded:', bodyLength, 'bytes ->',
+          localPath.substring(localPath.lastIndexOf('/') + 1));
         return true;
       } finally {
         session.close();
@@ -399,7 +455,8 @@ export class MangaImageLoader {
         console.info('[MangaImg] imageDecode: Base64 pattern');
         try {
           // 将 Uint8Array 转为字符串（Base64 文本）
-          const b64Str: string = String.fromCharCode.apply(null, Array.from(data));
+          let b64Str: string = '';
+          for (let i = 0; i < data.length; i++) b64Str += String.fromCharCode(data[i]);
           const decoded: Uint8Array = MangaImageLoader.base64Decode_(b64Str);
           if (decoded && MangaImageLoader.isValidImageBytes(decoded)) {
             console.info('[MangaImg] imageDecode Base64 success:', decoded.length, 'bytes');
@@ -603,7 +660,7 @@ export class MangaImageLoader {
    * 预加载图片（下载到缓存但不返回路径，不阻塞调用方）
    */
   static preload(url: string, source?: BookSource | null): void {
-    if (!url || MangaImageLoader.isCached(url)) return;
+    if (!url) return;
     MangaImageLoader.load(url, source).catch((_e: Error) => { /* ignore preload errors */ });
   }
 
@@ -613,15 +670,15 @@ export class MangaImageLoader {
    */
   static async clearCacheExcept(imageUrls: string[]): Promise<void> {
     try {
-      if (!fileFs.accessSync(MangaImageLoader.cacheDir)) return;
+      if (!await fileFs.access(MangaImageLoader.cacheDir)) return;
       const retainNames: Set<string> = new Set<string>();
       for (const url of imageUrls) {
-        retainNames.add(`${md5Short(url)}.${getImageSuffix(url)}`);
+        retainNames.add(`v${MangaImageLoader.CACHE_VERSION}_${md5Short(url)}.${getImageSuffix(url)}`);
       }
-      const files: string[] = fileFs.listFileSync(MangaImageLoader.cacheDir);
+      const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
       for (const file of files) {
         if (!retainNames.has(file)) {
-          try { fileFs.unlinkSync(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
+          try { await fileFs.unlink(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
         }
       }
     } catch (err) {
@@ -634,10 +691,10 @@ export class MangaImageLoader {
    */
   static async clearAllCache(): Promise<void> {
     try {
-      if (fileFs.accessSync(MangaImageLoader.cacheDir)) {
-        const files: string[] = fileFs.listFileSync(MangaImageLoader.cacheDir);
+      if (await fileFs.access(MangaImageLoader.cacheDir)) {
+        const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
         for (const file of files) {
-          try { fileFs.unlinkSync(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
+          try { await fileFs.unlink(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
         }
         console.info('[MangaImg] Cleared all cache:', files.length, 'files');
       }
@@ -651,12 +708,12 @@ export class MangaImageLoader {
    */
   static async getCacheSize(): Promise<number> {
     try {
-      if (!fileFs.accessSync(MangaImageLoader.cacheDir)) return 0;
+      if (!await fileFs.access(MangaImageLoader.cacheDir)) return 0;
       let totalSize: number = 0;
-      const files: string[] = fileFs.listFileSync(MangaImageLoader.cacheDir);
+      const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
       for (const file of files) {
         try {
-          const stat: fileFs.Stat = fileFs.statSync(`${MangaImageLoader.cacheDir}${file}`);
+          const stat: fileFs.Stat = await fileFs.stat(`${MangaImageLoader.cacheDir}${file}`);
           totalSize += stat.size;
         } catch (_) { /* ignore */ }
       }

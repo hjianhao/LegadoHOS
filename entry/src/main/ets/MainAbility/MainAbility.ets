@@ -55,6 +55,9 @@ export default class MainAbility extends UIAbility {
     try {
       await CookieStore.getInstance().init(this.context);
       await LoginInfoStore.getInstance().init(this.context);
+      // 2026-07 之前的优书网登录可能在 Preferences 中留下明文密码。
+      // 新版只保存 Cookie 会话，启动时立即清理旧凭据。
+      await LoginInfoStore.getInstance().remove('https://www.youshu.me');
       console.info('[MainAbility] CookieStore/LoginInfoStore initialized');
     } catch (err) {
       console.warn('[MainAbility] Cookie/LoginInfo store init failed:', err);

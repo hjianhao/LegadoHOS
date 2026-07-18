@@ -66,11 +66,11 @@ export class HtmlUtil {
    * 将 HTML 清洗为易读纯文本（不包含正文区域识别）
    * 适用于 EPUB 章节等已是正文的内容
    */
-  static toPlainText(html: string): string {
-    return HtmlUtil.cleanHtmlToText(html);
+  static toPlainText(html: string, maxLength: number = 20000): string {
+    return HtmlUtil.cleanHtmlToText(html, maxLength);
   }
 
-  private static cleanHtmlToText(html: string): string {
+  private static cleanHtmlToText(html: string, maxLength: number = 20000): string {
     if (!html) return '';
     let t = html;
 
@@ -144,7 +144,7 @@ export class HtmlUtil {
     t = t.replace(/\n{4,}/g, '\n\n\n');
     t = t.replace(/\n{3,}/g, '\n\n');
 
-    return t.substring(0, 20000);
+    return t.substring(0, maxLength);
   }
 
   /**
