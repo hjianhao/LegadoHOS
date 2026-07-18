@@ -27,7 +27,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
-import { ChangeSourceSheet, ChapterPickSheet } from '../components/BookInfoSheets';
+import { ChangeSourceSheet, ChapterPickSheet, OptionSelectSheet } from '../components/BookInfoSheets';
 import * as ChapterMatcher from '../util/ChapterMatcher';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
@@ -117,6 +117,7 @@ struct ReadPage {
   private aloudEngine_: ReadAloudEngine | null = null;
   private sourceDlg?: CustomDialogController;
   private chapterPickDlg?: CustomDialogController;
+  private optionDlg?: CustomDialogController;
   private loginDlg?: CustomDialogController;
   private pendingStyleSave_: ReadStyleSaveSnapshot | null = null;
   private styleSavePromise_: Promise<void> = Promise.resolve();
@@ -1395,20 +1396,28 @@ struct ReadPage {
   /** 长按换源按钮：选择整本换源或单章换源（对齐 Legado ReadBookMenuBar） */
   private showChangeSourceMenu_(): void {
     this.showMenu = false;
-    ActionSheet.show({
-      title: '换源方式',
-      message: '长按可再次打开本菜单',
-      sheets: [
-        {
-          title: '整本换源',
-          action: () => { this.openSourceSheet(false); }
-        },
-        {
-          title: '单章换源',
-          action: () => { this.openSourceSheet(true); }
-        },
-      ]
+    this.optionDlg = new CustomDialogController({
+      builder: OptionSelectSheet({
+        controller: this.optionDlg!,
+        title: '换源方式',
+        options: [
+          {
+            title: '整本换源',
+            description: '替换整本书的书源，迁移阅读进度',
+            action: () => { this.openSourceSheet(false); }
+          },
+          {
+            title: '单章换源',
+            description: '只从其他源替换当前章节内容',
+            action: () => { this.openSourceSheet(true); }
+          },
+        ]
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
     });
+    this.optionDlg.open();
   }
 
   /**

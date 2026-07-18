@@ -502,6 +502,7 @@ export struct ChangeSourceSheet {
 
   /** 网络搜索的原始结果（用于"校验作者"开关切换后本地重过滤） */
   private rawResults_: SearchResult[] = [];
+  private optionDlg?: CustomDialogController;
 
   /** 点击候选源：对齐 Legado —— 可选择替换当前书籍或作为新书添加 */
   private onResultClick_(item: SearchResult): void {
@@ -509,24 +510,33 @@ export struct ChangeSourceSheet {
       this.confirmReplace_(item);
       return;
     }
-    ActionSheet.show({
-      title: item.name || '',
-      message: (item.origin || '') + (item.author ? ' · ' + item.author : ''),
-      sheets: [
-        {
-          title: '替换当前书籍',
-          action: () => { this.confirmReplace_(item); }
-        },
-        {
-          title: '作为新书加入书架',
-          action: () => {
-            if (this.onAddAsNew) this.onAddAsNew(item);
-            this.searching = false;
-            this.controller.close();
-          }
-        },
-      ]
+    this.optionDlg = new CustomDialogController({
+      builder: OptionSelectSheet({
+        controller: this.optionDlg!,
+        title: item.name || '',
+        message: (item.origin || '') + (item.author ? ' · ' + item.author : ''),
+        options: [
+          {
+            title: '替换当前书籍',
+            description: '迁移阅读进度到新源',
+            action: () => { this.confirmReplace_(item); }
+          },
+          {
+            title: '作为新书加入书架',
+            description: '保留当前书籍，另存一本新书',
+            action: () => {
+              if (this.onAddAsNew) this.onAddAsNew(item);
+              this.searching = false;
+              this.controller.close();
+            }
+          },
+        ]
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
     });
+    this.optionDlg.open();
   }
 
   private confirmReplace_(item: SearchResult): void {
@@ -934,6 +944,87 @@ export struct ChapterPickSheet {
       .layoutWeight(1).width('100%')
     }
     .width('100%').height('70%')
+    .backgroundColor(ThemeColors.surface(this.isDark))
+    .borderRadius({ topLeft: 16, topRight: 16 })
+  }
+}
+
+
+// =====================================================================
+// OptionSelectSheet — 大字号选项弹窗（替代系统 ActionSheet）
+// 用于换源方式选择、候选源"替换/加新书"选择等二选一/多选一场景
+// =====================================================================
+export interface OptionItem {
+  title: string;
+  description?: string;
+  action: () => void;
+}
+
+@CustomDialog
+export struct OptionSelectSheet {
+  controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
+  title: string = '';
+  message: string = '';
+  options: OptionItem[] = [];
+
+  build() {
+    Column() {
+      if (this.title) {
+        Text(this.title)
+          .fontSize(17).fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onBackground(this.isDark))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: 24, right: 24, top: 20 })
+      }
+      if (this.message) {
+        Text(this.message)
+          .fontSize(13)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: 24, right: 24, top: 6 })
+      }
+      Column() {
+        ForEach(this.options, (opt: OptionItem, index: number) => {
+          Column() {
+            Text(opt.title)
+              .fontSize(17)
+              .fontColor(ThemeColors.onBackground(this.isDark))
+            if (opt.description) {
+              Text(opt.description)
+                .fontSize(12)
+                .fontColor(ThemeColors.secondaryText(this.isDark))
+                .margin({ top: 3 })
+            }
+          }
+          .width('100%')
+          .padding({ top: 18, bottom: 18 })
+          .alignItems(HorizontalAlign.Center)
+          .border({
+            width: { top: index === 0 ? 0 : 0.5 },
+            color: ThemeColors.outlineVariant(this.isDark)
+          })
+          .onClick(() => {
+            opt.action();
+            this.controller.close();
+          })
+        }, (opt: OptionItem, index: number) => index + '|' + opt.title)
+      }
+      .width('100%')
+      .margin({ top: 14 })
+
+      Text('取消')
+        .fontSize(17)
+        .fontColor(ThemeColors.secondaryText(this.isDark))
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .padding({ top: 18, bottom: 18 })
+        .margin({ top: 8 })
+        .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+        .onClick(() => { this.controller.close(); })
+    }
+    .width('100%')
+    .padding({ bottom: 16 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
