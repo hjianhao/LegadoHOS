@@ -650,8 +650,8 @@ export class HtmlParser {
   private findAllDescendants(root: HtmlElement, selector: string): HtmlElement[] {
     const results: HtmlElement[] = [];
     const queue = [...root.children];
-    while (queue.length > 0) {
-      const el = queue.shift()!;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const el = queue[cursor];
       if (this.matchesSelector(el, selector)) {
         results.push(el);
       }
@@ -683,16 +683,16 @@ export class HtmlParser {
       const position = parseInt(posMatch[2]);
       const allMatches: HtmlElement[] = [];
       const queue = [root];
-      while (queue.length > 0) {
-        const el = queue.shift()!;
+      let matchIndex = 0;
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const el = queue[cursor];
         if (el.tagName !== '#root' && this.matchesSelector(el, baseSel)) {
+          // 正向索引无需遍历剩余 DOM，避免大页面阻塞主线程。
+          if (position >= 0 && matchIndex === position) return [el];
+          matchIndex++;
           allMatches.push(el);
         }
         queue.push(...el.children);
-      }
-      // 正数索引
-      if (position >= 0 && position < allMatches.length) {
-        return [allMatches[position]];
       }
       // 负数索引（倒数）
       if (position < 0 && allMatches.length + position >= 0) {
@@ -703,8 +703,8 @@ export class HtmlParser {
 
     const results: HtmlElement[] = [];
     const queue = [root];
-    while (queue.length > 0) {
-      const el = queue.shift()!;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const el = queue[cursor];
       if (el.tagName !== '#root' && this.matchesSelector(el, exclSelector)) {
         results.push(el);
       }
@@ -916,8 +916,8 @@ export class HtmlParser {
   private allElements(root: HtmlElement): HtmlElement[] {
     const result: HtmlElement[] = [];
     const queue = [root];
-    while (queue.length > 0) {
-      const el = queue.shift()!;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const el = queue[cursor];
       if (el.tagName !== '#root') result.push(el);
       queue.push(...el.children);
     }
