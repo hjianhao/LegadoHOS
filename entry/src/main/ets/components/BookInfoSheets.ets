@@ -408,12 +408,13 @@ export struct ChangeSourceSheet {
           .borderRadius(18).backgroundColor('#F5F5F5')
           .padding({ left: 12, right: 12 })
           .onChange((value: string) => { this.keyword = value; })
-        Button('搜索').fontSize(13).height(36).width(56).margin({ left: 8 })
-          .backgroundColor('#0078D7').fontColor('#FFF').borderRadius(18)
+        Button() { Text('搜索').fontSize(13).fontColor('#FFF') }
+          .height(36).width(56).margin({ left: 8 }).padding(0)
+          .backgroundColor('#0078D7').borderRadius(18)
           .onClick(() => { this.searchSources(); })
-        Button('刷新').fontSize(13).height(36).width(56).margin({ left: 4 })
-          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-          .fontColor(ThemeColors.onBackground(this.isDark)).borderRadius(18)
+        Button() { Text('刷新').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)) }
+          .height(36).width(56).margin({ left: 4 }).padding(0)
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark)).borderRadius(18)
           .onClick(() => { this.cachedSources = []; this.searchSources(); })
       }
       .width('100%').padding({ left: 16, right: 16, bottom: 4 })
