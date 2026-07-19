@@ -13,6 +13,7 @@ import fileIo from '@ohos.file.fs';
 import { WebViewEngine } from '../components/WebViewEngine';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
@@ -61,6 +62,11 @@ struct BookSourcePage {
         controller: this.groupManageDlg!, onGroupChanged: () => { this.load(); }
       }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
     });
+    this.load();
+  }
+
+  /** 从新建/编辑页返回时重新读取数据库，避免列表保留旧的页面内存状态。 */
+  onPageShow(): void {
     this.load();
   }
 
@@ -382,20 +388,19 @@ struct BookSourcePage {
   build() {
     Column() {
       Row() {
-        Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
-          .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { UiUtil.back(this.getUIContext()); })
+        AppBackButton({ onBack: () => { UiUtil.back(this.getUIContext()); } })
         Column() {
           Text($r('app.string.ui_2e4bfce823')).fontSize(20).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).width('100%')
           Text(this.sources.length + ' 个书源' + (this.isSelectMode_ ? ' · 已选 ' + this.selectedUrls.length : ''))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         }.layoutWeight(1)
-        // 选择模式：显示"取消"按钮；非选择模式：显示"+"/导入/分组按钮
+        // 选择模式：显示"取消"按钮；非选择模式：显示新建/导入/分组按钮
         // 使用 visibility 避免条件渲染导致组件重建
         Button($r('app.string.common_cancel')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
           .onClick(() => { this.exitSelectMode(); })
-        Button($r('app.string.ui_a979ef10cc')).fontSize(24).width(40).height(40).borderRadius(20)
+        Button('新建').fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
@@ -405,7 +410,9 @@ struct BookSourcePage {
         Button($r('app.string.ui_97d8a6c05b')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.groupManageDlg?.open(); })
-      }.height(64).padding({ left: 8, right: 8 }).width('100%')
+      }.height(64).padding({ left: 4, right: 8 }).width('100%')
+        .backgroundColor(ThemeColors.surface(this.isDark))
+        .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       Row() {
         TextInput({ placeholder: $r('app.string.ui_3be802f0e1'), text: this.searchText })

@@ -26,6 +26,9 @@ import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { ExportBookDialog } from '../components/ExportBookDialog';
 import * as ChapterMatcher from '../util/ChapterMatcher';
+import { BookSourceResolver } from '../service/BookSourceResolver';
+import { AiBookProfileTable } from '../data/database/AiBookProfileTable';
+import { normalizeAiChapters } from '../engine/ai/AiBookImporter';
 
 @Entry
 @Component
@@ -133,14 +136,10 @@ struct BookInfoPage {
     this.tocLoadProgress = 0;
     try {
       await AppDatabase.getInstance().waitForInit();
-      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      const sources = await dao.getAllSources();
-      const matched = sources.find(s => s.sourceUrl === this.originUrl || s.sourceName === this.origin);
+      const matched = await BookSourceResolver.resolveByIdentity(
+        this.bookId, this.noteUrl, this.originUrl, this.origin);
       if (!matched) {
-        console.warn('[BookInfo] No matching source found for',
-          'originUrl=' + this.originUrl,
-          'origin=' + this.origin,
-          'available=' + sources.map(s => s.sourceUrl).join(', '));
+        console.warn('[BookInfo] No matching source/profile found for originUrl=' + this.originUrl);
         return;
       }
       this.currentSource_ = matched;  // 缓存书源对象，供路由分流判断
@@ -158,8 +157,12 @@ struct BookInfoPage {
         this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
       }
       // 获取目录统计（带进度回调）
-      const chapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
+      const rawChapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
         (loaded: number) => { this.tocLoadProgress = loaded; });
+      const aiProfileDao = new AiBookProfileTable(AppDatabase.getInstance().rdbStore);
+      const aiProfile = this.bookId > 0
+        ? await aiProfileDao.getByBookId(this.bookId) : await aiProfileDao.getByBookUrl(this.noteUrl);
+      const chapters = aiProfile ? normalizeAiChapters(rawChapters) : rawChapters;
       if (chapters.length > 0) {
         this.chapterCount = chapters.length;
         const last = chapters[chapters.length - 1];
@@ -168,6 +171,10 @@ struct BookInfoPage {
         // 缓存目录以便 ReadPage 复用（避免二次拉取）
         ChapterCache.bookUrl = this.noteUrl;
         ChapterCache.chapters = chapters;
+        if (this.bookId > 0) {
+          await new ChapterTable(AppDatabase.getInstance().rdbStore)
+            .replaceTocPreserveContent(this.bookId, chapters);
+        }
       }
     } catch (_e) { /* ignore */ }
     this.isRefreshing = false;
@@ -326,9 +333,8 @@ struct BookInfoPage {
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
-      const dao = new BookSourceTable(db);
-      const sources = await dao.getAllSources();
-      const matched = sources.find(s => s.sourceUrl === this.originUrl);
+      const matched = await BookSourceResolver.resolveByIdentity(
+        this.bookId, this.noteUrl, this.originUrl, this.origin);
       if (matched && matched.header) {
         this.sourceHeader = matched.header;
         console.info('[BookInfo] Header found for', this.originUrl, ':', matched.header.substring(0, 50));
@@ -447,19 +453,7 @@ struct BookInfoPage {
       if (chapters.length === 0) return;
 
       const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
-      const now = Date.now();
-      const bookChapters: BookChapter[] = chapters.map((ch: BookSourceChapter, idx: number): BookChapter => {
-        const item = createDefaultChapter();
-        item.bookId = bookId;
-        item.index = ch.index >= 0 ? ch.index : idx;
-        item.title = ch.title || '';
-        item.url = ch.url || '';
-        item.createTime = now;
-        item.updateTime = now;
-        return item;
-      });
-      await ct.deleteChaptersByBookId(bookId);
-      await ct.insertChapters(bookChapters);
+      await ct.replaceTocPreserveContent(bookId, chapters);
 
       // 更新书籍的章数和最新章节标题
       const lastCh = chapters[chapters.length - 1];
@@ -503,9 +497,8 @@ struct BookInfoPage {
     // currentSource_ 为 null，从 DB 查询
     try {
       await AppDatabase.getInstance().waitForInit();
-      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      const sources = await dao.getAllSources();
-      const matched = sources.find(s => s.sourceUrl === this.originUrl || s.sourceName === this.origin);
+      const matched = await BookSourceResolver.resolveByIdentity(
+        this.bookId, this.noteUrl, this.originUrl, this.origin);
       if (matched) {
         this.currentSource_ = matched;
         return matched.sourceType === 2;

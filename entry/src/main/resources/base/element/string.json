@@ -1434,7 +1434,7 @@
     },
     {
       "name": "ui_d919c10f40",
-      "value": "AI 智能导入"
+      "value": "在线导入"
     },
     {
       "name": "ui_3d04880897",
@@ -1462,11 +1462,43 @@
     },
     {
       "name": "ui_e108a94b68",
-      "value": "3. 自动下载所有章节到本地，后续无需网络"
+      "value": "3. 生成目录后可按需阅读，也可选择后台缓存"
     },
     {
       "name": "ui_31450a8073",
       "value": "输入小说目录页URL"
+    },
+    {
+      "name": "ai_import_intro_title",
+      "value": "从网页智能导入小说"
+    },
+    {
+      "name": "ai_import_intro_desc",
+      "value": "粘贴小说目录页链接，预览确认后由 AI 识别目录与正文规则。"
+    },
+    {
+      "name": "ai_import_url_label",
+      "value": "小说目录页网址"
+    },
+    {
+      "name": "ai_import_required",
+      "value": "必填"
+    },
+    {
+      "name": "ai_import_url_helper",
+      "value": "请填写能看到章节列表的网页地址，而不是搜索页或网站首页。"
+    },
+    {
+      "name": "ai_import_config_title",
+      "value": "AI 模型配置"
+    },
+    {
+      "name": "ai_import_config_desc",
+      "value": "选择服务商、模型并测试连接"
+    },
+    {
+      "name": "ai_import_running",
+      "value": "正在导入…"
     },
     {
       "name": "ui_06913109ef",

@@ -14,6 +14,7 @@ import { BackupService } from '../service/BackupService';
 import { WebDavService, WebDavConfig } from '../service/WebDavService';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ThemeColors } from '../theme/ThemeColors';
+import { AppTitleBar } from '../components/common/AppTitleBar';
 
 // PersistentStorage 持久化 WebDAV 设置
 PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
@@ -180,12 +181,7 @@ struct BackupSettingsPage {
 
   build() {
     Column() {
-      Row() {
-        Text($r('app.string.ui_39b50007b2')).fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
-          .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text($r('app.string.ui_dddaeefb0e')).fontSize(20).fontWeight(FontWeight.Bold)
-        Blank()
-      }.padding(16).width('100%')
+      AppTitleBar({ title: $r('app.string.ui_dddaeefb0e'), onBack: () => { UiUtil.back(this.getUIContext()); } })
 
       Scroll() {
         Column() {

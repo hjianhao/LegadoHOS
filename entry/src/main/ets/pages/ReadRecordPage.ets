@@ -1,5 +1,7 @@
 import { AppTheme } from '../theme/AppTheme';
 import { ThemeColors } from '../theme/ThemeColors';
+import { UiUtil } from '../util/UiUtil';
+import { AppTitleBar } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
@@ -9,9 +11,7 @@ struct ReadRecordPage {
 
   build() {
     Column() {
-      Text($r('app.string.ui_c3733c356a')).fontSize(20).fontWeight(FontWeight.Bold)
-        .fontColor(ThemeColors.onBackground(this.isDark))
-        .alignSelf(ItemAlign.Start).padding(16)
+      AppTitleBar({ title: $r('app.string.ui_c3733c356a'), onBack: () => { UiUtil.back(this.getUIContext()); } })
       Row() {
         Column() {
           Text($r('app.string.ui_b6589fc6ab')).fontSize(32).fontColor(ThemeColors.primary(this.isDark)).fontWeight(FontWeight.Bold)

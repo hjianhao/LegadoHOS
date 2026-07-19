@@ -18,9 +18,11 @@ import { NetUtil } from '../util/NetUtil';
 import { BookProgress } from '../model/BookProgress';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
+import { common } from '@kit.AbilityKit';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -62,6 +64,43 @@ export class WebDavService {
 
   configure(config: WebDavConfig): void {
     this.config = config;
+  }
+
+  /**
+   * 从持久化存储恢复 WebDav 配置（App 启动时调用，幂等）。
+   * - url/user/path 存于 PersistentStorage
+   * - 密码存于 SettingsStore（HUKS 加密）
+   * 修复：此前 configure 仅备份设置页调用，重启后同步静默空转。
+   */
+  async initFromStorage(context: common.Context): Promise<void> {
+    try {
+      // 确保 persistProp 已注册（备份页未打开过时，其模块顶层声明可能未执行）
+      PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
+      PersistentStorage.persistProp('webdav_user', '');
+      PersistentStorage.persistProp('webdav_path', 'legadohos');
+      const url = AppStorage.get<string>('webdav_url') || '';
+      const user = AppStorage.get<string>('webdav_user') || '';
+      const path = AppStorage.get<string>('webdav_path') || 'legadohos';
+      if (!url || !user) return; // 从未配置过
+      let pwd = '';
+      try {
+        const s = SettingsStore.getInstance();
+        await s.init(context);
+        pwd = await s.getWebDavPassword();
+      } catch (_e) { /* 密码读取失败按空处理 */ }
+      const autoSync = AppStorage.get<boolean>('webdav_auto_sync') ?? false;
+      this.configure({
+        serverUrl: url,
+        username: user,
+        password: pwd,
+        path: path,
+        autoSync: autoSync,
+        syncInterval: 60,
+      });
+      console.info('[WebDav] config restored from storage, user=' + user);
+    } catch (e) {
+      console.warn('[WebDav] initFromStorage fail:', (e as Error).message);
+    }
   }
 
   getConfig(): WebDavConfig | null {
@@ -394,17 +433,17 @@ export class WebDavService {
         const cloud = await this.downloadBookProgress(book.name, book.author);
         if (!cloud) continue;
 
-        // 冲突解决：云端进度更远才覆盖
-        if (cloud.durChapterIndex > book.durChapterIndex ||
-          (cloud.durChapterIndex === book.durChapterIndex &&
-           cloud.durChapterPos > book.durChapterPos)) {
-          // 更新本地进度
+        // 冲突解决：仅按章节比较，云端章节更远才覆盖。
+        // 注意云端 durChapterPos 是字符偏移（对齐安卓），本地 durChapterPos 是分页索引，
+        // 语义不同不能直接比较/写入；章节内精确位置在开书时由 syncFromCloud 按字符偏移定位。
+        if (cloud.durChapterIndex > book.durChapterIndex) {
+          // 更新本地进度（章节级，页位置归零）
           await bookTable.updateReadingProgress(
             book.bookUrl,
             cloud.durChapterIndex,
             cloud.durChapterTitle || '',
             0, // totalChapters unknown
-            cloud.durChapterPos
+            0
           );
           console.info('[WebDav] Progress restored from cloud:', book.name,
             '→ chapter', cloud.durChapterIndex);

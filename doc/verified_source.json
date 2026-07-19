@@ -775,5 +775,57 @@
     },
     "searchUrl": "https://www.qidian.com/so/{{key}}.html?page={{page}},{\n  \"webView\": true\n}",
     "weight": 0
+  },
+  {
+    "bookSourceComment": "//GET搜索；发现/分类、详情、封面、静态完整目录、正文可用；xbqg77 在部分网络会解析到 127.0.0.1，主域名改用站点同源备用域名 xbqg777",
+    "bookSourceName": "新笔趣阁",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://www.xbqg777.com",
+    "bookUrlPattern": "https?://www\\.xbqg77[7]?\\.com/\\d+/?",
+    "customOrder": 0,
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": true,
+    "exploreUrl": "[{\"title\":\"首页\",\"url\":\"/\"},{\"title\":\"玄幻奇幻\",\"url\":\"/xh\"},{\"title\":\"修真武侠\",\"url\":\"/xz\"},{\"title\":\"都市言情\",\"url\":\"/ds\"},{\"title\":\"穿越历史\",\"url\":\"/cy\"},{\"title\":\"网游竞技\",\"url\":\"/wy\"},{\"title\":\"科幻灵异\",\"url\":\"/kh\"},{\"title\":\"完结小说\",\"url\":\"/wj\"},{\"title\":\"排行榜\",\"url\":\"/ph\"}]",
+    "header": "{\n  \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36\"\n}",
+    "lastUpdateTime": "1783408077694",
+    "respondTime": 180000,
+    "ruleBookInfo": {
+      "author": "[property=\"og:novel:author\"]@content||.detail .zuthor@text##^作者：##",
+      "coverUrl": ".detail .cover img@src||script@html@js:(function(){var m=String(result||'').match(/imgUrl\\s*=\\s*['\"]([^'\"]+)['\"]/);return m?m[1]:'';})()",
+      "intro": "[property=\"og:description\"]@content||.detail .des .text@text##[^\\n]*最新章节由网友提供[\\s\\S]*",
+      "kind": "[property~=category|status|update_time]@content||.detail .state@text##^状态：##||.crumb a.1@text",
+      "lastChapter": "[property=\"og:novel:latest_chapter_name\"]@content||.detail .upcont a@text",
+      "name": "[property=\"og:novel:book_name\"]@content||.detail .title@text",
+      "tocUrl": ".crumb a:last-child@href||[property=\"og:novel:read_url\"]@content##https?://www\\.xbqg77\\.com##https://www.xbqg777.com"
+    },
+    "ruleContent": {
+      "content": "#article@html@js:(function(){var s=String(result||'');s=s.replace(/<p[^>]+class=[\"']readinline[\"'][\\s\\S]*?<\\/p>/gi,'');s=s.replace(/<!--over-->/gi,'');s=s.replace(/<br\\s*\\/?\\>/gi,'\\n').replace(/<\\/p>/gi,'\\n').replace(/<[^>]+>/g,'');s=s.replace(/&nbsp;|&emsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'\"').replace(/&#39;/g,\"'\").replace(/&amp;/g,'&');return s.split(/\\n+/).map(function(x){return x.replace(/^\\s+|\\s+$/g,'');}).filter(function(x){return x;}).join('\\n').replace(/\\n{3,}/g,'\\n\\n').trim();})()"
+    },
+    "ruleExplore": {
+      "author": ".author@text",
+      "bookList": ".card",
+      "bookUrl": "a@href",
+      "coverUrl": "img@src",
+      "intro": ".des@text",
+      "name": ".title@text||a@title",
+      "nextUrl": "text.下一页@href"
+    },
+    "ruleSearch": {
+      "author": ".author@text",
+      "bookList": ".card",
+      "bookUrl": "a@href",
+      "coverUrl": "img@src",
+      "intro": ".des@text",
+      "name": ".title@text||a@title",
+      "nextUrl": "text.下一页@href"
+    },
+    "ruleToc": {
+      "chapterList": ".chapter ol li a",
+      "chapterName": "text",
+      "chapterUrl": "href"
+    },
+    "searchUrl": "https://www.xbqg777.com/search?keyword={{key}}",
+    "weight": 0
   }
 ]

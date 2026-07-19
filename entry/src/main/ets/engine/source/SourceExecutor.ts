@@ -32,6 +32,102 @@ interface JsDomNode {
 
 type TocParseItem = HtmlElement | Record<string, unknown>;
 
+const MAX_CONTENT_PAGE_COUNT = 100;
+
+function contentLinkAttribute_(attributes: string, name: string): string {
+  const match = attributes.match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
+  return match && match.length > 2 ? match[2].replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').trim() : '';
+}
+
+function contentLinkText_(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;|&#xA0;/gi, ' ')
+    .replace(/&gt;/gi, '>')
+    .replace(/&lt;/gi, '<')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 将正文分页链接解析为绝对 URL，供 AI 嗅探和执行器共用。 */
+export function resolveContentPageUrl(url: string, currentUrl: string): string {
+  if (!url) return '';
+  const nextUrl = url.trim();
+  if (!nextUrl || nextUrl.startsWith('#') || nextUrl.startsWith('javascript:')) return '';
+  if (nextUrl.startsWith('//')) return currentUrl.startsWith('http:') ? 'http:' + nextUrl : 'https:' + nextUrl;
+  if (/^https?:\/\//i.test(nextUrl)) return nextUrl.replace(/#.*$/, '');
+  const originMatch = currentUrl.match(/^(https?:\/\/[^\/]+)/i);
+  const origin = originMatch && originMatch.length > 1 ? originMatch[1] : '';
+  if (nextUrl.startsWith('/')) return origin + nextUrl.replace(/#.*$/, '');
+  const base = currentUrl.replace(/[#?].*$/, '').replace(/\/[^\/]*$/, '/');
+  return (base + nextUrl).replace(/#.*$/, '');
+}
+
+/** 嗅探明确的“下一页”链接；不会把“下一章”当成分页。 */
+export function sniffNextContentPageUrl(html: string, currentUrl: string): string {
+  if (!html || !currentUrl) return '';
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let attributeCandidate = '';
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(html)) !== null) {
+    const attributes = match[1] || '';
+    const href = contentLinkAttribute_(attributes, 'href');
+    if (!href) continue;
+    const text = contentLinkText_(match[2] || '');
+    const title = contentLinkAttribute_(attributes, 'title');
+    const ariaLabel = contentLinkAttribute_(attributes, 'aria-label');
+    const className = contentLinkAttribute_(attributes, 'class');
+    const id = contentLinkAttribute_(attributes, 'id');
+    const rel = contentLinkAttribute_(attributes, 'rel');
+    const semantic = (text + ' ' + title + ' ' + ariaLabel).trim();
+    const marker = (className + ' ' + id).toLowerCase();
+    if (/(下一章|下章|后一章|next\s*chapter)/i.test(semantic + ' ' + marker)) continue;
+
+    const explicitText = /(下一页|下页|后一页|继续阅读|余下全文|next\s*page)/i.test(semantic) ||
+      /^(>|›|»|→)$/i.test(text);
+    if (explicitText) return resolveContentPageUrl(href, currentUrl);
+
+    const pageMarker = /(^|[\s_-])(nextpage|page-next|next-page|pager-next)([\s_-]|$)/i.test(marker);
+    if (!attributeCandidate && pageMarker) attributeCandidate = resolveContentPageUrl(href, currentUrl);
+    if (!attributeCandidate && /(^|\s)next(\s|$)/i.test(rel) &&
+      /[?&](page|p|pageIndex|pageNo)=\d+/i.test(href)) {
+      attributeCandidate = resolveContentPageUrl(href, currentUrl);
+    }
+  }
+  return attributeCandidate;
+}
+
+/** 判断规则解析出的链接是否仍像同一章节的分页，而不是下一章。 */
+export function isLikelySameChapterPageUrl(chapterUrl: string, nextUrl: string): boolean {
+  const current = (chapterUrl || '').replace(/#.*$/, '');
+  const next = (nextUrl || '').replace(/#.*$/, '');
+  if (!current || !next || current === next) return false;
+  const currentOrigin = current.match(/^(https?:\/\/[^\/]+)/i);
+  const nextOrigin = next.match(/^(https?:\/\/[^\/]+)/i);
+  if (!currentOrigin || !nextOrigin || currentOrigin[1].toLowerCase() !== nextOrigin[1].toLowerCase()) return false;
+
+  const currentPath = current.replace(/^https?:\/\/[^\/]+/i, '').replace(/[?#].*$/, '');
+  const nextPath = next.replace(/^https?:\/\/[^\/]+/i, '').replace(/[?#].*$/, '');
+  if (currentPath === nextPath) return /[?&](page|p|pageIndex|pageNo)=\d+/i.test(next);
+
+  const pageSuffix = /(?:[_-](?:page)?\d+)(\.[a-z0-9]+)?$/i;
+  const currentStem = currentPath.replace(pageSuffix, '$1');
+  const nextStem = nextPath.replace(pageSuffix, '$1');
+  if (currentStem === nextStem && (pageSuffix.test(currentPath) || pageSuffix.test(nextPath))) return true;
+
+  const currentSegments = currentPath.split('/').filter((item: string): boolean => item.length > 0);
+  const nextSegments = nextPath.split('/').filter((item: string): boolean => item.length > 0);
+  if (currentSegments.length === nextSegments.length && currentSegments.length >= 3) {
+    const last = currentSegments.length - 1;
+    const currentPage = currentSegments[last].replace(/\.[a-z0-9]+$/i, '');
+    const nextPage = nextSegments[last].replace(/\.[a-z0-9]+$/i, '');
+    if (/^\d+$/.test(currentPage) && /^\d+$/.test(nextPage) && currentPage !== nextPage) {
+      return currentSegments.slice(0, last).join('/') === nextSegments.slice(0, last).join('/');
+    }
+  }
+  return false;
+}
+
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   // 剥离 # 片段（含 ##webView 标记及源作者加的 #emoji 标记）。
@@ -957,27 +1053,15 @@ export class SourceExecutor {
       return [];
     }
 
-    // Fallback: 普通搜索 CSS 规则未命中时（可能是网站改版），尝试通用提取
+    // 搜索源已经声明 bookList 时，规则命中 0 项就是合法的“无结果”。
+    // Android 版会直接返回空列表；不能再扫描整页链接，否则导航、页脚会被误报成书籍。
+    // 保持空结果还能让 searchSingle 对动态页面继续执行 WebView 重试。
     if (source.ruleSearchList) {
       console.warn('[SrcEx] CSS rule found 0 items for configured source', source.sourceName,
-        'ruleSearchList=' + source.ruleSearchList + ', trying fallback extraction');
-      // 先用通用表格提取（table.grid@tr!0 / table@tr!0），再用 <a> 标签兜底
-      const tableResults = await this.extractWithParser(
-        bodyText, { ...source, ruleSearchList: 'table.grid@tr!0' }, baseUrl, ruleUrl
-      );
-      if (tableResults.length > 0) {
-        console.info('[SrcEx] Table fallback:', tableResults.length, 'items from', source.sourceName);
-        return tableResults;
-      }
-      // 再尝试不带 .grid 限定
-      const tableResults2 = await this.extractWithParser(
-        bodyText, { ...source, ruleSearchList: 'table@tr!0' }, baseUrl, ruleUrl
-      );
-      if (tableResults2.length > 0) {
-        console.info('[SrcEx] Table fallback (no grid):', tableResults2.length, 'items from', source.sourceName);
-        return tableResults2;
-      }
+        'ruleSearchList=' + source.ruleSearchList + ', returning empty result');
+      return [];
     }
+    // 未声明列表规则的旧来源才使用通用链接提取。
     return this.fallbackExtract(bodyText, source, baseUrl);
   }
 
@@ -1576,7 +1660,7 @@ export class SourceExecutor {
         const visited = new Set<string>();
         let pageUrl = contentUrl;
         let pageHtml = raw;
-        for (let page = 0; page < 10; page++) {
+        for (let page = 0; page < MAX_CONTENT_PAGE_COUNT; page++) {
           if (visited.has(pageUrl)) break;
           visited.add(pageUrl);
 
@@ -1608,17 +1692,21 @@ export class SourceExecutor {
             } catch (_e) { /* ignore */ }
           }
           const effectiveNextRule = nextRule || nextFromRaw;
-          if (!effectiveNextRule) break;
-          const nextUrl = this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl);
+          let sniffedNextUrl = '';
+          let nextUrl = effectiveNextRule
+            ? this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl) : '';
+          const isAiContentSource = source.isAiGenerated || source.sourceName.endsWith('(AI)');
+          if (isAiContentSource) {
+            sniffedNextUrl = sniffNextContentPageUrl(pageHtml, pageUrl);
+            // AI 没生成翻页规则，或规则在后续页面失效时，继续嗅探明确的“下一页”。
+            if (!nextUrl) nextUrl = sniffedNextUrl;
+          }
           if (!nextUrl || visited.has(nextUrl)) break;
-          // 检查是否还是同一章节的分页（防止 pt_next 跳到下一章）
-          // 同一章节分页 URL 包含原始章节 URL 的路径前缀
-          // 如: 122156_45809706.html → 122156_45809706_2.html (同章)
-          //     122156_45809706_3.html → 122156_45809707.html (跳到下一章)
-          const originBase = contentUrl.replace(/\.html.*$/i, '');
-          if (!nextUrl.includes(originBase)) {
+          // 明确嗅探到“下一页”时支持 query/path 等分页 URL；普通规则仍保留跨章保护。
+          const confirmedBySniffing = !!sniffedNextUrl && sniffedNextUrl === nextUrl;
+          if (!confirmedBySniffing && !isLikelySameChapterPageUrl(contentUrl, nextUrl)) {
             console.info('[SrcEx] getContent stopping: next page belongs to different chapter',
-              'originBase=' + originBase.replace(/^.+\//, '') + ' nextUrl=' + (nextUrl.replace(/^.+\//, '')));
+              'chapterUrl=' + contentUrl.substring(0, 100) + ' nextUrl=' + nextUrl.substring(0, 100));
             break;
           }
           pageUrl = nextUrl;

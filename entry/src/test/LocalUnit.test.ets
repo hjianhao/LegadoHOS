@@ -5,6 +5,11 @@ import { LkongBookAgent } from '../main/ets/engine/ai/LkongBookAgent';
 import { YoushuBookService } from '../main/ets/service/YoushuBookService';
 import { YoushuBooklistService } from '../main/ets/service/YoushuBooklistService';
 import { AiProviderProfile, detectAiProvider, normalizeAiTimeoutSeconds, upsertAiProfile } from '../main/ets/data/preferences/SettingsStore';
+import { HtmlParser } from '../main/ets/util/HtmlParser';
+import { extractAiBookMetadata, isSafeAiImportUrl, parseAiRulesJson,
+  prepareHtmlForAi, normalizeAiChapters, extractAiFullTocUrl,
+  isLikelySameAiBookPage } from '../main/ets/engine/ai/AiBookImporter';
+import { isLikelySameChapterPageUrl, sniffNextContentPageUrl } from '../main/ets/engine/source/SourceExecutor';
 
 export default function localUnitTest() {
   describe('localUnitTest', () => {
@@ -34,6 +39,12 @@ export default function localUnitTest() {
       // Defines a variety of assertion methods, which are used to declare expected boolean conditions.
       expect(a).assertContain(b);
       expect(a).assertEqual(a);
+    });
+    it('htmlTextKeepsInlineChildOrder', 0, () => {
+      const parser = new HtmlParser();
+      const doc = parser.parse('<div class="title"><mark>四合院</mark>：从晋升工程师开始</div>');
+      const title = parser.querySelector(doc, '.title@text');
+      expect(title).assertEqual('四合院：从晋升工程师开始');
     });
     it('bookSourceStandardFieldsRoundTrip', 0, () => {
       const source = parseBookSource({
@@ -136,6 +147,112 @@ export default function localUnitTest() {
       expect(afterUpdate[0].timeoutSeconds).assertEqual(300);
       expect(upsertAiProfile(afterUpdate, added).length).assertEqual(2);
       expect(normalizeAiTimeoutSeconds(undefined)).assertEqual(120);
+    });
+    it('aiImportKeepsDomAndRemovesExecutableMarkup', 0, () => {
+      const html = '<html><style>.x{color:red}</style><body><ul class="chapters"><li><a href="/1">第一章</a></li></ul>' +
+        '<script>ignorePrompt()</script></body></html>';
+      const prepared = prepareHtmlForAi(html, 40000);
+      expect(prepared).assertContain('<ul class="chapters">');
+      expect(prepared).assertContain('href="/1"');
+      expect(prepared.includes('<script>')).assertFalse();
+      expect(prepared.includes('<style>')).assertFalse();
+    });
+    it('aiImportParsesJsonFromExplanatoryResponse', 0, () => {
+      const rules = parseAiRulesJson('分析结果如下：\n{"ruleToc":".list a","ruleTocTitle":"@text","ruleTocUrlItem":"@href"}\n请验证');
+      expect(rules['ruleToc']).assertEqual('.list a');
+      const fenced = parseAiRulesJson('```json\n{"ruleBookContent":"#content@html"}\n```');
+      expect(fenced['ruleBookContent']).assertEqual('#content@html');
+    });
+    it('aiImportRejectsLocalAndNonHttpUrls', 0, () => {
+      expect(isSafeAiImportUrl('https://example.com/book/1')).assertTrue();
+      expect(isSafeAiImportUrl('http://127.0.0.1/book')).assertFalse();
+      expect(isSafeAiImportUrl('http://192.168.1.2/book')).assertFalse();
+      expect(isSafeAiImportUrl('https://user:pass@example.com/book')).assertFalse();
+      expect(isSafeAiImportUrl('file:///data/book.html')).assertFalse();
+    });
+    it('aiImportExtractsBookMetadataWithoutCreatingRules', 0, () => {
+      const html = '<html><head>' +
+        '<meta property="og:novel:book_name" content="测试小说">' +
+        '<meta property="og:novel:author" content="测试作者">' +
+        '<meta property="og:image" content="http://example.com/cover.jpg">' +
+        '<meta property="og:description" content="这是书籍简介">' +
+        '<meta property="og:novel:category" content="都市">' +
+        '<meta property="og:novel:update_time" content="2026-07-19 08:00:00">' +
+        '</head><body><p>字&nbsp;&nbsp;数：<span>553 万</span></p></body></html>';
+      const metadata = extractAiBookMetadata(html, 'https://example.com/book/1/');
+      expect(metadata.name).assertEqual('测试小说');
+      expect(metadata.author).assertEqual('测试作者');
+      expect(metadata.coverUrl).assertEqual('https://example.com/cover.jpg');
+      expect(metadata.introduce).assertEqual('这是书籍简介');
+      expect(metadata.wordCount).assertEqual('553万');
+      expect(metadata.kind).assertEqual('都市');
+      expect(metadata.lastUpdateTime).assertEqual('2026-07-19 08:00:00');
+    });
+    it('aiImportNormalizesLatestBlockDuplicatesAndReverseToc', 0, () => {
+      const latestFirst = normalizeAiChapters([
+        { index: 0, title: '第103章', url: 'https://a/103' },
+        { index: 1, title: '第102章', url: 'https://a/102' },
+        { index: 2, title: '第1章', url: 'https://a/1' },
+        { index: 3, title: '第2章', url: 'https://a/2' },
+        { index: 4, title: '第3章', url: 'https://a/3' },
+        { index: 5, title: '第102章', url: 'https://a/102#catalog' },
+        { index: 6, title: '第103章', url: 'https://a/103' },
+      ]);
+      expect(latestFirst.length).assertEqual(5);
+      expect(latestFirst[0].title).assertEqual('第1章');
+      expect(latestFirst[4].title).assertEqual('第103章');
+
+      const reversed = normalizeAiChapters([
+        { index: 0, title: '第5章', url: 'https://a/5' },
+        { index: 1, title: '第4章', url: 'https://a/4' },
+        { index: 2, title: '第3章', url: 'https://a/3' },
+        { index: 3, title: '第2章', url: 'https://a/2' },
+        { index: 4, title: '第1章', url: 'https://a/1' },
+      ]);
+      expect(reversed[0].title).assertEqual('第1章');
+      expect(reversed[4].title).assertEqual('第5章');
+    });
+    it('aiImportFindsFullTocEntryBeforeCatalogPagination', 0, () => {
+      const detailHtml = '<section class="latest"><ul><li><a href="/6_6706/415.html">最新章</a></li></ul>' +
+        '<div class="more"><a href="//s.bageccc.cc/6_6706_1/"><span>查看全部章节</span></a></div></section>';
+      expect(extractAiFullTocUrl(detailHtml, 'https://s.bageccc.cc/6_6706/'))
+        .assertEqual('https://s.bageccc.cc/6_6706_1/');
+
+      const catalogHtml = '<section id="zjlb"><a href="/6_6706/1.html">第一章</a>' +
+        '<div class="pagelink"><a href="//s.bageccc.cc/6_6706_2/">下一页</a></div></section>';
+      expect(extractAiFullTocUrl(catalogHtml, 'https://s.bageccc.cc/6_6706_1/')).assertEqual('');
+    });
+    it('aiImportDetectsRandomBookPageWithoutHttpRedirect', 0, () => {
+      const detailHtml = '<meta property="og:novel:book_name" content="四合院：从签到开始崛起最新章节目录全文阅读">' +
+        '<ul class="chapter"><li><a href="//m.qntxts.com/473_473149/1/">查看更多章节</a></li></ul>';
+      expect(extractAiFullTocUrl(detailHtml, 'https://m.qntxts.com/473_473149/'))
+        .assertEqual('https://m.qntxts.com/473_473149/1/');
+
+      const randomBookHtml = '<meta property="og:novel:book_name" content="蒸汽时代的驱魔猫番外">' +
+        '<a href="//m.qntxts.com/752_752937/64445740.html">第31章</a>';
+      expect(isLikelySameAiBookPage(detailHtml, randomBookHtml,
+        'https://m.qntxts.com/473_473149/', 'https://m.qntxts.com/473_473149/1/')).assertFalse();
+
+      const desktopHtml = '<meta property="og:novel:book_name" content="四合院：从签到开始崛起">' +
+        '<a href="//www.qntxts.com/473_473149/100.html">第1章</a>' +
+        '<a href="//www.qntxts.com/473_473149/101.html">第2章</a>';
+      expect(isLikelySameAiBookPage(detailHtml, desktopHtml,
+        'https://m.qntxts.com/473_473149/', 'https://www.qntxts.com/473_473149/')).assertTrue();
+    });
+    it('aiImportSniffsContentPaginationWithoutCrossingChapter', 0, () => {
+      const html = '<div id="content">第一页正文</div><div class="pager">' +
+        '<a href="/book/8/20.html">下一章</a><a class="next-page" href="/book/8/19_2.html">下一页</a></div>';
+      const nextPage = sniffNextContentPageUrl(html, 'https://example.com/book/8/19.html');
+      expect(nextPage).assertEqual('https://example.com/book/8/19_2.html');
+      expect(isLikelySameChapterPageUrl('https://example.com/book/8/19.html', nextPage)).assertTrue();
+      expect(isLikelySameChapterPageUrl('https://example.com/book/8/19.html',
+        'https://example.com/book/8/20.html')).assertFalse();
+    });
+    it('aiImportSniffsQueryAndNestedMarkupPagination', 0, () => {
+      const html = '<nav><a aria-label="下一页" href="read?id=19&amp;page=2"><span>›</span></a></nav>';
+      const nextPage = sniffNextContentPageUrl(html, 'https://example.com/book/read?id=19&page=1');
+      expect(nextPage).assertEqual('https://example.com/book/read?id=19&page=2');
+      expect(isLikelySameChapterPageUrl('https://example.com/book/read?id=19&page=1', nextPage)).assertTrue();
     });
   });
 }

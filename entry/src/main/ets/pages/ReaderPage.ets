@@ -195,6 +195,11 @@ struct ReaderPage {
   };
 
   private controller: web_webview.WebviewController = new web_webview.WebviewController();
+  /** WebviewController 在 onControllerAttached 前不可调用 loadUrl/runJavaScript。 */
+  private controllerAttached_: boolean = false;
+  /** 页面异步准备可能先于 Web 组件挂载完成，暂存最终阅读地址。 */
+  private pendingWebUrl_: string = '';
+  private pageActive_: boolean = false;
   private server_: EpubServer = new EpubServer();
   private book_: Book | null = null;
   private bookUrl_: string = '';
@@ -227,6 +232,7 @@ struct ReaderPage {
   private static readonly NIGHT_TEXT: string = ThemeColors.readingNightText();
 
   async aboutToAppear(): Promise<void> {
+    this.pageActive_ = true;
     await this.initFonts_();
     this.startLoad_();
     this.setSystemBarVisible_(false);
@@ -264,6 +270,9 @@ struct ReaderPage {
   }
 
   async aboutToDisappear(): Promise<void> {
+    this.pageActive_ = false;
+    this.controllerAttached_ = false;
+    this.pendingWebUrl_ = '';
     this.stopPoll_();
     if (this.styleTimer_ > 0) clearTimeout(this.styleTimer_);
     if (this.saveTimer_ > 0) clearTimeout(this.saveTimer_);
@@ -426,7 +435,7 @@ struct ReaderPage {
       const readerPath = this.isFoliate_ ? '/foliate/foliate-reader.html' : '/reader/epub-reader.html';
       const formatParam = this.isEpubFoliate_ ? '&format=epub-dir' : (this.isPdf_ ? '&format=pdf' : '');
       const url = `http://127.0.0.1:${port}${readerPath}?book=${encodeURIComponent(bookEntry)}&target=${encodeURIComponent(readerTarget)}&style=${encodeURIComponent(initialStyle)}&actions=${encodeURIComponent(initialActions)}${formatParam}`;
-      this.controller.loadUrl(url);
+      this.loadUrlWhenAttached_(url);
       trace('webview-load-started');
       this.armReadyTimeout_();
     } catch (e) {
@@ -859,6 +868,7 @@ struct ReaderPage {
   private startPoll_(): void {
     this.stopPoll_();
     this.pollTimer_ = setInterval(() => {
+      if (!this.controllerAttached_ || !this.pageActive_) return;
       if (this.pollBusy_) return;
       this.pollBusy_ = true;
       try {
@@ -1332,9 +1342,26 @@ struct ReaderPage {
   }
 
   private runJs_(code: string): void {
+    if (!this.controllerAttached_ || !this.pageActive_) return;
     try {
       this.controller.runJavaScript(code);
     } catch (_e) {}
+  }
+
+  private loadUrlWhenAttached_(url: string): void {
+    if (!this.pageActive_) return;
+    if (!this.controllerAttached_) {
+      this.pendingWebUrl_ = url;
+      this.progressText = '正在初始化阅读组件...';
+      return;
+    }
+    try {
+      this.controller.loadUrl(url);
+    } catch (e) {
+      this.loadError = e instanceof Error ? e.message : String(e);
+      this.progressText = this.loadError;
+      this.isLoading = false;
+    }
   }
 
   private goToChapter_(chapter: BookChapter): void {
@@ -1435,6 +1462,15 @@ struct ReaderPage {
         .domStorageAccess(true)
         .mixedMode(MixedMode.All)
         .backgroundColor(this.cfg.bgColor)
+        .onControllerAttached(() => {
+          if (!this.pageActive_) return;
+          this.controllerAttached_ = true;
+          if (this.pendingWebUrl_) {
+            const url = this.pendingWebUrl_;
+            this.pendingWebUrl_ = '';
+            this.loadUrlWhenAttached_(url);
+          }
+        })
         .onPageEnd(() => {
           this.startPoll_();
           this.applyStyleNow_();

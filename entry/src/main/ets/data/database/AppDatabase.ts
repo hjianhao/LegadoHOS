@@ -18,6 +18,7 @@ import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } 
 
 import { SearchResultTable, SearchResultTableCreate } from './SearchResultTable';
 import { SearchKeywordTable, SearchKeywordTableCreate } from './SearchKeywordTable';
+import { AiBookProfileTableCreate } from './AiBookProfileTable';
 import { RdbUtil } from './RdbUtil';
 
 const DATABASE_NAME = 'legado_hos.db';
@@ -104,6 +105,7 @@ export class AppDatabase {
     await RdbUtil.executeSql(this.rdbStore_, TxtTocRuleTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, SearchResultTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, SearchKeywordTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, AiBookProfileTableCreate);
 
     // 数据库迁移：为已有表添加新列
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
@@ -265,3 +267,4 @@ export { CacheTable, TxtTocRuleTable } from './CacheTable';
 
 export { SearchResultTable } from './SearchResultTable';
 export { SearchKeywordTable } from './SearchKeywordTable';
+export { AiBookProfileTable } from './AiBookProfileTable';

@@ -71,8 +71,9 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       const count = await dao.importSelected(sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup);
       UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
-      this.controller.close();
+      // 先通知宿主页刷新，再销毁弹窗，避免关闭后回调随组件一起失效。
       if (this.onImportSuccess) this.onImportSuccess();
+      this.controller.close();
     } catch (e) { console.error('[ImportSource] doImport error: ' + e); UiUtil.showToast(this.getUIContext(), {message:'导入失败',duration:1500}); }
     this.isLoading = false;
   }
@@ -191,7 +192,9 @@ export struct ImportSourceDialog {
         Column() {
           Text($r('app.string.ui_873b2f22c0')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
           TextInput({placeholder: $r('app.string.ui_a47dc3912c'),text:this.importUrl})
-            .height(44).backgroundColor(this.isDark?ThemeColors.onSurface(this.isDark):ThemeColors.surfaceVariant(this.isDark)).borderRadius(8).padding({left:12}).fontSize(14).width('100%')
+            .height(44).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+            .caretColor(ThemeColors.primary(this.isDark)).borderRadius(8).padding({left:12}).fontSize(14).width('100%')
             .margin({bottom:8}).onChange((v:string)=>{this.importUrl=v})
           Row() {
             Button($r('app.string.common_cancel')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
@@ -203,7 +206,9 @@ export struct ImportSourceDialog {
         Column() {
           Text($r('app.string.ui_c5faeb98cd')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
           TextArea({placeholder: $r('app.string.ui_9e6ca0bcd0'),text:this.jsonText})
-            .height(160).backgroundColor(this.isDark?ThemeColors.onSurface(this.isDark):ThemeColors.surfaceVariant(this.isDark)).borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
+            .height(160).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+            .caretColor(ThemeColors.primary(this.isDark)).borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
             .margin({bottom:8}).onChange((v:string)=>{this.jsonText=v})
           Row() {
             Button($r('app.string.common_cancel')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})

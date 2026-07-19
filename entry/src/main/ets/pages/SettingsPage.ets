@@ -8,6 +8,7 @@ import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
 import { EpubEngineConfig, EpubEngineType } from '../engine/EpubEngineConfig';
+import { AppBackButton } from '../components/common/AppTitleBar';
 
 interface SettingItem { icon: string; title: string; key: string; }
 interface ReadModeOption { mode: number; label: string; }
@@ -149,13 +150,15 @@ struct SettingsPage {
   build() {
     Column() {
       Row() {
-        if (this.currentSection !== 'main') {
-          Text($r('app.string.ui_39b50007b2')).fontSize(16).fontColor(ThemeColors.primary(this.isDark)).padding({ right: 12 })
-            .onClick(() => { this.currentSection = 'main'; })
-        }
+        AppBackButton({ onBack: () => {
+          if (this.currentSection === 'main') UiUtil.back(this.getUIContext());
+          else this.currentSection = 'main';
+        } })
         Text($r('app.string.common_settings')).fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
-      }.padding(16).width('100%')
+      }.height(56).padding({ left: 4, right: 12 }).width('100%')
+        .backgroundColor(ThemeColors.surface(this.isDark))
+        .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       if (this.currentSection === 'main') {
         this.buildMainMenu();
@@ -191,6 +194,7 @@ struct SettingsPage {
         { icon: 'AI', title: '大模型配置', key: 'ai' },
         { icon: '网', title: '网络设置', key: 'network' },
         { icon: '题', title: '主题设置', key: 'theme' },
+	        { icon: '存', title: '缓存管理', key: 'cacheManage' },
 	        { icon: '备', title: '备份与恢复', key: 'backup' },
 	        { icon: '关', title: '关于', key: 'about' },
 	      ] as SettingItem[], (item: SettingItem) => {
@@ -209,6 +213,8 @@ struct SettingsPage {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/BackupSettingsPage' }).catch(() => {});
 		          } else if (item.key === 'ai') {
 		            this.getUIContext().getRouter().pushUrl({ url: 'pages/AiConfigPage' }).catch(() => {});
+		          } else if (item.key === 'cacheManage') {
+		            this.getUIContext().getRouter().pushUrl({ url: 'pages/CacheManagePage' }).catch(() => {});
 		          } else {
 		            this.currentSection = item.key;
 		          }
@@ -402,7 +408,7 @@ struct SettingsPage {
         ], (item: ReadModeOption) => {
           Text(item.label)
             .fontSize(14).padding({ left: 16, right: 16, top: 8, bottom: 8 })
-            .fontColor(this.comicReadMode === item.mode ? ThemeColors.primary(this.isDark) : ThemeColors.onBackground(this.isDark))
+            .fontColor(this.comicReadMode === item.mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onBackground(this.isDark))
             .borderRadius(8)
             .backgroundColor(this.comicReadMode === item.mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
             .margin({ right: 8 })

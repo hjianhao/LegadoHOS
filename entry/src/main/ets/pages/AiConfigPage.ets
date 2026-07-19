@@ -8,6 +8,7 @@ import { AiProviderProfile, SettingsStore, upsertAiProfile } from '../data/prefe
 import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { AppBackButton } from '../components/common/AppTitleBar';
 
 interface PresetItem { name: string; label: string; endpoint: string; }
 
@@ -195,15 +196,17 @@ struct AiConfigPage {
   }
 
   async testConnection(): Promise<void> {
-    if (!this.apiKey) { UiUtil.showToast(this.getUIContext(), { message: '请先填写 API Key', duration: 1500 }); return; }
+    const keyOptional = this.activePreset === 'ollama' || this.endpoint.includes(':11434/');
+    if (!this.apiKey && !keyOptional) {
+      UiUtil.showToast(this.getUIContext(), { message: '请先填写 API Key', duration: 1500 });
+      return;
+    }
     this.isTesting = true;
     this.testResult = '测试中...';
     try {
       const body = '{"model":"' + this.model + '","messages":[{"role":"user","content":"hi"}],"max_tokens":5}';
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + this.apiKey,
-      };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.apiKey) headers['Authorization'] = 'Bearer ' + this.apiKey;
       const configuredTimeout = Number(this.timeoutSecondsText.trim());
       const timeoutMs = (!isNaN(configuredTimeout) && configuredTimeout > 0 ? Math.floor(configuredTimeout) : 120) * 1000;
       const resp = await NetUtil.httpPost(this.endpoint, body, headers, timeoutMs);
@@ -267,8 +270,7 @@ struct AiConfigPage {
   build() {
     Column() {
       Row() {
-        Button($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
-          .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
+        AppBackButton({ onBack: () => { UiUtil.back(this.getUIContext()); } })
         Text($r('app.string.ui_dc95e4a9f8')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
           .fontColor(ThemeColors.onBackground(this.isDark))
         Button($r('app.string.ui_2cd9e6ce81')).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
@@ -276,7 +278,9 @@ struct AiConfigPage {
         Button($r('app.string.common_save')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
           .height(40).padding({ left: 14, right: 14 }).borderRadius(16)
           .onClick(() => { this.save(); })
-      }.padding({ left: 12, right: 12, top: 44 }).width('100%')
+      }.height(56).padding({ left: 4, right: 12 }).width('100%')
+        .backgroundColor(ThemeColors.surface(this.isDark))
+        .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       Scroll() {
         Column() {

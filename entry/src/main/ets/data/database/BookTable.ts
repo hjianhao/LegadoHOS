@@ -121,6 +121,9 @@ export class BookTable {
   }
 
   async deleteBook(id: number): Promise<void> {
+    const profilePredicates = new relationalStore.RdbPredicates('ai_book_profiles');
+    profilePredicates.equalTo('book_id', id);
+    await RdbUtil.delete(this.rdbStore, profilePredicates);
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('id', id);
     await RdbUtil.delete(this.rdbStore, predicates);
@@ -128,6 +131,9 @@ export class BookTable {
 
   async deleteBooks(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
+    const profilePredicates = new relationalStore.RdbPredicates('ai_book_profiles');
+    profilePredicates.in('book_id', ids);
+    await RdbUtil.delete(this.rdbStore, profilePredicates);
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.in('id', ids);
     await RdbUtil.delete(this.rdbStore, predicates);
@@ -269,7 +275,7 @@ export class BookTable {
       'last_update_time': book.lastUpdateTime,
       'last_open_time': book.lastOpenTime,
       'create_time': book.createTime,
-      'update_time': book.lastOpenTime, // 用最后阅读时间同时作为 update_time
+      'update_time': book.updateTime,
       'sync_time': book.syncTime,
       'charset': book.charset || '',
     };

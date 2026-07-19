@@ -24,6 +24,9 @@ import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookG
 import { BookSourceChapter } from '../model/BookSource';
 import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
+import { BookSourceResolver } from '../service/BookSourceResolver';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 import { localBookEngine, LocalBookEngine, ImportFileItem, LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 import { localBookTitleFromPath } from '../engine/book/LocalBookFileUtil';
 import { EpubEngineType, EpubEngineConfig } from '../engine/EpubEngineConfig';
@@ -41,6 +44,9 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 import { ArrayDataSource } from '../util/ArrayDataSource';
+import { AiBookProfileTable } from '../data/database/AiBookProfileTable';
+import { extractAiBookMetadata, normalizeAiChapters } from '../engine/ai/AiBookImporter';
+import { NetUtil } from '../util/NetUtil';
 
 @Component
 export struct BookshelfPage {
@@ -473,44 +479,74 @@ export struct BookshelfPage {
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
-      const sourceDao = new BookSourceTable(db);
       const bookDao = new BookTable(db);
       const chapterDao = new ChapterTable(db);
+      const aiProfileDao = new AiBookProfileTable(db);
+      // 对齐安卓：目录刷新后自动缓存 当前章..+N 章（auto_cache_size，0 关闭）
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      const autoCacheNum = await settings.getAutoCacheSize();
       let success = 0;
       let failed = 0;
       for (const book of targets) {
-        const source = await sourceDao.getSourceByUrl(book.originUrl);
-        if (!source) {
-          failed++;
-          continue;
-        }
-        const chapters = await globalSourceExecutor.getToc(source, book.tocUrl || book.bookUrl);
-        if (chapters.length === 0) {
-          failed++;
-          continue;
-        }
-        // 保存旧章节中的已缓存内容，避免更新目录后丢失
-        const oldChapters = await chapterDao.getChaptersByBookId(book.id);
-        const contentByUrl = new Map<string, string>();
-        for (const old of oldChapters) {
-          if (old.content && old.content.length > 50 && old.url) {
-            contentByUrl.set(old.url, old.content);
+        try {
+          const source = await BookSourceResolver.resolve(book);
+          if (!source) throw new Error('解析规则不可用');
+          const aiProfile = await aiProfileDao.getByBookId(book.id);
+          const rawChapters = await globalSourceExecutor.getToc(source, book.tocUrl || book.bookUrl);
+          const chapters = aiProfile ? normalizeAiChapters(rawChapters) : rawChapters;
+          if (chapters.length === 0) throw new Error('目录为空');
+
+          // 增量合并目录，按 URL 保留已读状态和正文缓存。
+          await chapterDao.replaceTocPreserveContent(book.id, chapters);
+          book.chapterCount = chapters.length;
+          book.totalChapterNum = chapters.length;
+          book.latestChapterTitle = chapters[chapters.length - 1].title || '';
+
+          if (aiProfile) {
+            try {
+              const info = await globalSourceExecutor.getBookInfo(source, book.bookUrl);
+              if (info.name) book.name = info.name;
+              if (info.author) book.author = info.author;
+              if (info.coverUrl) book.coverUrl = info.coverUrl;
+              if (info.introduce) book.introduce = info.introduce;
+              if (info.wordCount) book.wordCount = info.wordCount;
+              if (info.kind) book.kind = info.kind;
+              if (info.lastUpdateTime) book.lastUpdateTime = info.lastUpdateTime;
+              const html = await NetUtil.httpGet(book.bookUrl, undefined, 25000);
+              const metadata = extractAiBookMetadata(html, book.bookUrl);
+              if (metadata.name) book.name = metadata.name;
+              if (metadata.author) book.author = metadata.author;
+              if (metadata.coverUrl) book.coverUrl = metadata.coverUrl;
+              if (metadata.introduce) book.introduce = metadata.introduce;
+              if (metadata.wordCount) book.wordCount = metadata.wordCount;
+              if (metadata.kind) book.kind = metadata.kind;
+              if (metadata.lastUpdateTime) book.lastUpdateTime = metadata.lastUpdateTime;
+            } catch (_metadataError) { /* 目录刷新不因元数据失败而回滚 */ }
+            await aiProfileDao.markRefresh(book.id, true);
           }
-        }
-        await chapterDao.deleteChaptersByBookId(book.id);
-        // 插入新目录时还原已缓存的内容
-        const newChapters = this.toBookChapters(book.id, chapters);
-        for (const nc of newChapters) {
-          const cached = contentByUrl.get(nc.url);
-          if (cached) {
-            nc.content = cached;
-            nc.contentLength = cached.length;
-            nc.isCached = true;
+          await bookDao.updateBook(book);
+          success++;
+
+          // 自动缓存 当前章..+N 章（BookCacheService 会跳过已缓存章节）
+          if (autoCacheNum > 0) {
+            const items: CacheChapterItem[] = chapters.map((ch: BookSourceChapter, idx: number): CacheChapterItem => {
+              return { index: ch.index >= 0 ? ch.index : idx, title: ch.title || '', url: ch.url || '' };
+            });
+            const startIdx = Math.max(0, Math.min(book.durChapterIndex, items.length - 1));
+            const endIdx = Math.min(startIdx + autoCacheNum, items.length - 1);
+            BookCacheService.getInstance().cacheBook({
+              bookId: book.id, bookName: book.name, bookUrl: book.bookUrl, source: source,
+              chapters: items, startIndex: startIdx, endIndex: endIdx,
+              context: UiUtil.getHostContext(this.getUIContext()),
+            }).catch((e: Error) => {
+              console.warn('[Bookshelf] auto cache fail: ' + book.name + ' - ' + e.message);
+            });
           }
+        } catch (_bookError) {
+          failed++;
+          if (await aiProfileDao.getByBookId(book.id)) await aiProfileDao.markRefresh(book.id, false);
         }
-        await chapterDao.insertChapters(newChapters);
-        await bookDao.updateTocInfo(book.id, chapters.length, chapters[chapters.length - 1].title);
-        success++;
       }
       UiUtil.showToast(this.getUIContext(), { message: '目录更新完成：成功 ' + success + '，失败 ' + failed, duration: 2000 });
       this.loadBooks();
@@ -837,21 +873,21 @@ export struct BookshelfPage {
                 .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
               }, (book: Book): string => String(book.id))
             }.width('100%').margin({ top: 4 })
-          } else {
-            Grid() {
-              LazyForEach(this.bookDataSource_, (book: Book) => {
-                GridItem() {
-                  this.buildGridItem(book)
-                }.onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
-                .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
-              }, (book: Book): string => String(book.id))
-            }.columnsTemplate(new Array(Math.max(1, this.gridColumns)).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
-            .padding({ left: 16, right: 16, top: 8 })
-          }
-        }.layoutWeight(1).width('100%').onRefreshing(() => { this.onRefresh(); }).refreshOffset(64)
+	          } else {
+		            Grid() {
+		              LazyForEach(this.bookDataSource_, (book: Book) => {
+		                GridItem() {
+		                  this.buildGridItem(book)
+		                }.onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
+		                .priorityGesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
+		              }, (book: Book): string => String(book.id))
+			            }.columnsTemplate(new Array(Math.max(1, this.gridColumns)).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
+			            .padding({ left: 16, right: 16, top: 8 })
+			          }
+	        }.layoutWeight(1).width('100%').onRefreshing(() => { this.onRefresh(); }).refreshOffset(64)
       }
     }
-    // ---- 11-item menu ----
+    // ---- 书架菜单 ----
     if (this.showMenu) {
       Column().width('100%').height('100%').position({ top: 0, left: 0 }).onClick(() => { this.showMenu = false; })
       Column() {
@@ -861,7 +897,6 @@ export struct BookshelfPage {
         this.mi('布局设置', () => { this.showMenu = false; this.cfgDlg?.open(); })
         this.mi('分组管理', () => { this.showMenu = false; this.groupDlg?.open(); })
         this.mi('添加URL', () => { this.showMenu = false; this.addUrlDlg?.open(); })
-        this.mi('AI 智能导入', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiImportBookPage' }); })
         this.mi(this.isSelectMode ? '退出选择模式' : '选择模式', () => { this.showMenu = false; this.toggleSelectMode(); })
         this.mi('书架管理', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookshelfManagePage' }); })
         this.mi('缓存/导出', () => { this.showMenu = false; UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookCachePage' }); })

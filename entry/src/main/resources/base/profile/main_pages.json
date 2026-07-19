@@ -26,6 +26,7 @@
     "pages/YoushuBooklistDetailPage",
     "pages/BookshelfManagePage",
     "pages/BookCachePage",
+    "pages/CacheManagePage",
     "pages/BackupSettingsPage",
     "pages/FontManagerPage",
     "pages/ReaderPage"

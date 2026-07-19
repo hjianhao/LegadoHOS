@@ -23,6 +23,10 @@ import relationalStore from '@ohos.data.relationalStore';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
+import { BookmarkTable } from '../data/database/BookmarkTable';
+import { Bookmark } from '../model/Bookmark';
+import { BookmarkEditDialog } from '../components/reader/BookmarkEditDialog';
+import { BookProgress } from '../model/BookProgress';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { Book } from '../model/Book';
@@ -40,6 +44,7 @@ import { LoginDialog } from '../components/reader/LoginDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 import { TxtParser } from '../engine/book/TxtParser';
+import { BookSourceResolver } from '../service/BookSourceResolver';
 
 interface ReadableEpubChapter {
   index: number;
@@ -79,6 +84,8 @@ struct ReadPage {
   private bookId_: number = -1;
   private cacheSize_: number = 10;
   private isCaching_: boolean = false;
+  /** 自动缓存失败计数（对齐安卓：失败 3 次后不再预下载该章） */
+  private preloadFailCount_: Map<number, number> = new Map<number, number>();
   private measureCharW_: number = 0;
   private measureLineH_: number = 0;
   private measureUtil_: MeasureUtils | null = null;
@@ -87,6 +94,21 @@ struct ReadPage {
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
   @State showAloud: boolean = false;
+  @State showBookmarkDlg: boolean = false;
+  /** 书签草稿（原文/笔记初值） */
+  @State bookmarkDraftText_: string = '';
+  @State bookmarkDraftNote_: string = '';
+  /** 书签/云同步跳转：按字符偏移定位（一次性，-1 无效） */
+  private pendingCharPos_: number = -1;
+  /** pendingCharPos_ 是否来自云端进度（来自云端时仅向前定位，本地更深则反向上传） */
+  private pendingCharPosFromCloud_: boolean = false;
+  /** 待反向上传本地进度（等排版完成后拿到字符偏移） */
+  private reverseUploadPending_: boolean = false;
+  /** 云端进度确认弹窗（plus 模式） */
+  @State showCloudProgressDlg: boolean = false;
+  private pendingCloudProgress_: BookProgress | null = null;
+  /** 阅读中定时上传进度的定时器 */
+  private progressUploadTimer_: number = -1;
   @State flowMode: string = 'paginated';
   @State readBgColor: string = ThemeColors.readingBackgroundDefault();
   @State readTextColor: string = ThemeColors.readingTextDefault();
@@ -147,6 +169,7 @@ struct ReadPage {
 	    this.tocUrl = String(p['tocUrl'] || '');
 	    if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
 	    if (p['durPageIndex'] !== undefined) this.pageIndex = Number(p['durPageIndex']);
+    if (p['durCharPos'] !== undefined) this.pendingCharPos_ = Number(p['durCharPos']);
 	    // 初始化字体管理器并注册已安装的自定义字体
 	    this.initFonts();
 	    // 先加载设置，确保首次渲染使用用户配置的样式（而非默认值再切换）
@@ -159,6 +182,10 @@ struct ReadPage {
 	    this.syncFromCloud();
 	    // 设置加载完成后立即加载内容（此时 cfg 已为用户配置）
 	    this.loadContent();
+	    // 阅读中每 5 分钟静默上传一次进度（对齐安卓 startBackupJob）
+	    this.progressUploadTimer_ = setInterval((): void => {
+	      this.saveAndUploadProgress(true);
+	    }, 5 * 60 * 1000);
 	  }
 
   /** 初始化 FontManager 并注册已安装的自定义字体 */
@@ -173,34 +200,68 @@ struct ReadPage {
     }
   }
 
-  /** 从云端下载进度并更新当前目标章节 */
+  /**
+   * 开书时与云端双向同步进度：
+   * - 云端章节更远 → 恢复云端（plus 开关开启时弹窗确认）
+   * - 本地章节更远 / 云端无进度 → 反向上传
+   * - 同章 → 云端字符偏移经 pendingCharPos_ 在排版后定位（本地更深则反向上传）
+   */
   private async syncFromCloud(): Promise<void> {
     try {
       const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
       if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
       if (!this.bookName || !this.bookAuthor) return;
 
-      UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
       const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor);
       if (!cloud) {
-        UiUtil.showToast(this.getUIContext(), { message: '同步成功：无云端进度', duration: 2000 });
+        // 云端无进度：本地已读过则反向上传
+        if (this.targetIdx_ > 0 || this.pageIndex > 0) {
+          this.reverseUploadPending_ = true;
+        }
         return;
       }
 
-      // 冲突解决：云端进度更远才覆盖本地目标
-      if (cloud.durChapterIndex > this.targetIdx_ ||
-        (cloud.durChapterIndex === this.targetIdx_ && cloud.durChapterPos > this.pageIndex)) {
-        this.targetIdx_ = cloud.durChapterIndex;
-        this.pageIndex = cloud.durChapterPos;
-        UiUtil.showToast(this.getUIContext(), { message: '同步成功：已恢复云端进度', duration: 2000 });
-        console.info('[ReadPage] Cloud progress restored:', cloud.durChapterIndex, cloud.durChapterPos);
+      if (cloud.durChapterIndex > this.targetIdx_) {
+        // 云端章节更远
+        const plus = AppStorage.get<boolean>('webdav_sync_progress_plus') === true;
+        if (plus) {
+          this.pendingCloudProgress_ = cloud;
+          this.showCloudProgressDlg = true;
+        } else {
+          this.applyCloudProgress_(cloud);
+        }
+      } else if (cloud.durChapterIndex < this.targetIdx_) {
+        // 本地章节更远 → 反向上传（等排版完成后拿到字符偏移再传）
+        this.reverseUploadPending_ = true;
       } else {
-        UiUtil.showToast(this.getUIContext(), { message: '同步成功：本地进度已是最新', duration: 2000 });
+        // 同章：云端字符偏移交给排版后处理
+        if (cloud.durChapterPos > 0) {
+          this.pendingCharPos_ = cloud.durChapterPos;
+          this.pendingCharPosFromCloud_ = true;
+        }
       }
     } catch (e) {
       console.warn('[ReadPage] Sync from cloud failed:', (e as Error).message);
-      UiUtil.showToast(this.getUIContext(), { message: '同步失败：' + (e as Error).message, duration: 2000 });
     }
+  }
+
+  /** 应用云端进度（静默恢复路径与弹窗确认路径共用） */
+  private applyCloudProgress_(cloud: BookProgress): void {
+    this.targetIdx_ = cloud.durChapterIndex;
+    if (this.pages.length > 0 && cloud.durChapterIndex !== this.currentIndex) {
+      // 内容已加载 → 切到云端章节并按字符偏移定位
+      this.pendingCharPos_ = cloud.durChapterPos;
+      this.loadChapter(cloud.durChapterIndex);
+    } else if (this.pages.length > 0) {
+      this.goToReadingPosition_(cloud.durChapterPos);
+    } else {
+      // 开书竞态：内容未加载 → 交给加载流程按 targetIdx_/pendingCharPos_ 处理
+      this.pendingCharPos_ = cloud.durChapterPos;
+      this.pendingCharPosFromCloud_ = true;
+    }
+    UiUtil.showToast(this.getUIContext(), {
+      message: '已恢复云端进度：第 ' + (cloud.durChapterIndex + 1) + ' 章', duration: 2000 });
+    console.info('[ReadPage] Cloud progress restored:', cloud.durChapterIndex, cloud.durChapterPos);
   }
 
   onPageShow(): void {
@@ -376,12 +437,8 @@ struct ReadPage {
 		        }
 	      }
 
-      const srcDao = new BookSourceTable(db);
-      const sources = this.isLocalBook_ ? [] : await srcDao.getAllSources();
-      const norm = this.originUrl.replace(/\/+$/, '');
-      this.source_ = sources.find(s => s.sourceUrl === this.originUrl) ||
-        sources.find(s => s.sourceUrl.replace(/\/+$/, '') === norm) ||
-        sources.find(s => s.sourceName === this.origin) || null;
+      this.source_ = this.isLocalBook_ ? null : await BookSourceResolver.resolveByIdentity(
+        this.bookId_, this.bookUrl, this.originUrl, this.origin);
       console.info('[ReadPage] loadContent: source_=', this.source_ ? this.source_.sourceName : 'NULL',
         'originUrl=', this.originUrl, 'origin=', this.origin, 'bookUrl=', this.bookUrl.substring(0, 80), 'tocUrl=', this.tocUrl);
       if (!this.tocUrl) {
@@ -683,6 +740,29 @@ struct ReadPage {
     this.currentIndex = idx;
     this.text = content;
     this.layoutText(content);
+    // 书签/云同步跳转：按字符偏移定位分页（一次性生效）
+    if (this.pendingCharPos_ >= 0 && idx === this.targetIdx_) {
+      const pos = this.pendingCharPos_;
+      const fromCloud = this.pendingCharPosFromCloud_;
+      this.pendingCharPos_ = -1;
+      this.pendingCharPosFromCloud_ = false;
+      for (let i = 0; i < this.pages.length; i++) {
+        if (pos >= this.pages[i].startOffset && pos < this.pages[i].endOffset) {
+          if (!fromCloud || i > this.pageIndex) {
+            this.pageIndex = i;
+          } else if (i < this.pageIndex) {
+            // 云同步同章但本地读得更深 → 本地进度反向上传
+            this.reverseUploadPending_ = true;
+          }
+          break;
+        }
+      }
+    }
+    // 反向上传：此时排版已完成，能拿到正确的字符偏移
+    if (this.reverseUploadPending_ && idx === this.targetIdx_) {
+      this.reverseUploadPending_ = false;
+      this.saveAndUploadProgress(true);
+    }
     this.initAloudEngine_();
   }
 
@@ -846,6 +926,8 @@ struct ReadPage {
         if (i === currentIdx) continue; // 当前章节已缓存
         const ch = this.allChapters_[i];
         if (!ch) continue;
+        // 失败 3 次的章节不再预下载（对齐安卓 downloadFailChapters 逻辑）
+        if ((this.preloadFailCount_.get(i) || 0) >= 3) continue;
         try {
           let content = await this.readChapterCache_(i);
           if (content && content.length > 50) continue;
@@ -858,9 +940,14 @@ struct ReadPage {
           }
           if (content && content.length > 50) {
             await this.saveToDbCache_(i, content);
+            this.preloadFailCount_.delete(i);
             count++;
+          } else {
+            this.preloadFailCount_.set(i, (this.preloadFailCount_.get(i) || 0) + 1);
           }
-        } catch (_e) { /* skip individual chapter errors */ }
+        } catch (_e) {
+          this.preloadFailCount_.set(i, (this.preloadFailCount_.get(i) || 0) + 1);
+        }
       }
       if (count > 0) console.info('[ReadPage] Auto-cached', count, 'chapters around', currentIdx);
     } catch (_e) { /* ignore */ }
@@ -876,8 +963,14 @@ struct ReadPage {
 
 	  async aboutToDisappear(): Promise<void> {
 	    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
+	    if (this.progressUploadTimer_ >= 0) {
+	      clearInterval(this.progressUploadTimer_);
+	      this.progressUploadTimer_ = -1;
+	    }
 	    await this.flushStyleSave_();
 	    await this.saveProgressAsync_();
+	    // 退出阅读时静默上传一次进度（对齐安卓 onPause 上传）
+	    await this.saveAndUploadProgress(true);
 	    releaseGlobalAloudEngine();
     // 退出时恢复系统栏
     this.setSystemBarVisible_(true);
@@ -912,31 +1005,38 @@ struct ReadPage {
     try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageIndex); console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex); } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
   }
 
-  /** 离开页面时保存进度并尝试上传到云端 */
-  private async saveAndUploadProgress(): Promise<void> {
+  /** 保存进度并尝试上传到云端（silent=true 时静默，供定时/退出场景） */
+  private async saveAndUploadProgress(silent: boolean = false): Promise<void> {
     this.saveProgress();
     try {
       const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
-      if (syncOn === true && WebDavService.getInstance().isConfigured()) {
-        const ch = this.allChapters_[this.currentIndex];
-        if (ch) {
-          UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
-          await WebDavService.getInstance().uploadBookProgress({
-            name: this.bookName,
-            author: this.bookAuthor,
-            durChapterIndex: this.currentIndex,
-            durChapterPos: this.pageIndex,
-            durChapterTitle: ch.title || '',
-          });
-          // 更新本地 syncTime
-          const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-          await bookTable.updateSyncTime(this.bookUrl, Date.now());
-          UiUtil.showToast(this.getUIContext(), { message: '同步成功：已上传进度', duration: 2000 });
-        }
+      if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
+      if (!this.bookName || !this.bookUrl) return;
+      const ch = this.allChapters_[this.currentIndex];
+      if (!ch) return;
+      // 云端格式对齐安卓：durChapterPos 存章节内字符偏移（页首 startOffset）
+      const pos = this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0;
+      if (!silent) {
+        UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
+      }
+      await WebDavService.getInstance().uploadBookProgress({
+        name: this.bookName,
+        author: this.bookAuthor,
+        durChapterIndex: this.currentIndex,
+        durChapterPos: pos,
+        durChapterTitle: ch.title || '',
+      });
+      // 更新本地 syncTime
+      const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+      await bookTable.updateSyncTime(this.bookUrl, Date.now());
+      if (!silent) {
+        UiUtil.showToast(this.getUIContext(), { message: '同步成功：已上传进度', duration: 2000 });
       }
     } catch (e) {
       console.warn('[ReadPage] Upload progress failed:', (e as Error).message);
-      UiUtil.showToast(this.getUIContext(), { message: '同步失败：' + (e as Error).message, duration: 2000 });
+      if (!silent) {
+        UiUtil.showToast(this.getUIContext(), { message: '同步失败：' + (e as Error).message, duration: 2000 });
+      }
     }
   }
 
@@ -1631,6 +1731,50 @@ struct ReadPage {
     return `${hh}:${mm}`;
   }
 
+  /** 添加书签：当前章节 + 页首字符偏移 + 当前页文本（对齐安卓阅读页菜单入口） */
+  private addBookmark_(): void {
+    if (this.bookId_ <= 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '书籍未入库，无法添加书签', duration: 1500 });
+      return;
+    }
+    const page = this.pages.length > 0 ? this.pages[this.pageIndex] : null;
+    const start = page ? page.startOffset : 0;
+    const end = page ? page.endOffset : 0;
+    let pageText = this.text.substring(start, end).trim();
+    if (pageText.length > 200) pageText = pageText.substring(0, 200);
+    this.bookmarkDraftText_ = pageText;
+    this.bookmarkDraftNote_ = '';
+    this.showBookmarkDlg = true;
+  }
+
+  private async saveBookmark_(text: string, note: string): Promise<void> {
+    this.showBookmarkDlg = false;
+    try {
+      const ch = this.allChapters_[this.currentIndex];
+      const page = this.pages.length > 0 ? this.pages[this.pageIndex] : null;
+      const now = Date.now();
+      const bookmark: Bookmark = {
+        id: 0,
+        bookId: this.bookId_,
+        bookName: this.bookName,
+        bookAuthor: this.bookAuthor,
+        chapterIndex: this.currentIndex,
+        chapterName: ch ? ch.title || '' : '',
+        chapterPos: page ? page.startOffset : 0,
+        text: text,
+        note: note,
+        createTime: now,
+        updateTime: now,
+      };
+      await AppDatabase.getInstance().waitForInit();
+      await new BookmarkTable(AppDatabase.getInstance().rdbStore).insert(bookmark);
+      UiUtil.showToast(this.getUIContext(), { message: '已添加书签', duration: 1500 });
+    } catch (e) {
+      console.warn('[ReadPage] save bookmark fail:', (e as Error).message);
+      UiUtil.showToast(this.getUIContext(), { message: '添加书签失败', duration: 1500 });
+    }
+  }
+
   // 页脚高度：分割线(4+1+4) + 文本行(~15) + 底部留白(10)，需与页脚布局保持一致
   private footerH_(): number { return 34; }
 
@@ -1779,7 +1923,7 @@ struct ReadPage {
             isLocalBook: this.isLocalBook_,
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
             onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { UiUtil.showToast(this.getUIContext(), {message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
-            onBookmark: () => { this.showMenu = false; UiUtil.showToast(this.getUIContext(), {message:'书签功能开发中',duration:1500}); },
+            onBookmark: () => { this.showMenu = false; this.addBookmark_(); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
@@ -1819,6 +1963,58 @@ struct ReadPage {
             onCacheComplete: () => { UiUtil.showToast(this.getUIContext(), { message: '缓存完成', duration: 1500 }); },
             onCacheStart: () => {},
           })
+        }.width('100%').height('100%')
+      }
+
+      if (this.showBookmarkDlg) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showBookmarkDlg = false; })
+          BookmarkEditDialog({
+            title: '添加书签',
+            initialText: this.bookmarkDraftText_,
+            initialNote: this.bookmarkDraftNote_,
+            onSave: (text: string, note: string) => { this.saveBookmark_(text, note); },
+            onDismiss: () => { this.showBookmarkDlg = false; },
+          })
+        }.width('100%').height('100%')
+      }
+
+      // 云端进度确认弹窗（增强同步模式：云端更远时询问是否恢复）
+      if (this.showCloudProgressDlg && this.pendingCloudProgress_) {
+        Column() {
+          Column().width('100%').height('100%').backgroundColor('#66000000')
+            .onClick(() => { this.showCloudProgressDlg = false; })
+          Column() {
+            Text('发现云端进度').fontSize(17).fontWeight(FontWeight.Bold)
+              .fontColor(ThemeColors.onBackground(this.isDark))
+              .padding({ top: 16, bottom: 8 })
+            Text('云端已读到第 ' + (this.pendingCloudProgress_!.durChapterIndex + 1) + ' 章'
+              + (this.pendingCloudProgress_!.durChapterTitle ? '「' + this.pendingCloudProgress_!.durChapterTitle + '」' : '')
+              + '，是否恢复？')
+              .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+              .padding({ left: 20, right: 20, bottom: 16 })
+            Row() {
+              Button('不恢复').fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
+                .backgroundColor(Color.Transparent).height(44).layoutWeight(1)
+                .onClick(() => {
+                  this.showCloudProgressDlg = false;
+                  this.pendingCloudProgress_ = null;
+                  // 保留本地进度并回传云端
+                  this.saveAndUploadProgress(true);
+                })
+              Button('恢复').fontSize(15).fontColor('#FFF')
+                .backgroundColor(ThemeColors.primary(this.isDark)).height(44).layoutWeight(1)
+                .onClick(() => {
+                  const cloud = this.pendingCloudProgress_!;
+                  this.showCloudProgressDlg = false;
+                  this.pendingCloudProgress_ = null;
+                  this.applyCloudProgress_(cloud);
+                })
+            }.width('100%')
+          }
+          .width('80%').backgroundColor(ThemeColors.surface(this.isDark))
+          .borderRadius(16)
+          .position({ x: '10%', y: '35%' })
         }.width('100%').height('100%')
       }
 

@@ -6,6 +6,17 @@ import { AppDatabase } from '../../data/database/AppDatabase';
 import { CacheTable } from '../../data/database/CacheTable';
 import { ChapterTable } from '../../data/database/ChapterTable';
 
+/** 单本书的章节缓存统计 */
+export interface BookCacheStat {
+  bookId: number;
+  name: string;
+  author: string;
+  /** 已缓存章节数 */
+  chapters: number;
+  /** 正文占用字节数（字符数估算） */
+  size: number;
+}
+
 export class CacheManager {
   private static instance: CacheManager;
   private cacheTable: CacheTable;
@@ -97,6 +108,35 @@ export class CacheManager {
     } catch (err) {
       console.error('[CacheManager] Clear book cache failed:', err);
     }
+  }
+
+  /**
+   * 按书统计章节缓存（含已下架书籍，按占用大小倒序）
+   */
+  async getBookCacheStats(): Promise<BookCacheStat[]> {
+    const stats: BookCacheStat[] = [];
+    try {
+      const rdb = AppDatabase.getInstance().rdbStore;
+      const rs = await rdb.querySql(
+        'SELECT c.book_id, b.name, b.author, COUNT(*) AS cnt, SUM(LENGTH(c.content)) AS total '
+        + 'FROM chapters c JOIN books b ON b.id = c.book_id WHERE c.is_cached = 1 '
+        + 'GROUP BY c.book_id ORDER BY total DESC', []);
+      let has = rs.goToFirstRow();
+      while (has) {
+        stats.push({
+          bookId: rs.getLong(0),
+          name: rs.getString(1) || '',
+          author: rs.getString(2) || '',
+          chapters: rs.getLong(3),
+          size: rs.getLong(4) || 0,
+        });
+        has = rs.goToNextRow();
+      }
+      rs.close();
+    } catch (err) {
+      console.error('[CacheManager] Get book stats failed:', err);
+    }
+    return stats;
   }
 
   /**

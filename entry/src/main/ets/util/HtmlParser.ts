@@ -18,6 +18,10 @@ export interface HtmlElement {
   attributes: Record<string, string>;
   children: HtmlElement[];
   parent: HtmlElement | null;
+  /** 直接文本（负数）和子元素（正数）的 1-based 索引，保留原始文档顺序 */
+  contentOrder: number[];
+  /** 当前元素的直接文本片段，与 contentOrder 中的负数索引对应 */
+  textParts: string[];
   /** 直接文本节点（不包括子元素中的文本） */
   ownText: string;
   /** 所有后代文本 */
@@ -53,6 +57,8 @@ export class HtmlParser {
           const current = stack[stack.length - 1];
           if (current) {
             current.ownText += text;
+            current.textParts.push(text);
+            current.contentOrder.push(-current.textParts.length);
           }
         }
         pos = textEnd === -1 ? html.length : textEnd;
@@ -126,6 +132,7 @@ export class HtmlParser {
       if (parent) {
         element.parent = parent;
         parent.children.push(element);
+        parent.contentOrder.push(parent.children.length);
       }
 
       // 自闭合或 void 元素不推入栈
@@ -470,6 +477,8 @@ export class HtmlParser {
       attributes,
       children: [],
       parent: null,
+      contentOrder: [],
+      textParts: [],
       ownText: '',
       text: '',
       innerHtml: '',
@@ -490,27 +499,32 @@ export class HtmlParser {
   }
 
   private buildText(el: HtmlElement): void {
-    // 先递归子元素，再按文档顺序拼接：自身直接文本在前，子元素文本在后
-    // 注意：ownText 是该元素所有直接文本节点的拼接（不区分在子元素前还是后），
-    // 但绝大多数实际场景中 ownText 在子元素之前，所以 ownText 先加更接近原文顺序。
-    if (el.ownText) {
-      el.text = el.ownText;
-    }
+    el.text = '';
     for (const child of el.children) {
       this.buildText(child);
-      if (child.text) {
-        el.text += child.text;
-      } else if (child.ownText) {
-        el.text += child.ownText;
+    }
+    for (const index of el.contentOrder) {
+      if (index < 0) {
+        el.text += el.textParts[-index - 1] || '';
+      } else {
+        const child = el.children[index - 1];
+        if (child) el.text += child.text || child.ownText;
       }
     }
   }
 
   private buildHtml(el: HtmlElement): void {
-    let inner: string = el.ownText;
     for (const child of el.children) {
       this.buildHtml(child);
-      inner += child.outerHtml;
+    }
+    let inner: string = '';
+    for (const index of el.contentOrder) {
+      if (index < 0) {
+        inner += el.textParts[-index - 1] || '';
+      } else {
+        const child = el.children[index - 1];
+        if (child) inner += child.outerHtml;
+      }
     }
     el.innerHtml = inner;
 

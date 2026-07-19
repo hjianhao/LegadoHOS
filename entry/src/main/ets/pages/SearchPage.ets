@@ -18,6 +18,29 @@ import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
 import { ArrayDataSource } from '../util/ArrayDataSource';
 import { ThemeColors } from '../theme/ThemeColors';
+import { AiImportPreviewDialog, AiImportPreviewResult } from '../components/AiImportPreviewDialog';
+import { AiBookImporter, ImportProgress, isSafeAiImportUrl } from '../engine/ai/AiBookImporter';
+import { ChapterTable } from '../data/database/ChapterTable';
+import { BookSourceResolver } from '../service/BookSourceResolver';
+import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
+import { BookChapter } from '../model/BookChapter';
+
+interface OnlineSearchEngine {
+  id: string;
+  name: string;
+}
+
+const ONLINE_SEARCH_ENGINES: OnlineSearchEngine[] = [
+  { id: 'bing', name: '必应' },
+  { id: 'baidu', name: '百度' },
+  { id: 'sogou', name: '搜狗' },
+  { id: 'shenma', name: '神马' },
+  { id: 'google', name: 'Google' },
+];
+
+const ONLINE_SEARCH_OPTIONS: SelectOption[] = ONLINE_SEARCH_ENGINES.map((item: OnlineSearchEngine): SelectOption => ({
+  value: item.name,
+}));
 
 interface SearchSourceGroup {
   sourceName: string;
@@ -40,6 +63,7 @@ interface ParsedSearchScope {
 @Entry
 @Component
 struct SearchPage {
+  @State searchMode: number = 0; // 0=书源，1=在线
   @State keyword: string = '';
   @State committedKeyword: string = '';
   @StorageLink('isDark') isDark: boolean = false;
@@ -57,6 +81,7 @@ struct SearchPage {
   @State history: string[] = [];
   @State bookshelfHints: Book[] = [];
   @State showSuggestions: boolean = false;
+  @State suppressSearchSuggestions: boolean = false;
   @State showScopeSheet: boolean = false;
   @State showSettingsSheet: boolean = false;
   @State showClearHistoryDialog: boolean = false;
@@ -80,6 +105,17 @@ struct SearchPage {
   @State expandedSourceLoading: boolean = false;
   @State expandedSourceHasMore: boolean = true;
   @State expandedSourceError: string = '';
+  @State onlineEngine: string = 'bing';
+  @State showOnlineBrowser: boolean = false;
+  @State onlineBrowserUrl: string = '';
+  @State onlineBrowserTitle: string = '';
+  @State onlineImporting: boolean = false;
+  @State onlinePhase: string = '';
+  @State onlineProgressText: string = '';
+  @State onlineProgressCurrent: number = 0;
+  @State onlineProgressTotal: number = 0;
+  @State onlineErrorText: string = '';
+  @State onlineResultText: string = '';
 
   private searchRunId: number = 0;
   private hintRunId: number = 0;
@@ -88,16 +124,35 @@ struct SearchPage {
   private initialized: boolean = false;
   private previewItem: SearchResult | null = null;
   private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
+  private onlineImporter_: AiBookImporter | null = null;
+  private pageActive_: boolean = false;
 
   private onResultsChanged_(): void {
     this.resultDataSource_.reset(this.results);
   }
 
   aboutToAppear(): void {
+    this.pageActive_ = true;
+    this.onlineImporter_ = new AiBookImporter((progress: ImportProgress): void => {
+      if (!this.pageActive_) return;
+      this.onlinePhase = progress.phase;
+      this.onlineProgressText = progress.message;
+      this.onlineProgressCurrent = progress.current;
+      this.onlineProgressTotal = progress.total;
+      if (progress.phase === 'error') {
+        this.onlineErrorText = progress.message;
+        this.onlineImporting = false;
+      } else if (progress.phase === 'done') {
+        this.onlineResultText = progress.message;
+        this.onlineImporting = false;
+      }
+    });
     this.initPage();
   }
 
   aboutToDisappear(): void {
+   this.pageActive_ = false;
+   this.onlineImporter_?.cancel();
    WebViewFetcher.cancelPending();
    if (this.queryHintTimer >= 0) {
       clearTimeout(this.queryHintTimer);
@@ -127,6 +182,7 @@ struct SearchPage {
       this.matchModeExact = (await s.get<number>('search_match_mode', 0)) === 1;
       this.selectedSourceTypes = await s.get<number[]>('search_source_types', []);
       this.applySearchScope(await s.get<string>('search_scope', ''), false);
+      this.onlineEngine = this.normalizeOnlineEngine_(await s.get<string>('online_search_engine', 'bing'));
       console.info('[SearchPage] prefs loaded layout=' + this.layoutMode.toString()
         + ' exact=' + (this.matchModeExact ? 'true' : 'false')
         + ' typeFilter=' + JSON.stringify(this.selectedSourceTypes)
@@ -144,6 +200,184 @@ struct SearchPage {
     } catch (_e) { /* ignore */ }
   }
 
+  private normalizeOnlineEngine_(value: string): string {
+    return ONLINE_SEARCH_ENGINES.some((item: OnlineSearchEngine): boolean => item.id === value) ? value : 'bing';
+  }
+
+  private onlineEngineIndex_(): number {
+    const index = ONLINE_SEARCH_ENGINES.findIndex((item: OnlineSearchEngine): boolean => item.id === this.onlineEngine);
+    return index >= 0 ? index : 0;
+  }
+
+  private onlineEngineName_(): string {
+    const index = this.onlineEngineIndex_();
+    return ONLINE_SEARCH_ENGINES[index].name;
+  }
+
+  private async selectOnlineEngine_(index: number): Promise<void> {
+    if (index < 0 || index >= ONLINE_SEARCH_ENGINES.length) return;
+    this.onlineEngine = ONLINE_SEARCH_ENGINES[index].id;
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      await settings.put('online_search_engine', this.onlineEngine);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private switchSearchMode_(mode: number): void {
+    if (this.searchMode === mode) return;
+    if (this.isSearching || this.isLoadingMore) this.stopSearch();
+    this.searchMode = mode;
+    this.suppressSearchSuggestions = false;
+    this.showSuggestions = this.keyword.trim().length === 0 ? this.history.length > 0 : true;
+    if (mode === 1) {
+      this.bookshelfHints = [];
+      this.showSettingsSheet = false;
+      this.showScopeSheet = false;
+    }
+  }
+
+  private submitCurrentSearch_(keyword?: string): void {
+    const query = (keyword || this.keyword).trim();
+    if (!query) return;
+    if (this.searchMode === 1) {
+      void this.openOnlineSearch_(query);
+    } else {
+      void this.doSearch(query);
+    }
+  }
+
+  private onlineSearchUrl_(keyword: string): string {
+    const query = `"${keyword}" 小说 在线阅读 目录 -电视剧 -动漫 -漫画`;
+    const encoded = encodeURIComponent(query);
+    switch (this.onlineEngine) {
+      case 'baidu': return 'https://www.baidu.com/s?wd=' + encoded;
+      case 'sogou': return 'https://www.sogou.com/web?query=' + encoded;
+      case 'shenma': return 'https://m.sm.cn/s?q=' + encoded;
+      case 'google': return 'https://www.google.com/search?q=' + encoded;
+      case 'bing':
+      default: return 'https://cn.bing.com/search?q=' + encoded;
+    }
+  }
+
+  private async openOnlineSearch_(rawKeyword?: string): Promise<void> {
+    const query = (rawKeyword || this.keyword).trim();
+    if (!query) {
+      UiUtil.showToast(this.getUIContext(), { message: '请输入书名', duration: 1500 });
+      return;
+    }
+    this.keyword = query;
+    this.dismissSearchInput_();
+    await this.addToHistory(query);
+    this.onlineBrowserUrl = this.onlineSearchUrl_(query);
+    this.onlineBrowserTitle = this.onlineEngineName_() + ' · ' + query;
+    this.showOnlineBrowser = true;
+  }
+
+  private isOnlineSearchPage_(url: string): boolean {
+    const lower = url.toLowerCase();
+    return (lower.includes('bing.com/search'))
+      || (lower.includes('baidu.com/s'))
+      || (lower.includes('sogou.com/web') || lower.includes('m.sogou.com/web'))
+      || (lower.includes('sm.cn/s'))
+      || (lower.includes('google.') && lower.includes('/search'));
+  }
+
+  private confirmOnlinePage_(result: AiImportPreviewResult): void {
+    if (this.isOnlineSearchPage_(result.url)) {
+      UiUtil.showToast(this.getUIContext(), { message: '请先打开具体小说的详情页或目录页', duration: 2200 });
+      return;
+    }
+    if (!isSafeAiImportUrl(result.url)) {
+      UiUtil.showToast(this.getUIContext(), { message: '当前网页不可导入', duration: 1800 });
+      return;
+    }
+    this.dismissSearchInput_();
+    this.showOnlineBrowser = false;
+    void this.startOnlineImport_(result.url, result.html);
+  }
+
+  /** 防止 WebView 浮层关闭或系统对话框弹出时，焦点自动回到搜索框并展开历史。 */
+  private dismissSearchInput_(): void {
+    this.suppressSearchSuggestions = true;
+    this.showSuggestions = false;
+    this.bookshelfHints = [];
+    try {
+      this.getUIContext().getFocusController().clearFocus();
+    } catch (_e) { /* 当前窗口尚未建立焦点链时无需处理 */ }
+  }
+
+  private async startOnlineImport_(url: string, html: string): Promise<void> {
+    this.onlineImporting = true;
+    this.onlineErrorText = '';
+    this.onlineResultText = '';
+    try {
+      if (!this.onlineImporter_) throw new Error('导入器未初始化');
+      const ready = await this.onlineImporter_.init(UiUtil.getHostContext(this.getUIContext()));
+      if (!ready) throw new Error('请先在 AI 配置中设置 LLM API');
+      const result = await this.onlineImporter_.import(url, html);
+      this.onlineResultText = `导入成功！已生成 ${result.chapterCount} 章目录`;
+      this.onlineImporting = false;
+      this.askOnlineBackgroundCache_(result.bookId, result.chapterCount);
+    } catch (e) {
+      this.onlineErrorText = '导入失败：' + ((e as Error).message || '');
+      this.onlineImporting = false;
+    }
+  }
+
+  private askOnlineBackgroundCache_(bookId: number, chapterCount: number): void {
+    UiUtil.showDialog(this.getUIContext(), {
+      title: '目录导入完成',
+      message: `已生成 ${chapterCount} 章目录。可以在阅读时按需加载，或现在开始后台缓存全书。`,
+      buttons: [
+        { text: '稍后缓存', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '立即后台缓存', color: ThemeColors.primary(this.isDark) }
+      ]
+    }).then((result): void => {
+      if (result.index === 1) void this.startOnlineBackgroundCache_(bookId);
+    });
+  }
+
+  private async startOnlineBackgroundCache_(bookId: number): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      const book = await new BookTable(db).getBookById(bookId);
+      if (!book) throw new Error('书籍不存在');
+      const source = await BookSourceResolver.resolve(book);
+      if (!source) throw new Error('AI 解析档案不可用');
+      const chapters = await new ChapterTable(db).getChaptersByBookId(bookId);
+      const items: CacheChapterItem[] = chapters.map((chapter: BookChapter): CacheChapterItem => ({
+        index: chapter.index, title: chapter.title, url: chapter.url,
+      }));
+      this.onlineResultText = `已在后台缓存《${book.name}》，可在离线缓存页查看进度`;
+      BookCacheService.getInstance().cacheBook({
+        bookId: book.id,
+        bookName: book.name,
+        bookUrl: book.bookUrl,
+        source: source,
+        chapters: items,
+        startIndex: 0,
+        endIndex: Math.max(0, items.length - 1),
+        context: UiUtil.getHostContext(this.getUIContext()),
+      }).catch((e: Error): void => { console.warn('[OnlineImport] background cache failed:', e.message); });
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '启动后台缓存失败：' + (e as Error).message, duration: 2000 });
+    }
+  }
+
+  private onlinePhaseLabel_(): string {
+    switch (this.onlinePhase) {
+      case 'fetch': return '抓取页面';
+      case 'analyze_toc': return '分析目录';
+      case 'analyze_content': return '分析正文';
+      case 'download': return '下载章节';
+      case 'done': return '完成';
+      case 'error': return '出错';
+      default: return '';
+    }
+  }
+
   async loadHistory(): Promise<void> {
     try {
       const table = new SearchKeywordTable(AppDatabase.getInstance().rdbStore);
@@ -158,7 +392,8 @@ struct SearchPage {
         items = await table.getRecent(30);
       }
       this.history = items.map(item => item.word);
-      this.showSuggestions = this.history.length > 0;
+      // 最近输入只在用户主动点击搜索框时展开，避免页面或浮层重建时遮挡对话框。
+      this.showSuggestions = false;
     } catch (_e) { this.history = []; }
   }
 
@@ -252,6 +487,8 @@ struct SearchPage {
     try {
       const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
       if (!params) return;
+      const modeRaw = String(params['searchMode'] || params['mode'] || '').toLowerCase();
+      this.searchMode = modeRaw === 'online' || modeRaw === '1' ? 1 : 0;
       const scopeRaw = String(params['searchScope'] || params['scope'] || '');
       if (scopeRaw) {
         this.applySearchScope(scopeRaw, false);
@@ -260,7 +497,8 @@ struct SearchPage {
       if (key.trim()) {
         this.keyword = key.trim();
         this.showSuggestions = false;
-        await this.doSearch(key);
+        if (this.searchMode === 1) await this.openOnlineSearch_(key);
+        else await this.doSearch(key);
       }
     } catch (_e) { /* ignore */ }
   }
@@ -287,9 +525,14 @@ struct SearchPage {
 
   onQueryChanged(v: string): void {
     this.keyword = v;
+    this.suppressSearchSuggestions = false;
     const q = v.trim();
     this.showSuggestions = !this.hasSearched || q !== this.committedKeyword;
     if (this.queryHintTimer >= 0) clearTimeout(this.queryHintTimer);
+    if (this.searchMode === 1) {
+      this.bookshelfHints = [];
+      return;
+    }
     this.queryHintTimer = setTimeout(() => {
       this.queryHintTimer = -1;
       this.loadBookshelfHints(this.keyword.trim());
@@ -297,6 +540,8 @@ struct SearchPage {
   }
 
   shouldShowSuggestions(): boolean {
+    if (this.suppressSearchSuggestions) return false;
+    if (this.searchMode === 1) return this.showSuggestions && !this.onlineImporting;
     return this.showSuggestions
       && !this.isSearching
       && !this.isLoadingMore
@@ -971,7 +1216,7 @@ struct SearchPage {
     Stack() {
       Column() {
         this.buildTopArea()
-        this.buildScopeStrip()
+        if (this.searchMode === 0) this.buildScopeStrip()
         Stack({ alignContent: Alignment.TopStart }) {
           this.buildBody()
         }
@@ -983,7 +1228,7 @@ struct SearchPage {
       .height('100%')
       .backgroundColor(this.bgColor())
 
-      if (this.isSearching || this.isLoadingMore) {
+      if (this.searchMode === 0 && (this.isSearching || this.isLoadingMore)) {
         Button(this.isSearching ? '■' : '+')
           .fontSize(20)
           .fontColor(ThemeColors.onPrimary(this.isDark))
@@ -997,7 +1242,7 @@ struct SearchPage {
               this.stopSearch();
             }
           })
-      } else if (this.hasSearched && this.hasMore && this.results.length > 0) {
+      } else if (this.searchMode === 0 && this.hasSearched && this.hasMore && this.results.length > 0) {
         Button($r('app.string.ui_a979ef10cc'))
           .fontSize(24)
           .fontColor(ThemeColors.onPrimary(this.isDark))
@@ -1041,6 +1286,22 @@ struct SearchPage {
         })
         this.buildExpandedSourceSheet()
       }
+
+      if (this.showOnlineBrowser) {
+        Stack({ alignContent: Alignment.Center }) {
+          Column().width('100%').height('100%').backgroundColor(ThemeColors.scrim(this.isDark))
+          AiImportPreviewDialog({
+            initialUrl: this.onlineBrowserUrl,
+            titleText: this.onlineBrowserTitle,
+            confirmText: '导入当前页',
+            helperText: '先在搜索结果中进入小说详情页或目录页，再导入当前网页。',
+            dismissBeforeConfirm: false,
+            onCancel: (): void => { this.showOnlineBrowser = false; },
+            onConfirm: (result: AiImportPreviewResult): void => { this.confirmOnlinePage_(result); }
+          })
+        }
+        .width('100%').height('100%')
+      }
     }
     .width('100%')
     .height('100%')
@@ -1062,22 +1323,59 @@ struct SearchPage {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textColor())
           .layoutWeight(1)
-        this.buildIconAction('筛选', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
-          this.showSettingsSheet = true;
-          this.showScopeSheet = false;
-        })
-        this.buildIconAction('=', this.matchModeExact, () => {
-          this.setMatchModeExact(!this.matchModeExact);
-        })
-        this.buildIconAction('☰', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
-          this.showScopeSheet = true;
-          this.showSettingsSheet = false;
-        })
+        if (this.searchMode === 0) {
+          this.buildIconAction('筛选', this.layoutMode === 1 || this.selectedSourceTypes.length > 0, () => {
+            this.showSettingsSheet = true;
+            this.showScopeSheet = false;
+          })
+          this.buildIconAction('=', this.matchModeExact, () => {
+            this.setMatchModeExact(!this.matchModeExact);
+          })
+          this.buildIconAction('☰', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
+            this.showScopeSheet = true;
+            this.showSettingsSheet = false;
+          })
+        }
       }
       .width('100%')
       .height(48)
       .padding({ left: 8, right: 10 })
       .alignItems(VerticalAlign.Center)
+
+      Row() {
+        Button('书源')
+          .layoutWeight(1).height(38).fontSize(14)
+          .fontColor(this.searchMode === 0 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
+          .backgroundColor(this.searchMode === 0 ? this.primaryColor() : ThemeColors.transparent())
+          .borderRadius(19)
+          .onClick((): void => { this.switchSearchMode_(0); })
+        Button('在线')
+          .layoutWeight(1).height(38).fontSize(14)
+          .fontColor(this.searchMode === 1 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
+          .backgroundColor(this.searchMode === 1 ? this.primaryColor() : ThemeColors.transparent())
+          .borderRadius(19)
+          .onClick((): void => { this.switchSearchMode_(1); })
+      }
+      .width('100%')
+      .padding(3)
+      .margin({ left: 16, right: 16, bottom: 10 })
+      .backgroundColor(this.surfaceAltColor())
+      .borderRadius(22)
+
+      if (this.searchMode === 1) {
+        Row() {
+          Text('搜索引擎').fontSize(13).fontColor(this.subTextColor()).layoutWeight(1)
+          Select(ONLINE_SEARCH_OPTIONS)
+            .selected(this.onlineEngineIndex_())
+            .value(this.onlineEngineName_())
+            .height(40)
+            .fontColor(this.primaryColor())
+            .backgroundColor(this.surfaceAltColor())
+            .onSelect((index: number): void => { void this.selectOnlineEngine_(index); })
+        }
+        .width('100%')
+        .padding({ left: 18, right: 16, bottom: 8 })
+      }
 
       Row() {
         Row() {
@@ -1089,7 +1387,6 @@ struct SearchPage {
             .textAlign(TextAlign.Center)
           TextInput({ placeholder: $r('app.string.ui_f9faaeaa8e'), text: this.keyword })
             .height(42)
-            .defaultFocus(true)
             .layoutWeight(1)
             .backgroundColor(Color.Transparent)
             .fontSize(15)
@@ -1097,9 +1394,17 @@ struct SearchPage {
             .placeholderColor(this.subTextColor())
             .padding({ left: 0 })
             .onChange((v: string) => { this.onQueryChanged(v); })
-            .onSubmit(() => { this.doSearch(); })
+            .onSubmit(() => { this.submitCurrentSearch_(); })
             .onFocus(() => {
-              if (!this.hasSearched || this.keyword.trim() !== this.committedKeyword) {
+              if (!this.suppressSearchSuggestions &&
+                (this.searchMode === 1 || !this.hasSearched || this.keyword.trim() !== this.committedKeyword)) {
+                this.showSuggestions = this.keyword.trim().length > 0 || this.history.length > 0 || this.bookshelfHints.length > 0;
+              }
+            })
+            .onClick(() => {
+              // 点击代表用户主动编辑；此时才解除导入流程设置的历史面板抑制状态。
+              this.suppressSearchSuggestions = false;
+              if (!this.onlineImporting) {
                 this.showSuggestions = this.keyword.trim().length > 0 || this.history.length > 0 || this.bookshelfHints.length > 0;
               }
             })
@@ -1128,17 +1433,17 @@ struct SearchPage {
         .backgroundColor(this.surfaceAltColor())
         .borderRadius(21)
 
-        Button(this.isSearching ? '停止' : '搜索')
+        Button(this.searchMode === 0 && this.isSearching ? '停止' : '搜索')
           .fontSize(14)
           .fontColor(ThemeColors.onPrimary(this.isDark))
           .height(40)
           .padding({ left: 16, right: 16 })
-          .backgroundColor(this.isSearching ? ThemeColors.error(this.isDark) : this.primaryColor())
+          .backgroundColor(this.searchMode === 0 && this.isSearching ? ThemeColors.error(this.isDark) : this.primaryColor())
           .borderRadius(20)
           .margin({ left: 8 })
           .onClick(() => {
-            if (this.isSearching) this.stopSearch();
-            else this.doSearch();
+            if (this.searchMode === 0 && this.isSearching) this.stopSearch();
+            else this.submitCurrentSearch_();
           })
       }
       .width('100%')
@@ -1202,6 +1507,8 @@ struct SearchPage {
   @Builder buildBody() {
     if (this.shouldShowSuggestions()) {
       this.buildSuggestionPanel()
+    } else if (this.searchMode === 1) {
+      this.buildOnlineBody_()
     } else if (this.hasSearched || this.isSearching || this.isLoadingMore) {
       Column() {
         this.buildFloatingSummary()
@@ -1241,7 +1548,7 @@ struct SearchPage {
       .backgroundColor(this.bgColor())
     } else {
       List({ space: 0 }) {
-        if (this.bookshelfHints.length > 0) {
+        if (this.searchMode === 0 && this.bookshelfHints.length > 0) {
           ListItem() {
             Row() {
               Text($r('app.string.ui_8986a5a260'))
@@ -1298,6 +1605,17 @@ struct SearchPage {
                 .fontSize(13)
                 .fontColor(this.subTextColor())
                 .layoutWeight(1)
+              Text('收起')
+                .fontSize(12)
+                .fontColor(this.primaryColor())
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .onClick(() => {
+                  this.suppressSearchSuggestions = true;
+                  this.showSuggestions = false;
+                  try {
+                    this.getUIContext().getFocusController().clearFocus();
+                  } catch (_e) { /* ignore */ }
+                })
               Text($r('app.string.ui_2e9ab4934c'))
                 .fontSize(12)
                 .fontColor(ThemeColors.error(this.isDark))
@@ -1335,7 +1653,7 @@ struct SearchPage {
               .onClick(() => {
                 this.keyword = h;
                 this.showSuggestions = false;
-                this.doSearch(h);
+                this.submitCurrentSearch_(h);
               })
             }
           }, (h: string, idx: number): string => h + idx.toString())
@@ -1346,6 +1664,90 @@ struct SearchPage {
       .alignListItem(ListItemAlign.Start)
       .backgroundColor(this.bgColor())
     }
+  }
+
+  @Builder buildOnlineBody_() {
+    Scroll() {
+      Column({ space: 14 }) {
+        Column({ space: 8 }) {
+          Text('在线搜索导入')
+            .width('100%')
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.textColor())
+          Text('输入书名后会在内置浏览器中搜索。请打开具体小说详情页或目录页，再点击“导入当前页”。')
+            .width('100%')
+            .fontSize(14)
+            .lineHeight(21)
+            .fontColor(this.subTextColor())
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding(16)
+        .backgroundColor(this.surfaceColor())
+        .borderRadius(16)
+
+        Row({ space: 10 }) {
+          Text('当前引擎').fontSize(13).fontColor(this.subTextColor())
+          Text(this.onlineEngineName_())
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryColor())
+          Blank()
+          Text('会记住上次选择').fontSize(12).fontColor(this.subTextColor())
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor(this.surfaceAltColor())
+        .borderRadius(14)
+
+        if (this.onlineImporting || this.onlineResultText || this.onlineErrorText) {
+          Column({ space: 10 }) {
+            if (this.onlineImporting) {
+              Row({ space: 10 }) {
+                LoadingProgress().width(24).height(24).color(this.primaryColor())
+                Column({ space: 3 }) {
+                  Text(this.onlinePhaseLabel_())
+                    .width('100%').fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.textColor())
+                  Text(this.onlineProgressText)
+                    .width('100%').fontSize(12).fontColor(this.subTextColor())
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              }.width('100%')
+              if (this.onlineProgressTotal > 0) {
+                Progress({
+                  value: this.onlineProgressCurrent,
+                  total: this.onlineProgressTotal,
+                  type: ProgressType.Linear,
+                }).width('100%').color(this.primaryColor())
+              }
+            }
+            if (this.onlineResultText) {
+              Text(this.onlineResultText).width('100%').fontSize(14).fontColor(this.primaryColor())
+            }
+            if (this.onlineErrorText) {
+              Text(this.onlineErrorText).width('100%').fontSize(14).fontColor(ThemeColors.error(this.isDark))
+            }
+          }
+          .width('100%')
+          .padding(16)
+          .alignItems(HorizontalAlign.Start)
+          .backgroundColor(this.surfaceColor())
+          .borderRadius(16)
+        }
+
+        Text('最近输入会在搜索框获得焦点时显示，可直接点击再次搜索。')
+          .width('100%')
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor(this.subTextColor())
+          .padding({ left: 4, right: 4 })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 18, bottom: 30 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder buildFloatingSummary() {

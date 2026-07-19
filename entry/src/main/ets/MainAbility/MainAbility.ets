@@ -62,6 +62,12 @@ export default class MainAbility extends UIAbility {
     } catch (err) {
       console.warn('[MainAbility] Cookie/LoginInfo store init failed:', err);
     }
+    // 启动时恢复 WebDav 配置（进度同步的前提）
+    try {
+      await WebDavService.getInstance().initFromStorage(this.context);
+    } catch (err) {
+      console.warn('[MainAbility] WebDav config restore failed:', err);
+    }
     // 启动时批量同步云端阅读进度
     this.syncProgressFromCloud();
   }

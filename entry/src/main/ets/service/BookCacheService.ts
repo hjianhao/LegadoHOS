@@ -32,10 +32,12 @@ export interface CacheBookRequest {
   bookUrl: string;
   source: BookSource;
   chapters: CacheChapterItem[];
-  /** 起始章节索引（含，0 基） */
+  /** 起始章节索引（含，0 基）；指定了 indices 时忽略 */
   startIndex: number;
-  /** 结束章节索引（含，0 基） */
+  /** 结束章节索引（含，0 基）；指定了 indices 时忽略 */
   endIndex: number;
+  /** 可选：显式章节索引列表（多选缓存场景），去重排序后生效 */
+  indices?: number[];
   /** 传入则下载期间保持后台运行 */
   context?: common.Context;
   onProgress?: (done: number, total: number, currentTitle: string) => void;
@@ -99,18 +101,25 @@ export class BookCacheService {
   async cacheBook(req: CacheBookRequest): Promise<CacheBookResult | null> {
     if (this.activeTasks_.has(req.bookId)) return null;
 
-    const start = Math.max(0, req.startIndex);
-    const end = Math.min(req.endIndex, req.chapters.length - 1);
     const result: CacheBookResult = { total: 0, skipped: 0, success: 0, failed: 0, cancelled: false };
+    let indices: number[] = [];
+    if (req.indices && req.indices.length > 0) {
+      const set = new Set<number>();
+      for (const i of req.indices) {
+        if (i >= 0 && i < req.chapters.length) set.add(i);
+      }
+      indices = Array.from(set).sort((a: number, b: number): number => a - b);
+    } else {
+      const start = Math.max(0, req.startIndex);
+      const end = Math.min(req.endIndex, req.chapters.length - 1);
+      for (let i = start; i <= end; i++) indices.push(i);
+    }
     console.info('[BookCache] start bookId=' + req.bookId + ' chapters=' + req.chapters.length
-      + ' range=' + start + '-' + end);
-    if (end < start || req.bookId <= 0) {
-      console.warn('[BookCache] invalid request: bookId=' + req.bookId + ' range=' + start + '-' + end);
+      + ' count=' + indices.length);
+    if (indices.length === 0 || req.bookId <= 0) {
+      console.warn('[BookCache] invalid request: bookId=' + req.bookId + ' count=' + indices.length);
       return result;
     }
-
-    const indices: number[] = [];
-    for (let i = start; i <= end; i++) indices.push(i);
     result.total = indices.length;
 
     const task: ActiveTask = { cancelled: false, done: 0, total: indices.length };

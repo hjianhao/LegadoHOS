@@ -35,10 +35,65 @@ export interface EpubJsResult {
 }
 
 let globalController: web_webview.WebviewController | null = null;
+let pendingController: web_webview.WebviewController | null = null;
+let controllerWaiters: Array<(controller: web_webview.WebviewController) => void> = [];
 
-/** 设置全局 WebView 控制器（由 EpubParserWebView 组件调用） */
+/** 新组件开始创建时先使旧 Controller 失效，但不提前暴露尚未关联的 Controller。 */
+export function prepareParserController(controller: web_webview.WebviewController): void {
+  pendingController = controller;
+  globalController = null;
+}
+
+/**
+ * 设置已完成 Web 组件关联的控制器。
+ * 必须仅在 Web.onControllerAttached 中调用，避免 Controller 尚未关联时执行 Web API。
+ */
 export function setParserController(controller: web_webview.WebviewController): void {
+  if (pendingController && pendingController !== controller) {
+    return;
+  }
+  pendingController = null;
   globalController = controller;
+  const waiters = controllerWaiters;
+  controllerWaiters = [];
+  for (const waiter of waiters) {
+    waiter(controller);
+  }
+}
+
+/** 组件销毁时仅清除自身注册的控制器，避免误清除随后创建的新实例。 */
+export function clearParserController(controller: web_webview.WebviewController): void {
+  if (globalController === controller) {
+    globalController = null;
+  }
+  if (pendingController === controller) {
+    pendingController = null;
+  }
+}
+
+/** 等待隐藏 WebView 完成 Controller 关联。 */
+function waitForParserController(timeoutMs: number = 5000): Promise<web_webview.WebviewController> {
+  if (globalController) {
+    return Promise.resolve(globalController);
+  }
+  return new Promise<web_webview.WebviewController>((resolve, reject) => {
+    let settled = false;
+    const waiter = (controller: web_webview.WebviewController): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(controller);
+    };
+    controllerWaiters.push(waiter);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      controllerWaiters = controllerWaiters.filter(
+        (item: (controller: web_webview.WebviewController) => void): boolean => item !== waiter
+      );
+      reject(new Error('EpubParserWebView controller attach timeout'));
+    }, timeoutMs);
+  });
 }
 
 export class EpubJsParser {
@@ -52,10 +107,7 @@ export class EpubJsParser {
   }
 
   async parse(filePath: string): Promise<EpubJsResult> {
-    const controller = globalController;
-    if (!controller) {
-      throw new Error('EpubParserWebView not initialized');
-    }
+    const controller = await waitForParserController();
     return new Promise<EpubJsResult>((resolve, reject) => {
       try {
         const fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);

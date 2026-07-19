@@ -13,6 +13,7 @@ const HUKS_AI_KEY_ALIAS = 'legado_ai_api_key';
 interface EncryptedPayload {
   iv: string;
   ciphertext: string;
+  authTag: string;
 }
 
 /** 可切换的 AI 供应商/模型配置（apiKey 仅在内存中为明文）。 */
@@ -60,7 +61,7 @@ export function upsertAiProfile(profiles: AiProviderProfile[], profile: AiProvid
 export class SettingsStore {
   private static instance: SettingsStore;
   private prefStore_: preferences.Preferences | null = null;
-  private cipher_: cryptoFramework.Cipher | null = null;
+  private cryptoReady_: boolean = false;
   private memoryCache_: Map<string, Object> = new Map();
 
   private constructor() {}
@@ -87,11 +88,12 @@ export class SettingsStore {
 
   private async initCipher_(): Promise<void> {
     try {
-      this.cipher_ = await this.createCipher_(cryptoFramework.CryptoMode.ENCRYPT_MODE);
+      await this.createSymKey_();
+      this.cryptoReady_ = true;
     } catch (_e) {
       /* 降级：明文存储（加密组件不可用时自动回退） */
       console.warn('[SettingsStore] HUKS init failed, falling back to plaintext');
-      this.cipher_ = null;
+      this.cryptoReady_ = false;
     }
   }
 
@@ -106,6 +108,16 @@ export class SettingsStore {
       return cipher;
     } catch (err) {
       throw new Error('[SettingsStore] create cipher failed: ' + (err as Error).message);
+    }
+  }
+
+  private async createSymKey_(): Promise<cryptoFramework.SymKey> {
+    try {
+      const symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
+      const keyData = await this.getEncKeyMaterial_();
+      return await symKeyGenerator.convertKey({ data: keyData });
+    } catch (e) {
+      throw new Error('[SettingsStore] create symmetric key failed: ' + (e as Error).message);
     }
   }
 
@@ -152,20 +164,32 @@ export class SettingsStore {
     }
   }
 
-  /** 加密字符串 → base64{iv}:base64{ciphertext} */
+  /** 使用显式随机 IV 的 AES-GCM 加密，格式为 v2:{iv}:{ciphertext}:{authTag}。 */
   private async encrypt_(plaintext: string): Promise<string> {
-    if (!this.cipher_) return plaintext;
+    if (!this.cryptoReady_) return plaintext;
     try {
-      // Cipher.doFinal 后实例不可安全复用；每个 Key 使用独立加密实例。
-      const cipher = await this.createCipher_(cryptoFramework.CryptoMode.ENCRYPT_MODE);
+      const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS7');
+      const symKey = await this.createSymKey_();
+      const randomData = await cryptoFramework.createRandom().generateRandom(12);
+      const params: cryptoFramework.GcmParamsSpec = {
+        algName: 'GcmParamsSpec',
+        iv: { data: randomData.data },
+        aad: { data: new Uint8Array(0) },
+        authTag: { data: new Uint8Array(0) },
+      };
+      await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, params);
       const plainBytes = new Uint8Array(plaintext.length);
       for (let i = 0; i < plaintext.length; i++) {
         plainBytes[i] = plaintext.charCodeAt(i) & 0xFF;
       }
-      const encrypted = await cipher.doFinal({ data: plainBytes });
-      // iv 和 ciphertext 拼接在一起存储
-      const result = Array.from(encrypted.data);
-      return this.bytesToBase64_(result);
+      const encrypted = await cipher.update({ data: plainBytes });
+      const tag = await cipher.doFinal(null);
+      const payload: EncryptedPayload = {
+        iv: this.bytesToBase64_(Array.from(randomData.data)),
+        ciphertext: this.bytesToBase64_(Array.from(encrypted.data)),
+        authTag: this.bytesToBase64_(Array.from(tag.data)),
+      };
+      return 'v2:' + payload.iv + ':' + payload.ciphertext + ':' + payload.authTag;
     } catch (_e) {
       console.warn('[SettingsStore] Encrypt failed, storing plaintext');
       return plaintext;
@@ -175,7 +199,33 @@ export class SettingsStore {
   /** 解密 base64 → 明文 */
   private async decrypt_(encoded: string): Promise<string> {
     if (!encoded) return encoded;
+    if (encoded.startsWith('v2:')) {
+      try {
+        const parts = encoded.split(':');
+        if (parts.length !== 4) return '';
+        const payload: EncryptedPayload = { iv: parts[1], ciphertext: parts[2], authTag: parts[3] };
+        const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS7');
+        const symKey = await this.createSymKey_();
+        const params: cryptoFramework.GcmParamsSpec = {
+          algName: 'GcmParamsSpec',
+          iv: { data: new Uint8Array(this.base64ToBytes_(payload.iv)) },
+          aad: { data: new Uint8Array(0) },
+          authTag: { data: new Uint8Array(this.base64ToBytes_(payload.authTag)) },
+        };
+        await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
+        const updated = await cipher.update({ data: new Uint8Array(this.base64ToBytes_(payload.ciphertext)) });
+        const finalData = await cipher.doFinal(null);
+        const bytes = Array.from(updated.data).concat(Array.from(finalData.data));
+        let result = '';
+        for (let i = 0; i < bytes.length; i++) result += String.fromCharCode(bytes[i]);
+        return result;
+      } catch (_e) {
+        console.warn('[SettingsStore] Decrypt v2 failed');
+        return '';
+      }
+    }
     try {
+      // 兼容旧版本未带格式前缀的密文；成功读取后，下次保存会自动升级为 v2。
       // 创建解密专用的 Cipher 实例
       const cipher = await this.createCipher_(cryptoFramework.CryptoMode.DECRYPT_MODE);
       const bytes = this.base64ToBytes_(encoded);
@@ -186,8 +236,9 @@ export class SettingsStore {
       }
       return result;
     } catch (_e) {
-      console.warn('[SettingsStore] Decrypt failed, returning raw');
-      return encoded;
+      // 加密组件不可用时旧版本可能曾降级为明文；只保留明显不是 Base64 密文的值。
+      console.warn('[SettingsStore] Legacy decrypt failed');
+      return /^[A-Za-z0-9+/]+={0,2}$/.test(encoded) ? '' : encoded;
     }
   }
 

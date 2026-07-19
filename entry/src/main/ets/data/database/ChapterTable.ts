@@ -1,5 +1,6 @@
 import relationalStore from '@ohos.data.relationalStore';
 import { BookChapter, createDefaultChapter } from '../../model/BookChapter';
+import { BookSourceChapter } from '../../model/BookSource';
 import { RdbUtil } from './RdbUtil';
 
 export const ChapterTableCreate = `
@@ -111,6 +112,32 @@ export class ChapterTable {
     try { while (RdbUtil.next(rs)) { count++; } } catch (_catchErr) {}
     RdbUtil.close(rs);
     return count;
+  }
+
+  /** 整书目录落库，按规范化 URL 保留阅读、缓存、下载及音频状态。 */
+  async replaceTocPreserveContent(bookId: number, chapters: BookSourceChapter[]): Promise<void> {
+    const oldChapters = await this.getChaptersByBookId(bookId);
+    const oldByUrl = new Map<string, BookChapter>();
+    for (const old of oldChapters) {
+      const key = (old.url || '').replace(/#.*$/, '');
+      if (key) oldByUrl.set(key, old);
+    }
+    await this.deleteChaptersByBookId(bookId);
+    const now = Date.now();
+    const newChapters: BookChapter[] = chapters.map((ch: BookSourceChapter, idx: number): BookChapter => {
+      const key = (ch.url || '').replace(/#.*$/, '');
+      const old = oldByUrl.get(key);
+      const item = old || createDefaultChapter();
+      item.id = 0;
+      item.bookId = bookId;
+      item.index = ch.index >= 0 ? ch.index : idx;
+      item.title = ch.title || '';
+      item.url = key;
+      item.createTime = old ? old.createTime : now;
+      item.updateTime = now;
+      return item;
+    });
+    await this.insertChapters(newChapters);
   }
 
   private toChapters(rs: relationalStore.ResultSet): BookChapter[] {

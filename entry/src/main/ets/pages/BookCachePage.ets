@@ -13,6 +13,7 @@ import { BookChapter } from '../model/BookChapter';
 import { BookSource } from '../model/BookSource';
 import { BookCover } from '../components/BookCover';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
+import { BookSourceResolver } from '../service/BookSourceResolver';
 import { LocalBookEngine } from '../engine/book/LocalBookEngine';
 import { ExportBookDialog } from '../components/ExportBookDialog';
 import { UiUtil } from '../util/UiUtil';
@@ -151,9 +152,7 @@ struct BookCachePage {
   private async resolveAndCache(book: Book): Promise<void> {
     try {
       const db = AppDatabase.getInstance().rdbStore;
-      const sources = await new BookSourceTable(db).getAllSources();
-      const source = sources.find((s: BookSource): boolean =>
-        s.sourceUrl === book.originUrl || s.sourceName === book.origin);
+      const source = await BookSourceResolver.resolve(book);
       console.info('[BookCachePage] source=' + (source ? source.sourceName : 'null')
         + ' book.originUrl=' + book.originUrl + ' book.origin=' + book.origin);
       if (!source) {

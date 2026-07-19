@@ -386,8 +386,19 @@ export struct LkongExplorePage {
 
   private openSearch(book: LkongBookRecommendation): void {
     const keyword = book.author ? book.name + ' ' + book.author : book.name;
-    UiUtil.pushUrl(this.getUIContext(), {
-      url: 'pages/SearchPage', params: { key: keyword, bookName: book.name, author: book.author }
+    UiUtil.showDialog(this.getUIContext(), {
+      title: '搜索《' + book.name + '》',
+      message: '请选择搜索方式',
+      buttons: [
+        { text: '书源搜索', color: ThemeColors.primary(this.isDark) },
+        { text: '在线搜索', color: ThemeColors.primary(this.isDark) }
+      ]
+    }).then((result): void => {
+      if (result.index < 0 || result.index > 1) return;
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/SearchPage', params: { key: keyword, bookName: book.name, author: book.author,
+          searchMode: result.index === 1 ? 'online' : 'source' }
+      });
     });
   }
 

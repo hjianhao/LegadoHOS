@@ -50,6 +50,11 @@ export struct EpubWebView {
   private callbacks: EpubReaderCallbacks = {};
   /** 事件轮询定时器 */
   private pollTimer_: number | null = null;
+  /** Controller 只有在 Web.onControllerAttached 后才可调用 Web API */
+  private controllerAttached_: boolean = false;
+  /** 资源准备可能早于 Web 组件关联，暂存待加载地址 */
+  private pendingUrl_: string = '';
+  private componentActive_: boolean = false;
   /** 主题配置 */
   @State private bgColor: string = ThemeColors.readingBackgroundDefault();
   @State private textColor: string = ThemeColors.readingTextDefault();
@@ -57,8 +62,15 @@ export struct EpubWebView {
   @State private fontFamily: string = "'PingFang SC', 'Noto Sans SC', serif";
   @State private lineHeight: number = 1.8;
 
+  aboutToAppear(): void {
+    this.componentActive_ = true;
+  }
+
   aboutToDisappear(): void {
+    this.componentActive_ = false;
     this.stopPoll_();
+    this.controllerAttached_ = false;
+    this.pendingUrl_ = '';
   }
 
   /** 加载 EPUB 文件 */
@@ -112,6 +124,15 @@ export struct EpubWebView {
         .javaScriptAccess(true)
         .domStorageAccess(true)
         .mixedMode(MixedMode.All)
+        .onControllerAttached(() => {
+          if (!this.componentActive_) return;
+          this.controllerAttached_ = true;
+          if (this.pendingUrl_) {
+            const url = this.pendingUrl_;
+            this.pendingUrl_ = '';
+            this.loadUrlWhenAttached_(url);
+          }
+        })
         .onPageEnd(() => {
           if (this.epubPath) {
             this.loadEpubInWebView_(this.epubPath);
@@ -124,6 +145,7 @@ export struct EpubWebView {
   // ==================== 内部方法 ====================
 
   private runJs_(code: string): void {
+    if (!this.controllerAttached_) return;
     try {
       this.controller.runJavaScript(code);
     } catch (_e) { /* WebView not ready */ }
@@ -153,9 +175,22 @@ export struct EpubWebView {
       }
 
       // 加载 WebView
-      this.controller.loadUrl('file://' + epubDir + '/epub-reader.html');
+      this.loadUrlWhenAttached_('file://' + epubDir + '/epub-reader.html');
     } catch (e) {
       console.error('[EpubWebView] prepare error:', e);
+    }
+  }
+
+  private loadUrlWhenAttached_(url: string): void {
+    if (!this.componentActive_) return;
+    if (!this.controllerAttached_) {
+      this.pendingUrl_ = url;
+      return;
+    }
+    try {
+      this.controller.loadUrl(url);
+    } catch (e) {
+      console.error('[EpubWebView] loadUrl error:', e);
     }
   }
 
@@ -173,6 +208,7 @@ export struct EpubWebView {
   private startPoll_(): void {
     this.stopPoll_();
     this.pollTimer_ = setInterval(() => {
+      if (!this.controllerAttached_) return;
       try {
         this.controller.runJavaScript('window.pollEvent()', (err: BusinessError, result: string) => {
           if (result && result !== 'null') {

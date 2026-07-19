@@ -34,6 +34,16 @@ export class BookmarkTable {
     return this.toBookmarks(rs);
   }
 
+  /** 全部书签（按书名/章节/位置排序，供全局书签列表） */
+  async getAll(): Promise<Bookmark[]> {
+    const predicates = new relationalStore.RdbPredicates(BookmarkTable.TABLE_NAME);
+    predicates.orderByAsc('book_name');
+    predicates.orderByAsc('chapter_index');
+    predicates.orderByAsc('chapter_pos');
+    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
+    return this.toBookmarks(rs);
+  }
+
   async insert(bookmark: Bookmark): Promise<number> {
     return await RdbUtil.insert(this.rdbStore, BookmarkTable.TABLE_NAME, {
       'book_id': bookmark.bookId,
@@ -47,6 +57,22 @@ export class BookmarkTable {
       'create_time': bookmark.createTime,
       'update_time': bookmark.updateTime,
     });
+  }
+
+  async update(bookmark: Bookmark): Promise<void> {
+    const p = new relationalStore.RdbPredicates(BookmarkTable.TABLE_NAME);
+    p.equalTo('id', bookmark.id);
+    await RdbUtil.update(this.rdbStore, {
+      'book_id': bookmark.bookId,
+      'book_name': bookmark.bookName,
+      'book_author': bookmark.bookAuthor,
+      'chapter_index': bookmark.chapterIndex,
+      'chapter_name': bookmark.chapterName,
+      'chapter_pos': bookmark.chapterPos,
+      'text': bookmark.text,
+      'note': bookmark.note,
+      'update_time': bookmark.updateTime,
+    }, p);
   }
 
   async delete(id: number): Promise<void> {

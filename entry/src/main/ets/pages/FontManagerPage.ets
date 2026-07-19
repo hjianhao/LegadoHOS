@@ -12,6 +12,7 @@ import { UiUtil } from '../util/UiUtil';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import picker from '@ohos.file.picker';
 import common from '@ohos.app.ability.common';
+import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
@@ -45,6 +46,7 @@ struct FontManagerPage {
     Column() {
       // 顶部导航栏
       Row() {
+        AppBackButton({ onBack: () => { UiUtil.back(this.getUIContext()); } })
         Text($r('app.string.ui_4831ec355a')).fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
 
@@ -80,8 +82,9 @@ struct FontManagerPage {
             .onClick(() => { this.importFont(); })
         }
       }
-      .width('100%').height(52).padding({ left: 16, right: 16 })
+      .width('100%').height(56).padding({ left: 4, right: 12 })
       .backgroundColor(ThemeColors.surface(this.isDark))
+      .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       // 字体列表
       if (this.fontList.length === 0) {
