@@ -802,7 +802,9 @@ ${truncated}`;
   /** 从规则构造 BookSource */
   private buildSource_(url: string, rules: AiRules): BookSource {
     const src = createEmptyBookSource();
-    src.sourceUrl = url;
+    // sourceUrl 表示书源站点，而不是某一本书的详情页地址。
+    // 书籍详情页和目录页分别由 bookUrl/originUrl 与 ruleTocUrl 保存。
+    src.sourceUrl = this.extractOrigin_(url);
     src.enabled = true;
     src.isAiGenerated = true;
     src.ruleTocUrl = rules.tocUrl || url;
@@ -853,10 +855,17 @@ ${truncated}`;
 
     try {
       db.beginTransaction();
-      // 清理旧版对同一网址误建的 AI 书源；新版不再持久化临时规则。
-      const sameUrlSources = await sourceDao.getSourcesByUrl(source.sourceUrl);
-      for (const oldSource of sameUrlSources) {
-        if (oldSource.isAiGenerated) await sourceDao.deleteSource(oldSource.id);
+      // 清理旧版误建的 AI 书源。旧版 sourceUrl 使用书籍详情页，新版使用站点根地址。
+      const obsoleteSources = await sourceDao.getSourcesByUrl(source.sourceUrl);
+      if (bookUrl !== source.sourceUrl) {
+        obsoleteSources.push(...await sourceDao.getSourcesByUrl(bookUrl));
+      }
+      const deletedSourceIds = new Set<number>();
+      for (const oldSource of obsoleteSources) {
+        if (oldSource.isAiGenerated && !deletedSourceIds.has(oldSource.id)) {
+          await sourceDao.deleteSource(oldSource.id);
+          deletedSourceIds.add(oldSource.id);
+        }
       }
 
       if (!book) {

@@ -18,6 +18,8 @@ import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { PageViewConfig, PageTurnAnim } from '../components/reader/PageView';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
+import { ReadTopMenu } from '../components/reader/ReadTopMenu';
+import { ReadProgressBar } from '../components/reader/ReadProgressBar';
 import { StylePanel } from '../components/reader/StylePanel';
 import { ThemeColors } from '../theme/ThemeColors';
 import { UiUtil } from '../util/UiUtil';
@@ -235,11 +237,11 @@ struct ReaderPage {
     this.pageActive_ = true;
     await this.initFonts_();
     this.startLoad_();
-    this.setSystemBarVisible_(false);
+    this.setSystemBarVisible_(true, false);
   }
 
   onPageShow(): void {
-    this.setSystemBarVisible_(false);
+    this.setSystemBarVisible_(true, false);
     this.reloadFollowThemeSetting_();
     this.refreshFonts_();
   }
@@ -290,13 +292,13 @@ struct ReaderPage {
     this.setSystemBarVisible_(true);
   }
 
-  private async setSystemBarVisible_(visible: boolean): Promise<void> {
+  private async setSystemBarVisible_(visible: boolean, showNavigation: boolean = true): Promise<void> {
     try {
       const context = UiUtil.getHostContext(this.getUIContext());
       if (!context) return;
       const win: window.Window = await window.getLastWindow(context);
       if (visible) {
-        await win.setWindowSystemBarEnable(['status', 'navigation']);
+        await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
@@ -1578,57 +1580,41 @@ struct ReaderPage {
   @Builder
   MenuLayer() {
     Column() {
-      Row() {
-        Button($r('app.string.common_back'))
-          .fontSize(14)
-          .fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-          .onClick(() => UiUtil.back(this.getUIContext()))
-        Column() {
-          Text(this.bookName)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(this.currentTitle)
-            .fontSize(11)
-            .fontColor(ThemeColors.secondaryText(this.isDark))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Center)
-        Text(this.pageText)
-          .fontSize(12)
-          .fontColor(ThemeColors.secondaryText(this.isDark))
-          .width(52)
-          .textAlign(TextAlign.End)
-      }
-      .height(56)
-      .width('100%')
-      .padding({ left: 12, right: 12 })
-      .backgroundColor(ThemeColors.surface(this.isDark))
-
-      Blank().layoutWeight(1).onClick(() => { this.showMenu = false; })
-
-      ReadBottomMenu({
-        isLocalBook: true,
-        onToc: () => { this.showMenu = false; this.showToc = true; },
-        onReadAloud: () => {
+      ReadTopMenu({
+        bookName: this.bookName,
+        chapterTitle: this.currentTitle + (this.pageText ? ' · ' + this.pageText : ''),
+        chapterUrl: this.chapters_[this.currentIndex]?.url || this.currentHref_ || this.bookUrl_,
+        sourceName: this.book_?.origin || '本地书籍',
+        onBack: () => { UiUtil.back(this.getUIContext()); },
+        onSearch: () => {
           this.showMenu = false;
-          this.prepareAloudPanel_();
+          UiUtil.showToast(this.getUIContext(), { message: '页内搜索开发中', duration: 1200 });
         },
         onBookmark: () => {
           this.showMenu = false;
           UiUtil.showToast(this.getUIContext(), { message: '书签功能开发中', duration: 1200 });
         },
+      })
+
+      Blank().layoutWeight(1).onClick(() => { this.showMenu = false; })
+
+      ReadProgressBar({
+        currentIndex: this.currentIndex,
+        total: (this.isMobi_ || this.isPdf_) && this.tocItems.length > 0
+          ? this.tocItems.length : this.chapters_.length,
+        onPrevious: () => { this.showMenu = false; this.goToChapterIndex_(this.currentIndex - 1); },
+        onNext: () => { this.showMenu = false; this.goToChapterIndex_(this.currentIndex + 1); },
+        onSeek: (index: number) => { this.showMenu = false; this.goToChapterIndex_(index); },
+      })
+
+      ReadBottomMenu({
+        onToc: () => { this.showMenu = false; this.showToc = true; },
+        onReadAloud: () => {
+          this.showMenu = false;
+          this.prepareAloudPanel_();
+        },
         onStyle: () => { this.showMenu = false; this.showStyle = true; },
         onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
-        onSearch: () => {
-          this.showMenu = false;
-          UiUtil.showToast(this.getUIContext(), { message: '页内搜索开发中', duration: 1200 });
-        },
       })
     }
     .width('100%')

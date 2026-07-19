@@ -72,7 +72,7 @@ struct ComicReadPage {
   @State loadError: string = '';
 
   // UI 状态
-  @State @Watch('onShowMenuChange_') showMenu: boolean = false;
+  @State showMenu: boolean = false;
   @State readMode: number = READ_MODE_WEBTOON;
   @State singlePageMode: boolean = false;  // 单页全屏开关（独立于阅读方向）
   @State currentPageIndex: number = 0;
@@ -143,8 +143,8 @@ struct ComicReadPage {
     if (p['durChapterIndex'] !== undefined) this.targetIdx_ = Number(p['durChapterIndex']);
     // 加载阅读模式和触控配置
     this.loadSettings();
-    // 进入沉浸式模式（隐藏状态栏和导航栏）
-    this.setSystemBarVisible_(false);
+    // 保留系统栏，避免菜单显隐引起漫画可用区域跳动。
+    this.setSystemBarVisible_(true, false);
   }
 
   private async loadSettings(): Promise<void> {
@@ -681,19 +681,14 @@ struct ComicReadPage {
     this.setSystemBarVisible_(true);
   }
 
-  /** showMenu 变化时自动同步系统栏：菜单显示→恢复状态栏，菜单隐藏→进入沉浸式 */
-  private onShowMenuChange_(): void {
-    this.setSystemBarVisible_(this.showMenu);
-  }
-
-  /** 控制系统栏显示/隐藏 */
-  private async setSystemBarVisible_(visible: boolean): Promise<void> {
+  /** 阅读时只显示状态栏；离开阅读页时恢复状态栏和系统导航栏。 */
+  private async setSystemBarVisible_(visible: boolean, showNavigation: boolean = true): Promise<void> {
     try {
       const ctx = UiUtil.getHostContext(this.getUIContext());
       if (!ctx) return;
       const win: window.Window = await window.getLastWindow(ctx);
       if (visible) {
-        await win.setWindowSystemBarEnable(['status', 'navigation']);
+        await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
@@ -874,7 +869,7 @@ struct ComicReadPage {
         break;
       case ClickAction.MENU:
         this.showMenu = !this.showMenu;
-        // 菜单显示时暂停自动阅读（状态栏由 @Watch onShowMenuChange_ 自动同步）
+        // 菜单显示时暂停自动阅读；系统栏保持常驻，阅读区域尺寸不变。
         if (this.showMenu) {
           this.stopAutoRead();
         }

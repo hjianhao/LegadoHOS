@@ -14,6 +14,8 @@ import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../compon
 import { ClickAction, DEFAULT_ZONE_ACTIONS } from '../components/reader/ClickAction';
 import { StylePanel } from '../components/reader/StylePanel';
 import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
+import { ReadTopMenu } from '../components/reader/ReadTopMenu';
+import { ReadProgressBar } from '../components/reader/ReadProgressBar';
 import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
 import { HtmlUtil } from '../util/HtmlUtil';
@@ -32,7 +34,7 @@ import { BookChapter } from '../model/BookChapter';
 import { Book } from '../model/Book';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
-import { ChangeSourceSheet, ChapterPickSheet, OptionSelectSheet } from '../components/BookInfoSheets';
+import { ChangeSourceSheet, ChapterPickSheet, OptionItem, OptionSelectSheet } from '../components/BookInfoSheets';
 import * as ChapterMatcher from '../util/ChapterMatcher';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
@@ -91,7 +93,7 @@ struct ReadPage {
   private measureCharW_: number = 0;
   private measureLineH_: number = 0;
   private measureUtil_: MeasureUtils | null = null;
-  @State @Watch('onShowMenuChange_') showMenu: boolean = false;
+  @State showMenu: boolean = false;
   @State showStyle: boolean = false;
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
@@ -184,8 +186,8 @@ struct ReadPage {
 	    this.initFonts();
 	    // 先加载设置，确保首次渲染使用用户配置的样式（而非默认值再切换）
 	    await this.loadSettings();
-	    // 进入沉浸式模式（隐藏状态栏和导航栏）
-	    this.setSystemBarVisible_(false);
+	    // 阅读页保留系统栏，避免调出菜单时可用高度变化导致正文跳动。
+	    this.setSystemBarVisible_(true, false);
 	    // 初始化测量工具
 	    try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
 	    // 云端同步（异步，不阻塞主流程）
@@ -275,8 +277,8 @@ struct ReadPage {
   }
 
   onPageShow(): void {
-    // 从其他页面返回时重新进入沉浸式
-    this.setSystemBarVisible_(false);
+    // 始终保留系统栏，保证阅读区域尺寸稳定。
+    this.setSystemBarVisible_(true, false);
     this.reloadFollowThemeSetting();
     // 刷新字体列表（从字体管理页返回时可能有变化）
     this.fontList = FontManager.getInstance().getAllFonts();
@@ -1055,19 +1057,14 @@ struct ReadPage {
     this.setSystemBarVisible_(true);
   }
 
-  /** showMenu 变化时自动同步系统栏：菜单显示->恢复状态栏，菜单隐藏->进入沉浸式 */
-  private onShowMenuChange_(): void {
-    this.setSystemBarVisible_(this.showMenu);
-  }
-
-  /** 控制系统栏显示/隐藏 */
-  private async setSystemBarVisible_(visible: boolean): Promise<void> {
+  /** 阅读时只显示状态栏；离开阅读页时恢复状态栏和系统导航栏。 */
+  private async setSystemBarVisible_(visible: boolean, showNavigation: boolean = true): Promise<void> {
     try {
       const ctx = UiUtil.getHostContext(this.getUIContext());
       if (!ctx) return;
       const win: window.Window = await window.getLastWindow(ctx);
       if (visible) {
-        await win.setWindowSystemBarEnable(['status', 'navigation']);
+        await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
@@ -1683,6 +1680,56 @@ struct ReadPage {
     this.optionDlg.open();
   }
 
+  private currentChapterUrl_(): string {
+    return this.allChapters_[this.currentIndex]?.url || this.bookUrl || '';
+  }
+
+  private currentSourceName_(): string {
+    return this.source_?.sourceName || this.origin || (this.isLocalBook_ ? '本地书籍' : '未知书源');
+  }
+
+  /** 顶部“更多”承载低频阅读工具，底部只保留高频入口。 */
+  private showReadToolsMenu_(): void {
+    this.showMenu = false;
+    const options: OptionItem[] = [];
+    if (!this.isLocalBook_) {
+      options.push({
+        title: '更换书源',
+        description: '为整本书选择其他书源',
+        action: () => { this.openSourceSheet(false); }
+      });
+      options.push({
+        title: '缓存章节',
+        description: '缓存当前章节附近或整本书',
+        action: () => { this.showCacheDialog = true; }
+      });
+    }
+    options.push({
+      title: '刷新当前章',
+      description: '重新加载当前章节内容',
+      action: () => {
+        this.loadChapter(this.currentIndex, true);
+        UiUtil.showToast(this.getUIContext(), { message: '已刷新', duration: 1500 });
+      }
+    });
+    options.push({
+      title: '替换净化',
+      description: '切换净化状态或管理替换规则',
+      action: () => { setTimeout((): void => { this.showReplaceRuleMenu_(); }, 120); }
+    });
+    this.optionDlg = new CustomDialogController({
+      builder: OptionSelectSheet({
+        controller: this.optionDlg!,
+        title: '更多阅读工具',
+        options: options
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.optionDlg.open();
+  }
+
   /** 切换替换净化全局开关：写入设置并立即用原文重排当前章（不重抓网络、不清缓存） */
   private async toggleReplaceEnabled_(): Promise<void> {
     this.replaceEnabled_ = !this.replaceEnabled_;
@@ -2035,20 +2082,33 @@ struct ReadPage {
       }
       if (this.showMenu) {
         Column() {
+          ReadTopMenu({
+            bookName: this.bookName,
+            chapterTitle: this.displayTitle_,
+            chapterUrl: this.currentChapterUrl_(),
+            sourceName: this.currentSourceName_(),
+            onBack: () => { UiUtil.back(this.getUIContext()); },
+            onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
+            onBookmark: () => { this.showMenu = false; this.addBookmark_(); },
+            onMore: () => { this.showReadToolsMenu_(); },
+          })
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
+          ReadProgressBar({
+            currentIndex: this.currentIndex,
+            total: this.totalChapters_,
+            onPrevious: () => { this.showMenu = false; this.onPrevChapter(); },
+            onNext: () => { this.showMenu = false; this.onNextChapter(); },
+            onSeek: (index: number) => {
+              this.showMenu = false;
+              this.pageIndex = 0;
+              this.loadChapter(index);
+            },
+          })
           ReadBottomMenu({
-            isLocalBook: this.isLocalBook_,
             onToc: () => { this.showMenu = false; this.onOpenToc(); },
             onReadAloud: () => { this.showMenu = false; if (!this.aloudEngine_) { UiUtil.showToast(this.getUIContext(), {message:'请先加载章节内容',duration:1500}); return; } this.showAloud = true; },
-            onBookmark: () => { this.showMenu = false; this.addBookmark_(); },
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
-            onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
-            onReplaceRule: () => { this.showReplaceRuleMenu_(); },
-            onSource: () => { this.showMenu = false; this.openSourceSheet(false); },
-            onSourceLongPress: () => { this.showChangeSourceMenu_(); },
-            onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
-	            onRefresh: () => { this.showMenu = false; this.loadChapter(this.currentIndex, true); UiUtil.showToast(this.getUIContext(), {message:'已刷新',duration:1500}); },
           })
         }.width('100%').height('100%')
       }

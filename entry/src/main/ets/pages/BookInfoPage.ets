@@ -20,7 +20,8 @@ import {
   ChangeSourceSheet,
   GroupSelectSheet,
   BookReadRecordSheet,
-  RemarkEditDialog
+  RemarkEditDialog,
+  EditBookInfoDialog
 } from '../components/BookInfoSheets';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -78,6 +79,7 @@ struct BookInfoPage {
   private groupDlg?: CustomDialogController;
   private readRecordDlg?: CustomDialogController;
   private remarkDlg?: CustomDialogController
+  private editInfoDlg?: CustomDialogController
   private loginDlg?: CustomDialogController
 
   aboutToAppear(): void {
@@ -1071,6 +1073,52 @@ struct BookInfoPage {
     this.remarkDlg.open();
   }
 
+  showEditInfoDialog(): void {
+    this.editInfoDlg = new CustomDialogController({
+      builder: EditBookInfoDialog({
+        controller: this.editInfoDlg!,
+        editName: this.bookName,
+        editAuthor: this.bookAuthor,
+        onConfirm: (name: string, author: string) => {
+          this.saveBookInfo(name, author);
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      customStyle: true
+    });
+    this.editInfoDlg.open();
+  }
+
+  private async saveBookInfo(name: string, author: string): Promise<void> {
+    if (!name.trim()) {
+      UiUtil.showToast(this.getUIContext(), { message: '书名不能为空', duration: 1500 });
+      return;
+    }
+    this.bookName = name.trim();
+    this.bookAuthor = author.trim();
+    // 书架中的书，同步更新数据库
+    if (this.isInShelf && this.bookId > 0) {
+      try {
+        await AppDatabase.getInstance().waitForInit();
+        const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
+        const book = await bookTable.getBookById(this.bookId);
+        if (book) {
+          book.name = this.bookName;
+          book.author = this.bookAuthor;
+          book.updateTime = Date.now();
+          await bookTable.updateBook(book);
+          AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+        }
+      } catch (e) {
+        console.warn('[BookInfo] Failed to save book info:', (e as Error).message);
+        UiUtil.showToast(this.getUIContext(), { message: '保存失败', duration: 1500 });
+        return;
+      }
+    }
+    UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
+  }
+
   openToc(): void {
     const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
     UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: {
@@ -1493,6 +1541,7 @@ struct BookInfoPage {
       this.buildMenuItem('换封面', () => { this.showMoreMenu = false; this.showCoverSheet(); })
       this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })
       this.buildMenuItem('备注', () => { this.showMoreMenu = false; this.showRemarkDialog(); })
+      this.buildMenuItem('编辑', () => { this.showMoreMenu = false; this.showEditInfoDialog(); })
       if (this.isInShelf) {
         this.buildMenuItem('导出', () => { this.showMoreMenu = false; this.showExportDialog = true; })
         this.buildMenuItem('清缓存', () => { this.showMoreMenu = false; this.clearCache(); })

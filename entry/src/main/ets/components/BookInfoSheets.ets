@@ -902,6 +902,64 @@ export struct BookReadRecordSheet {
 }
 
 // =====================================================================
+// EditBookInfoDialog — 编辑书名/作者弹窗
+// =====================================================================
+@CustomDialog
+export struct EditBookInfoDialog {
+  controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
+  @State editName: string = '';
+  @State editAuthor: string = '';
+  onConfirm?: (name: string, author: string) => void;
+
+  build() {
+    Column() {
+      Row() {
+        Text('编辑书籍信息').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
+        Blank()
+        Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
+          .width(40).height(40).backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
+      }
+      .width('100%').padding({ left: 16, right: 8, top: 16, bottom: 8 })
+
+      Column() {
+        Text('书名')
+          .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          .width('100%').padding({ left: 4, bottom: 4 })
+        TextInput({ text: this.editName, placeholder: '输入书名' })
+          .width('100%').height(48).fontSize(16)
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .borderRadius(12).padding({ left: 12, right: 12 })
+          .onChange((value: string): void => { this.editName = value; })
+
+        Text('作者')
+          .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+          .width('100%').padding({ left: 4, bottom: 4, top: 12 })
+        TextInput({ text: this.editAuthor, placeholder: '输入作者' })
+          .width('100%').height(48).fontSize(14)
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .borderRadius(12).padding({ left: 12, right: 12 })
+          .onChange((value: string): void => { this.editAuthor = value; })
+      }
+      .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+
+      Button($r('app.string.common_save')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
+        .backgroundColor(ThemeColors.primary(this.isDark)).width('100%').height(44)
+        .borderRadius(0)
+        .margin({ top: 4 })
+        .onClick(() => {
+          if (this.onConfirm) this.onConfirm(this.editName, this.editAuthor);
+          this.controller.close();
+        })
+    }
+    .width('100%').height(280).constraintSize({ maxWidth: 640, maxHeight: '70%' })
+    .backgroundColor(ThemeColors.surface(this.isDark))
+    .borderRadius({ topLeft: 16, topRight: 16 })
+  }
+}
+
+// =====================================================================
 // RemarkEditDialog — 编辑备注弹窗
 // =====================================================================
 @CustomDialog
