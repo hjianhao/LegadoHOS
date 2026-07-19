@@ -2,7 +2,7 @@
 
 > **目标读者**：AI Agent / LLM / 后续开发者
 > **编写原则**：结构化的架构、模块划分、数据流描述，减少歧义，便于 AI 理解和维护
-> **更新日期**：2026-07-18（全面审计：新增 RSS/AI/分组/朗读/WebViewFetcher/TTS 后端/PDF/漫画等模块）
+> **更新日期**：2026-07-19（补充在线搜索/URL→WebView 确认→AI 单书导入→缓存/刷新的总体设计）
 
 ---
 
@@ -45,9 +45,9 @@ LegadoHOS/
 │   │       │   └── MyApplication.ts
 │   │       ├── MainAbility/           # UIAbility 入口
 │   │       │   └── MainAbility.ts
-│   │       ├── model/                 # 数据模型（15 个文件）
+│   │       ├── model/                 # 数据模型（含 AiBookProfile 单书解析档案）
 │   │       ├── data/                  # 数据层
-│   │       │   ├── database/          # 数据库 Dao（14 个表类 / 17 张表）
+│   │       │   ├── database/          # 数据库 Dao（18 张核心表）
 │   │       │   ├── preferences/       # 偏好设置（SettingsStore / GlobalConfig）
 │   │       │   └── repository/        # 仓储（组合 Dao 的高阶操作）
 │   │       ├── engine/                # ★ 引擎层（核心逻辑）
@@ -59,7 +59,7 @@ LegadoHOS/
 │   │       │   ├── download/          # 下载
 │   │       │   ├── web/               # Web 服务 + WebView 取内容
 │   │       │   ├── rss/               # RSS 解析引擎（3 个文件）
-│   │       │   ├── ai/                # AI 书源生成
+│   │       │   ├── ai/                # AI 书源生成 + 在线单书导入
 │   │       │   └── translation/       # 翻译
 │   │       ├── service/               # 后台服务（9 个）
 │   │       ├── pages/                 # 页面（49 个 .ets/.ts 文件）
@@ -92,7 +92,7 @@ ets/
 ├── MainAbility/MainAbility.ts         # UIAbility：生命周期管理，加载首页
 ├── model/                             # 纯数据模型（16 个文件）
 ├── data/
-    │   ├── database/                      # Dao 层：12 个表类 + RdbUtil + AppDatabase，管理 17 张 SQL 表
+    │   ├── database/                      # Dao 层：Table 类 + RdbUtil + AppDatabase，管理 18 张核心表
 │   │   ├── AppDatabase.ts             # 单例数据库管理器（建表 + 迁移）
 │   │   ├── BookTable.ts               # 书籍表
 │   │   ├── ChapterTable.ts            # 章节表
@@ -106,6 +106,7 @@ ets/
 │   │   ├── SearchResultTable.ts       # 搜索结果表
 │   │   ├── BookGroupTable.ts          # 书架分组表（NEW）
 │   │   ├── SearchKeywordTable.ts      # 搜索关键词表（NEW）
+│   │   ├── AiBookProfileTable.ts      # AI 单书解析档案表
 │   │   └── RdbUtil.ts                 # RDB 工具类（建表辅助）
 │   ├── preferences/                   # KV 存储封装（@ohos.data.preferences）
 │   │   ├── SettingsStore.ts           # 全局设置（AI 端点、WebDAV 配置等）
@@ -157,9 +158,9 @@ ets/
 │   │   ├── RssService.ets             # RSS 服务协调（270 行）
 │   │   ├── RssParserByRule.ets        # 规则式 RSS 解析（399 行）
 │   │   └── RssParserDefault.ts        # 标准 RSS/Atom feed 解析
-    │   ├── ai/                            # AI 书源生成 + 智能导入（NEW）
+    │   ├── ai/                            # AI 书源生成 + 在线单书导入
     │   │   ├── AiSourceAgent.ts           # AI 书源生成引擎（6 步 LLM 分析，382 行）
-    │   │   └── AiBookImporter.ts          # AI 书籍导入引擎（抓取 + LLM 分析 + 批量下载）
+    │   │   └── AiBookImporter.ts          # 元数据/完整目录/正文规则验证/原子落库
 │   └── translation/                   # 翻译
 │       └── TranslationEngine.ts
 ├── service/                           # 有状态后台服务（9 个根目录 + 7 个 tts/ 子模块）
@@ -172,6 +173,8 @@ ets/
 │   ├── ControllerService.ts           # 全局播放控制
 │   ├── BookshelfTransferService.ts    # 书架导入导出传输（NEW，323 行）
 │   ├── SourceChecker.ts               # 书源校验服务（NEW，275 行）
+│   ├── BookSourceResolver.ts           # 正式书源与 AI 单书档案统一解析
+│   ├── BookCacheService.ts             # 在线书籍后台正文缓存
 │   └── tts/                           # ★ TTS 后端模块（NEW）
 │       ├── ITtsBackend.ets            # TTS 后端接口抽象
 │       ├── SherpaOnnxTtsBackend.ets   # sherpa-onnx 离线神经 TTS
@@ -259,7 +262,7 @@ ets/
 │          仓储层 (data/repository/)                       │
 │        BookRepository / BookSourceRepository            │
 ├─────────────────────────────────────────────────────────┤
-│     数据访问层 (data/database/, 14 个表类 / 17 张表)        │
+│     数据访问层 (data/database/, 18 张核心表)                │
 │  Book / Chapter / Source / Bookmark / ReadRecord / ...  │
 ├─────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
@@ -296,7 +299,7 @@ UI 层 (pages) ──→ 引擎层 (engine) ──→ 数据访问层 (database)
 - **数据库名**：`legado_hos.db`
 - **版本**：1
 
-#### 3.1.1 表结构总览（17 张表）
+#### 3.1.1 表结构总览（18 张表）
 
 | 表名 | 对应模型 | 用途 | 关键字段 |
 |------|---------|------|---------|
@@ -317,6 +320,7 @@ UI 层 (pages) ──→ 引擎层 (engine) ──→ 数据访问层 (database)
 | `search_results` | SearchResult | 搜索结果缓存 | bookName, author, sourceUrl, data |
 | `book_groups` | BookGroupItem | 书架分组 | groupName, sortOrder |
 | `search_keywords` | SearchKeyword | 搜索历史 | keyword, searchTime |
+| `ai_book_profiles` | AiBookProfile | AI 导入书的单书解析档案 | bookId, bookUrl, baseUrl, tocUrl, sourceJson, lastRefreshAt, ruleVersion |
 
 #### 3.1.2 AppDatabase（`data/database/AppDatabase.ts`）
 
@@ -338,7 +342,7 @@ class AppDatabase {
 
 **初始化流程**：
 1. `getRdbStore(context, config)` — 打开/创建数据库
-2. 按序执行 17 条 `CREATE TABLE IF NOT EXISTS` SQL
+2. 按序创建核心表（包括 `ai_book_profiles`，建表均使用 `IF NOT EXISTS`）
 3. 执行 ALTER TABLE 迁移（try-catch 幂等）
 
 #### 3.1.3 Dao 层约定
@@ -361,7 +365,7 @@ class BookTable {
 
 ## 4. 模型层
 
-### 4.1 核心模型（16 个文件）
+### 4.1 核心模型
 
 ```
 model/
@@ -372,6 +376,7 @@ model/
 ├── BookGroup.ts      # ★ 书架分组（系统分组枚举 + BookGroupItem interface）
 ├── SearchResult.ts   # 搜索结果（含去重合并逻辑）
 ├── SearchKeyword.ts  # 搜索历史关键词
+├── AiBookProfile.ts  # AI 导入书的一对一解析档案
 ├── Bookmark.ts       # 书签
 ├── ReadConfig.ts     # 阅读配置（PageMode, TextSizeUnit）
 ├── ReadRecord.ts     # 阅读记录
@@ -548,7 +553,7 @@ sourceUrl → HTTP GET
 ```
 engine/ai/
 ├── AiSourceAgent.ts        # AI 书源生成引擎（6 步 LLM 分析）
-└── AiBookImporter.ts       # AI 智能书籍导入引擎（抓取→LLM 分析→源生成→批量下载）
+└── AiBookImporter.ts       # 在线单书导入（抓取→规则分析/实测→目录与档案落库）
 ```
 
 **AiSourceAgent 分析流程（6 步）**：
@@ -559,17 +564,26 @@ engine/ai/
   5. CONTENT   → 分析正文页规则
   6. COMPILE   → 汇总生成完整书源 JSON
 
-**AiBookImporter 流程（4 步）**：
-  1. 抓取目标页面 HTML
-  2. LLM 分析页面结构并提取规则
-  3. 自动存入 BookSource 表
-  4. 批量下载章节 → 写入 RDB
+**AiBookImporter 流程**：
+
+1. 校验用户确认的公网 URL，优先使用 WebView 渲染后的 HTML，HTTP/WebView 互为兜底。
+2. 确定性提取书名、作者、封面、简介、字数等元数据，缺失项再由 LLM 补充。
+3. 分析目录规则和“全部章节”入口，通过 `SourceExecutor` 跟进分页；剔除最近章节摘要、按 URL 去重并纠正明显倒序。
+4. 最多选择 3 个章节分析正文规则，并调用真实正文提取链验证规则。
+5. 事务内 upsert `Book`、替换目录并保存 `AiBookProfile`；**不写入全局 `BookSource` 表**。
+6. 默认只保存目录；用户确认后可由 `BookCacheService` 启动整书后台缓存。
+
+导入生成的临时 `BookSource.sourceUrl` 是网站根地址；详情页、目录页和每章 URL 分别保存，不能互相替代。后续阅读、缓存和刷新统一通过 `BookSourceResolver` 解析正式书源或单书档案。
 
 依赖：
   - SettingsStore (AI 配置)
   - NetUtil (HTTP 请求)
   - HtmlUtil (HTML 清理)
   - WebViewFetcher (Cloudflare 兜底)
+  - SourceExecutor (目录分页和正文规则实测)
+  - AiBookProfileTable / BookSourceResolver (单书规则持久化与复用)
+
+端到端细节见 [`doc/modules/online_book.md`](modules/online_book.md)。
 
 ### 5.6 Web 引擎（`engine/web/`）
 
@@ -692,6 +706,7 @@ check(source, config): CheckResult    → 执行多步校验
 ```
 MainPage (Tabs)
 ├── Tab 0: BookshelfPage               (书架)
+│   ├── 搜索入口 → SearchPage（书源/在线双标签）
 │   ├── 分组标签切换（全部/未分组/本地/漫画/自定义）
 │   ├── 书架配置 (BookshelfConfigDialog)
 │   ├── 分组管理 (BookGroupManageDialog)
@@ -704,7 +719,10 @@ MainPage (Tabs)
 │   └── click → ReadPage (文本) / ComicReadPage (漫画) / ReaderPage (EPUB图文)
 ├── Tab 1: ExplorePage                 (发现/搜索)
 │   ├── ExploreBookPage                (发现书单)
-│   ├── SearchPage                     (搜索页：历史/书架建议/多源并发/精确模式)
+│   ├── YoushuExplorePage / LkongExplorePage
+│   │   └── 发现书 → 选择书源搜索/在线搜索 → SearchPage 对应标签
+│   ├── SearchPage                     (统一搜索：书源多源搜索 / 在线搜索与 URL 导入)
+│   │   └── AiImportPreviewDialog      (WebView 人工确认、导航、桌面/移动模式)
 │   ├── SearchContentPage              (书内搜索)
 │   ├── WebViewFetchDialog             (WebView 兜底)
 │   └── click → BookInfoPage           (书籍详情)
@@ -730,7 +748,7 @@ MainPage (Tabs)
     │   └── FontManagerPage            (字体管理)
     ├── AiConfigPage                   (AI 配置)
     ├── AiSourceGeneratePage           (AI 生成书源)
-    ├── AiImportBookPage               (AI 智能导入书籍)
+    ├── AiImportBookPage               (旧独立页面，保留兼容；不作为在线导入主入口)
     ├── BookmarkPage                   (书签)
     ├── AboutPage                      (关于)
     ├── WebServicePage                 (Web 服务)
@@ -758,7 +776,9 @@ MainPage (Tabs)
 | 书架 | GroupManageDialog.ets | 移动书籍到分组 |
 | 发现 | ExplorePage.ets | 搜索 + 发现 |
 | 发现 | ExploreBookPage.ets | 发现书单列表 |
-| 发现 | SearchPage.ets | 搜索页（历史/书架建议/多源并发/精确模式） |
+| 发现 | SearchPage.ets | 统一搜索页：书源/在线双标签、历史、搜索引擎、URL 输入和 WebView 确认 |
+| 发现 | YoushuExplorePage.ets | 优书发现书入口，选择搜索方式并跳转对应标签 |
+| 发现 | LkongExplorePage.ets | 龙空发现书入口，选择搜索方式并跳转对应标签 |
 | 发现 | SearchContentPage.ets | 书内搜索 |
 | 阅读 | ReadPage.ets | 阅读主页面（文本/分页/滚动模式） |
 | 阅读 | ReaderPage.ets | 图文混排阅读页（EPUB/MOBI WebView） |
@@ -785,7 +805,7 @@ MainPage (Tabs)
 | 书源 | RuleSubPage.ets | 规则订阅 |
 | AI | AiConfigPage.ets | AI 配置 |
 | AI | AiSourceGeneratePage.ets | AI 生成书源 |
-| AI | AiImportBookPage.ets | AI 智能导入书籍 |
+| AI | AiImportBookPage.ets | 旧独立 AI 导入页（兼容保留，主流程已整合到 SearchPage） |
 | 设置 | SettingsPage.ets | 设置（含备份恢复/字体管理入口） |
 | 设置 | BackupSettingsPage.ets | 备份与恢复（WebDAV + 本地） |
 | 设置 | FontManagerPage.ets | 字体管理（导入/预览/批量删除） |
@@ -1029,7 +1049,41 @@ AiSourceAgent.run(homepageUrl, keyword)
        └─ 输出完整 BookSource 规则
 ```
 
-### 11.5 书架导入传输数据流
+### 11.5 在线搜索与 AI 单书导入数据流
+
+```text
+优书/龙空“发现书” ─┐
+书架搜索输入书名 ───┼→ SearchPage（书源 / 在线）
+直接输入公网 URL ───┘                 │
+                                      ▼
+在线搜索引擎 WebView（Bing 默认，可选百度/搜狗/神马/Google）
+  │ 用户进入具体小说详情页或目录页
+  │ 后退 / 前进 / 刷新 / 桌面-移动切换
+  ▼
+AiImportPreviewDialog.confirm()
+  │ 当前 URL + 渲染后 outerHTML
+  ▼
+AiBookImporter.import()
+  ├─ URL/页面安全校验；HTTP 与 WebView 兜底
+  ├─ 元数据提取（确定性优先，LLM 补充）
+  ├─ 完整目录入口识别 → 目录分页（≤60 页，≤5 并发）
+  ├─ 最近章节摘要剔除 → URL 去重 → 明显倒序纠正
+  ├─ 最多 3 章正文样本 → 规则生成 → SourceExecutor 实测
+  └─ RDB 事务
+       ├─ upsert books（bookUrl = 用户确认的详情页）
+       ├─ replace chapters（每章保留真实 URL 与旧缓存状态）
+       └─ upsert ai_book_profiles（sourceJson 内的 sourceUrl = 网站根地址）
+              ※ 不向 book_sources 写入单书临时源
+  │
+  ▼
+导入完成 → 稍后按需缓存 / BookCacheService 立即后台缓存
+  │
+  └─ 后续刷新：BookSourceResolver → getToc → 保留内容地替换目录
+```
+
+这条数据流是人工确认与自动分析的组合：搜索引擎只负责定位，用户负责确认目标网页，Agent 负责把目标网页转换成经过实测的单书解析档案。详细状态、错误恢复和验收标准见 [`doc/modules/online_book.md`](modules/online_book.md)。
+
+### 11.6 书架导入传输数据流
 
 ```
 BookshelfImportDialog → 选择 JSON 文件
@@ -1068,11 +1122,11 @@ BookshelfTransferService.importBookshelf(json)
 **决策**：所有规则解析（CSS/XPath/JSONPath/正则）在 ArkTS 侧通过 `RuleParser` 纯文本解析完成。QuickJS 仅用于执行 JS 书源脚本。
 **影响**：减少 NAPI 通信量，提高解析性能，但 RuleParser 的 CSS/XPath 实现是简化的。
 
-### D-004: 17 张核心表（扩展版）
+### D-004: 18 张核心表（扩展版）
 
 **问题**：原 Android Legado 有 28 张表，部分表用途重叠。初始设计精简为 12 张。
-**决策**：随着功能增加，扩展至 17 张表（新增 book_groups、book_sources_cache、search_keywords、rss_stars、rss_read_records）。
-**影响**：数据库体积略增，但保留了必要的功能完整性（分组、搜索历史、RSS 收藏）。
+**决策**：随着功能增加，扩展至 18 张表；除分组、搜索历史、RSS 收藏等表外，增加 `ai_book_profiles` 保存 AI 导入书的一对一解析档案。
+**影响**：数据库体积略增，但单书规则不再污染全局书源列表，并可支持后续阅读、缓存和刷新。
 
 ### D-005: 双模式书源加载 + AI 生成
 
@@ -1133,6 +1187,24 @@ BookshelfTransferService.importBookshelf(json)
 **问题**：鸿蒙无原生 PDF 渲染 API。
 **决策**：利用 WebView 加载 PDF 文件实现渲染，支持横竖屏切换、裁边显示、双页模式。
 **影响**：无需第三方库，但依赖 WebView 能力和 PDF 的浏览器兼容性。
+
+### D-015: 在线导入采用 WebView 人工确认
+
+**问题**：通用搜索结果、广告跳转和移动站重定向无法仅靠后台抓取可靠判断最终目标书页。
+**决策**：在线搜索与直接 URL 均先进入同一个 WebView 预览，由用户导航到具体书籍页后提交当前 URL 和渲染后 DOM；默认桌面模式，并提供后退、前进、刷新和页面模式切换。
+**影响**：多一步确认，但显著降低误导入；搜索引擎 DOM 变化不影响核心导入器。WebViewController 必须与单一 Web 组件绑定并在就绪后调用。
+
+### D-016: 单书解析档案与正式书源分离
+
+**问题**：为导入一本书创建一个全局书源，会污染书源管理、错误暗示该规则可搜索整个站点，并导致 `sourceUrl` 与详情页 URL 混淆。
+**决策**：`AiBookImporter` 只构造临时 `BookSource`，其中 `sourceUrl` 为站点根地址；验证后的规则序列化到 `AiBookProfile`。`BookSourceResolver` 对上层统一解析正式书源和单书档案。
+**影响**：阅读、缓存和刷新仍可复用 `SourceExecutor`，同时全局书源保持用户可控；删除书籍时应同步清理对应档案。
+
+### D-017: 目录先行、正文按需缓存
+
+**问题**：导入阶段同步下载整书正文耗时长、失败面大，也与阅读页和离线缓存已有能力重复。
+**决策**：导入成功的边界是“书籍元数据 + 完整目录 + 已验证正文规则 + 单书档案”已原子落库；正文默认阅读时按需获取，用户也可选择立即启动后台整书缓存。
+**影响**：导入更快且可恢复；缓存任务与导入事务解耦，后台缓存失败不会撤销已经成功的书籍导入。
 
 ---
 
