@@ -27,13 +27,16 @@ struct RuleSubEditDialog {
 
   build() {
     Column() {
-      Text($r('app.string.ui_715a993b09')).fontSize(18).fontWeight(FontWeight.Bold).margin({ bottom: 12 })
+      Text($r('app.string.ui_715a993b09')).fontSize(18).fontWeight(FontWeight.Bold)
+        .fontColor(ThemeColors.onSurface(this.isDark)).margin({ bottom: 12 })
       TextInput({ placeholder: $r('app.string.ui_1be7ae4fc2'), text: this.name })
         .onChange((val: string) => { this.name = val; })
-        .width('100%').margin({ bottom: 8 }).height(40).borderRadius(4)
+        .width('100%').margin({ bottom: 8 }).height(48).borderRadius(12)
+        .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
       TextInput({ placeholder: $r('app.string.ui_0e2d9b0777'), text: this.url })
         .onChange((val: string) => { this.url = val; })
-        .width('100%').margin({ bottom: 12 }).height(40).borderRadius(4)
+        .width('100%').margin({ bottom: 12 }).height(48).borderRadius(12)
+        .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
       Text($r('app.string.ui_0edb3ace51')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ bottom: 8 })
       Row() {
         ForEach(['书源', 'RSS源', '替换规则', '自动'], (label: string, idx: number) => {
@@ -42,16 +45,16 @@ struct RuleSubEditDialog {
               .fontColor(this.type === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
               .padding(8)
               .border({ radius: 4, width: 1, color: this.type === idx ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark) })
-          }.onClick(() => { this.type = idx; })
+          }.height(44).justifyContent(FlexAlign.Center).onClick(() => { this.type = idx; })
         })
       }
       .width('100%').justifyContent(FlexAlign.SpaceEvenly).margin({ bottom: 16 })
       Row() {
-        Button($r('app.string.common_cancel')).height(40).fontSize(14)
+        Button($r('app.string.common_cancel')).height(48).fontSize(14)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8)
           .layoutWeight(1).margin({ right: 6 })
           .onClick(() => { this.controller.close(); })
-        Button($r('app.string.common_save')).height(40).fontSize(14)
+        Button($r('app.string.common_save')).height(48).fontSize(14)
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8)
           .layoutWeight(1)
           .onClick(() => {
@@ -59,7 +62,7 @@ struct RuleSubEditDialog {
             this.controller.close();
           })
       }.width('100%')
-    }.padding(16).width('100%')
+    }.padding(16).width('100%').constraintSize({ maxWidth: 560, maxHeight: '90%' })
   }
 }
 

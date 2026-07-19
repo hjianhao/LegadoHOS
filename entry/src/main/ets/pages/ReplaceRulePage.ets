@@ -372,7 +372,7 @@ struct ReplaceRulePage {
         Scroll() {
           Row() {
             ForEach(this.groups_, (group: string) => {
-              Text(group).fontSize(13).height(36).padding({ left: 14, right: 14 })
+              Text(group).fontSize(13).height(44).padding({ left: 14, right: 14 })
                 .fontColor(this.groupFilter === group ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
                 .backgroundColor(this.groupFilter === group ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
                 .borderRadius(18).margin({ right: 8 }).textAlign(TextAlign.Center)

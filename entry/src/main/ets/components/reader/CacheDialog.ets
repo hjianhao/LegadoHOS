@@ -78,18 +78,20 @@ export struct CacheDialog {
       Row() {
         Text($r('app.string.ui_08d760c5e8')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         TextInput({ placeholder: $r('app.string.ui_356a192b79'), text: this.startChapter })
-          .width(80).height(40)
+          .width(80).height(48)
           .fontSize(14)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => { this.startChapter = v; })
       }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
 
       Row() {
         Text($r('app.string.ui_dbd6ec8454')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
         TextInput({ placeholder: String(this.totalChapters), text: this.endChapter })
-          .width(80).height(40)
+          .width(80).height(48)
           .fontSize(14)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => { this.endChapter = v; })
       }.padding({ left: 16, right: 16, bottom: 16 }).width('100%')
 

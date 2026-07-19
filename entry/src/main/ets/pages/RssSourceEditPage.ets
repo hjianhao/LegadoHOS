@@ -212,7 +212,8 @@ struct RssSourceEditPage {
                 .fontColor(ThemeColors.secondaryText(this.isDark))
                 .width(60)
               TextInput({ text: this.editSource[field.key] as string, placeholder: field.placeholder })
-                .fontSize(13)
+                .fontSize(13).height(48)
+                .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
                 .layoutWeight(1)
                 .onChange((val: string) => {
                   this.editSource[field.key] = val;

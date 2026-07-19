@@ -43,7 +43,7 @@ export struct CloudflareDialog {
       Stack() {
         if (this.hasError) {
           Column() {
-            Text($r('app.string.ui_bf341e957f')).fontSize(48).margin({ top: 60 })
+            Text($r('app.string.ui_bf341e957f')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(48).margin({ top: 60 })
             Text($r('app.string.ui_e1a2e746b7')).fontSize(16).fontWeight(FontWeight.Medium)
               .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 12 })
             Text($r('app.string.ui_82153b1e69')).fontSize(13)

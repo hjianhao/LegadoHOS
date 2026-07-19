@@ -325,7 +325,8 @@ struct AiConfigPage {
           Text($r('app.string.ui_47acd2028c')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
             TextInput({ text: this.apiKey, placeholder: $r('app.string.ui_ec3810e10f') })
-              .fontSize(14).layoutWeight(1).type(this.showKey ? InputType.Normal : InputType.Password)
+              .fontSize(14).layoutWeight(1).height(48).type(this.showKey ? InputType.Normal : InputType.Password)
+              .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
               .onChange((v: string) => { this.apiKey = v; })
             Button(this.showKey ? '隐藏' : '显示').fontSize(12)
               .backgroundColor(ThemeColors.transparent()).width(40).height(40)
@@ -336,7 +337,8 @@ struct AiConfigPage {
           Text($r('app.string.ui_98fd0cbd9c')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 4 })
           Row() {
             TextInput({ text: this.model, placeholder: $r('app.string.ui_6d9372f6ba') })
-              .fontSize(14).layoutWeight(1)
+              .fontSize(14).layoutWeight(1).height(48)
+              .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
               .onChange((v: string) => { this.model = v; })
             Button(this.isFetchingModels ? '获取中' : '获取模型').fontSize(12)
               .backgroundColor(ThemeColors.transparent()).width(40).height(40)

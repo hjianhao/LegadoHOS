@@ -457,7 +457,7 @@ struct BookSourceEditPage {
       Row() {
         Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { this.cancelEdit(); })
-        Text(this.isNew ? '新建书源' : '编辑书源').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text(this.isNew ? '新建书源' : '编辑书源').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
         if (!this.isNew) {
           Button($r('app.string.ui_0b5d7ed54b')).fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
             .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openSearchTest(); })

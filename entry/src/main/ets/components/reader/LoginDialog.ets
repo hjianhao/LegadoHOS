@@ -27,14 +27,16 @@ export struct LoginDialog {
         .type(InputType.Email)
         .width('100%').height(44).margin({ bottom: 12 })
         .backgroundColor(ThemeColors.surface(this.isDark))
-        .borderRadius(8).fontSize(15)
+        .borderRadius(8).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark))
+        .placeholderColor(ThemeColors.secondaryText(this.isDark))
         .onChange((v: string) => { this.email = v; })
 
       TextInput({ placeholder: $r('app.string.ui_c839a8ff17'), text: this.password })
         .type(InputType.Password)
         .width('100%').height(44).margin({ bottom: 16 })
         .backgroundColor(ThemeColors.surface(this.isDark))
-        .borderRadius(8).fontSize(15)
+        .borderRadius(8).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark))
+        .placeholderColor(ThemeColors.secondaryText(this.isDark))
         .onChange((v: string) => { this.password = v; })
 
       if (this.statusText) {
@@ -45,18 +47,18 @@ export struct LoginDialog {
 
       Row() {
         Button($r('app.string.common_cancel')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
-          .height(40).layoutWeight(1)
+          .height(48).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
           .onClick(() => { this.controller.close(); })
 
         Button(this.isLoading ? '登录中...' : '登录').fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
-          .height(40).layoutWeight(1).margin({ left: 12 })
+          .height(48).layoutWeight(1).margin({ left: 12 })
           .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
           .enabled(!this.isLoading)
           .onClick(() => { this.doLogin(); })
       }.width('100%').margin({ bottom: 20 })
     }
-    .width('80%').padding(20)
+    .width('80%').constraintSize({ maxWidth: 520, maxHeight: '90%' }).padding(20)
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
   }

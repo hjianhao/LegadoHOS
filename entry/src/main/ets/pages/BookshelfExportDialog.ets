@@ -45,7 +45,7 @@ export struct BookshelfExportDialog {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_8ce30b48a4')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text($r('app.string.ui_8ce30b48a4')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(Color.Transparent)
           .width(40).height(40)
           .accessibilityText($r('app.string.common_close')).onClick((): void => { this.controller.close(); })

@@ -821,11 +821,11 @@ export struct BookshelfPage {
                 .fontSize(19)
                 .fontColor(ThemeColors.secondaryText(this.isDark))
             }
-            .width(36)
-            .height(36)
+            .width(44)
+            .height(44)
             .padding(0)
             .backgroundColor(ThemeColors.transparent())
-            .borderRadius(18)
+            .borderRadius(22)
             .accessibilityText('清除过滤文字')
             .onClick((): void => { this.onSearchChange(''); })
           }
@@ -1036,7 +1036,11 @@ export struct BookshelfPage {
               .fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
           }
         }.width('100%').margin({ top: 2 })
-      }.layoutWeight(1).alignItems(HorizontalAlign.Start).height(72).justifyContent(FlexAlign.Center)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .constraintSize({ minHeight: Math.round(this.coverWidth * 1.375) })
+      .justifyContent(FlexAlign.Center)
       if (!this.isSelectMode) {
         Button() { Text($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.error(this.isDark)) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())

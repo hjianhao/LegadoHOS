@@ -449,10 +449,10 @@ struct BookSourcePage {
       Scroll() {
         Row() {
           ForEach(this.groups_, (group: string) => {
-            Text(group).fontSize(13).height(36).padding({ left: 14, right: 14 })
+            Text(group).fontSize(13).height(44).padding({ left: 14, right: 14 })
               .fontColor(this.groupFilter === group ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
               .backgroundColor(this.groupFilter === group ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-              .borderRadius(18).margin({ right: 8 }).textAlign(TextAlign.Center)
+              .borderRadius(22).margin({ right: 8 }).textAlign(TextAlign.Center)
               .onClick(() => { this.groupFilter = this.groupFilter === group ? '' : group; this.applyFilters(); })
           })
         }.padding({ left: 16, right: 8, top: 10, bottom: 8 })
@@ -511,7 +511,7 @@ struct BookSourcePage {
         Row() {
           Text('校验：通过 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'success').length +
             ' · 部分 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'partial').length +
-            ' · 失败 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'fail').length)
+            ' · 失败 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'fail').length).fontColor(ThemeColors.onSurface(this.isDark))
             .fontSize(13).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
           Button($r('app.string.common_close')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
             .onClick(() => { this.showCheckSummary = false; })

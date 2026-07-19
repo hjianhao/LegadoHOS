@@ -151,7 +151,7 @@ struct ExploreBookPage {
         }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
       } else if (this.errorMsg) {
         Column() {
-          Text($r('app.string.ui_76e163cfa2')).fontSize(48).margin({ top: 80 })
+          Text($r('app.string.ui_76e163cfa2')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(48).margin({ top: 80 })
           Text(this.errorMsg).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
           Button($r('app.string.common_retry')).margin({ top: 12 }).fontSize(13)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(18)

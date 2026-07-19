@@ -89,7 +89,7 @@ struct FontManagerPage {
       // 字体列表
       if (this.fontList.length === 0) {
         Column() {
-          Text($r('app.string.ui_4c106ddba7')).fontSize(48).margin({ bottom: 12 })
+          Text($r('app.string.ui_4c106ddba7')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(48).margin({ bottom: 12 })
           Text($r('app.string.ui_524f9b3e07')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
           Text($r('app.string.ui_ce206202aa')).fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 4 })
@@ -116,16 +116,16 @@ struct FontManagerPage {
     Row() {
       // 批量选择模式下显示选择框
       if (this.isSelectMode) {
-        Row() {
-          if (this.selectedIds.has(font.id)) {
-            Text($r('app.string.ui_698a879938')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark))
+        Stack() {
+          Row() {
+            if (this.selectedIds.has(font.id)) {
+              Text($r('app.string.ui_698a879938')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark))
+            }
           }
-        }
-        .width(24).height(24).borderRadius(12)
-        .backgroundColor(this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.transparent())
-        .border({ width: 1.5, color: this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
-        .margin({ right: 12 })
-        .onClick(() => { this.toggleSelect(font.id); })
+          .width(24).height(24).borderRadius(12)
+          .backgroundColor(this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.transparent())
+          .border({ width: 1.5, color: this.selectedIds.has(font.id) ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
+        }.width(44).height(44).margin({ right: 4 }).accessibilityText(font.name)
       }
 
       // 字体信息
@@ -160,6 +160,7 @@ struct FontManagerPage {
     }
     .width('100%').padding({ left: 16, right: 16, top: 14, bottom: 14 })
     .alignItems(VerticalAlign.Center)
+    .onClick(() => { if (this.isSelectMode) this.toggleSelect(font.id); })
     .gesture(
       LongPressGesture()
         .onAction(() => {
@@ -310,23 +311,24 @@ struct RenameFontDialog {
         .width('100%').height(44).margin({ bottom: 16 })
         .backgroundColor(ThemeColors.surface(this.isDark))
         .borderRadius(8).fontSize(15)
+        .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
         .onChange((v: string) => { this.newName = v; })
 
       Row() {
         Button($r('app.string.common_cancel')).fontSize(14).fontColor(ThemeColors.onBackground(this.isDark))
-          .height(40).layoutWeight(1)
+          .height(48).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(8)
           .onClick(() => { this.controller.close(); })
 
         Button($r('app.string.common_confirm')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
-          .height(40).layoutWeight(1).margin({ left: 12 })
+          .height(48).layoutWeight(1).margin({ left: 12 })
           .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
           .onClick(() => {
             this.onConfirm?.(this.newName.trim());
           })
       }.width('100%').margin({ bottom: 20 })
     }
-    .width('80%').padding(20)
+    .width('80%').constraintSize({ maxWidth: 520, maxHeight: '90%' }).padding(20)
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
   }

@@ -88,7 +88,7 @@ export struct RssMainPage {
                     Image(source.sourceIcon)
                       .width(40).height(40).borderRadius(8).objectFit(ImageFit.Cover)
                   } else {
-                    Text($r('app.string.ui_9cce584749')).fontSize(30)
+                    Text($r('app.string.ui_9cce584749')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(30)
                   }
                   Column() {
                     Text(source.sourceName).fontSize(15)

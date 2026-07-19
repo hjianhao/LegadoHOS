@@ -1387,7 +1387,7 @@ struct BookInfoPage {
   @Builder buildSummary() {
     Column() {
       Text('目录：' + (this.durChapterTitle ||
-        (this.isRefreshing ? (this.tocLoadProgress > 0 ? `加载中(${this.tocLoadProgress}章)` : '加载中') : '未开始阅读')))
+        (this.isRefreshing ? (this.tocLoadProgress > 0 ? `加载中(${this.tocLoadProgress}章)` : '加载中') : '未开始阅读'))).fontColor(ThemeColors.onSurface(this.isDark))
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.primaryTextColor())

@@ -217,7 +217,7 @@ export struct PageView {
   build() {
     Column() {
       // 隐藏的测量文本（测量字宽和行高，用于 TextLayout 精确估算）
-      Text($r('app.string.ui_582c50066c')).fontSize(this.config.fontSize)
+      Text($r('app.string.ui_582c50066c')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(this.config.fontSize)
         .fontFamily(this.config.fontFamily)
         .fontWeight(this.getFontWeight())
         .visibility(Visibility.None)

@@ -333,8 +333,9 @@ struct SettingsPage {
         Column() {
           TextInput({ text: this.ttsAzureEndpoint, placeholder: $r('app.string.ui_298b8d3d76') })
             .fontSize(13)
-            .height(42)
+            .height(48)
             .width('100%')
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .onChange((v: string) => { this.ttsAzureEndpoint = v; })
         }
         .width('100%')
@@ -351,6 +352,7 @@ struct SettingsPage {
           TextInput({ text: this.ttsAzureKey, placeholder: $r('app.string.ui_81474dc689') })
             .fontSize(13)
             .layoutWeight(1)
+            .height(48).fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .type(this.showTtsAzureKey ? InputType.Normal : InputType.Password)
             .onChange((v: string) => { this.ttsAzureKey = v; })
           Button(this.showTtsAzureKey ? '隐藏' : '显示')
@@ -569,7 +571,8 @@ struct SettingsPage {
       // 网络超时
       Row() { Text($r('app.string.ui_bbd5eab31b')).fontSize(15).layoutWeight(1).fontColor(ThemeColors.onBackground(this.isDark))
         TextInput({ text: String(this.netTimeout), placeholder: $r('app.string.ui_e6c3dd6304') })
-          .height(40).fontSize(13).width(60).type(InputType.Number)
+          .height(48).fontSize(13).width(60).type(InputType.Number)
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => {
             const val = parseInt(v);
             if (val && val > 0) {
@@ -589,10 +592,12 @@ struct SettingsPage {
       // 代理地址和端口（@StorageLink 自动同步，无需手动保存）
       Row() {
         TextInput({ text: this.proxyHost, placeholder: $r('app.string.ui_d74862f686') })
-          .height(40).fontSize(13).layoutWeight(1).margin({ left: 16 })
+          .height(48).fontSize(13).layoutWeight(1).margin({ left: 16 })
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => { this.proxyHost = v; this.applyProxy_(); })
         TextInput({ text: this.proxyPort, placeholder: $r('app.string.ui_6cbb7335b5') })
-          .height(40).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
+          .height(48).fontSize(13).width(80).type(InputType.Number).margin({ left: 8, right: 16 })
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => { this.proxyPort = v; this.applyProxy_(); })
       }.width('100%').margin({ top: 4 })
 

@@ -124,7 +124,7 @@ struct AiSourceGeneratePage {
       Row() {
         Button($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
           .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text($r('app.string.ui_1ef00e7d2f')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text($r('app.string.ui_1ef00e7d2f')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button($r('app.string.ui_d7d7ce790b')).fontSize(13)
           .backgroundColor(ThemeColors.transparent()).width(40).height(40)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
@@ -161,7 +161,7 @@ struct AiSourceGeneratePage {
               ListItem() {
                 Column() {
                   Row() {
-                    Text(this.statusIcon(r.status)).fontSize(14)
+                    Text(this.statusIcon(r.status)).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
                     Text(this.stepLabel(r.step)).fontSize(14)
                       .fontWeight(r.status === 'running' ? FontWeight.Bold : FontWeight.Normal)
                       .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })

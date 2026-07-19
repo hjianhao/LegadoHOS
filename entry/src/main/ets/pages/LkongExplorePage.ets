@@ -539,7 +539,7 @@ export struct LkongExplorePage {
       } else if (this.errorMessage && this.threads.length === 0) {
         Column() {
           Text(this.loginRequired ? '登录后才能浏览' :
-            (this.browseMode === 'tag' && !this.selectedTag ? '标签加载失败' : '帖子加载失败'))
+            (this.browseMode === 'tag' && !this.selectedTag ? '标签加载失败' : '帖子加载失败')).fontColor(ThemeColors.onSurface(this.isDark))
             .fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onBackground(this.isDark))
           Text(this.errorMessage).fontSize(12).fontColor(ThemeColors.error(this.isDark))
@@ -651,7 +651,7 @@ export struct LkongExplorePage {
             Text(this.currentRecord.title).fontSize(16).fontWeight(FontWeight.Bold)
               .fontColor(ThemeColors.onBackground(this.isDark))
             Text(this.currentRecord.threadCount.toString() + ' 个帖子 · ' +
-              this.currentRecord.books.length.toString() + ' 本书')
+              this.currentRecord.books.length.toString() + ' 本书').fontColor(ThemeColors.onSurface(this.isDark))
               .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 3 })
           }.alignItems(HorizontalAlign.Start)
         }.width('100%').padding({ left: 16, right: 16, top: 5, bottom: 8 })

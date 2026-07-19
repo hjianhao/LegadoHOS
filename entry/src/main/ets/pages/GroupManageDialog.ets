@@ -123,7 +123,7 @@ export struct GroupManageDialog {
     Column() {
       // ===== 标题栏 =====
       Row() {
-        Text($r('app.string.ui_e900b55ce7')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text($r('app.string.ui_e900b55ce7')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
         Button() { Text($r('app.string.ui_2cd9e6ce81')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark)) }
           .height(40).backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(20)
           .padding({ left: 12, right: 12 })
@@ -188,7 +188,7 @@ export struct GroupManageDialog {
           ForEach(this.groups, (group: string) => {
             ListItem() {
               Row() {
-                Text(group).fontSize(15).layoutWeight(1)
+                Text(group).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(15).layoutWeight(1)
                 Button() { Text($r('app.string.common_edit')).fontSize(12).fontColor(ThemeColors.primary(this.isDark)) }
                   .height(40).backgroundColor(ThemeColors.transparent()).borderRadius(20)
                   .onClick(() => { this.onEditGroup(group); })

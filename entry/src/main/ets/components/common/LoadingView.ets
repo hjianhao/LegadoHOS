@@ -33,7 +33,7 @@ export struct EmptyView {
 
   build() {
     Column() {
-      Text(this.icon)
+      Text(this.icon).fontColor(ThemeColors.onSurface(this.isDark))
         .fontSize(48)
         .margin({ bottom: 16 })
       Text(this.message)

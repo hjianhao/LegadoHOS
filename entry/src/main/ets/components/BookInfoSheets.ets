@@ -81,7 +81,7 @@ export struct ChangeCoverSheet {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_8c7609ffeb')).fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_8c7609ffeb')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())
@@ -416,7 +416,7 @@ export struct ChangeSourceSheet {
     Column() {
       // 标题栏
       Row() {
-        Text(this.singleChapterMode ? '单章换源' : '更换书源').fontSize(16).fontWeight(FontWeight.Bold)
+        Text(this.singleChapterMode ? '单章换源' : '更换书源').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())
@@ -430,8 +430,8 @@ export struct ChangeSourceSheet {
       // 搜索栏 + 刷新按钮
       Row() {
         TextInput({ text: this.keyword, placeholder: $r('app.string.ui_7f4ffe6a5d') })
-          .layoutWeight(1).height(36).fontSize(13)
-          .borderRadius(18).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .layoutWeight(1).height(44).fontSize(13)
+          .borderRadius(22).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .padding({ left: 12, right: 12 })
           .onChange((value: string) => { this.keyword = value; })
         Button() { Text($r('app.string.common_search')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark)) }
@@ -494,7 +494,7 @@ export struct ChangeSourceSheet {
                 }
                 Column() {
                   Row() {
-                    Text(item.name || '未知').fontSize(14).fontWeight(FontWeight.Medium)
+                    Text(item.name || '未知').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).fontWeight(FontWeight.Medium)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     if (item.originUrl === this.currentOriginUrl) {
                       Text($r('app.string.ui_25e74dceac')).fontSize(10).fontColor(ThemeColors.success(this.isDark)).margin({ left: 6 })
@@ -677,7 +677,7 @@ export struct GroupSelectSheet {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_d3c09574cc')).fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_d3c09574cc')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text($r('app.string.common_done')).fontSize(14).fontColor(ThemeColors.primary(this.isDark)) }
           .backgroundColor(ThemeColors.transparent())
@@ -704,7 +704,7 @@ export struct GroupSelectSheet {
                     }
                     this.selectedGroupId = item.id;
                   })
-                Text(item.name).fontSize(14).margin({ left: 8 })
+                Text(item.name).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).margin({ left: 8 })
               }
               .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
               .onClick(() => {
@@ -914,7 +914,7 @@ export struct RemarkEditDialog {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_1c9313edc3')).fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_1c9313edc3')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())
@@ -972,7 +972,7 @@ export struct ChapterPickSheet {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_e164fce278')).fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_e164fce278')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
         Blank()
         Button() { Text($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())

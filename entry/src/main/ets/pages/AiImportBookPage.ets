@@ -300,7 +300,7 @@ struct AiImportBookPage {
                 .fontColor(ThemeColors.onBackground(this.isDark))
               Text(this.importMode === 0 ?
                 '输入书名，通过搜书引擎找到小说网页；进入详情页或目录页后确认导入。' :
-                $r('app.string.ai_import_intro_desc'))
+                $r('app.string.ai_import_intro_desc')).fontColor(ThemeColors.onSurface(this.isDark))
                 .width('100%')
                 .fontSize(14)
                 .lineHeight(21)

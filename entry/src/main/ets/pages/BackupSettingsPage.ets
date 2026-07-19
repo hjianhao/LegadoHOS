@@ -196,33 +196,37 @@ struct BackupSettingsPage {
           // ===== WebDAV 配置 =====
           this.buildSection('🌩 WebDAV 云端配置')
           TextInput({ placeholder: $r('app.string.ui_2eb291f695'), text: this.webDavUrl })
-            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUrl = v; })
           TextInput({ placeholder: $r('app.string.ui_a1aaf352cb'), text: this.webDavUser })
-            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavUser = v; })
           TextInput({ placeholder: $r('app.string.ui_c839a8ff17'), text: this.webDavPwd })
-            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .type(InputType.Password)
             .onChange((v: string) => { this.webDavPwd = v; this.savePassword(v); })
           TextInput({ placeholder: $r('app.string.ui_5aa328deb8'), text: this.webDavPath })
-            .height(40).fontSize(14).borderRadius(8).padding({ left: 12 })
+            .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .onChange((v: string) => { this.webDavPath = v; })
           Row() {
-            Text($r('app.string.ui_220e7111f6')).fontSize(14)
+            Text($r('app.string.ui_220e7111f6')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
             Toggle({ type: ToggleType.Switch, isOn: this.webDavAutoSync })
               .onChange((v: boolean) => { this.webDavAutoSync = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 6 })
           Row() {
-            Text($r('app.string.ui_64c9bc1502')).fontSize(14)
+            Text($r('app.string.ui_64c9bc1502')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
             Toggle({ type: ToggleType.Switch, isOn: this.syncProgress })
               .onChange((v: boolean) => { this.syncProgress = v; })
           }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 2 })
@@ -287,7 +291,7 @@ struct BackupSettingsPage {
 
   @Builder
   buildSection(title: string) {
-    Text(title).fontSize(15).fontWeight(FontWeight.Bold)
+    Text(title).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(15).fontWeight(FontWeight.Bold)
       .width('100%').margin({ top: 16, bottom: 8 })
   }
 

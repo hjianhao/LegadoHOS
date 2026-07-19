@@ -1328,7 +1328,7 @@ struct ComicReadPage {
               .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ right: 10 })
           }
           Text(`${this.currentIndex + 1}/${this.totalChapters}` +
-            (this.totalChapters > 0 ? ` (${this.getProgressPercent()}%)` : ''))
+            (this.totalChapters > 0 ? ` (${this.getProgressPercent()}%)` : '')).fontColor(ThemeColors.onSurface(this.isDark))
             .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%')

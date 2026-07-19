@@ -2019,7 +2019,7 @@ struct ReadPage {
                 .fontFamily(this.cfg.fontFamily).margin({ right: 10 })
               if (this.flowMode !== 'scrolled') {
                 Text(`${this.pageIndex + 1}/${this.pages.length}` +
-                  (this.totalChapters_ > 0 ? ` (${this.getProgressPercent()}%)` : ''))
+                  (this.totalChapters_ > 0 ? ` (${this.getProgressPercent()}%)` : '')).fontColor(ThemeColors.onSurface(this.isDark))
                   .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
                   .fontFamily(this.cfg.fontFamily)
               }
@@ -2108,7 +2108,7 @@ struct ReadPage {
               .padding({ top: 16, bottom: 8 })
             Text('云端已读到第 ' + (this.pendingCloudProgress_!.durChapterIndex + 1) + ' 章'
               + (this.pendingCloudProgress_!.durChapterTitle ? '「' + this.pendingCloudProgress_!.durChapterTitle + '」' : '')
-              + '，是否恢复？')
+              + '，是否恢复？').fontColor(ThemeColors.onSurface(this.isDark))
               .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
               .padding({ left: 20, right: 20, bottom: 16 })
             Row() {

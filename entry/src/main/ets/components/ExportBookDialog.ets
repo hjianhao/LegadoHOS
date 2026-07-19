@@ -87,7 +87,7 @@ export struct ExportBookDialog {
 
       Text(this.statsLoading
         ? '正在统计章节...'
-        : '共 ' + this.totalChapters + ' 章 · 已缓存 ' + this.cachedChapters + ' 章')
+        : '共 ' + this.totalChapters + ' 章 · 已缓存 ' + this.cachedChapters + ' 章').fontColor(ThemeColors.onSurface(this.isDark))
         .fontSize(13)
         .fontColor(this.totalChapters === 0 && !this.statsLoading
           ? ThemeColors.error(this.isDark) : ThemeColors.secondaryText(this.isDark))

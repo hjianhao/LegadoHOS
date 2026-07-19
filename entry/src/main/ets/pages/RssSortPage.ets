@@ -321,9 +321,8 @@ struct RssSortPage {
             })
           }
         }
-        .width('100%').height(36)
+        .width('100%').height(44)
         .scrollBar(BarState.Off)
-        .width('100%').height(40)
       }
 
       // ===== 文章列表 =====

@@ -104,6 +104,7 @@ export struct WebViewFetchDialog {
             this.onFetched('', this.fetchUrl);
           }
         })
-    }.width('100%').padding(16)
+    }.width('100%').constraintSize({ maxWidth: 560, maxHeight: '90%' }).padding(16)
+      .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(16)
   }
 }

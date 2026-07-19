@@ -491,10 +491,10 @@ struct ChapterListPage {
     Column() {
       // ===== 顶部栏 =====
       Row() {
-        Button() { Text($r('app.string.ui_8179643cdc')).fontSize(18) }
+        Button() { Text($r('app.string.ui_8179643cdc')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())
           .accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text($r('app.string.ui_41e5243e2d')).fontSize(16).fontWeight(FontWeight.Bold)
+        Text($r('app.string.ui_41e5243e2d')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
           .margin({ left: 8 })
         Text('- ' + this.bookName).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -515,7 +515,7 @@ struct ChapterListPage {
         // 排序切换按钮
         Button() {
           Row() {
-            Text(this.isAscending ? '↑' : '↓').fontSize(14)
+            Text(this.isAscending ? '↑' : '↓').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
             Text(this.isAscending ? '正序' : '倒序').fontSize(12)
               .fontColor(ThemeColors.onBackground(this.isDark))
           }.alignItems(VerticalAlign.Center)

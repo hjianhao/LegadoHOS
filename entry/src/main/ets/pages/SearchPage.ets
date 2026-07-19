@@ -1374,13 +1374,13 @@ struct SearchPage {
 
       Row() {
         Button($r('app.string.ui_literal_2dc145c1ae'))
-          .layoutWeight(1).height(38).fontSize(14)
+          .layoutWeight(1).height(44).fontSize(14)
           .fontColor(this.searchMode === 0 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
           .backgroundColor(this.searchMode === 0 ? this.primaryColor() : ThemeColors.transparent())
           .borderRadius(19)
           .onClick((): void => { this.switchSearchMode_(0); })
         Button($r('app.string.ui_literal_0373ff9231'))
-          .layoutWeight(1).height(38).fontSize(14)
+          .layoutWeight(1).height(44).fontSize(14)
           .fontColor(this.searchMode === 1 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
           .backgroundColor(this.searchMode === 1 ? this.primaryColor() : ThemeColors.transparent())
           .borderRadius(19)
@@ -1442,9 +1442,10 @@ struct SearchPage {
             Text($r('app.string.ui_67fba2f357'))
               .fontSize(16)
               .fontColor(this.subTextColor())
-              .width(34)
-              .height(34)
+              .width(44)
+              .height(44)
               .textAlign(TextAlign.Center)
+              .accessibilityText($r('app.string.common_clear'))
               .onClick(() => {
                 this.keyword = '';
                 this.bookshelfHints = [];
@@ -2276,9 +2277,9 @@ struct SearchPage {
       .fontSize(14)
       .fontColor(selected ? ThemeColors.onPrimary(this.isDark) : this.textColor())
       .textAlign(TextAlign.Center)
-      .height(38)
+      .height(44)
       .layoutWeight(1)
-      .padding({ top: 9 })
+      .padding({ top: 12 })
       .backgroundColor(selected ? this.primaryColor() : this.surfaceAltColor())
       .borderRadius(8)
       .margin({ right: 8 })

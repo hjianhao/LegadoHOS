@@ -311,7 +311,7 @@ struct BookshelfManagePage {
           Button() { Text($r('app.string.ui_8179643cdc')).fontSize(20).fontColor(ThemeColors.primary(this.isDark)) }
             .width(44).height(44).backgroundColor(Color.Transparent).accessibilityText($r('app.string.common_back'))
             .onClick(() => { UiUtil.back(this.getUIContext()); })
-          Text($r('app.string.ui_4f5a0869c2')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+          Text($r('app.string.ui_4f5a0869c2')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
           Text('选中 ' + this.selectedBookIds.length).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
         }
         .width('100%').height(56).padding({ left: 8, right: 12 })

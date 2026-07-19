@@ -113,7 +113,7 @@ export struct BookshelfConfigDialog {
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
           Row() {
-            Text($r('app.string.ui_c0276ec9a7')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_c0276ec9a7')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.sortOrder === 1 })
               .onChange((v: boolean) => { this.sortOrder = v ? 1 : 0; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
@@ -121,7 +121,7 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_c6b568b516')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_c6b568b516')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Button((this.layoutMode === 0 ? '列表' : '网格') + ' ›')
               .fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
               .onClick(() => { this.layoutMode = this.layoutMode === 0 ? 1 : 0; this.onChanged(); })
@@ -129,14 +129,14 @@ export struct BookshelfConfigDialog {
 
           if (this.layoutMode === 1) {
             Row() {
-              Text($r('app.string.ui_b65a519f48')).fontSize(14).layoutWeight(1)
+              Text($r('app.string.ui_b65a519f48')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
               Button(this.gridStyleLabels[this.gridStyle] + ' ›')
                 .fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
                 .onClick(() => { this.gridStyle = (this.gridStyle + 1) % 3; this.onChanged(); })
             }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
             Row() {
-              Text($r('app.string.ui_94e885c673')).fontSize(14)
+              Text($r('app.string.ui_94e885c673')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
               Text(String(this.gridColumns)).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
               Slider({ value: this.gridColumns, min: 2, max: 7, step: 1 }).width('50%').margin({ left: 8 })
                 .onChange((v: number) => { this.gridColumns = v; this.onChanged(); })
@@ -145,19 +145,19 @@ export struct BookshelfConfigDialog {
 
           if (this.layoutMode === 0) {
             Row() {
-              Text($r('app.string.ui_76b7708dba')).fontSize(14).layoutWeight(1)
+              Text($r('app.string.ui_76b7708dba')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
               Toggle({ type: ToggleType.Switch, isOn: this.showDivider })
                 .onChange((v: boolean) => { this.showDivider = v; this.onChanged(); })
             }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
             Row() {
-              Text($r('app.string.ui_5631e62f4e')).fontSize(14).layoutWeight(1)
+              Text($r('app.string.ui_5631e62f4e')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
               Toggle({ type: ToggleType.Switch, isOn: this.isCompact })
                 .onChange((v: boolean) => { this.isCompact = v; this.onChanged(); })
             }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
             Row() {
-              Text($r('app.string.ui_10f8d00352')).fontSize(14)
+              Text($r('app.string.ui_10f8d00352')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
               Text(String(this.coverWidth)).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
               Slider({ value: this.coverWidth, min: 40, max: 120, step: 5 }).width('50%').margin({ left: 8 })
                 .onChange((v: number) => { this.coverWidth = v; this.onChanged(); })
@@ -167,14 +167,14 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_33f508cafc')).fontSize(14)
+            Text($r('app.string.ui_33f508cafc')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
             Text(String(this.titleMaxLines)).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
             Slider({ value: this.titleMaxLines, min: 1, max: 5, step: 1 }).width('50%').margin({ left: 8 })
               .onChange((v: number) => { this.titleMaxLines = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
           Row() {
-            Text($r('app.string.ui_d88a491209')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_d88a491209')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.coverShadow })
               .onChange((v: boolean) => { this.coverShadow = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
@@ -182,19 +182,19 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_56e7fe236f')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_56e7fe236f')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.showUnread })
               .onChange((v: boolean) => { this.showUnread = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
           Row() {
-            Text($r('app.string.ui_cb637b277a')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_cb637b277a')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.showTip })
               .onChange((v: boolean) => { this.showTip = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
 
           Row() {
-            Text($r('app.string.ui_250914a225')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_250914a225')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.showLastUpdateTime })
               .onChange((v: boolean) => { this.showLastUpdateTime = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
@@ -202,7 +202,7 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_3f1dbc33b9')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_3f1dbc33b9')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.showBookIntro })
               .onChange((v: boolean) => { this.showBookIntro = v; this.onChanged(); })
           }.width('100%').height(48).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center)
@@ -210,17 +210,17 @@ export struct BookshelfConfigDialog {
           if (this.showBookIntro) {
             Column() {
               Row() {
-                Text($r('app.string.ui_297c07c337')).fontSize(14).layoutWeight(1)
+                Text($r('app.string.ui_297c07c337')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
                 Toggle({ type: ToggleType.Switch, isOn: this.showLatestChapter })
                   .onChange((v: boolean) => { this.showLatestChapter = v; this.onChanged(); })
               }.width('100%').height(48).padding({ left: 16, right: 8 }).alignItems(VerticalAlign.Center)
               Row() {
-                Text($r('app.string.ui_6c64d7e6ab')).fontSize(14).layoutWeight(1)
+                Text($r('app.string.ui_6c64d7e6ab')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14).layoutWeight(1)
                 Toggle({ type: ToggleType.Switch, isOn: this.showTag })
                   .onChange((v: boolean) => { this.showTag = v; this.onChanged(); })
               }.width('100%').height(48).padding({ left: 16, right: 8 }).alignItems(VerticalAlign.Center)
               Row() {
-                Text($r('app.string.ui_5ca7f32445')).fontSize(14)
+                Text($r('app.string.ui_5ca7f32445')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
                 Text(this.introMaxLines === 0 ? '全部' : String(this.introMaxLines)).fontSize(13).fontColor(ThemeColors.primary(this.isDark)).margin({ left: 8 })
                 Slider({ value: this.introMaxLines, min: 0, max: 10, step: 1 }).width('50%').margin({ left: 8 })
                   .onChange((v: number) => { this.introMaxLines = v; this.onChanged(); })
@@ -231,7 +231,7 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_d9fa520992')).fontSize(14)
+            Text($r('app.string.ui_d9fa520992')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
             Text(this.refreshLimit === 0 ? '不限制' : `${this.refreshLimit}本`).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 6 })
             Slider({ value: this.refreshLimit, min: 0, max: 100, step: 5 }).width('50%').margin({ left: 8 })
               .onChange((v: number) => { this.refreshLimit = v; this.onChanged(); })
