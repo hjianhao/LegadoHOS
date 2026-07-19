@@ -10,7 +10,7 @@ import { WebViewFetcher } from '../web/WebViewFetcher';
 import { BookSource, createEmptyBookSource, serializeBookSource } from '../../model/BookSource';
 import { BookSourceTable } from '../../data/database/BookSourceTable';
 import { BookSourceChapter } from '../../model/BookSource';
-import { globalSourceExecutor } from '../source/SourceExecutor';
+import { globalSourceExecutor, isInvalidAiContentResult } from '../source/SourceExecutor';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { ChapterTable } from '../../data/database/ChapterTable';
 import { BookTable } from '../../data/database/BookTable';
@@ -144,6 +144,41 @@ export function isLikelySameAiBookPage(expectedHtml: string, candidateHtml: stri
 interface VerifiedTocPage {
   url: string;
   html: string;
+}
+
+/** 仅在已经排除转码/广告占位页后，为模型漏识别提供常见正文容器兜底。 */
+export function inferAiContentRule(html: string): string {
+  if (!html || isInvalidAiContentResult(html)) return '';
+  const candidates: Array<{ rule: string; pattern: RegExp }> = [
+    { rule: '#chaptercontent@html', pattern: /<[^>]+id=["']chaptercontent["'][^>]*>/i },
+    { rule: '#content@html', pattern: /<[^>]+id=["']content["'][^>]*>/i },
+    // 部分移动小说站直接把正文段落放在 txtnav 容器下，没有单独 content 节点。
+    { rule: '.txtnav p@textNodes', pattern: /<[^>]+class=["'][^"']*\btxtnav\b[^"']*["'][^>]*>[\s\S]*?<p\b/i },
+    { rule: '.chapter-content@html', pattern: /<[^>]+class=["'][^"']*\bchapter-content\b[^"']*["'][^>]*>/i },
+    { rule: '.read-content@html', pattern: /<[^>]+class=["'][^"']*\bread-content\b[^"']*["'][^>]*>/i },
+    { rule: '.article-content@html', pattern: /<[^>]+class=["'][^"']*\barticle-content\b[^"']*["'][^>]*>/i },
+    { rule: '.content@html', pattern: /<[^>]+class=["'][^"']*\bcontent\b[^"']*["'][^>]*>/i },
+  ];
+  for (const candidate of candidates) {
+    if (candidate.pattern.test(html)) return candidate.rule;
+  }
+  return '';
+}
+
+/**
+ * 正文规则不仅要“有返回值”，还必须排除整页外壳被误当正文的情况。
+ * 该检测只使用稳定的导航词组合；单个词可能自然出现在正文中，因此需要多项同时命中。
+ */
+export function isUsableAiExtractedContent(content: string): boolean {
+  const normalized = (content || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length < MIN_CONTENT_LENGTH || isInvalidAiContentResult(normalized)) return false;
+  const shellMarkers = ['首页', '排行榜', '小说分类', '我的书架', '阅读记录', '意见反馈',
+    '书页', '足迹', '设置', '黑夜', '换源'];
+  let shellMarkerCount = 0;
+  for (const marker of shellMarkers) {
+    if (normalized.includes(marker)) shellMarkerCount++;
+  }
+  return shellMarkerCount < 4;
 }
 
 /**
@@ -481,19 +516,40 @@ export class AiBookImporter {
       throw new Error('AI 识别了目录规则，但未拉取到任何章节');
     }
 
-    // 4. LLM 分析正文规则（用第一章）
-    if (chapters.length > 0) {
-      this.report_('analyze_content', 'AI 正在分析正文结构...', 0, 1);
-      const firstUrl = chapters[0].url;
-      const contentHtml = await this.fetchHtml_(firstUrl);
-      if (!contentHtml || contentHtml.length < MIN_PAGE_HTML_LENGTH) {
-        throw new Error('第一章页面抓取失败，无法验证正文规则');
-      }
-      const contentRules = await this.analyzeContent_(contentHtml, firstUrl);
-      if (contentRules.ruleBookContent) {
-        source.ruleBookContent = contentRules.ruleBookContent;
+    // 4. LLM 分析正文规则。小说站可能随机返回转码失败页，因此从前几章中选择真实正文样本。
+    let contentValidationUrl = chapters[0].url;
+    let validatedContent = '';
+    const sampleCount = Math.min(3, chapters.length);
+    for (let i = 0; i < sampleCount && !source.ruleBookContent; i++) {
+      const sampleUrl = chapters[i].url;
+      this.report_('analyze_content', `正在获取正文样本（${i + 1}/${sampleCount}）...`, i + 1, sampleCount);
+      const contentHtml = await this.fetchUsableContentHtml_(sampleUrl);
+      if (!contentHtml) continue;
+      this.report_('analyze_content', 'AI 正在分析正文结构...', i + 1, sampleCount);
+      const contentRules = await this.analyzeContent_(contentHtml, sampleUrl);
+      const inferredRule = inferAiContentRule(contentHtml);
+      const candidateRules: string[] = [];
+      if (contentRules.ruleBookContent) candidateRules.push(contentRules.ruleBookContent);
+      if (inferredRule && !candidateRules.includes(inferredRule)) candidateRules.push(inferredRule);
+
+      for (const candidateRule of candidateRules) {
+        source.ruleBookContent = candidateRule;
         source.ruleBookContentTitle = contentRules.ruleBookContentTitle || '';
         source.ruleBookContentNext = contentRules.ruleBookContentNext || '';
+        const extracted = await globalSourceExecutor.getContent(source, sampleUrl, normalizedUrl);
+        this.ensureNotCancelled_();
+        if (isUsableAiExtractedContent(extracted)) {
+          validatedContent = extracted;
+          contentValidationUrl = sampleUrl;
+          console.info('[AiImport] accepted content rule=' + candidateRule
+            + ' extracted=' + extracted.length.toString() + ' chars');
+          break;
+        }
+        console.warn('[AiImport] rejected content rule=' + candidateRule
+          + ' extracted=' + extracted.length.toString() + ' chars');
+        source.ruleBookContent = '';
+        source.ruleBookContentTitle = '';
+        source.ruleBookContentNext = '';
       }
     }
 
@@ -502,9 +558,10 @@ export class AiBookImporter {
     }
 
     // 在写数据库前用第一章验证规则，避免留下不可用书源和空书籍。
-    const firstContent = await globalSourceExecutor.getContent(source, chapters[0].url, normalizedUrl);
+    const firstContent = validatedContent ||
+      await globalSourceExecutor.getContent(source, contentValidationUrl, normalizedUrl);
     this.ensureNotCancelled_();
-    if (!firstContent || firstContent.trim().length < MIN_CONTENT_LENGTH) {
+    if (!isUsableAiExtractedContent(firstContent)) {
       throw new Error('正文规则验证失败，第一章未提取到有效内容');
     }
 
@@ -556,6 +613,25 @@ export class AiBookImporter {
       }
     }
     return html;
+  }
+
+  /** 获取可用于规则分析的真实正文页，跳过 HTTP 200 的转码失败/Cloudflare 占位内容。 */
+  private async fetchUsableContentHtml_(url: string): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const html = await this.fetchHtml_(url);
+      this.ensureNotCancelled_();
+      if (html.length >= MIN_PAGE_HTML_LENGTH && !isInvalidAiContentResult(html)) return html;
+      console.warn('[AiImport] rejected invalid content sample attempt=' + (attempt + 1).toString()
+        + ' url=' + url.substring(0, 100));
+    }
+    const ready = await WebViewFetcher.waitForReady(3000);
+    if (ready) {
+      try {
+        const result = await WebViewFetcher.fetch(url, 30000);
+        if (result.html.length >= MIN_PAGE_HTML_LENGTH && !isInvalidAiContentResult(result.html)) return result.html;
+      } catch (_e) { /* try next chapter sample */ }
+    }
+    return '';
   }
 
   private desktopVariantUrl_(url: string): string {
@@ -661,6 +737,7 @@ ${truncated}`;
 
 翻页规则要求：
 - 只能提取“下一页/下页/Next Page”等同一章节分页链接，不能把“下一章”当作下一页。
+- “上一章/上一页/下一章”等相邻章节导航不能作为正文分页；仅数字章节 URL 变化（如 4.html 到 3.html 或 5.html）也不是分页。
 - 即使当前是第一页，也要检查正文后的分页导航、rel=next、next-page/page-next 等标记。
 - 没有章节内分页时，ruleBookContentNext 必须返回空字符串。
 
@@ -676,7 +753,12 @@ ${truncated}`;
 ${truncated}`;
 
     const resp = await this.callLlm_(prompt);
-    return this.parseJson_(resp);
+    const rules = this.parseJson_(resp);
+    console.info('[AiImport] content rules url=' + url.substring(0, 100)
+      + ' content=' + (rules.ruleBookContent || '')
+      + ' title=' + (rules.ruleBookContentTitle || '')
+      + ' next=' + (rules.ruleBookContentNext || ''));
+    return rules;
   }
 
   /** 调用 LLM API */

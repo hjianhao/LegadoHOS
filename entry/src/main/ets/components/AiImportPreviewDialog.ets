@@ -1,6 +1,13 @@
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../theme/ThemeColors';
 
+const AI_WEB_DESKTOP_MODE_KEY = 'ai_import_web_desktop_mode';
+const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+// 在线导入默认请求桌面网页，并跨应用重启记住用户最后一次选择。
+PersistentStorage.persistProp(AI_WEB_DESKTOP_MODE_KEY, true);
+
 export interface AiImportPreviewResult {
   url: string;
   html: string;
@@ -23,21 +30,27 @@ export struct AiImportPreviewDialog {
   onCancel?: () => void;
 
   @StorageLink('isDark') isDark: boolean = false;
+  @StorageLink(AI_WEB_DESKTOP_MODE_KEY) isDesktopMode_: boolean = true;
   @State private currentUrl: string = '';
   @State private isLoading: boolean = true;
   @State private errorText: string = '';
   @State private noticeText: string = '';
   @State private isExtracting: boolean = false;
+  @State private canGoBack_: boolean = false;
+  @State private canGoForward_: boolean = false;
   private webController_: web_webview.WebviewController = new web_webview.WebviewController();
   @State private controllerAttached_: boolean = false;
   private initialScriptExecuted_: boolean = false;
   private fallbackUsed_: boolean = false;
+  private mobileUserAgent_: string = '';
 
   aboutToAppear(): void {
     this.currentUrl = this.initialUrl;
     this.initialScriptExecuted_ = false;
     this.fallbackUsed_ = false;
     this.noticeText = '';
+    this.canGoBack_ = false;
+    this.canGoForward_ = false;
   }
 
   aboutToDisappear(): void {
@@ -88,11 +101,66 @@ export struct AiImportPreviewDialog {
     } catch (_e) {}
   }
 
+  private handleNavigation_(action: number): void {
+    switch (action) {
+      case 0:
+        this.goBack_();
+        break;
+      case 1:
+        this.goForward_();
+        break;
+      case 2:
+        this.refresh_();
+        break;
+      case 3:
+        this.togglePageMode_();
+        break;
+      default:
+        break;
+    }
+  }
+
   private refresh_(): void {
     if (!this.controllerAttached_) return;
     try {
       this.webController_.refresh();
     } catch (_e) {}
+  }
+
+  private applyPageMode_(reload: boolean): void {
+    if (!this.controllerAttached_) return;
+    try {
+      if (!this.mobileUserAgent_) {
+        this.mobileUserAgent_ = this.webController_.getCustomUserAgent();
+      }
+      const userAgent = this.isDesktopMode_ ? DESKTOP_USER_AGENT : this.mobileUserAgent_;
+      this.webController_.setCustomUserAgent(userAgent);
+      if (reload) this.webController_.refresh();
+    } catch (e) {
+      this.errorText = '切换网页模式失败：' + (e as Error).message;
+    }
+  }
+
+  private togglePageMode_(): void {
+    if (!this.controllerAttached_) return;
+    this.isDesktopMode_ = !this.isDesktopMode_;
+    this.noticeText = this.isDesktopMode_ ? '已切换为桌面网页' : '已切换为移动网页';
+    this.applyPageMode_(true);
+  }
+
+  private updateNavigationState_(): void {
+    if (!this.controllerAttached_) {
+      this.canGoBack_ = false;
+      this.canGoForward_ = false;
+      return;
+    }
+    try {
+      this.canGoBack_ = this.webController_.accessBackward();
+      this.canGoForward_ = this.webController_.accessForward();
+    } catch (_e) {
+      this.canGoBack_ = false;
+      this.canGoForward_ = false;
+    }
   }
 
   private runInitialScript_(): void {
@@ -106,6 +174,40 @@ export struct AiImportPreviewDialog {
   private scheduleInitialScript_(): void {
     if (!this.initialScript || this.initialScriptExecuted_) return;
     setTimeout((): void => { this.runInitialScript_(); }, 1000);
+  }
+
+  @Builder
+  private NavigationButton_(icon: string, label: string, enabled: boolean, action: number) {
+    Button() {
+      Column({ space: 1 }) {
+        Text(icon)
+          .height(25)
+          .fontSize(21)
+          .lineHeight(25)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+        Text(label)
+          .height(15)
+          .fontSize(10)
+          .lineHeight(15)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+    }
+    .width(56)
+    .height(52)
+    .padding(0)
+    .stateEffect(enabled)
+    .opacity(enabled ? 1 : 0.42)
+    .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(14)
+    .accessibilityText(label)
+    // 不使用动态 .enabled()：CustomDialog 中 Builder 参数初始化为 false 后，
+    // 部分系统版本不会恢复点击命中。事件内再查询 Controller 的实时状态。
+    .onClick((): void => { this.handleNavigation_(action); })
   }
 
   build() {
@@ -141,36 +243,31 @@ export struct AiImportPreviewDialog {
         .height(56)
 
         Row({ space: 8 }) {
-          Button('‹')
-            .width(36).height(32).fontSize(22)
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-            .borderRadius(16)
-            .onClick((): void => { this.goBack_(); })
+          this.NavigationButton_('←', '后退', this.canGoBack_, 0)
+          this.NavigationButton_('→', '前进', this.canGoForward_, 1)
+          this.NavigationButton_('↻', '刷新', this.controllerAttached_, 2)
+          this.NavigationButton_(this.isDesktopMode_ ? '▣' : '▯',
+            this.isDesktopMode_ ? '桌面' : '移动', this.controllerAttached_, 3)
 
-          Button('›')
-            .width(36).height(32).fontSize(22)
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-            .borderRadius(16)
-            .onClick((): void => { this.goForward_(); })
-
-          Button('↻')
-            .width(36).height(32).fontSize(17)
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-            .borderRadius(16)
-            .onClick((): void => { this.refresh_(); })
-
-          Text(this.currentUrl)
-            .layoutWeight(1).fontSize(11).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .fontColor(ThemeColors.secondaryText(this.isDark))
+          Row() {
+            Text(this.currentUrl)
+              .layoutWeight(1)
+              .fontSize(11)
+              .maxLines(2)
+              .lineHeight(15)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(ThemeColors.secondaryText(this.isDark))
+          }
+          .layoutWeight(1)
+          .height(44)
+          .padding({ left: 10, right: 10 })
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .borderRadius(14)
         }
         .width('100%')
-        .height(40)
+        .height(60)
       }
-      .width('100%').height(96).padding({ left: 6, right: 10 })
+      .width('100%').height(116).padding({ left: 10, right: 10 })
       .backgroundColor(ThemeColors.surface(this.isDark))
 
       Stack() {
@@ -180,6 +277,8 @@ export struct AiImportPreviewDialog {
           .mixedMode(MixedMode.All)
           .onControllerAttached((): void => {
             this.controllerAttached_ = true;
+            this.applyPageMode_(false);
+            this.updateNavigationState_();
             this.scheduleInitialScript_();
           })
           .onPageBegin((): void => {
@@ -190,6 +289,7 @@ export struct AiImportPreviewDialog {
           .onPageEnd((event): void => {
             this.currentUrl = event.url || this.currentUrl;
             this.isLoading = false;
+            this.updateNavigationState_();
             this.runInitialScript_();
           })
           .onErrorReceive((event): void => {

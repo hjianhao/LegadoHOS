@@ -115,17 +115,15 @@ export function isLikelySameChapterPageUrl(chapterUrl: string, nextUrl: string):
   const nextStem = nextPath.replace(pageSuffix, '$1');
   if (currentStem === nextStem && (pageSuffix.test(currentPath) || pageSuffix.test(nextPath))) return true;
 
-  const currentSegments = currentPath.split('/').filter((item: string): boolean => item.length > 0);
-  const nextSegments = nextPath.split('/').filter((item: string): boolean => item.length > 0);
-  if (currentSegments.length === nextSegments.length && currentSegments.length >= 3) {
-    const last = currentSegments.length - 1;
-    const currentPage = currentSegments[last].replace(/\.[a-z0-9]+$/i, '');
-    const nextPage = nextSegments[last].replace(/\.[a-z0-9]+$/i, '');
-    if (/^\d+$/.test(currentPage) && /^\d+$/.test(nextPage) && currentPage !== nextPage) {
-      return currentSegments.slice(0, last).join('/') === nextSegments.slice(0, last).join('/');
-    }
-  }
+  // `.../4.html → .../3.html` 这类裸数字变化通常是相邻章节，不是同章分页。
+  // 真正分页必须有 page 查询参数、_2/-page2 等明确标记，或由页面“下一页”语义嗅探确认。
   return false;
+}
+
+/** HTTP 200 也可能是转码/换源失败占位页，不能把导航文字当成小说正文。 */
+export function isInvalidAiContentResult(content: string): boolean {
+  if (!content) return true;
+  return /(转码失败|请换(?:以下)?其他源|章节内容(?:加载|获取)失败|正文(?:加载|获取)失败|Enable JavaScript and cookies to continue|Just a moment\.\.\.)/i.test(content);
 }
 
 function getBaseUrl(rawUrl: string): string {
@@ -1660,11 +1658,33 @@ export class SourceExecutor {
         const visited = new Set<string>();
         let pageUrl = contentUrl;
         let pageHtml = raw;
+        const isAiContentSource = source.isAiGenerated || source.sourceName.endsWith('(AI)');
+        let rejectedInvalidContent = false;
         for (let page = 0; page < MAX_CONTENT_PAGE_COUNT; page++) {
           if (visited.has(pageUrl)) break;
           visited.add(pageUrl);
 
-          const result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
+          let result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
+          if (isAiContentSource && isInvalidAiContentResult(result)) {
+            console.warn('[SrcEx] getContent detected placeholder/transcode failure, retrying current page:',
+              pageUrl.substring(0, 100));
+            for (let retry = 0; retry < 2; retry++) {
+              const retryHtml = await this.fetchWithOpts(pageUrl, headers);
+              if (!retryHtml) continue;
+              const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent });
+              if (!isInvalidAiContentResult(retryResult)) {
+                pageHtml = retryHtml;
+                result = retryResult;
+                console.info('[SrcEx] getContent placeholder retry succeeded:', retry + 1);
+                break;
+              }
+            }
+            if (isInvalidAiContentResult(result)) {
+              rejectedInvalidContent = true;
+              console.warn('[SrcEx] getContent rejected placeholder/transcode failure after retries');
+              break;
+            }
+          }
           if (result && result.length > 0) {
             const newlineCount = (result.match(/\n/g) || []).length;
             console.info('[SrcEx] getContent source=', source.sourceName, 'replaceRule=', source.ruleBookContentReplaceRegex?.substring(0, 100),
@@ -1695,11 +1715,10 @@ export class SourceExecutor {
           let sniffedNextUrl = '';
           let nextUrl = effectiveNextRule
             ? this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl) : '';
-          const isAiContentSource = source.isAiGenerated || source.sourceName.endsWith('(AI)');
           if (isAiContentSource) {
             sniffedNextUrl = sniffNextContentPageUrl(pageHtml, pageUrl);
-            // AI 没生成翻页规则，或规则在后续页面失效时，继续嗅探明确的“下一页”。
-            if (!nextUrl) nextUrl = sniffedNextUrl;
+            // 页面明确标注“下一页”时优先于 AI 规则，避免模型误选“上一章/下一章”。
+            if (sniffedNextUrl) nextUrl = sniffedNextUrl;
           }
           if (!nextUrl || visited.has(nextUrl)) break;
           // 明确嗅探到“下一页”时支持 query/path 等分页 URL；普通规则仍保留跨章保护。
@@ -1716,6 +1735,9 @@ export class SourceExecutor {
         }
         const merged = contentParts.join('\n');
         if (merged && merged.length > 0) return merged;
+        // 已配置正文规则但所有页面都没有匹配结果时，不得再退回整页文本。
+        // 否则错误选择器仍会绕过上层的正文规则验证。
+        if (rejectedInvalidContent || source.ruleBookContent) return '';
       }
 
       // 兜底：stripHtml 或 formatKeepImg
@@ -3395,7 +3417,12 @@ export class SourceExecutor {
       if (value) {
         return this.stripHtml(value);
       }
+
+      // 已配置内容规则却没有匹配到节点时必须返回空值。此前退回整页纯文本，
+      // 会把导航栏、标题、广告和页脚误当成正文，也会让 AI 规则验证产生假阳性。
+      return '';
     }
+    // 没有配置规则时才保留历史的整页纯文本兜底。
     return this.stripHtml(html);
   }
 

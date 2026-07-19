@@ -8,8 +8,10 @@ import { AiProviderProfile, detectAiProvider, normalizeAiTimeoutSeconds, upsertA
 import { HtmlParser } from '../main/ets/util/HtmlParser';
 import { extractAiBookMetadata, isSafeAiImportUrl, parseAiRulesJson,
   prepareHtmlForAi, normalizeAiChapters, extractAiFullTocUrl,
-  isLikelySameAiBookPage } from '../main/ets/engine/ai/AiBookImporter';
-import { isLikelySameChapterPageUrl, sniffNextContentPageUrl } from '../main/ets/engine/source/SourceExecutor';
+  inferAiContentRule, isLikelySameAiBookPage,
+  isUsableAiExtractedContent } from '../main/ets/engine/ai/AiBookImporter';
+import { isInvalidAiContentResult, isLikelySameChapterPageUrl,
+  sniffNextContentPageUrl } from '../main/ets/engine/source/SourceExecutor';
 
 export default function localUnitTest() {
   describe('localUnitTest', () => {
@@ -253,6 +255,21 @@ export default function localUnitTest() {
       const nextPage = sniffNextContentPageUrl(html, 'https://example.com/book/read?id=19&page=1');
       expect(nextPage).assertEqual('https://example.com/book/read?id=19&page=2');
       expect(isLikelySameChapterPageUrl('https://example.com/book/read?id=19&page=1', nextPage)).assertTrue();
+    });
+    it('aiImportRejectsAdjacentNumericChaptersAndTranscodePlaceholder', 0, () => {
+      const chapter = 'https://m.3kxs.net/read/7613/79/4.html';
+      expect(isLikelySameChapterPageUrl(chapter, 'https://m.3kxs.net/read/7613/79/3.html')).assertFalse();
+      expect(isLikelySameChapterPageUrl(chapter, 'https://m.3kxs.net/read/7613/79/5.html')).assertFalse();
+      expect(isInvalidAiContentResult('转码失败！请换以下其他源继续阅读！')).assertTrue();
+      expect(isInvalidAiContentResult('这是正常的小说正文内容。')).assertFalse();
+      expect(inferAiContentRule('<main><div class="content">真实正文</div></main>')).assertEqual('.content@html');
+      expect(inferAiContentRule('<div class="txtnav"><p>第一段正文</p><p>第二段正文</p></div>'))
+        .assertEqual('.txtnav p@textNodes');
+      expect(inferAiContentRule('<div class="content">转码失败！请换以下其他源继续阅读！</div>')).assertEqual('');
+      expect(isUsableAiExtractedContent('这是正常小说正文内容，用足够长度模拟章节段落。' +
+        '人物继续交谈并推动情节发展，窗外的雨声逐渐变大。故事仍然在继续，没有混入网页导航。')).assertTrue();
+      expect(isUsableAiExtractedContent('首页 排行榜 小说分类 我的书架 阅读记录 意见反馈 设置 黑夜 换源 正文'))
+        .assertFalse();
     });
   });
 }

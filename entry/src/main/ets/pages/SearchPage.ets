@@ -109,6 +109,8 @@ struct SearchPage {
   @State showOnlineBrowser: boolean = false;
   @State onlineBrowserUrl: string = '';
   @State onlineBrowserTitle: string = '';
+  @State onlineDirectUrl: string = '';
+  @State onlineBrowserFromDirect: boolean = false;
   @State onlineImporting: boolean = false;
   @State onlinePhase: string = '';
   @State onlineProgressText: string = '';
@@ -271,6 +273,25 @@ struct SearchPage {
     await this.addToHistory(query);
     this.onlineBrowserUrl = this.onlineSearchUrl_(query);
     this.onlineBrowserTitle = this.onlineEngineName_() + ' · ' + query;
+    this.onlineBrowserFromDirect = false;
+    this.showOnlineBrowser = true;
+  }
+
+  private openDirectOnlineUrl_(): void {
+    const url = this.onlineDirectUrl.trim();
+    if (!url) {
+      UiUtil.showToast(this.getUIContext(), { message: '请输入小说详情页或目录页网址', duration: 1500 });
+      return;
+    }
+    if (!isSafeAiImportUrl(url)) {
+      UiUtil.showToast(this.getUIContext(), { message: '请输入有效的公网 HTTP(S) 网址', duration: 2000 });
+      return;
+    }
+    this.dismissSearchInput_();
+    this.onlineDirectUrl = url;
+    this.onlineBrowserUrl = url;
+    this.onlineBrowserTitle = '确认导入网页';
+    this.onlineBrowserFromDirect = true;
     this.showOnlineBrowser = true;
   }
 
@@ -1294,9 +1315,14 @@ struct SearchPage {
             initialUrl: this.onlineBrowserUrl,
             titleText: this.onlineBrowserTitle,
             confirmText: '导入当前页',
-            helperText: '先在搜索结果中进入小说详情页或目录页，再导入当前网页。',
+            helperText: this.onlineBrowserFromDirect ?
+              '请确认当前网页是小说详情页或目录页，再导入当前网页。' :
+              '先在搜索结果中进入小说详情页或目录页，再导入当前网页。',
             dismissBeforeConfirm: false,
-            onCancel: (): void => { this.showOnlineBrowser = false; },
+            onCancel: (): void => {
+              this.showOnlineBrowser = false;
+              this.onlineBrowserFromDirect = false;
+            },
             onConfirm: (result: AiImportPreviewResult): void => { this.confirmOnlinePage_(result); }
           })
         }
@@ -1700,6 +1726,53 @@ struct SearchPage {
         .padding(14)
         .backgroundColor(this.surfaceAltColor())
         .borderRadius(14)
+
+        Column({ space: 10 }) {
+          Row() {
+            Text('直接网址导入')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.textColor())
+            Blank()
+            Text('小说详情页 / 目录页')
+              .fontSize(12)
+              .fontColor(this.subTextColor())
+          }
+          .width('100%')
+
+          TextArea({
+            text: this.onlineDirectUrl,
+            placeholder: 'https://example.com/book/123/'
+          })
+            .width('100%')
+            .height(96)
+            .fontSize(14)
+            .fontColor(this.textColor())
+            .placeholderColor(this.subTextColor())
+            .caretColor(this.primaryColor())
+            .padding(12)
+            .backgroundColor(this.surfaceAltColor())
+            .borderRadius(12)
+            .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
+            .onChange((value: string): void => { this.onlineDirectUrl = value; })
+
+          Button('打开网址并确认导入')
+            .width('100%')
+            .height(48)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(ThemeColors.onPrimary(this.isDark))
+            .backgroundColor(this.primaryColor())
+            .borderRadius(24)
+            .enabled(!this.onlineImporting && this.onlineDirectUrl.trim().length > 0)
+            .onClick((): void => { this.openDirectOnlineUrl_(); })
+        }
+        .width('100%')
+        .padding(16)
+        .alignItems(HorizontalAlign.Start)
+        .backgroundColor(this.surfaceColor())
+        .borderRadius(16)
+        .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
 
         if (this.onlineImporting || this.onlineResultText || this.onlineErrorText) {
           Column({ space: 10 }) {

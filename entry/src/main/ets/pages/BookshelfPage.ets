@@ -59,6 +59,7 @@ export struct BookshelfPage {
   @State activeGroupId: number = BookGroup.ALL;
   @State groups: BookGroupItem[] = [];
   @State searchText: string = '';
+  @State isShelfSearchFocused: boolean = false;
   @StorageLink('gc_groupStyle') groupStyle: number = 0;
   @StorageLink('gc_sortMode') sortMode: number = 0;
   @StorageLink('gc_sortOrder') sortOrder: number = 0;
@@ -791,12 +792,56 @@ export struct BookshelfPage {
         Button() { Text($r('app.string.ui_b7ed67990b')).fontSize(22).fontColor(ThemeColors.onBackground(this.isDark)) }.width(40).height(40).backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.ui_77836d3a99')).onClick(() => { this.showMenu = !this.showMenu; })
       }.padding({ left: 16, right: 12, top: 12 }).width('100%')
 
-      // 搜索栏
-      TextInput({ placeholder: $r('app.string.ui_f9faaeaa8e'), text: this.searchText })
-        .width('calc(100% - 32)').height(36).margin({ left: 16, right: 16, top: 8 })
-        .padding({ left: 12 }).backgroundColor(ThemeColors.surface(this.isDark))
-        .borderRadius(18).fontSize(14).placeholderColor(ThemeColors.secondaryText(this.isDark))
-        .onChange((value: string) => { this.onSearchChange(value); })
+      // 书架过滤栏。不要使用 CSS calc() 宽度，ArkUI 真机会将其压缩为接近 0 宽。
+      Row() {
+        Row({ space: 6 }) {
+          Text($r('app.string.ui_1b0a1f59a5'))
+            .width(26)
+            .fontSize(18)
+            .textAlign(TextAlign.Center)
+            .fontColor(ThemeColors.secondaryText(this.isDark))
+
+          TextInput({ placeholder: '过滤书名、作者或简介', text: this.searchText })
+            .layoutWeight(1)
+            .height(42)
+            .padding(0)
+            .fontSize(15)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .placeholderColor(ThemeColors.secondaryText(this.isDark))
+            .caretColor(ThemeColors.primary(this.isDark))
+            .backgroundColor(ThemeColors.transparent())
+            .onFocus((): void => { this.isShelfSearchFocused = true; })
+            .onBlur((): void => { this.isShelfSearchFocused = false; })
+            .onChange((value: string): void => { this.onSearchChange(value); })
+
+          if (this.searchText.length > 0) {
+            Button() {
+              Text('×')
+                .fontSize(19)
+                .fontColor(ThemeColors.secondaryText(this.isDark))
+            }
+            .width(36)
+            .height(36)
+            .padding(0)
+            .backgroundColor(ThemeColors.transparent())
+            .borderRadius(18)
+            .accessibilityText('清除过滤文字')
+            .onClick((): void => { this.onSearchChange(''); })
+          }
+        }
+        .layoutWeight(1)
+        .height(46)
+        .padding({ left: 10, right: 5 })
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+        .borderRadius(23)
+        .border({
+          width: this.isShelfSearchFocused ? 2 : 1,
+          color: this.isShelfSearchFocused ?
+            ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark)
+        })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8 })
 
       // 分类标签 (groupStyle: 0=show, 1=hide)
       if (this.groupStyle === 0) {
