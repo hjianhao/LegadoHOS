@@ -783,6 +783,7 @@ export struct BookshelfPage {
         Button() {
           Text((this.layoutMode === 0) ? '▦' : '☰').fontSize(16).fontColor(ThemeColors.onBackground(this.isDark))
         }.width(40).height(40).backgroundColor(ThemeColors.transparent())
+        .accessibilityText(this.layoutMode === 0 ? '切换到列表布局' : '切换到网格布局')
         .onClick(() => { this.onLayoutToggle(); })
         Button() {
           Text(this.sortLabels[this.sortMode]).fontSize(12).fontColor(ThemeColors.onBackground(this.isDark))

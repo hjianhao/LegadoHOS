@@ -595,7 +595,7 @@ struct BookSourcePage {
           this.menuItem('删除', true, () => { this.selectedUrls = [source.sourceUrl]; this.syncSelectedSet_(); this.isSelectMode_ = false; this.contextMenuUrl = ''; this.confirmDelete(); })
         }.width(136).padding({ top: 4, bottom: 4 }).borderRadius(16)
           .backgroundColor(ThemeColors.surface(this.isDark)).shadow({ radius: 12, color: ThemeColors.scrim(this.isDark) })
-          .position({ x: 'calc(100% - 148)', y: 48 }).zIndex(120)
+          .position({ right: 12, top: 48 }).zIndex(120)
       }
     }.width('100%')
   }

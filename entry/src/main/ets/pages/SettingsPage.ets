@@ -233,15 +233,17 @@ struct SettingsPage {
           .width(40).textAlign(TextAlign.End)
       }.padding({ left: 16, right: 16, top: 16, bottom: 8 }).width('100%')
 
-      Slider({
-        value: this.searchConcurrency,
-        min: 1, max: 50, step: 1
-      })
-      .width('calc(100% - 32)').margin({ left: 16, right: 16 })
-      .onChange((val: number) => {
-        this.searchConcurrency = val;
-        AppStorage.set<number>('searchConcurrency', val);
-      })
+      Row() {
+        Slider({
+          value: this.searchConcurrency,
+          min: 1, max: 50, step: 1
+        })
+        .width('100%')
+        .onChange((val: number) => {
+          this.searchConcurrency = val;
+          AppStorage.set<number>('searchConcurrency', val);
+        })
+      }.width('100%').padding({ left: 16, right: 16 })
 
       Text($r('app.string.ui_0a4ed43a7e'))
         .fontSize(12).fontColor(ThemeColors.onBackground(this.isDark)).padding({ left: 16, right: 16, top: 4 })

@@ -66,13 +66,14 @@ export struct BookmarkEditDialog {
           .backgroundColor(Color.Transparent)
           .height(44).layoutWeight(1)
           .onClick(() => { this.onDismiss?.(); })
-        Button('保存').fontSize(15).fontColor('#FFF')
+        Button('保存').fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
           .backgroundColor(ThemeColors.primary(this.isDark))
           .height(44).layoutWeight(1).borderRadius(0)
           .onClick(() => { this.onSave?.(this.text.trim(), this.note.trim()); })
       }.width('100%').height(48)
     }
     .width('100%')
+    .constraintSize({ maxWidth: 640, maxHeight: '92%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }

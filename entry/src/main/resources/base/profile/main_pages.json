@@ -10,6 +10,8 @@
     "pages/BookInfoPage",
     "pages/BookSourcePage",
     "pages/BookSourceEditPage",
+    "pages/ReplaceRulePage",
+    "pages/ReplaceRuleEditPage",
     "pages/BookSourceDebugPage",
     "pages/ChapterListPage",
     "pages/ReadRecordPage",

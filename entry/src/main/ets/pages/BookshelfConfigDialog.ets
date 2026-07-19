@@ -88,7 +88,8 @@ export struct BookshelfConfigDialog {
   build() {
     Column() {
       Row() {
-        Text($r('app.string.ui_99f30ec7d9')).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text($r('app.string.ui_99f30ec7d9')).fontSize(18).fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
         Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(Color.Transparent)
           .accessibilityText($r('app.string.common_close')).onClick(() => { this.controller.close(); })
       }.padding(12).width('100%')
@@ -96,7 +97,7 @@ export struct BookshelfConfigDialog {
       Scroll() {
         Column() {
           Row() {
-            Text($r('app.string.ui_b42911985e')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_b42911985e')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
             Button(this.groupStyleLabels[this.groupStyle] + ' ›')
               .fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
               .onClick(() => { this.groupStyle = (this.groupStyle + 1) % 3; this.onChanged(); })
@@ -105,7 +106,7 @@ export struct BookshelfConfigDialog {
           Divider().color(ThemeColors.outlineVariant(this.isDark)).width('100%').margin({ left: 8 })
 
           Row() {
-            Text($r('app.string.ui_3bf3689a69')).fontSize(14).layoutWeight(1)
+            Text($r('app.string.ui_3bf3689a69')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
             Button(this.sortLabels[this.sortMode] + ' ›')
               .fontSize(13).fontColor(ThemeColors.primary(this.isDark)).backgroundColor(Color.Transparent)
               .onClick(() => { this.sortMode = (this.sortMode + 1) % 4; this.onChanged(); })
@@ -241,7 +242,7 @@ export struct BookshelfConfigDialog {
       }.layoutWeight(1).width('100%')
     }
     .padding({ left: 8, right: 8, top: 0, bottom: 12 })
-    .width('100%').height('70%')
+    .width('100%').height('70%').constraintSize({ maxWidth: 640, maxHeight: 720 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }

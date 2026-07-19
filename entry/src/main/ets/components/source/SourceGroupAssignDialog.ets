@@ -79,7 +79,7 @@ export struct SourceGroupAssignDialog {
           })
         }.height(220).width('100%')
       }
-    }.padding({ left: 16, right: 16, bottom: 20 }).width('100%')
+    }.padding({ left: 16, right: 16, bottom: 20 }).width('100%').constraintSize({ maxWidth: 640, maxHeight: '92%' })
       .backgroundColor(ThemeColors.background(this.isDark))
       .borderRadius({ topLeft: 20, topRight: 20 })
   }

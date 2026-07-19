@@ -40,7 +40,7 @@ struct CacheManagePage {
       message: '删除《' + stat.name + '》的全部章节缓存？（保留目录和阅读进度）',
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
-        value: '删除', fontColor: '#E53935',
+        value: '删除', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           await CacheManager.getInstance().clearBookCache(stat.bookId);
           UiUtil.showToast(this.getUIContext(), { message: '已清理《' + stat.name + '》', duration: 1500 });
@@ -57,7 +57,7 @@ struct CacheManagePage {
       message: '将删除所有书籍的章节内容缓存（保留目录和阅读进度），确定继续？',
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
-        value: '全部删除', fontColor: '#E53935',
+        value: '全部删除', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           await CacheManager.getInstance().clearAll();
           UiUtil.showToast(this.getUIContext(), { message: '已清理全部缓存', duration: 1500 });
@@ -73,22 +73,23 @@ struct CacheManagePage {
 
       // 总览卡片
       Row() {
-        Column() {
-          Text('章节内容缓存').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
-          Text(CacheManager.formatSize(this.totalSize)).fontSize(22).fontWeight(FontWeight.Bold)
-            .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Row() {
+          Column() {
+            Text('章节内容缓存').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            Text(CacheManager.formatSize(this.totalSize)).fontSize(22).fontWeight(FontWeight.Bold)
+              .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
 
-        Button('清理全部').fontSize(13).fontColor('#FFF')
-          .backgroundColor(this.stats.length > 0
-            ? ThemeColors.error(this.isDark) : ThemeColors.outlineVariant(this.isDark))
-          .enabled(this.stats.length > 0)
-          .height(34).borderRadius(17).padding({ left: 16, right: 16 })
-          .onClick(() => { this.clearAll(); })
-      }
-      .width('calc(100% - 24)').margin({ left: 12, right: 12, top: 12, bottom: 8 })
-      .padding(16).borderRadius(12)
-      .backgroundColor(ThemeColors.surface(this.isDark))
+          Button('清理全部').fontSize(13).fontColor(ThemeColors.onError(this.isDark))
+            .backgroundColor(this.stats.length > 0
+              ? ThemeColors.error(this.isDark) : ThemeColors.outlineVariant(this.isDark))
+            .enabled(this.stats.length > 0)
+            .height(48).borderRadius(24).padding({ left: 16, right: 16 })
+            .onClick(() => { this.clearAll(); })
+        }
+        .width('100%').padding(16).borderRadius(12)
+        .backgroundColor(ThemeColors.surface(this.isDark))
+      }.width('100%').padding({ left: 12, right: 12, top: 12, bottom: 8 })
 
       if (this.isLoading) {
         LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
@@ -113,7 +114,7 @@ struct CacheManagePage {
                 Button('清理').fontSize(13)
                   .fontColor(ThemeColors.error(this.isDark))
                   .backgroundColor(Color.Transparent)
-                  .height(34).padding({ left: 8, right: 8 })
+                  .height(48).padding({ left: 12, right: 12 })
                   .onClick((): void => { this.clearBook(stat); })
               }
               .width('100%').padding({ left: 16, right: 8, top: 10, bottom: 10 })

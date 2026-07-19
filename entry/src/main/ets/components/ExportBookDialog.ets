@@ -68,6 +68,7 @@ export struct ExportBookDialog {
       }
     }
     .width('100%')
+    .constraintSize({ maxWidth: 640, maxHeight: '92%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -198,10 +199,12 @@ export struct ExportBookDialog {
         .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, right: 16, bottom: 16 }).alignSelf(ItemAlign.Start)
 
-      Button($r('app.string.common_done')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
-        .backgroundColor(ThemeColors.primary(this.isDark))
-        .height(44).width('calc(100% - 32)').margin({ left: 16, right: 16, bottom: 16 })
-        .onClick(() => { this.onDismiss?.(); })
+      Row() {
+        Button($r('app.string.common_done')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
+          .backgroundColor(ThemeColors.primary(this.isDark))
+          .height(48).width('100%').borderRadius(24)
+          .onClick(() => { this.onDismiss?.(); })
+      }.width('100%').padding({ left: 16, right: 16, bottom: 16 })
     }
   }
 

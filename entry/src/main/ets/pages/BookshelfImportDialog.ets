@@ -100,6 +100,7 @@ export struct BookshelfImportDialog {
           .onClick((): void => { this.doImport(); })
       }.width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 })
     }
-    .width('100%').backgroundColor(ThemeColors.onPrimary(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
+    .width('100%').constraintSize({ maxWidth: 640 })
+    .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

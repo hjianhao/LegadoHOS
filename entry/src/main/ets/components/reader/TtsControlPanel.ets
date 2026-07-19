@@ -75,7 +75,7 @@ export struct TtsControlPanel {
             .onClick(() => { this.onStop?.(); })
         }.width('100%').justifyContent(FlexAlign.Center).margin({ top: 10, bottom: 16 })
       }.width('100%').backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(12)
-    }.width('100%').height('100%').backgroundColor('rgba(0,0,0,0.3)')
+    }.width('100%').height('100%').backgroundColor(ThemeColors.strongScrim(this.isDark))
   }
 
   @Builder

@@ -227,7 +227,7 @@ export struct BookGroupManageDialog {
         .onClick(() => { this.controller.close(); })
     }
     .padding({ left: 16, right: 16, top: 0, bottom: 12 })
-    .width('100%').height('70%')
+    .width('100%').height('70%').constraintSize({ maxWidth: 640, maxHeight: 720 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }

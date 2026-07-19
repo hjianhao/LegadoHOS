@@ -223,6 +223,7 @@ export struct ImportSourceDialog {
           Button($r('app.string.ui_a27b2f6612')).fontSize(15).height(44).width('100%').backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).onClick(()=>{this.importMode = 'url'})
         }.padding(16).width('100%')
       }
-    }.width('100%').backgroundColor(ThemeColors.background(this.isDark)).borderRadius({topLeft:16,topRight:16})
+    }.width('100%').constraintSize({ maxWidth: 640, maxHeight: '92%' })
+      .backgroundColor(ThemeColors.background(this.isDark)).borderRadius({topLeft:16,topRight:16})
   }
 }

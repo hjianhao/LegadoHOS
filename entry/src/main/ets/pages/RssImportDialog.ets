@@ -236,6 +236,7 @@ export struct RssImportDialog {
             .onClick((): void => { this.doUrlImport(); })
         }.padding(16).width('100%')
       }
-    }.width('100%').backgroundColor(ThemeColors.surface(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
+    }.width('100%').constraintSize({ maxWidth: 640, maxHeight: '92%' })
+      .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })
   }
 }

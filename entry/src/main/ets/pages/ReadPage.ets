@@ -2100,7 +2100,7 @@ struct ReadPage {
       // 云端进度确认弹窗（增强同步模式：云端更远时询问是否恢复）
       if (this.showCloudProgressDlg && this.pendingCloudProgress_) {
         Column() {
-          Column().width('100%').height('100%').backgroundColor('#66000000')
+          Column().width('100%').height('100%').backgroundColor(ThemeColors.strongScrim(this.isDark))
             .onClick(() => { this.showCloudProgressDlg = false; })
           Column() {
             Text('发现云端进度').fontSize(17).fontWeight(FontWeight.Bold)
@@ -2120,7 +2120,7 @@ struct ReadPage {
                   // 保留本地进度并回传云端
                   this.saveAndUploadProgress(true);
                 })
-              Button('恢复').fontSize(15).fontColor('#FFF')
+              Button('恢复').fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
                 .backgroundColor(ThemeColors.primary(this.isDark)).height(44).layoutWeight(1)
                 .onClick(() => {
                   const cloud = this.pendingCloudProgress_!;

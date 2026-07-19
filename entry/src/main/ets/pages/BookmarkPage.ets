@@ -135,7 +135,7 @@ struct BookmarkPage {
       message: '删除「' + (b.chapterName || '未命名章节') + '」处的书签？',
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
-        value: '删除', fontColor: '#E53935',
+        value: '删除', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           this.showEditDlg = false;
           await new BookmarkTable(AppDatabase.getInstance().rdbStore).delete(b.id);
@@ -151,8 +151,12 @@ struct BookmarkPage {
       Column() {
         // 标题栏
         Row() {
-          Button() { Text('←').fontSize(20).fontColor(ThemeColors.primary(this.isDark)) }
-            .backgroundColor(Color.Transparent)
+          Button() {
+            SymbolGlyph($r('sys.symbol.chevron_backward')).fontSize(24)
+              .fontColor([ThemeColors.onSurface(this.isDark)])
+          }
+            .width(48).height(48).padding(0).borderRadius(24)
+            .backgroundColor(Color.Transparent).accessibilityText($r('app.string.common_back'))
             .onClick(() => { UiUtil.back(this.getUIContext()); })
           Text('书签').fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
@@ -162,11 +166,15 @@ struct BookmarkPage {
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
         // 搜索框
-        TextInput({ placeholder: '搜索书名 / 章节 / 原文 / 笔记', text: this.searchText })
-          .width('calc(100% - 24)').height(36).margin({ left: 12, right: 12, top: 10 })
-          .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(18)
-          .padding({ left: 12 }).fontSize(14)
-          .onChange((v: string) => { this.searchText = v; this.applyFilter(); })
+        Row() {
+          TextInput({ placeholder: '搜索书名 / 章节 / 原文 / 笔记', text: this.searchText })
+            .width('100%').height(44)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(22)
+            .padding({ left: 14, right: 14 }).fontSize(14)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .placeholderColor(ThemeColors.secondaryText(this.isDark))
+            .onChange((v: string) => { this.searchText = v; this.applyFilter(); })
+        }.width('100%').padding({ left: 12, right: 12, top: 10 })
 
         if (this.isLoading) {
           LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 60 })

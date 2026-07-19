@@ -1257,7 +1257,7 @@ struct SearchPage {
           .height(56)
           .borderRadius(28)
           .backgroundColor(this.isSearching ? ThemeColors.error(this.isDark) : this.primaryColor())
-          .position({ x: '80%', y: '82%' })
+          .position({ right: 16, bottom: 24 })
           .onClick(() => {
             if (this.isSearching || this.isLoadingMore) {
               this.stopSearch();
@@ -1271,7 +1271,7 @@ struct SearchPage {
           .height(56)
           .borderRadius(28)
           .backgroundColor(this.primaryColor())
-          .position({ x: '80%', y: '82%' })
+          .position({ right: 16, bottom: 24 })
           .onClick(() => { this.loadMore(); })
       }
 
@@ -1287,12 +1287,16 @@ struct SearchPage {
 
       if (this.showClearHistoryDialog) {
         this.buildDimLayer(() => { this.showClearHistoryDialog = false; })
-        this.buildClearHistoryDialog()
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildClearHistoryDialog()
+        }.width('100%').height('100%')
       }
 
       if (this.showRelaxFilterDialog) {
         this.buildDimLayer(() => { this.showRelaxFilterDialog = false; })
-        this.buildRelaxFilterDialog()
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildRelaxFilterDialog()
+        }.width('100%').height('100%')
       }
 
       if (this.showPreviewSheet) {
@@ -1667,9 +1671,10 @@ struct SearchPage {
                 Text($r('app.string.ui_11f6ad8ec5'))
                   .fontSize(14)
                   .fontColor(this.subTextColor())
-                  .width(32)
-                  .height(32)
+                  .width(44)
+                  .height(44)
                   .textAlign(TextAlign.Center)
+                  .accessibilityText($r('app.string.common_delete'))
                   .onClick(() => { this.removeHistory(idx); })
               }
               .width('100%')
@@ -2263,7 +2268,7 @@ struct SearchPage {
     .padding({ bottom: 18 })
     .backgroundColor(this.surfaceColor())
     .borderRadius({ topLeft: 20, topRight: 20 })
-    .position({ x: 0, y: '54%' })
+    .position({ left: 0, bottom: 0 })
   }
 
   @Builder buildSegment(label: string, selected: boolean, action: () => void) {
@@ -2328,9 +2333,10 @@ struct SearchPage {
             Text($r('app.string.ui_11f6ad8ec5'))
               .fontSize(14)
               .fontColor(this.subTextColor())
-              .width(32)
-              .height(32)
+              .width(44)
+              .height(44)
               .textAlign(TextAlign.Center)
+              .accessibilityText($r('app.string.common_clear'))
               .onClick(() => { this.sourceFilterText = ''; })
           }
         }
@@ -2413,7 +2419,7 @@ struct SearchPage {
     .padding({ bottom: 18 })
     .backgroundColor(this.surfaceColor())
     .borderRadius({ topLeft: 20, topRight: 20 })
-    .position({ x: 0, y: '30%' })
+    .position({ left: 0, bottom: 0 })
   }
 
   @Builder buildClearHistoryDialog() {
@@ -2452,7 +2458,6 @@ struct SearchPage {
     .width('82%')
     .backgroundColor(this.surfaceColor())
     .borderRadius(18)
-    .position({ x: '9%', y: '38%' })
   }
 
   @Builder buildRelaxFilterDialog() {
@@ -2511,7 +2516,6 @@ struct SearchPage {
     .padding({ left: 20, right: 20 })
     .backgroundColor(this.surfaceColor())
     .borderRadius(18)
-    .position({ x: '9%', y: '30%' })
   }
 
   @Builder buildExpandedSourceSheet() {
@@ -2596,7 +2600,7 @@ struct SearchPage {
     .padding({ bottom: 18 })
     .backgroundColor(this.surfaceColor())
     .borderRadius({ topLeft: 20, topRight: 20 })
-    .position({ x: 0, y: '18%' })
+    .position({ left: 0, bottom: 0 })
   }
 
   @Builder buildPreviewSheet() {
@@ -2699,7 +2703,7 @@ struct SearchPage {
       .width('100%')
       .backgroundColor(this.surfaceColor())
       .borderRadius({ topLeft: 20, topRight: 20 })
-      .position({ x: 0, y: '54%' })
+      .position({ left: 0, bottom: 0 })
     }
   }
 }

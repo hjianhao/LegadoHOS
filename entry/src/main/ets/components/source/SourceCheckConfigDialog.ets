@@ -58,7 +58,7 @@ export struct SourceCheckConfigDialog {
       Button($r('app.string.ui_b324a672c3')).height(48).width('100%').borderRadius(24).margin({ top: 16 })
         .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
         .onClick(() => { this.submit(); })
-    }.padding({ left: 16, right: 16, bottom: 20 }).width('100%')
+    }.padding({ left: 16, right: 16, bottom: 20 }).width('100%').constraintSize({ maxWidth: 640, maxHeight: '92%' })
       .backgroundColor(ThemeColors.background(this.isDark)).borderRadius({ topLeft: 20, topRight: 20 })
   }
 

@@ -655,6 +655,8 @@ export struct ExplorePage {
           .height(44).layoutWeight(1)
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .placeholderColor(ThemeColors.secondaryText(this.isDark))
           .onChange((v: string) => { this.searchKey = v; })
         if (this.searchKey.length > 0) {
           Button($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)

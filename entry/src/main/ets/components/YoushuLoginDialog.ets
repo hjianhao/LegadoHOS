@@ -146,7 +146,7 @@ export struct YoushuLoginDialog {
         .fontColor(ThemeColors.secondaryText(this.isDark))
       }.width('100%').padding(18)
     }
-    .width('88%').constraintSize({ maxHeight: '90%' }).borderRadius(16)
+    .width('88%').constraintSize({ maxWidth: 520, maxHeight: '90%' }).borderRadius(16)
     .scrollBar(BarState.Auto)
     .backgroundColor(ThemeColors.background(this.isDark))
   }

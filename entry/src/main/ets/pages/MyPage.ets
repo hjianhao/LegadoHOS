@@ -31,6 +31,7 @@ export struct MyPage {
         ForEach([
           { icon: '设', title: '设置', desc: '阅读、搜索、主题等全局设置', page: 'pages/SettingsPage' },
           { icon: '源', title: '书源管理', desc: '管理书源、在线导入', page: 'pages/BookSourcePage' },
+          { icon: '净', title: '替换净化', desc: '正文/标题替换规则管理', page: 'pages/ReplaceRulePage' },
           { icon: '字', title: '字体管理', desc: '导入、删除自定义字体', page: 'pages/FontManagerPage' },
           { icon: '记', title: '阅读记录', desc: '阅读时长、统计', page: 'pages/ReadRecordPage' },
           { icon: '签', title: '书签管理', desc: '书签、笔记', page: 'pages/BookmarkPage' },

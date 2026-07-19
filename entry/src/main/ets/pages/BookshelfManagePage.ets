@@ -318,11 +318,13 @@ struct BookshelfManagePage {
         .backgroundColor(ThemeColors.surface(this.isDark))
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-        TextInput({ placeholder: $r('app.string.ui_2c643fe94c'), text: this.searchText })
-          .width('calc(100% - 24)').height(36).margin({ left: 12, right: 12, top: 10 })
-          .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(18).padding({ left: 12 }).fontSize(14)
-          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
-          .onChange((value: string): void => { this.searchText = value; this.applyFilters(); })
+        Row() {
+          TextInput({ placeholder: $r('app.string.ui_2c643fe94c'), text: this.searchText })
+            .width('100%').height(44)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(22).padding({ left: 14, right: 14 }).fontSize(14)
+            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+            .onChange((value: string): void => { this.searchText = value; this.applyFilters(); })
+        }.width('100%').padding({ left: 12, right: 12, top: 10 })
 
         Scroll() {
           Row() {
@@ -419,9 +421,11 @@ struct BookshelfManagePage {
               }
             })
           }.width('100%').height(260)
-          Button($r('app.string.common_cancel')).height(40).width('calc(100% - 32)').margin({ left: 16, right: 16, top: 8, bottom: 16 })
-            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8)
-            .onClick((): void => { this.showGroupChooser = false; })
+          Row() {
+            Button($r('app.string.common_cancel')).height(48).width('100%')
+              .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(24)
+              .onClick((): void => { this.showGroupChooser = false; })
+          }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 16 })
         }
         .position({ left: 0, bottom: 0 }).width('100%')
         .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 })

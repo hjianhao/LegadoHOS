@@ -1143,10 +1143,12 @@ struct BookInfoPage {
         Row() {
           Button() { Text($r('app.string.ui_0dccf90917')).fontSize(30).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText($r('app.string.common_back'))
             .onClick((): void => { UiUtil.back(this.getUIContext()); })
           Blank()
           Button() { Text($r('app.string.ui_6564582d82')).fontSize(20).fontColor(this.primaryTextColor()) }
             .width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText('分享')
             .onClick(() => {
               UiUtil.showToast(this.getUIContext(), { message: '分享功能待完善', duration: 1200 });
             })
@@ -1502,7 +1504,7 @@ struct BookInfoPage {
     .borderRadius(16)
     .backgroundColor(ThemeColors.surface(this.isDark))
     .shadow({ radius: 20, color: ThemeColors.shadow(this.isDark), offsetX: 0, offsetY: 8 })
-    .position({ x: 'calc(100% - 166vp)', y: 82 })
+    .position({ right: 12, top: 82 })
     .zIndex(30)
   }
 

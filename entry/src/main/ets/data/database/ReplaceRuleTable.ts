@@ -148,9 +148,9 @@ export class ReplaceRuleTable {
     };
   }
 
-  /** id 不写入，由 AUTOINCREMENT 分配 */
+  /** id<=0 时不写入，交给 AUTOINCREMENT 分配；显式 id（导入/新建）需保留以支持按 id 去重 */
   private toRow(rule: ReplaceRule): relationalStore.ValuesBucket {
-    return {
+    const row: relationalStore.ValuesBucket = {
       'rule_name': rule.name,
       'rule_group': rule.group,
       'pattern': rule.pattern,
@@ -164,5 +164,9 @@ export class ReplaceRuleTable {
       'timeout_millisecond': rule.timeoutMillisecond,
       'sort_order': rule.order,
     };
+    if (rule.id > 0) {
+      row['id'] = rule.id;
+    }
+    return row;
   }
 }

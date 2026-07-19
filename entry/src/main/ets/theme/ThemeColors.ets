@@ -111,6 +111,11 @@ export class ThemeColors {
     return '#EF5350';
   }
 
+  /** 错误色容器上的前景色。 */
+  static onError(_isDark: boolean): string {
+    return '#FFFFFF';
+  }
+
   /** 成功状态色。保持足够饱和度，避免与正文颜色混淆。 */
   static success(isDark: boolean): string {
     return isDark ? '#66BB6A' : '#2E7D32';

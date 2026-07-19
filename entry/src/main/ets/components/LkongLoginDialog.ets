@@ -63,7 +63,7 @@ export struct LkongLoginDialog {
         .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 8 })
     }
-    .width('96%').height('92%').borderRadius(16)
+    .width('96%').height('92%').constraintSize({ maxWidth: 1200, maxHeight: 900 }).borderRadius(16)
     .backgroundColor(ThemeColors.background(this.isDark))
   }
 

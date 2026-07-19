@@ -98,9 +98,20 @@ export class AppDatabase {
     await RdbUtil.executeSql(this.rdbStore_, BookmarkTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, ReadRecordTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, ReadRecordDetailTableCreate);
-    // replace_rules 旧表 schema（scope 枚举 + scope_value）与安卓字符串子串语义不兼容，
-    // 且无 UI 写入过数据（表必为空），直接 DROP 重建为安卓对齐结构
-    await RdbUtil.executeSql(this.rdbStore_, 'DROP TABLE IF EXISTS replace_rules');
+    // replace_rules 旧表 schema（scope 枚举 + scope_value 列）与安卓字符串子串语义不兼容，
+    // 仅在检测到旧 schema（存在 scope_value 列）时 DROP 重建；新表无条件 DROP 会清空用户规则
+    let isOldReplaceRuleSchema = false;
+    const schemaRs = await RdbUtil.querySql(this.rdbStore_, 'PRAGMA table_info(replace_rules)', []);
+    while (RdbUtil.next(schemaRs)) {
+      if (RdbUtil.string(schemaRs, 'name') === 'scope_value') {
+        isOldReplaceRuleSchema = true;
+        break;
+      }
+    }
+    RdbUtil.close(schemaRs);
+    if (isOldReplaceRuleSchema) {
+      await RdbUtil.executeSql(this.rdbStore_, 'DROP TABLE IF EXISTS replace_rules');
+    }
     await RdbUtil.executeSql(this.rdbStore_, ReplaceRuleTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, RSSSourceTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, RSSArticleTableCreate);

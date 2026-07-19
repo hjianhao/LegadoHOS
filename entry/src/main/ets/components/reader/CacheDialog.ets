@@ -58,6 +58,7 @@ export struct CacheDialog {
       }
     }
     .width('100%')
+    .constraintSize({ maxWidth: 640, maxHeight: '92%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }

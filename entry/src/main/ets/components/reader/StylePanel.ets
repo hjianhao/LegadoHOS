@@ -214,13 +214,19 @@ export struct StylePanel {
   }
 
   @Builder bgChip(color: string) {
-    Column().width(28).height(28).backgroundColor(color)
-      .border({ width: color === this.currentDayBgColor_() ? 2 : 1, color: color === this.currentDayBgColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
+    Stack() {
+      Column().width(28).height(28).backgroundColor(color)
+        .border({ width: color === this.currentDayBgColor_() ? 2 : 1, color: color === this.currentDayBgColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14)
+    }.width(44).height(44).margin({ right: 2 })
+      .accessibilityText('选择阅读背景色')
       .onClick(() => { this.editingDayBgColor = color; this.emitChange(); })
   }
   @Builder txtChip(color: string) {
-    Column().width(28).height(28).backgroundColor(color)
-      .border({ width: color === this.currentDayTextColor_() ? 2 : 1, color: color === this.currentDayTextColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14).margin({ right: 6 })
+    Stack() {
+      Column().width(28).height(28).backgroundColor(color)
+        .border({ width: color === this.currentDayTextColor_() ? 2 : 1, color: color === this.currentDayTextColor_() ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) }).borderRadius(14)
+    }.width(44).height(44).margin({ right: 2 })
+      .accessibilityText('选择阅读文字色')
       .onClick(() => { this.editingDayTextColor = color; this.emitChange(); })
   }
 
@@ -231,7 +237,8 @@ export struct StylePanel {
         .padding({ top: 6, bottom: 6, left: 12, right: 12 })
     }
     .backgroundColor(this.cfg.fontWeight === w ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-    .borderRadius(16).margin({ right: 6 })
+    .borderRadius(22).height(44).margin({ right: 6 }).justifyContent(FlexAlign.Center)
+    .accessibilityText('字重' + label)
     .onClick(() => { this.cfg.fontWeight = w; this.emitChange(); })
   }
 
@@ -245,7 +252,8 @@ export struct StylePanel {
         .padding({ top: 6, bottom: 6, left: 12, right: 12 })
     }
     .backgroundColor(this.cfg.fontFamily === font.familyName ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-    .borderRadius(12).height(28).margin({ left: 4 })
+    .borderRadius(22).height(44).margin({ left: 4 }).justifyContent(FlexAlign.Center)
+    .accessibilityText('字体' + font.name)
     .onClick(() => { this.cfg.fontFamily = font.familyName; this.emitChange(); })
   }
 
@@ -260,7 +268,8 @@ export struct StylePanel {
         .padding({ top: 6, bottom: 6, left: 12, right: 12 })
     }
     .backgroundColor(this.cfg.indentSize === n ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-    .borderRadius(16).margin({ right: 6 })
+    .borderRadius(22).height(44).margin({ right: 6 }).justifyContent(FlexAlign.Center)
+    .accessibilityText('首行缩进' + label)
     .onClick(() => { this.cfg.indentSize = n; this.emitChange(); })
   }
 

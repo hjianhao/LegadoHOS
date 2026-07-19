@@ -191,6 +191,7 @@ export struct SourceLoginDialog {
     }
     .width(this.webViewMode ? '96%' : '85%')
     .height(this.webViewMode ? '92%' : undefined)
+    .constraintSize({ maxWidth: this.webViewMode ? 1200 : 560, maxHeight: this.webViewMode ? 900 : '90%' })
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
   }

@@ -86,7 +86,7 @@ export struct CloudflareDialog {
         }
       }
     }
-    .width('96%').height('92%')
+    .width('96%').height('92%').constraintSize({ maxWidth: 1200, maxHeight: 900 })
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
   }
