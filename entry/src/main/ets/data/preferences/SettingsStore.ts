@@ -333,6 +333,10 @@ export class SettingsStore {
   async getZhFormat(): Promise<boolean> { return await this.get('zh_format', true); }
   async setZhFormat(v: boolean): Promise<void> { await this.put('zh_format', v); }
 
+  /** 替换净化全局开关（默认开；关闭时阅读页跳过用户规则替换） */
+  async getReplaceEnabled(): Promise<boolean> { return await this.get('replace_enabled', true); }
+  async setReplaceEnabled(v: boolean): Promise<void> { await this.put('replace_enabled', v); }
+
   // ---- 主题设置 ----
   async getThemeMode(): Promise<string> { return await this.get('theme_mode', 'system'); }
   async setThemeMode(v: string): Promise<void> { await this.put('theme_mode', v); }

@@ -45,6 +45,8 @@ import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 import { TxtParser } from '../engine/book/TxtParser';
 import { BookSourceResolver } from '../service/BookSourceResolver';
+import { ReplaceRuleTable } from '../data/database/ReplaceRuleTable';
+import { ContentReplaceEngine } from '../engine/book/ContentReplace';
 
 interface ReadableEpubChapter {
   index: number;
@@ -145,6 +147,14 @@ struct ReadPage {
   private pendingStyleSave_: ReadStyleSaveSnapshot | null = null;
   private styleSavePromise_: Promise<void> = Promise.resolve();
   private styleSaveScheduled_: boolean = false;
+  /** 替换净化引擎（规则在打开书/换源/从规则页返回时加载） */
+  private replaceEngine_: ContentReplaceEngine = new ContentReplaceEngine();
+  /** 替换净化全局开关（SettingsStore.replace_enabled，默认开） */
+  private replaceEnabled_: boolean = true;
+  /** 当前章净化前原文（含书源级清洗，未过用户规则），供规则变更后不重抓网络直接重排 */
+  private rawChapterContent_: string = '';
+  /** 当前章净化后的显示标题（用户规则 applyTitle 结果） */
+  @State displayTitle_: string = '';
 
   onLoginRequired(): void {
     if (this.loginRequired && !this.loginDlg) {
@@ -278,6 +288,8 @@ struct ReadPage {
       }
     }
     if (!this.isLoading) {
+      // 从规则管理页等返回时：重新加载替换规则，净化结果有变化则用原文重排当前章（不清缓存）
+      this.reloadReplaceRules_().then(() => { this.relayoutWithRawContent_(); }).catch(() => {});
       // 从目录页返回时，通过 ChapterCache 获取目标章节索引
       if (ChapterCache.targetIndex >= 0) {
         const idx = ChapterCache.targetIndex;
@@ -520,6 +532,8 @@ struct ReadPage {
         this.currentIndex = this.targetIdx_;
       }
       console.info('[ReadPage] pos: targetIdx_=' + this.targetIdx_ + ' pageIdx=' + this.pageIndex + ' chapters=' + this.allChapters_.length);
+      // 打开书时加载一次替换净化规则（书不换则规则集合不变；换源时会重新加载）
+      await this.reloadReplaceRules_();
       await this.loadChapter(this.currentIndex);
     } catch (e) {
       this.text = '加载失败';
@@ -555,6 +569,7 @@ struct ReadPage {
     const previousIndex = this.currentIndex;
     this.currentIndex = idx;
     const ch = this.allChapters_[idx];
+    this.displayTitle_ = this.purifyTitle_(ch?.title || '');
 
     // 非强制刷新的情况下，尝试从数据库缓存加载
 	    if (!forceFetch) {
@@ -584,22 +599,25 @@ struct ReadPage {
       }
       if (content && content.length > 50) {
         this.applyChapterContent_(loadedIdx, content);
+        // 持久化缓存到数据库（content 为净化前原文，净化结果不落缓存）
+        this.saveToDbCache_(loadedIdx, content);
       } else if (this.isLocalEpub_ && previousIndex !== idx && this.text.length > 50) {
         // 向前/向后已经没有可读文本章节时，保留当前页，避免用错误提示覆盖正文。
         this.currentIndex = previousIndex;
+        this.displayTitle_ = this.purifyTitle_(this.allChapters_[previousIndex]?.title || '');
         this.isLoading = false;
         return;
       } else {
+        this.rawChapterContent_ = '';
         this.text = this.isLocalEpub_ ? '当前章节没有可提取的文本，请在设置中切换为“图文混排”引擎' :
           (content || '加载失败');
         this.layoutText(this.text);
       }
     } catch (e) {
+      this.rawChapterContent_ = '';
       this.text = '加载失败';
     }
     this.isLoading = false;
-    // 持久化缓存到数据库
-    this.saveToDbCache_(this.currentIndex, this.text);
     // 保存阅读进度
     this.saveProgress();
     // 无缝翻页：预加载下一章
@@ -730,14 +748,75 @@ struct ReadPage {
       if (r) content = HtmlUtil.stripHtml(r);
     }
     console.info('[ReadPage] fetchChapterContent_ final:', content ? content.length : 0, 'bytes');
-    if (content && content.length > 50 && this.cfg.chineseMode !== 'original') {
-      content = convertChinese(content, this.cfg.chineseMode);
-    }
+    // 返回原文（仅含书源级清洗）。简繁转换 + 用户规则替换统一在展示前 processForDisplay_ 处理，
+    // 保证写入 DB 缓存的始终是原文（对齐安卓：用户规则净化结果不落缓存）
     return content;
   }
 
-  private applyChapterContent_(idx: number, content: string): void {
+  /** 加载替换净化规则（正文 + 标题两个 scope）并刷新全局开关 */
+  private async reloadReplaceRules_(): Promise<void> {
+    try {
+      this.replaceEnabled_ = await SettingsStore.getInstance().getReplaceEnabled();
+      await AppDatabase.getInstance().waitForInit();
+      const ruleTable = new ReplaceRuleTable(AppDatabase.getInstance().rdbStore);
+      await this.replaceEngine_.loadRules(ruleTable, this.bookName, this.originUrl);
+    } catch (e) {
+      console.warn('[ReadPage] load replace rules failed:', (e as Error).message);
+    }
+  }
+
+  /**
+   * 展示前内容处理（对齐安卓 ContentProcessor.getContent 的顺序：简繁转换 → 用户规则替换）。
+   * 只作用于排版展示，处理结果不写缓存；用户规则替换受全局开关 replaceEnabled_ 控制。
+   */
+  private processForDisplay_(raw: string): string {
+    let text = raw;
+    if (text && text.length > 50 && this.cfg.chineseMode !== 'original') {
+      text = convertChinese(text, this.cfg.chineseMode);
+    }
+    if (text && this.replaceEnabled_) {
+      text = this.replaceEngine_.applyContent(text);
+    }
+    return text;
+  }
+
+  /** 标题净化（受全局开关控制） */
+  private purifyTitle_(title: string): string {
+    if (!title || !this.replaceEnabled_) return title;
+    return this.replaceEngine_.applyTitle(title);
+  }
+
+  /**
+   * 规则/开关变更后：不重抓网络，用 rawChapterContent_ 重走「简繁+替换→排版」刷新当前章。
+   * 净化结果无变化时直接返回（避免无谓重排）；有变化时按原页首字符偏移尽量保持阅读位置。
+   */
+  private relayoutWithRawContent_(): void {
+    if (!this.rawChapterContent_) return;
+    const content = this.processForDisplay_(this.rawChapterContent_);
+    const newTitle = this.purifyTitle_(this.allChapters_[this.currentIndex]?.title || '');
+    if (content === this.text && newTitle === this.displayTitle_) return;
+    const charPos = this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0;
+    this.displayTitle_ = newTitle;
+    this.text = content;
+    this.layoutText(content);
+    for (let i = 0; i < this.pages.length; i++) {
+      if (charPos >= this.pages[i].startOffset && charPos < this.pages[i].endOffset) {
+        this.pageIndex = i;
+        break;
+      }
+    }
+  }
+
+  /**
+   * 应用章节内容到阅读页。入参必须是净化前原文（缓存/网络抓取原始结果）：
+   * 原文存入 rawChapterContent_（供规则变更后重排），展示文本经 processForDisplay_
+   * （简繁转换 → 用户规则替换）处理后排版；处理结果不写缓存。
+   */
+  private applyChapterContent_(idx: number, rawContent: string): void {
     this.currentIndex = idx;
+    this.rawChapterContent_ = rawContent;
+    this.displayTitle_ = this.purifyTitle_(this.allChapters_[idx]?.title || '');
+    const content = this.processForDisplay_(rawContent);
     this.text = content;
     this.layoutText(content);
     // 书签/云同步跳转：按字符偏移定位分页（一次性生效）
@@ -1103,10 +1182,9 @@ struct ReadPage {
     if (this.styleTimer_ > 0) clearTimeout(this.styleTimer_);
     this.styleTimer_ = setTimeout(() => {
       this.styleTimer_ = -1;
-      let text = this.text;
-      if (c.chineseMode !== 'original' && text) {
-        text = convertChinese(text, c.chineseMode);
-      }
+      // 有原文时基于原文重走「简繁+替换」（此时 cfg 已是新配置）；无原文（错误提示页）保持现状
+      const text = this.rawChapterContent_ ? this.processForDisplay_(this.rawChapterContent_) : this.text;
+      this.text = text;
       // 排版前先应用夜间模式颜色覆盖（排版使用 display 颜色）
       this.applyReadColors();
       this.layoutText(text);
@@ -1483,10 +1561,9 @@ struct ReadPage {
       ChapterCache.chapters = newToc;
       ChapterCache.targetIndex = matchedIdx;
 
-      // 9. 直接应用已验证的正文（pageIndex 由 layoutText 收敛到合法范围）
-      if (this.cfg.chineseMode !== 'original') {
-        verifiedContent = convertChinese(verifiedContent, this.cfg.chineseMode);
-      }
+      // 9. 换源后 origin 变化会改变规则集合，先重新加载替换规则；再直接应用已验证的正文
+      // （pageIndex 由 layoutText 收敛到合法范围；verifiedContent 保持原文，净化在展示前进行，缓存存原文）
+      await this.reloadReplaceRules_();
       this.applyChapterContent_(matchedIdx, verifiedContent);
       this.isLoading = false;
       await this.saveToDbCache_(matchedIdx, verifiedContent);
@@ -1579,6 +1656,46 @@ struct ReadPage {
     this.optionDlg.open();
   }
 
+  /** 替换净化菜单（RR-8）：全局开关 + 跳规则管理页 */
+  private showReplaceRuleMenu_(): void {
+    this.showMenu = false;
+    this.optionDlg = new CustomDialogController({
+      builder: OptionSelectSheet({
+        controller: this.optionDlg!,
+        title: '替换净化',
+        options: [
+          {
+            title: '替换净化',
+            description: this.replaceEnabled_ ? '当前：已开启（点击关闭）' : '当前：已关闭（点击开启）',
+            action: () => { this.toggleReplaceEnabled_(); }
+          },
+          {
+            title: '替换净化设置',
+            description: '管理替换规则',
+            action: () => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ReplaceRulePage' }); }
+          },
+        ]
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Bottom,
+      customStyle: true
+    });
+    this.optionDlg.open();
+  }
+
+  /** 切换替换净化全局开关：写入设置并立即用原文重排当前章（不重抓网络、不清缓存） */
+  private async toggleReplaceEnabled_(): Promise<void> {
+    this.replaceEnabled_ = !this.replaceEnabled_;
+    try {
+      const s = SettingsStore.getInstance();
+      await s.init(UiUtil.getHostContext(this.getUIContext()));
+      await s.setReplaceEnabled(this.replaceEnabled_);
+    } catch (_e) { /* ignore */ }
+    UiUtil.showToast(this.getUIContext(), {
+      message: this.replaceEnabled_ ? '已开启替换净化' : '已关闭替换净化', duration: 1500 });
+    this.relayoutWithRawContent_();
+  }
+
   /**
    * 单章换源（对齐 Legado ChangeChapterSourceViewModel）：
    * 只替换当前章节的正文，不改变整本书的书源和目录。
@@ -1653,13 +1770,11 @@ struct ReadPage {
     try {
       let content = await globalSourceExecutor.getContent(source, ch.url, bookUrl);
       if (!content || content.length <= 50) throw new Error('正文为空');
-      if (this.cfg.chineseMode !== 'original') {
-        content = convertChinese(content, this.cfg.chineseMode);
-      }
       const target = this.currentIndex;
+      // content 为原文；简繁转换 + 用户规则替换在 applyChapterContent_ 内统一处理
       this.applyChapterContent_(target, content);
       this.isLoading = false;
-      // 覆盖数据库中本章的内容缓存，后续翻页不再回退到旧源内容
+      // 覆盖数据库中本章的内容缓存（存净化前原文），后续翻页不再回退到旧源内容
       await this.saveToDbCache_(target, content);
       this.preloadNextChapter_(target);
       this.cacheSurrounding_(target);
@@ -1679,7 +1794,9 @@ struct ReadPage {
       if (n >= this.totalChapters_) return null;
       this.lastProviderIdx_ = n;
       if (this.nextChapterIdx_ === n && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
-        const text = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
+        const raw = this.nextChapterContent_; this.nextChapterContent_ = ''; this.nextChapterIdx_ = -1;
+        // 预加载内容为原文，朗读前补一遍展示处理（简繁 + 用户规则替换）
+        const text = this.processForDisplay_(raw);
         console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
         return { text: text, offset: 0, chapterIndex: n };
       }
@@ -1699,7 +1816,7 @@ struct ReadPage {
         }
       }
       const promise = this.preloadingChapterPromises_.get(n);
-      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: content, offset: 0, chapterIndex: n } : null; }
+      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: this.processForDisplay_(content), offset: 0, chapterIndex: n } : null; }
       return null;
     })();
   }
@@ -1859,7 +1976,7 @@ struct ReadPage {
           .width('100%').height('100%')
         } else {
 	        PageView({
-          pages: this.pages, chapterTitle: this.allChapters_[this.currentIndex]?.title || '',
+          pages: this.pages, chapterTitle: this.displayTitle_,
           chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
           zoneActions: this.zoneActions,
           config: {
@@ -1893,7 +2010,7 @@ struct ReadPage {
             Row().width('100%').height(1).backgroundColor(ThemeColors.outlineVariant(this.isDark))
               .margin({ top: 4, bottom: 4 })
             Row() {
-              Text(this.allChapters_[this.currentIndex]?.title || '')
+              Text(this.displayTitle_)
                 .fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
                 .fontFamily(this.cfg.fontFamily)
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
@@ -1927,6 +2044,7 @@ struct ReadPage {
             onStyle: () => { this.showMenu = false; this.showStyle = true; },
             onSettings: () => { this.showMenu = false; this.showZoneConfig = true; },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
+            onReplaceRule: () => { this.showReplaceRuleMenu_(); },
             onSource: () => { this.showMenu = false; this.openSourceSheet(false); },
             onSourceLongPress: () => { this.showChangeSourceMenu_(); },
             onCache: () => { this.showMenu = false; this.showCacheDialog = true; },
@@ -2025,7 +2143,7 @@ struct ReadPage {
             text: this.text,
             textOffset: this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0,
             currentChapterIndex: this.currentIndex,
-            chapterTitle: this.chapters[this.currentIndex]?.title || '',
+            chapterTitle: this.displayTitle_,
             externalEngine: this.aloudEngine_!,
             onDismiss: () => { this.showAloud = false; },
             onGoToPosition: (charIdx: number, chapterIdx?: number) => { this.goToReadingPosition_(charIdx, chapterIdx); },

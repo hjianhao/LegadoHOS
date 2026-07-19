@@ -3453,9 +3453,44 @@ export class SourceExecutor {
     return base + nextUrl;
   }
 
+  /**
+   * 应用书源级的 replaceRegex 替换规则。
+   *
+   * 支持两种格式：
+   * 1. ##pattern##replacement##pattern2##replacement2（字符串对）
+   * 2. {"0":"pattern##replacement","1":"pattern2##replacement2"}（Legado Map JSON）
+   *
+   * 参考 Android Legado ReplaceRuleManager.applyReplaceRule
+   */
   private applyReplaceRegex(content: string, replaceRule: string): string {
     if (!content || !replaceRule) return content;
     let result = content;
+
+    // 格式 2：JSON 对象格式 → 解析 Map<number, "pattern##replacement">
+    if (replaceRule.startsWith('{')) {
+      try {
+        const map = JSON.parse(replaceRule) as Record<string, string>;
+        const keys = Object.keys(map).sort((a, b) => Number(a) - Number(b));
+        for (const key of keys) {
+          const val = map[key];
+          if (!val) continue;
+          const idx = val.indexOf('##');
+          const pattern = idx >= 0 ? val.substring(0, idx) : val;
+          const replacement = idx >= 0 ? val.substring(idx + 2) : '';
+          if (!pattern) continue;
+          try {
+            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
+          } catch (_e) {
+            /* ignore invalid replacement rule */
+          }
+        }
+        return result.trim();
+      } catch (_e) {
+        /* JSON parse failed, fall through to format 1 */
+      }
+    }
+
+    // 格式 1：##pattern##replacement 交替对
     const rules = replaceRule.startsWith('##') ? replaceRule.substring(2).split('##') : replaceRule.split('##');
     for (let i = 0; i < rules.length; i += 2) {
       const pattern = rules[i];

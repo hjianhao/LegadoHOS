@@ -14,6 +14,8 @@ export struct ReadBottomMenu {
   onFont?: () => void;
   onSettings?: () => void;
   onSearch?: () => void;
+  /** 替换净化：开关 + 跳规则管理页（对齐 Legado 阅读页菜单） */
+  onReplaceRule?: () => void;
   onSource?: () => void;
   /** 长按换源：选择整本换源/单章换源（对齐 Legado ReadBookMenuBar） */
   onSourceLongPress?: () => void;
@@ -46,6 +48,12 @@ export struct ReadBottomMenu {
         Text($r('app.string.ui_35d70d63b7')).fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
         Text($r('app.string.common_search')).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
       }.height(48).accessibilityText($r('app.string.common_search')).onClick(() => { this.onSearch?.() })
+      if (this.onReplaceRule) {
+        Column() {
+          Text($r('app.string.read_replace_icon')).fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+          Text($r('app.string.read_replace_purify')).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark)).margin({top: 2})
+        }.height(48).accessibilityText($r('app.string.read_replace_purify')).onClick(() => { this.onReplaceRule?.() })
+      }
       if (!this.isLocalBook) {
         Column() {
           Text($r('app.string.ui_9394cdbfe1')).fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))

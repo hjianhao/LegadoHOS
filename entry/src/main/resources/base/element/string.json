@@ -273,6 +273,14 @@
       "value": "刷新"
     },
     {
+      "name": "read_replace_icon",
+      "value": "净"
+    },
+    {
+      "name": "read_replace_purify",
+      "value": "净化"
+    },
+    {
       "name": "ui_8ce30b48a4",
       "value": "导出书架"
     },

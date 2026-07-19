@@ -303,7 +303,7 @@ export function parseBookSource(json: any): BookSource {
     ruleBookContentTitle: json.ruleBookContentTitle || rc.title || '',
     ruleBookContentWebJs: json.ruleBookContentWebJs || rc.webJs || '',
     ruleBookContentSourceRegex: json.ruleBookContentSourceRegex || rc.sourceRegex || '',
-    ruleBookContentReplaceRegex: json.ruleBookContentReplaceRegex || rc.replaceRegex || '',
+    ruleBookContentReplaceRegex: toRuleString(json.ruleBookContentReplaceRegex || rc.replaceRegex || ''),
     ruleBookContentImageStyle: json.ruleBookContentImageStyle || rc.imageStyle || '',
     ruleBookContentImageDecode: json.ruleBookContentImageDecode || rc.imageDecode || '',
     ruleBookContentPayAction: json.ruleBookContentPayAction || rc.payAction || '',
