@@ -198,7 +198,7 @@ export class ContentCleaner {
    * @param content      原始正文
    * @param chapterTitle 章节标题
    * @param bookName     书名（用于去重匹配）
-   * @param replaceRules 用户替换规则列表（已按 sortOrder 排序）
+   * @param replaceRules 用户替换规则列表（调用方负责按 scope 过滤并按 order 升序排序）
    * @param enabled      是否启用替换规则
    * @returns 清洗后的正文
    */
@@ -229,7 +229,7 @@ export class ContentCleaner {
     // Step 2: 每行 trim
     mContent = mContent.split('\n').map(l => l.trim()).join('\n');
 
-    // Step 3: 应用替换规则
+    // Step 3: 应用替换规则（逐条应用，单条失败不影响后续）
     if (enabled && replaceRules && replaceRules.length > 0) {
       for (const rule of replaceRules) {
         if (!rule.isEnabled || !rule.pattern) continue;
@@ -238,7 +238,7 @@ export class ContentCleaner {
             const reg = new RegExp(rule.pattern, 'g');
             mContent = mContent.replace(reg, rule.replacement || '');
           } else {
-            mContent = mContent.replace(rule.pattern, rule.replacement || '');
+            mContent = mContent.split(rule.pattern).join(rule.replacement || '');
           }
         } catch (_e) {
           // 单个规则失败不影响后续

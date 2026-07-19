@@ -99,7 +99,7 @@ export class BookExportService {
       BookExportService.finishNotify(notifId, book.name, result);
       return result;
     }
-    const replaceEngine = await BookExportService.loadReplaceEngine(options.useReplace);
+    const replaceEngine = await BookExportService.loadReplaceEngine(options.useReplace, book);
 
     // 写入文件
     let file: fileIo.File | null = null;
@@ -115,7 +115,7 @@ export class BookExportService {
           result.skipped++;
           continue;
         }
-        const body = BookExportService.applyReplace(replaceEngine, ch.content, book);
+        const body = BookExportService.applyReplace(replaceEngine, ch.content);
         const chunk = '\n\n' + (options.includeTitle ? ch.title + '\n' : '') + body;
         fileIo.writeSync(file.fd, chunk);
         result.exported++;
@@ -155,7 +155,7 @@ export class BookExportService {
       result.error = '目录为空，请先加载目录';
       return result;
     }
-    const replaceEngine = await BookExportService.loadReplaceEngine(options.useReplace);
+    const replaceEngine = await BookExportService.loadReplaceEngine(options.useReplace, book);
 
     const epubChapters: EpubChapter[] = [];
     for (const ch of chapters) {
@@ -165,7 +165,7 @@ export class BookExportService {
       }
       epubChapters.push({
         title: ch.title,
-        content: BookExportService.applyReplace(replaceEngine, ch.content, book),
+        content: BookExportService.applyReplace(replaceEngine, ch.content),
       });
     }
     if (epubChapters.length === 0) {
@@ -250,11 +250,13 @@ export class BookExportService {
     return chapters;
   }
 
-  private static async loadReplaceEngine(useReplace: boolean): Promise<ContentReplaceEngine | null> {
+  private static async loadReplaceEngine(useReplace: boolean,
+    book: ExportBookInfo): Promise<ContentReplaceEngine | null> {
     if (!useReplace) return null;
     try {
       const engine = new ContentReplaceEngine();
-      await engine.loadRules(new ReplaceRuleTable(AppDatabase.getInstance().rdbStore));
+      await engine.loadRules(new ReplaceRuleTable(AppDatabase.getInstance().rdbStore),
+        book.name, book.originUrl);
       return engine;
     } catch (e) {
       console.warn('[BookExport] load replace rules fail:', (e as Error).message);
@@ -262,11 +264,10 @@ export class BookExportService {
     }
   }
 
-  private static applyReplace(engine: ContentReplaceEngine | null, content: string,
-    book: ExportBookInfo): string {
+  private static applyReplace(engine: ContentReplaceEngine | null, content: string): string {
     if (!engine) return content;
     try {
-      return engine.apply(content, book.originUrl, book.bookUrl);
+      return engine.applyContent(content);
     } catch (_e) {
       return content;
     }

@@ -1,51 +1,54 @@
 /**
  * 内容替换引擎
  *
- * 应用用户配置的替换规则对阅读内容进行过滤/净化。
- * 支持：
- * - 正则替换
- * - 纯文本替换
- * - 全局/书源/单书范围
+ * 应用用户配置的替换净化规则（对齐 Android ContentProcessor）：
+ * - 规则按 scope 在 DAO 层预过滤（findEnabledByContentScope / findEnabledByTitleScope），
+ *   加载后按 sort_order 升序逐条应用，上一条的输出是下一条的输入
+ * - isRegex=true：正则替换（'g' 标志，支持 $1 分组引用）；否则纯文本 split/join
+ * - 单条规则独立 try/catch（含 new RegExp 编译失败），记日志跳过，不中断后续规则
  */
-import { ReplaceRule, ReplaceScope } from '../../model/ReplaceRule';
+import { ReplaceRule } from '../../model/ReplaceRule';
+import { ReplaceRuleTable } from '../../data/database/ReplaceRuleTable';
 
 export class ContentReplaceEngine {
-  private rules: ReplaceRule[] = [];
+  contentRules: ReplaceRule[] = [];
+  titleRules: ReplaceRule[] = [];
 
   /**
-   * 加载替换规则
+   * 按书名 + 书源 URL 并行加载正文/标题两个 scope 的启用规则
    */
-  async loadRules(ruleTable: any): Promise<void> {
+  async loadRules(ruleTable: ReplaceRuleTable, bookName: string, origin: string): Promise<void> {
     try {
-      this.rules = await ruleTable.getAllEnabled();
+      const results: ReplaceRule[][] = await Promise.all([
+        ruleTable.findEnabledByContentScope(bookName, origin),
+        ruleTable.findEnabledByTitleScope(bookName, origin),
+      ]);
+      this.contentRules = results[0];
+      this.titleRules = results[1];
     } catch (err) {
       console.error('[ContentReplace] Failed to load rules:', err);
     }
   }
 
-  /**
-   * 应用替换规则到文本
-   * @param text 原始文本
-   * @param sourceUrl 当前书源 URL（用于范围过滤）
-   * @param bookUrl 当前书籍 URL（用于范围过滤）
-   * @returns 替换后的文本
-   */
-  apply(text: string, sourceUrl?: string, bookUrl?: string): string {
-    if (!text || this.rules.length === 0) return text;
+  /** 应用正文规则 */
+  applyContent(text: string): string {
+    return this.applyRules(text, this.contentRules);
+  }
+
+  /** 应用标题规则 */
+  applyTitle(title: string): string {
+    return this.applyRules(title, this.titleRules);
+  }
+
+  private applyRules(text: string, rules: ReplaceRule[]): string {
+    if (!text || rules.length === 0) return text;
 
     let result = text;
-
-    for (const rule of this.rules) {
-      // 范围过滤
-      if (rule.scope !== ReplaceScope.GLOBAL) {
-        if (rule.scope === ReplaceScope.SOURCE && rule.scopeValue !== sourceUrl) continue;
-        if (rule.scope === ReplaceScope.BOOK && rule.scopeValue !== bookUrl) continue;
-      }
-
+    for (const rule of rules) {
+      if (!rule.pattern) continue;
       try {
         if (rule.isRegex) {
-          const regex = new RegExp(rule.pattern, 'gi');
-          result = result.replace(regex, rule.replacement);
+          result = result.replace(new RegExp(rule.pattern, 'g'), rule.replacement);
         } else {
           result = result.split(rule.pattern).join(rule.replacement);
         }
@@ -53,7 +56,6 @@ export class ContentReplaceEngine {
         console.warn('[ContentReplace] Rule error:', rule.name, err);
       }
     }
-
     return result;
   }
 

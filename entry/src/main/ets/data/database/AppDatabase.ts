@@ -98,6 +98,9 @@ export class AppDatabase {
     await RdbUtil.executeSql(this.rdbStore_, BookmarkTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, ReadRecordTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, ReadRecordDetailTableCreate);
+    // replace_rules 旧表 schema（scope 枚举 + scope_value）与安卓字符串子串语义不兼容，
+    // 且无 UI 写入过数据（表必为空），直接 DROP 重建为安卓对齐结构
+    await RdbUtil.executeSql(this.rdbStore_, 'DROP TABLE IF EXISTS replace_rules');
     await RdbUtil.executeSql(this.rdbStore_, ReplaceRuleTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, RSSSourceTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, RSSArticleTableCreate);

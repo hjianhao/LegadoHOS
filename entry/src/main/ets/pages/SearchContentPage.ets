@@ -131,7 +131,7 @@ struct SearchContentPage {
     try {
       await AppDatabase.getInstance().waitForInit();
       const ruleTable = new ReplaceRuleTable(AppDatabase.getInstance().rdbStore);
-      await this.replaceEngine_.loadRules(ruleTable);
+      await this.replaceEngine_.loadRules(ruleTable, this.bookName, this.originUrl);
     } catch (e) {
       console.warn('[SearchContent] replace rules unavailable:', (e as Error).message);
     }
@@ -222,7 +222,7 @@ struct SearchContentPage {
         if (runId !== this.searchRunId_) return;
       }
       if (this.replaceEnabled) {
-        content = this.replaceEngine_.apply(content, this.originUrl, this.bookUrl);
+        content = this.replaceEngine_.applyContent(content);
       }
       const count = this.matchCount(`${title}\n${content}`, key, regex);
       if (count > 0) {
