@@ -400,7 +400,7 @@ struct BookSourcePage {
         Button($r('app.string.common_cancel')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
           .onClick(() => { this.exitSelectMode(); })
-        Button('新建').fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
+        Button($r('app.string.ui_literal_0cda8d1c71')).fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })

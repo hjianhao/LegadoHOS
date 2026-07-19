@@ -2323,6 +2323,198 @@
     {
       "name": "widget_start_reading",
       "value": "点击开始阅读"
+    },
+    {
+      "name": "ui_literal_0147352334",
+      "value": "当前版本不强制中断超时正则，该值仅为数据兼容保留"
+    },
+    {
+      "name": "ui_literal_0373ff9231",
+      "value": "在线"
+    },
+    {
+      "name": "ui_literal_09d0603a3b",
+      "value": "导入净化规则"
+    },
+    {
+      "name": "ui_literal_0cda8d1c71",
+      "value": "新建"
+    },
+    {
+      "name": "ui_literal_0d5894b920",
+      "value": "清理全部"
+    },
+    {
+      "name": "ui_literal_143006be81",
+      "value": "会记住上次选择"
+    },
+    {
+      "name": "ui_literal_145e4059bc",
+      "value": "粘贴网址"
+    },
+    {
+      "name": "ui_literal_1821a99ece",
+      "value": "暂无章节缓存"
+    },
+    {
+      "name": "ui_literal_28cd2efd8f",
+      "value": "跳转"
+    },
+    {
+      "name": "ui_literal_2a2319ac39",
+      "value": "直接网址导入"
+    },
+    {
+      "name": "ui_literal_2dc145c1ae",
+      "value": "书源"
+    },
+    {
+      "name": "ui_literal_3755f56f2f",
+      "value": "删除"
+    },
+    {
+      "name": "ui_literal_376a6413ca",
+      "value": "章节内容缓存"
+    },
+    {
+      "name": "ui_literal_3fd63faac4",
+      "value": "选择搜索渠道"
+    },
+    {
+      "name": "ui_literal_4ca5450fe1",
+      "value": "当前引擎"
+    },
+    {
+      "name": "ui_literal_4d0b4688c7",
+      "value": "取消"
+    },
+    {
+      "name": "ui_literal_4d69dbdf62",
+      "value": "原文"
+    },
+    {
+      "name": "ui_literal_56c82f95e0",
+      "value": "下载导入"
+    },
+    {
+      "name": "ui_literal_5d5815647c",
+      "value": "收起"
+    },
+    {
+      "name": "ui_literal_5e669ba230",
+      "value": "搜索在线书"
+    },
+    {
+      "name": "ui_literal_60e2bcad85",
+      "value": "导入"
+    },
+    {
+      "name": "ui_literal_697dbde096",
+      "value": "笔记"
+    },
+    {
+      "name": "ui_literal_71764d04db",
+      "value": "打开网址并确认导入"
+    },
+    {
+      "name": "ui_literal_763d09922a",
+      "value": "不恢复"
+    },
+    {
+      "name": "ui_literal_79748ca1c6",
+      "value": "恢复"
+    },
+    {
+      "name": "ui_literal_7f4ffe6a5d",
+      "value": "搜索书名"
+    },
+    {
+      "name": "ui_literal_820f5b6440",
+      "value": "书签"
+    },
+    {
+      "name": "ui_literal_8b7196767d",
+      "value": "暂无净化规则"
+    },
+    {
+      "name": "ui_literal_907c3945d8",
+      "value": "清理"
+    },
+    {
+      "name": "ui_literal_91a99d3e44",
+      "value": "最近输入会在搜索框获得焦点时显示，可直接点击再次搜索。"
+    },
+    {
+      "name": "ui_literal_98d61e4378",
+      "value": "作用于标题"
+    },
+    {
+      "name": "ui_literal_a3ce47a749",
+      "value": "超时（毫秒）"
+    },
+    {
+      "name": "ui_literal_a7f814c0a4",
+      "value": "编辑"
+    },
+    {
+      "name": "ui_literal_ae67a9117c",
+      "value": "输入书名后会在内置浏览器中搜索。请打开具体小说详情页或目录页，再点击“导入当前页”。"
+    },
+    {
+      "name": "ui_literal_b7fe649d81",
+      "value": "替换净化"
+    },
+    {
+      "name": "ui_literal_bcc0b869ef",
+      "value": "加书签"
+    },
+    {
+      "name": "ui_literal_c01cdae76a",
+      "value": "小说详情页 / 目录页"
+    },
+    {
+      "name": "ui_literal_c21d1d4051",
+      "value": "点击右上角新建或导入"
+    },
+    {
+      "name": "ui_literal_c4eb94d079",
+      "value": "剪贴板"
+    },
+    {
+      "name": "ui_literal_cd74f09629",
+      "value": "正在导入…"
+    },
+    {
+      "name": "ui_literal_ce56f617e4",
+      "value": "加载中"
+    },
+    {
+      "name": "ui_literal_d65ca51e8a",
+      "value": "发现云端进度"
+    },
+    {
+      "name": "ui_literal_e36e16b52b",
+      "value": "搜索结果会在内置浏览器中打开。请进入具体小说详情页或目录页，再点击“导入当前页”。"
+    },
+    {
+      "name": "ui_literal_e58371cb29",
+      "value": "搜索引擎"
+    },
+    {
+      "name": "ui_literal_e8743d244e",
+      "value": "在线搜索导入"
+    },
+    {
+      "name": "ui_literal_e910705bc2",
+      "value": "范围限定"
+    },
+    {
+      "name": "ui_literal_fadf24dbc5",
+      "value": "保存"
+    },
+    {
+      "name": "ui_literal_ff401427cd",
+      "value": "正在加载网页…"
     }
   ]
 }

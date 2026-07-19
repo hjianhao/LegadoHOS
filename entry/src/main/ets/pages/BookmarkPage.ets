@@ -158,7 +158,7 @@ struct BookmarkPage {
             .width(48).height(48).padding(0).borderRadius(24)
             .backgroundColor(Color.Transparent).accessibilityText($r('app.string.common_back'))
             .onClick(() => { UiUtil.back(this.getUIContext()); })
-          Text('书签').fontSize(18).fontWeight(FontWeight.Bold)
+          Text($r('app.string.ui_literal_820f5b6440')).fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
         }
         .width('100%').height(56).padding({ left: 8, right: 12 })
@@ -215,10 +215,10 @@ struct BookmarkPage {
                       }
 
                       Row() {
-                        Text('跳转').fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+                        Text($r('app.string.ui_literal_28cd2efd8f')).fontSize(12).fontColor(ThemeColors.primary(this.isDark))
                           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
                           .onClick(() => { this.openBookmark(b); })
-                        Text('编辑').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+                        Text($r('app.string.ui_literal_a7f814c0a4')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
                           .margin({ left: 8 })
                           .onClick(() => { this.openEdit(b); })

@@ -124,7 +124,7 @@ export struct ChangeCoverSheet {
         .layoutWeight(1)
       }
     }
-    .width('100%').height(420)
+    .width('100%').height(420).constraintSize({ maxWidth: 640, maxHeight: '80%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -523,7 +523,7 @@ export struct ChangeSourceSheet {
         .layoutWeight(1).width('100%')
       }
     }
-    .width('100%').height('70%')
+    .width('100%').height('70%').constraintSize({ maxWidth: 720, maxHeight: 760 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -719,7 +719,7 @@ export struct GroupSelectSheet {
         .layoutWeight(1).width('100%')
       }
     }
-    .width('100%').height(360)
+    .width('100%').height(360).constraintSize({ maxWidth: 640, maxHeight: '70%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -895,7 +895,7 @@ export struct BookReadRecordSheet {
           .width('100%').padding(24).textAlign(TextAlign.Center)
       }
     }
-    .width('100%').height('60%')
+    .width('100%').height('60%').constraintSize({ maxWidth: 720, maxHeight: 680 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -940,7 +940,7 @@ export struct RemarkEditDialog {
           this.controller.close();
         })
     }
-    .width('100%').height(280)
+    .width('100%').height(280).constraintSize({ maxWidth: 640, maxHeight: '70%' })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -1001,7 +1001,7 @@ export struct ChapterPickSheet {
       }
       .layoutWeight(1).width('100%')
     }
-    .width('100%').height('70%')
+    .width('100%').height('70%').constraintSize({ maxWidth: 720, maxHeight: 760 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
   }
@@ -1082,6 +1082,7 @@ export struct OptionSelectSheet {
         .onClick(() => { this.controller.close(); })
     }
     .width('100%')
+    .constraintSize({ maxWidth: 640, maxHeight: '90%' })
     .padding({ bottom: 16 })
     .backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })

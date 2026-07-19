@@ -6,6 +6,7 @@ import { DiscoverPage } from './DiscoverPage';
 import { MyPage } from './MyPage';
 import { RssMainPage } from './RssMainPage';
 import { ThemeColors } from '../theme/ThemeColors';
+import { KeyboardAvoidMode as UIKeyboardAvoidMode } from '@kit.ArkUI';
 
 interface TabCfg {
   icon: ResourceStr;
@@ -25,6 +26,11 @@ struct MainPage {
     { icon: $r('app.media.ic_rss'), label: 'RSS' },
     { icon: $r('app.media.ic_profile'), label: '我的' },
   ];
+
+  aboutToAppear(): void {
+    // 统一启用 ArkUI 默认键盘避让，输入页和底部弹层在软键盘出现时自动压缩/平移。
+    this.getUIContext().setKeyboardAvoidMode(UIKeyboardAvoidMode.RESIZE);
+  }
 
   build() {
     Tabs({

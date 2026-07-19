@@ -214,7 +214,7 @@ export struct AiImportPreviewDialog {
     Column() {
       Column() {
         Row({ space: 8 }) {
-          Button('取消')
+          Button($r('app.string.ui_literal_4d0b4688c7'))
             .height(44)
             .fontSize(14)
             .fontColor(ThemeColors.onSurface(this.isDark))
@@ -310,7 +310,7 @@ export struct AiImportPreviewDialog {
         if (this.isLoading) {
           Column({ space: 10 }) {
             LoadingProgress().width(32).height(32).color(ThemeColors.primary(this.isDark))
-            Text('正在加载网页…').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            Text($r('app.string.ui_literal_ff401427cd')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
           }
           .padding(18).backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(14)
         }

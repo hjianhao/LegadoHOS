@@ -340,19 +340,19 @@ struct ReplaceRulePage {
         Row() {
           AppBackButton({ onBack: () => { UiUtil.back(this.getUIContext()); } })
           Column() {
-            Text('替换净化').fontSize(20).fontWeight(FontWeight.Bold)
+            Text($r('app.string.ui_literal_b7fe649d81')).fontSize(20).fontWeight(FontWeight.Bold)
               .fontColor(ThemeColors.onBackground(this.isDark)).width('100%')
             Text(this.rules.length + ' 条规则' + (this.isSelectMode_ ? ' · 已选 ' + this.selectedIds.length : ''))
               .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
           }.layoutWeight(1)
-          Button('取消').height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
+          Button($r('app.string.ui_literal_4d0b4688c7')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
             .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
             .onClick(() => { this.exitSelectMode(); })
-          Button('新建').fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
+          Button($r('app.string.ui_literal_0cda8d1c71')).fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
             .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
             .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ReplaceRuleEditPage' }); })
-          Button('导入').height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
+          Button($r('app.string.ui_literal_60e2bcad85')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
             .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
             .onClick(() => { this.showImportSheet = true; })
         }.height(64).padding({ left: 4, right: 8 }).width('100%')
@@ -385,12 +385,12 @@ struct ReplaceRulePage {
         if (this.isLoading) {
           Column() {
             LoadingProgress().color(ThemeColors.primary(this.isDark))
-            Text('加载中').fontSize(13).margin({ top: 10 }).fontColor(ThemeColors.secondaryText(this.isDark))
+            Text($r('app.string.ui_literal_ce56f617e4')).fontSize(13).margin({ top: 10 }).fontColor(ThemeColors.secondaryText(this.isDark))
           }.layoutWeight(1).justifyContent(FlexAlign.Center)
         } else if (this.filtered.length === 0) {
           Column() {
-            Text('暂无净化规则').fontSize(18).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onSurface(this.isDark))
-            Text('点击右上角新建或导入').fontSize(13).margin({ top: 8 }).fontColor(ThemeColors.secondaryText(this.isDark))
+            Text($r('app.string.ui_literal_8b7196767d')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onSurface(this.isDark))
+            Text($r('app.string.ui_literal_c21d1d4051')).fontSize(13).margin({ top: 8 }).fontColor(ThemeColors.secondaryText(this.isDark))
           }.layoutWeight(1).justifyContent(FlexAlign.Center)
         } else {
           List({ space: 4 }) {
@@ -407,7 +407,7 @@ struct ReplaceRulePage {
             this.actionButton('批量启用', () => { this.batchEnable(true); })
             this.actionButton('批量禁用', () => { this.batchEnable(false); })
             this.actionButton('导出', () => { this.doExport(); })
-            Button('删除').height(40).borderRadius(20).padding({ left: 16, right: 16 })
+            Button($r('app.string.ui_literal_3755f56f2f')).height(40).borderRadius(20).padding({ left: 16, right: 16 })
               .backgroundColor(ThemeColors.error(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
               .onClick(() => { this.confirmDelete(this.selectedRules()); })
           }.padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -418,7 +418,7 @@ struct ReplaceRulePage {
         if (this.isImporting) {
           Row() {
             LoadingProgress().width(24).height(24).color(ThemeColors.primary(this.isDark))
-            Text('正在导入…').fontSize(13).fontColor(ThemeColors.onSurface(this.isDark)).margin({ left: 10 })
+            Text($r('app.string.ui_literal_cd74f09629')).fontSize(13).fontColor(ThemeColors.onSurface(this.isDark)).margin({ left: 10 })
           }.height(48).padding({ left: 16 }).width('100%').backgroundColor(ThemeColors.surface(this.isDark))
         }
       }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
@@ -431,13 +431,13 @@ struct ReplaceRulePage {
           Column() {
           }.width('100%').height('100%').onClick(() => { this.closeImportSheet(); })
           Column() {
-            Text('导入净化规则').fontSize(16).fontWeight(FontWeight.Bold)
+            Text($r('app.string.ui_literal_09d0603a3b')).fontSize(16).fontWeight(FontWeight.Bold)
               .fontColor(ThemeColors.onSurface(this.isDark))
               .padding({ left: 16, top: 16, bottom: 8 }).width('100%')
             if (!this.importUrlMode) {
               this.sheetItem('本地文件', () => { this.doFileImport(); })
               Row() {
-                Text('剪贴板').fontSize(15).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+                Text($r('app.string.ui_literal_c4eb94d079')).fontSize(15).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
                 PasteButton()
                   .padding({ left: 12, right: 12 })
                   .onClick((event: ClickEvent, result: PasteButtonOnClickResult) => {
@@ -457,10 +457,10 @@ struct ReplaceRulePage {
                 .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
                 .onChange((value: string) => { this.importUrl = value; })
               Row() {
-                Button('取消').fontSize(14).height(40).layoutWeight(1).borderRadius(8).margin({ right: 6 })
+                Button($r('app.string.ui_literal_4d0b4688c7')).fontSize(14).height(40).layoutWeight(1).borderRadius(8).margin({ right: 6 })
                   .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
                   .onClick(() => { this.closeImportSheet(); })
-                Button('下载导入').fontSize(14).height(40).layoutWeight(1).borderRadius(8).margin({ left: 6 })
+                Button($r('app.string.ui_literal_56c82f95e0')).fontSize(14).height(40).layoutWeight(1).borderRadius(8).margin({ left: 6 })
                   .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
                   .onClick(() => { this.doUrlImport(); })
               }.width('100%').margin({ top: 12 })
@@ -527,10 +527,10 @@ struct ReplaceRulePage {
             Text(rule.isRegex ? '正则' : '普通文本').fontSize(11)
               .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: rule.group ? 10 : 0 })
             if (rule.scopeTitle) {
-              Text('作用于标题').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 })
+              Text($r('app.string.ui_literal_98d61e4378')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 })
             }
             if (rule.scope) {
-              Text('范围限定').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 })
+              Text($r('app.string.ui_literal_e910705bc2')).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 10 })
             }
           }.width('100%').margin({ top: 6 })
         }.layoutWeight(1).onClick(() => {

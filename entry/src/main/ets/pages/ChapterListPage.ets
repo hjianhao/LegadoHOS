@@ -601,7 +601,7 @@ struct ChapterListPage {
             Button($r('app.string.common_invert_selection')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
               .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
               .onClick(() => { this.invertSelect(); })
-            Button('加书签').fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            Button($r('app.string.ui_literal_bcc0b869ef')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
               .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
               .onClick(() => { this.addBookmarksForSelected(); })
             Button('缓存所选(' + this.selectedIndices.length + ')').fontSize(13)

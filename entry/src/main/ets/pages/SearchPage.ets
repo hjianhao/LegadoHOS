@@ -1373,13 +1373,13 @@ struct SearchPage {
       .alignItems(VerticalAlign.Center)
 
       Row() {
-        Button('书源')
+        Button($r('app.string.ui_literal_2dc145c1ae'))
           .layoutWeight(1).height(38).fontSize(14)
           .fontColor(this.searchMode === 0 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
           .backgroundColor(this.searchMode === 0 ? this.primaryColor() : ThemeColors.transparent())
           .borderRadius(19)
           .onClick((): void => { this.switchSearchMode_(0); })
-        Button('在线')
+        Button($r('app.string.ui_literal_0373ff9231'))
           .layoutWeight(1).height(38).fontSize(14)
           .fontColor(this.searchMode === 1 ? ThemeColors.onPrimary(this.isDark) : this.textColor())
           .backgroundColor(this.searchMode === 1 ? this.primaryColor() : ThemeColors.transparent())
@@ -1394,7 +1394,7 @@ struct SearchPage {
 
       if (this.searchMode === 1) {
         Row() {
-          Text('搜索引擎').fontSize(13).fontColor(this.subTextColor()).layoutWeight(1)
+          Text($r('app.string.ui_literal_e58371cb29')).fontSize(13).fontColor(this.subTextColor()).layoutWeight(1)
           Select(ONLINE_SEARCH_OPTIONS)
             .selected(this.onlineEngineIndex_())
             .value(this.onlineEngineName_())
@@ -1635,7 +1635,7 @@ struct SearchPage {
                 .fontSize(13)
                 .fontColor(this.subTextColor())
                 .layoutWeight(1)
-              Text('收起')
+              Text($r('app.string.ui_literal_5d5815647c'))
                 .fontSize(12)
                 .fontColor(this.primaryColor())
                 .padding({ left: 10, right: 10, top: 6, bottom: 6 })
@@ -1701,12 +1701,12 @@ struct SearchPage {
     Scroll() {
       Column({ space: 14 }) {
         Column({ space: 8 }) {
-          Text('在线搜索导入')
+          Text($r('app.string.ui_literal_e8743d244e'))
             .width('100%')
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.textColor())
-          Text('输入书名后会在内置浏览器中搜索。请打开具体小说详情页或目录页，再点击“导入当前页”。')
+          Text($r('app.string.ui_literal_ae67a9117c'))
             .width('100%')
             .fontSize(14)
             .lineHeight(21)
@@ -1719,13 +1719,13 @@ struct SearchPage {
         .borderRadius(16)
 
         Row({ space: 10 }) {
-          Text('当前引擎').fontSize(13).fontColor(this.subTextColor())
+          Text($r('app.string.ui_literal_4ca5450fe1')).fontSize(13).fontColor(this.subTextColor())
           Text(this.onlineEngineName_())
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.primaryColor())
           Blank()
-          Text('会记住上次选择').fontSize(12).fontColor(this.subTextColor())
+          Text($r('app.string.ui_literal_143006be81')).fontSize(12).fontColor(this.subTextColor())
         }
         .width('100%')
         .padding(14)
@@ -1734,12 +1734,12 @@ struct SearchPage {
 
         Column({ space: 10 }) {
           Row() {
-            Text('直接网址导入')
+            Text($r('app.string.ui_literal_2a2319ac39'))
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.textColor())
             Blank()
-            Text('小说详情页 / 目录页')
+            Text($r('app.string.ui_literal_c01cdae76a'))
               .fontSize(12)
               .fontColor(this.subTextColor())
           }
@@ -1761,7 +1761,7 @@ struct SearchPage {
             .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
             .onChange((value: string): void => { this.onlineDirectUrl = value; })
 
-          Button('打开网址并确认导入')
+          Button($r('app.string.ui_literal_71764d04db'))
             .width('100%')
             .height(48)
             .fontSize(15)
@@ -1813,7 +1813,7 @@ struct SearchPage {
           .borderRadius(16)
         }
 
-        Text('最近输入会在搜索框获得焦点时显示，可直接点击再次搜索。')
+        Text($r('app.string.ui_literal_91a99d3e44'))
           .width('100%')
           .fontSize(12)
           .lineHeight(18)

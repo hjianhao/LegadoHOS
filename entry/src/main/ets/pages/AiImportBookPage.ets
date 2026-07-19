@@ -310,13 +310,13 @@ struct AiImportBookPage {
             .alignItems(HorizontalAlign.Start)
 
             Row() {
-              Button('搜索在线书')
+              Button($r('app.string.ui_literal_5e669ba230'))
                 .layoutWeight(1).height(42).fontSize(14)
                 .fontColor(this.importMode === 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
                 .backgroundColor(this.importMode === 0 ? ThemeColors.primary(this.isDark) : Color.Transparent)
                 .borderRadius(21)
                 .onClick((): void => { this.importMode = 0; })
-              Button('粘贴网址')
+              Button($r('app.string.ui_literal_145e4059bc'))
                 .layoutWeight(1).height(42).fontSize(14)
                 .fontColor(this.importMode === 1 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
                 .backgroundColor(this.importMode === 1 ? ThemeColors.primary(this.isDark) : Color.Transparent)
@@ -330,7 +330,7 @@ struct AiImportBookPage {
 
             if (this.importMode === 0) {
               Column({ space: 14 }) {
-                Text('搜索书名')
+                Text($r('app.string.ui_literal_7f4ffe6a5d'))
                   .width('100%').fontSize(16).fontWeight(FontWeight.Medium)
                   .fontColor(ThemeColors.onSurface(this.isDark))
 
@@ -345,7 +345,7 @@ struct AiImportBookPage {
                   .onChange((value: string): void => { this.searchKeyword = value; })
                   .onSubmit((): void => { this.openOnlineSearch_(); })
 
-                Text('选择搜索渠道')
+                Text($r('app.string.ui_literal_3fd63faac4'))
                   .width('100%').fontSize(13)
                   .fontColor(ThemeColors.secondaryText(this.isDark))
 
@@ -369,7 +369,7 @@ struct AiImportBookPage {
                   .enabled(this.searchKeyword.trim().length > 0 && !this.isRunning)
                   .onClick((): void => { this.openOnlineSearch_(); })
 
-                Text('搜索结果会在内置浏览器中打开。请进入具体小说详情页或目录页，再点击“导入当前页”。')
+                Text($r('app.string.ui_literal_e36e16b52b'))
                   .width('100%').fontSize(12).lineHeight(18)
                   .fontColor(ThemeColors.secondaryText(this.isDark))
               }

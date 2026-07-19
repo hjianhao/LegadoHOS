@@ -75,12 +75,12 @@ struct CacheManagePage {
       Row() {
         Row() {
           Column() {
-            Text('章节内容缓存').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+            Text($r('app.string.ui_literal_376a6413ca')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
             Text(CacheManager.formatSize(this.totalSize)).fontSize(22).fontWeight(FontWeight.Bold)
               .fontColor(ThemeColors.onBackground(this.isDark)).margin({ top: 4 })
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
 
-          Button('清理全部').fontSize(13).fontColor(ThemeColors.onError(this.isDark))
+          Button($r('app.string.ui_literal_0d5894b920')).fontSize(13).fontColor(ThemeColors.onError(this.isDark))
             .backgroundColor(this.stats.length > 0
               ? ThemeColors.error(this.isDark) : ThemeColors.outlineVariant(this.isDark))
             .enabled(this.stats.length > 0)
@@ -94,7 +94,7 @@ struct CacheManagePage {
       if (this.isLoading) {
         LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 40 })
       } else if (this.stats.length === 0) {
-        Text('暂无章节缓存')
+        Text($r('app.string.ui_literal_1821a99ece'))
           .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
           .margin({ top: 60 })
       } else {
@@ -111,7 +111,7 @@ struct CacheManagePage {
                     .margin({ top: 4 })
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start)
 
-                Button('清理').fontSize(13)
+                Button($r('app.string.ui_literal_907c3945d8')).fontSize(13)
                   .fontColor(ThemeColors.error(this.isDark))
                   .backgroundColor(Color.Transparent)
                   .height(48).padding({ left: 12, right: 12 })

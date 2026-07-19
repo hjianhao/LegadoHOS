@@ -2103,7 +2103,7 @@ struct ReadPage {
           Column().width('100%').height('100%').backgroundColor(ThemeColors.strongScrim(this.isDark))
             .onClick(() => { this.showCloudProgressDlg = false; })
           Column() {
-            Text('发现云端进度').fontSize(17).fontWeight(FontWeight.Bold)
+            Text($r('app.string.ui_literal_d65ca51e8a')).fontSize(17).fontWeight(FontWeight.Bold)
               .fontColor(ThemeColors.onBackground(this.isDark))
               .padding({ top: 16, bottom: 8 })
             Text('云端已读到第 ' + (this.pendingCloudProgress_!.durChapterIndex + 1) + ' 章'
@@ -2112,7 +2112,7 @@ struct ReadPage {
               .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
               .padding({ left: 20, right: 20, bottom: 16 })
             Row() {
-              Button('不恢复').fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
+              Button($r('app.string.ui_literal_763d09922a')).fontSize(15).fontColor(ThemeColors.secondaryText(this.isDark))
                 .backgroundColor(Color.Transparent).height(44).layoutWeight(1)
                 .onClick(() => {
                   this.showCloudProgressDlg = false;
@@ -2120,7 +2120,7 @@ struct ReadPage {
                   // 保留本地进度并回传云端
                   this.saveAndUploadProgress(true);
                 })
-              Button('恢复').fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
+              Button($r('app.string.ui_literal_79748ca1c6')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
                 .backgroundColor(ThemeColors.primary(this.isDark)).height(44).layoutWeight(1)
                 .onClick(() => {
                   const cloud = this.pendingCloudProgress_!;

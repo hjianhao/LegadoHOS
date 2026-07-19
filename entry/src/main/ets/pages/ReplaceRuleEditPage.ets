@@ -172,7 +172,7 @@ struct ReplaceRuleEditPage {
               (v: string) => { this.excludeScope = v; })
 
             Column() {
-              Text('超时（毫秒）').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+              Text($r('app.string.ui_literal_a3ce47a749')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
               TextInput({ placeholder: '3000', text: this.timeoutText })
                 .height(48).fontSize(14).borderRadius(12).width('100%').margin({ top: 4 })
                 .type(InputType.Number)
@@ -180,7 +180,7 @@ struct ReplaceRuleEditPage {
                 .fontColor(ThemeColors.onSurface(this.isDark))
                 .placeholderColor(ThemeColors.secondaryText(this.isDark))
                 .onChange((v: string) => { this.timeoutText = v; })
-              Text('当前版本不强制中断超时正则，该值仅为数据兼容保留')
+              Text($r('app.string.ui_literal_0147352334'))
                 .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ top: 4 })
             }.width('100%').margin({ top: 12 })
           }.width('100%').padding({ left: 16, right: 16, bottom: 24 })
