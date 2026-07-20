@@ -655,16 +655,8 @@ struct ComicReadPage {
   private async saveFullTocToDb_(bookId: number, chapters: BookSourceChapter[]): Promise<void> {
     try {
       const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
-      await ct.deleteChaptersByBookId(bookId);
-      const now = Date.now();
-      const newChapters: BookChapter[] = chapters.map((ch: BookSourceChapter, idx: number): BookChapter => ({
-        id: 0, bookId: bookId, index: ch.index >= 0 ? ch.index : idx, volumeIndex: 0,
-        title: ch.title || '', url: ch.url || '',
-        content: '', contentLength: 0,
-        isRead: false, isDownloaded: false, isCached: false,
-        duration: 0, audioUrl: '', createTime: now, updateTime: now,
-      }));
-      await ct.insertChapters(newChapters);
+      // 复用统一的目录落库：按 URL 保留已缓存内容，目录骤减时拒绝覆盖
+      await ct.replaceTocPreserveContent(bookId, chapters);
     } catch (e) {
       console.warn('[ComicRead] Failed to save TOC:', (e as Error).message);
     }

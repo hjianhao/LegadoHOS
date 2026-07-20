@@ -114,9 +114,15 @@ export class ChapterTable {
     return count;
   }
 
-  /** 整书目录落库，按规范化 URL 保留阅读、缓存、下载及音频状态。 */
-  async replaceTocPreserveContent(bookId: number, chapters: BookSourceChapter[]): Promise<void> {
+  /** 整书目录落库，按规范化 URL 保留阅读、缓存、下载及音频状态。目录骤减疑似书源解析异常时拒绝覆盖，返回 false。 */
+  async replaceTocPreserveContent(bookId: number, chapters: BookSourceChapter[]): Promise<boolean> {
     const oldChapters = await this.getChaptersByBookId(bookId);
+    // 目录骤减保护：新目录不足旧目录一半通常是书源解析失败/网站改版，直接覆盖会丢掉缓存内容
+    if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length) {
+      console.warn('[ChapterTable] toc shrink rejected: bookId=' + bookId
+        + ' old=' + oldChapters.length + ' new=' + chapters.length);
+      return false;
+    }
     const oldByUrl = new Map<string, BookChapter>();
     for (const old of oldChapters) {
       const key = (old.url || '').replace(/#.*$/, '');
@@ -138,6 +144,7 @@ export class ChapterTable {
       return item;
     });
     await this.insertChapters(newChapters);
+    return true;
   }
 
   private toChapters(rs: relationalStore.ResultSet): BookChapter[] {

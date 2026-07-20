@@ -963,6 +963,11 @@ struct ReadPage {
       const ct = new ChapterTable(AppDatabase.getInstance().rdbStore);
       // 备份已有章节的内容
       const oldChapters = await ct.getChaptersByBookId(bookId);
+      // 目录骤减保护：新目录不足旧目录一半通常是书源解析失败，直接覆盖会丢掉缓存内容
+      if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length) {
+        console.warn('[ReadPage] toc shrink rejected: bookId=', bookId, ' old=', oldChapters.length, ' new=', chapters.length);
+        return;
+      }
       const contentByUrl = new Map<string, string>();
       for (const old of oldChapters) {
         if (old.content && old.content.length > 50 && old.url) {

@@ -13,6 +13,7 @@ import { BookChapter } from '../model/BookChapter';
 import { BookSource } from '../model/BookSource';
 import { BookCover } from '../components/BookCover';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
+import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { LocalBookEngine } from '../engine/book/LocalBookEngine';
 import { ExportBookDialog } from '../components/ExportBookDialog';
@@ -159,8 +160,20 @@ struct BookCachePage {
         UiUtil.showToast(this.getUIContext(), { message: '书源不可用', duration: 1500 });
         return;
       }
-      const chapters = await new ChapterTable(db).getChaptersByBookId(book.id);
+      const chapterTable = new ChapterTable(db);
+      let chapters = await chapterTable.getChaptersByBookId(book.id);
       console.info('[BookCachePage] chapters in db=' + chapters.length + ' bookId=' + book.id);
+      // 缓存前先刷新目录：DB 目录可能不完整（如漫画只读过几章），否则进度和缓存范围都不对
+      try {
+        const toc = await globalSourceExecutor.getToc(source, book.bookUrl);
+        if (toc.length > 0) {
+          await chapterTable.replaceTocPreserveContent(book.id, toc);
+          chapters = await chapterTable.getChaptersByBookId(book.id);
+          console.info('[BookCachePage] toc refreshed, chapters=' + chapters.length);
+        }
+      } catch (e) {
+        console.warn('[BookCachePage] refresh toc failed, use db chapters: ' + (e as Error).message);
+      }
       if (chapters.length === 0) {
         UiUtil.showToast(this.getUIContext(), { message: '目录为空，请先更新目录', duration: 1500 });
         return;

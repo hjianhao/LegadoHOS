@@ -260,7 +260,14 @@ export class BookCacheService {
     for (const u of urls) {
       if (task.cancelled) return;
       try {
-        await MangaImageLoader.load(u, req.source);
+        // load 失败时不抛错而是返回原 URL，据此判断并重试一次
+        let saved: string = await MangaImageLoader.load(u, req.source);
+        if (saved === u) {
+          saved = await MangaImageLoader.load(u, req.source);
+        }
+        if (saved === u) {
+          console.warn('[BookCache] image failed: ' + u);
+        }
       } catch (err) {
         console.warn('[BookCache] image failed: ' + (err as Error).message);
       }
