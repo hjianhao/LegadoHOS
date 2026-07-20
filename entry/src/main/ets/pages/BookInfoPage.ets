@@ -1207,7 +1207,8 @@ struct BookInfoPage {
         }
         .width('100%')
         .height(88)
-        .padding({ left: 4, right: 8, top: 36 })
+        .padding({ left: 4, right: 8, top: 0 })
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
         .zIndex(10)
         .position({ x: 0, y: 0 })
 

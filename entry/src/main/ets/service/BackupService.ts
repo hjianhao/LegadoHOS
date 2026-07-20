@@ -13,6 +13,7 @@ import picker from '@ohos.file.picker';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import zlib from '@ohos.zlib';
+import { common } from '@kit.AbilityKit';
 
 export interface BackupData {
   version: string;
@@ -130,11 +131,11 @@ export class BackupService {
   }
 
   /** 本地备份 */
-  static async backupToLocal(): Promise<void> {
+  static async backupToLocal(context: Context): Promise<void> {
     const data = await BackupService.exportBackup();
     const json = JSON.stringify(data);
     const name = `backup_${new Date().toISOString().slice(0, 10)}.zip`;
-    const uris = await new picker.DocumentViewPicker().save({ newFileNames: [name] });
+    const uris = await new picker.DocumentViewPicker(context).save({ newFileNames: [name] });
     if (!uris || uris.length === 0) return;
     const backupFile = await BackupService.createBackupZip(json);
     try {
@@ -145,8 +146,10 @@ export class BackupService {
   }
 
   /** 本地恢复 */
-  static async restoreFromLocal(): Promise<ImportResult | null> {
-    const uris = await new picker.DocumentViewPicker().select();
+  static async restoreFromLocal(context: common.Context): Promise<ImportResult | null> {
+    const documentSelectOptions = new picker.DocumentSelectOptions();
+    documentSelectOptions.fileSuffixFilters = ['.zip'];
+    const uris = await new picker.DocumentViewPicker(context).select(documentSelectOptions);
     if (!uris || uris.length === 0) return null;
     const path = uris[0];
 

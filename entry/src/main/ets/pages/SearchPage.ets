@@ -1481,7 +1481,8 @@ struct SearchPage {
       .padding({ left: 16, right: 16, bottom: 10 })
     }
     .width('100%')
-    .padding({ top: 42 })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+    .padding({ top: 0 })
     .backgroundColor(this.surfaceColor())
   }
 

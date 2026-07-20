@@ -226,9 +226,24 @@ struct ReplaceRulePage {
 
   private async doFileImport(): Promise<void> {
     this.closeImportSheet();
+    // 部分设备（如缺少 sysPicker/filePicker 组件的平板 ROM）没有系统文件选择器，
+    // select() 会抛错或返回空，统一降级为提示改用其它导入方式。
+    let uris: string[] = [];
     try {
-      const uris = await new picker.DocumentViewPicker().select();
-      if (!uris || uris.length === 0) return;
+      const documentSelectOptions = new picker.DocumentSelectOptions();
+      documentSelectOptions.fileSuffixFilters = ['.json'];
+      const context = this.getUIContext().getHostContext()!;
+      uris = await new picker.DocumentViewPicker(context).select(documentSelectOptions);
+    } catch (e) {
+      console.error('[ReplaceRule] file picker unavailable: ' + JSON.stringify(e));
+    }
+    if (!uris || uris.length === 0) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '此设备不支持文件选择器', duration: 2500
+      });
+      return;
+    }
+    try {
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
       const s = fileIo.statSync(f.fd);
       const b = new ArrayBuffer(s.size);

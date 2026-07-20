@@ -229,7 +229,8 @@ export struct ExportBookDialog {
 
     let uri = '';
     try {
-      const uris = await new picker.DocumentViewPicker().save({ newFileNames: [fileName] });
+      const context = this.getUIContext().getHostContext()!;
+      const uris = await new picker.DocumentViewPicker(context).save({ newFileNames: [fileName] });
       if (!uris || uris.length === 0) return;
       uri = uris[0];
     } catch (e) {

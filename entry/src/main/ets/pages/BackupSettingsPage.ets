@@ -102,7 +102,7 @@ struct BackupSettingsPage {
     this.isBusy = true;
     this.statusText = '导出备份...';
     try {
-      await BackupService.backupToLocal();
+      await BackupService.backupToLocal(this.getUIContext().getHostContext()!);
       this.statusText = '备份已保存 ✓';
       this.showToast('本地备份成功');
     } catch (err) {
@@ -116,7 +116,7 @@ struct BackupSettingsPage {
     this.isBusy = true;
     this.statusText = '恢复中...';
     try {
-      const result = await BackupService.restoreFromLocal();
+      const result = await BackupService.restoreFromLocal(this.getUIContext().getHostContext()!);
       if (result) {
         this.statusText = `恢复完成: ${result.books} 本书, ${result.sources} 个书源`;
         this.showToast('恢复成功');

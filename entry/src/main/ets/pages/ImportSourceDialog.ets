@@ -29,6 +29,15 @@ export struct ImportSourceDialog {
 
   onImportSuccess?: () => void;
 
+  /** 通过「打开方式/分享」进入时预置的书源 JSON，非空则跳过菜单直接预览 */
+  initialJson?: string;
+
+  aboutToAppear(): void {
+    if (this.initialJson && this.initialJson.trim().length > 0) {
+      this.loadPreview(this.initialJson);
+    }
+  }
+
   private resetMode(): void {
     this.importMode = 'menu';
     this.importUrl = '';
@@ -79,10 +88,28 @@ export struct ImportSourceDialog {
   }
 
   private async doFileImport(): Promise<void> {
+    // 部分设备（如缺少 sysPicker/filePicker 组件的平板 ROM）没有系统文件选择器，
+    // select() 会抛错(errorCode=1011)或返回空，统一降级为提示改用其它导入方式。
+    let uris: string[] = [];
     try {
-      const uris = await new picker.DocumentViewPicker().select();
-      if (!uris || uris.length === 0) return;
-      this.statusText = '读取文件...';
+      const documentSelectOptions = new picker.DocumentSelectOptions();
+      documentSelectOptions.fileSuffixFilters = ['.json'];
+      const context = this.getUIContext().getHostContext()!;
+      uris = await new picker.DocumentViewPicker(context).select(documentSelectOptions);
+    } catch (e) {
+      console.error('[ImportSource] file picker unavailable: ' + JSON.stringify(e));
+    }
+    if (!uris || uris.length === 0) {
+      console.warn('[ImportSource] file picker returned empty — system file picker unavailable on this device');
+      UiUtil.showToast(this.getUIContext(), {
+        message: '此设备不支持文件选择器，请使用「从URL导入」或「粘贴 JSON」',
+        duration: 3000
+      });
+      this.statusText = '';
+      return;
+    }
+    this.statusText = '读取文件...';
+    try {
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
       const s = fileIo.statSync(f.fd);
       const b = new ArrayBuffer(s.size);

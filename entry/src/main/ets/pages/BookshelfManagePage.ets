@@ -211,7 +211,8 @@ struct BookshelfManagePage {
     if (!this.requireSelection()) return;
     try {
       const json = await BookshelfTransferService.exportBookshelf(this.selectedBooks());
-      const uris = await new picker.DocumentViewPicker().save({ newFileNames: ['bookshelf_selected.json'] });
+      const context = this.getUIContext().getHostContext()!;
+      const uris = await new picker.DocumentViewPicker(context).save({ newFileNames: ['bookshelf_selected.json'] });
       if (!uris || uris.length === 0) return;
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
       fileIo.writeSync(f.fd, json);

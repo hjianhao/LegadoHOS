@@ -275,7 +275,7 @@ struct BookSourcePage {
       return;
     }
     try {
-      const documentPicker = new picker.DocumentViewPicker();
+      const documentPicker = new picker.DocumentViewPicker(this.getUIContext().getHostContext()!);
       const uris = await documentPicker.save({ newFileNames: ['bookSources.json'] });
       if (!uris || uris.length === 0) return;
       const json = await this.dao_.exportSources(target);

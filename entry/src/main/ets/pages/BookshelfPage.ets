@@ -50,6 +50,7 @@ import { ArrayDataSource } from '../util/ArrayDataSource';
 import { AiBookProfileTable } from '../data/database/AiBookProfileTable';
 import { extractAiBookMetadata, normalizeAiChapters } from '../engine/ai/AiBookImporter';
 import { NetUtil } from '../util/NetUtil';
+import { ShareImportPayload } from '../service/ShareImportService';
 
 @Component
 export struct BookshelfPage {
@@ -82,6 +83,8 @@ export struct BookshelfPage {
   @StorageLink('gc_showTag') showTag: boolean = true;
   @StorageLink('gc_introLines') introMaxLines: number = 2;
   @StorageLink('shelfRefreshCounter') @Watch('onShelfRefreshCounterChanged') shelfRefreshCounter: number = 0;
+  @StorageLink('pendingShareImport') @Watch('onShareImport') pendingShareImport: ShareImportPayload | null = null;
+  private lastShareImportId: number = 0;
 
   @State showMenu: boolean = false;
   @State isSelectMode: boolean = false;
@@ -155,6 +158,8 @@ export struct BookshelfPage {
     });
     this.loadShelfData();
     this.syncProgressFromCloud();
+    // 「打开方式/分享」冷启动时 payload 可能已就绪
+    this.consumeShareImport(this.pendingShareImport);
   }
 
   onPageShow(): void {
@@ -296,60 +301,7 @@ export struct BookshelfPage {
       options.fileSuffixFilters = ['.txt', '.epub', '.mobi', '.azw', '.azw3', '.pdf'];
       const uris = await docPicker.select(options);
       if (!uris || uris.length === 0) return;
-
-      this.isImporting = true;
-      this.importProgress = `正在导入 0/${uris.length}...`;
-
-      // 获取沙箱 context
-      const context = this.getUIContext().getHostContext() as Context;
-
-	      // 构造导入项列表（uri + fileName），从 URI 提取文件名
-	      const items: ImportFileItem[] = [];
-	      for (let i = 0; i < uris.length; i++) {
-	        const uri = uris[i];
-		        const name = decodeURIComponent(uri.split('/').pop() || `book_${i + 1}`);
-	        items.push({ uri, fileName: name });
-	      }
-
-		      // 先复制到沙箱，EPUB 再用 TaskPool 解压（避免 EAWorker + WebView 冲突）
-		      const sandboxItems: ImportFileItem[] = [];
-		      for (const item of items) {
-		        const sandboxPath = await localBookEngine.copyToSandbox(item.uri, item.fileName, context);
-		        let epubDir = '';
-		        if (/\.epub$/i.test(item.fileName)) {
-		          epubDir = LocalBookEngine.getEpubDir(context);
-		          this.importProgress = `正在解压 ${item.fileName}...`;
-		          await taskpool.execute(extractZipConcurrent, sandboxPath, epubDir);
-		        }
-		        sandboxItems.push({ uri: sandboxPath, fileName: item.fileName, epubDir });
-		      }
-
-	      const result = await localBookEngine.importBooks(sandboxItems, context, (current, total, name) => {
-	        this.importProgress = `正在导入 ${current}/${total}: ${name}`;
-	      });
-
-      this.isImporting = false;
-      this.importProgress = '';
-
-      if (result.success > 0) {
-        UiUtil.showToast(this.getUIContext(), {
-          message: `导入完成: 成功 ${result.success} 本${result.failed > 0 ? `，失败 ${result.failed} 本` : ''}`,
-          duration: 2000
-        });
-        await this.loadBooks();
-      } else if (result.failed > 0) {
-        let firstError = '未知错误';
-        for (const detail of result.details) {
-          if (!detail.success && detail.error) {
-            firstError = detail.error;
-            break;
-          }
-        }
-        UiUtil.showToast(this.getUIContext(), {
-          message: `导入失败: ${firstError}`,
-          duration: 2000
-        });
-      }
+      await this.importLocalBookUris(uris);
     } catch (e) {
       this.isImporting = false;
       this.importProgress = '';
@@ -358,6 +310,82 @@ export struct BookshelfPage {
       console.error('[Bookshelf] addLocalBooks error:', e);
       UiUtil.showToast(this.getUIContext(), { message: '导入失败', duration: 1500 });
     }
+  }
+
+  /**
+   * 本地书籍导入流程：「文件选择器」与「打开方式/分享」共用
+   */
+  private async importLocalBookUris(uris: string[]): Promise<void> {
+    this.isImporting = true;
+    this.importProgress = `正在导入 0/${uris.length}...`;
+
+    // 获取沙箱 context
+    const context = this.getUIContext().getHostContext() as Context;
+
+    // 构造导入项列表（uri + fileName），从 URI 提取文件名
+    const items: ImportFileItem[] = [];
+    for (let i = 0; i < uris.length; i++) {
+      const uri = uris[i];
+      const name = decodeURIComponent(uri.split('/').pop() || `book_${i + 1}`);
+      items.push({ uri, fileName: name });
+    }
+
+    // 先复制到沙箱，EPUB 再用 TaskPool 解压（避免 EAWorker + WebView 冲突）
+    const sandboxItems: ImportFileItem[] = [];
+    for (const item of items) {
+      const sandboxPath = await localBookEngine.copyToSandbox(item.uri, item.fileName, context);
+      let epubDir = '';
+      if (/\.epub$/i.test(item.fileName)) {
+        epubDir = LocalBookEngine.getEpubDir(context);
+        this.importProgress = `正在解压 ${item.fileName}...`;
+        await taskpool.execute(extractZipConcurrent, sandboxPath, epubDir);
+      }
+      sandboxItems.push({ uri: sandboxPath, fileName: item.fileName, epubDir });
+    }
+
+    const result = await localBookEngine.importBooks(sandboxItems, context, (current, total, name) => {
+      this.importProgress = `正在导入 ${current}/${total}: ${name}`;
+    });
+
+    this.isImporting = false;
+    this.importProgress = '';
+
+    if (result.success > 0) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: `导入完成: 成功 ${result.success} 本${result.failed > 0 ? `，失败 ${result.failed} 本` : ''}`,
+        duration: 2000
+      });
+      await this.loadBooks();
+    } else if (result.failed > 0) {
+      let firstError = '未知错误';
+      for (const detail of result.details) {
+        if (!detail.success && detail.error) {
+          firstError = detail.error;
+          break;
+        }
+      }
+      UiUtil.showToast(this.getUIContext(), {
+        message: `导入失败: ${firstError}`,
+        duration: 2000
+      });
+    }
+  }
+
+  private onShareImport(): void {
+    this.consumeShareImport(this.pendingShareImport);
+  }
+
+  /** 「打开方式/分享」收到的电子书文件：执行本地书导入 */
+  private consumeShareImport(p: ShareImportPayload | null): void {
+    if (!p || p.id === this.lastShareImportId || p.kind !== 'book') return;
+    this.lastShareImportId = p.id;
+    console.info('[Bookshelf] share import books: ' + p.fileName);
+    this.importLocalBookUris(p.uris).catch((e: Error) => {
+      this.isImporting = false;
+      this.importProgress = '';
+      console.error('[Bookshelf] importSharedBooks error:', e);
+      UiUtil.showToast(this.getUIContext(), { message: '导入失败', duration: 1500 });
+    });
   }
 
   applyFilters(): void {

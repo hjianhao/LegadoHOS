@@ -31,7 +31,8 @@ export struct BookshelfExportDialog {
   private async saveFile(): Promise<void> {
     if (!this.jsonText) await this.generate();
     try {
-      const uris = await new picker.DocumentViewPicker().save({ newFileNames: ['bookshelf.json'] });
+      const context = this.getUIContext().getHostContext()!;
+      const uris = await new picker.DocumentViewPicker(context).save({ newFileNames: ['bookshelf.json'] });
       if (!uris || uris.length === 0) return;
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
       fileIo.writeSync(f.fd, this.jsonText);

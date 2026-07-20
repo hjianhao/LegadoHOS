@@ -17,9 +17,25 @@ export struct BookshelfImportDialog {
   onImportSuccess?: () => void;
 
   private async chooseFile(): Promise<void> {
+    // 部分设备（如缺少 sysPicker/filePicker 组件的平板 ROM）没有系统文件选择器，
+    // select() 会抛错或返回空，统一降级为提示改用粘贴 JSON。
+    let uris: string[] = [];
     try {
-      const uris = await new picker.DocumentViewPicker().select();
-      if (!uris || uris.length === 0) return;
+      const documentSelectOptions = new picker.DocumentSelectOptions();
+      documentSelectOptions.fileSuffixFilters = ['.json'];
+      const context = this.getUIContext().getHostContext()!;
+      uris = await new picker.DocumentViewPicker(context).select(documentSelectOptions);
+    } catch (e) {
+      console.error('[BookshelfImport] file picker unavailable: ' + JSON.stringify(e));
+    }
+    if (!uris || uris.length === 0) {
+      console.warn('[BookshelfImport] file picker returned empty — system file picker unavailable');
+      UiUtil.showToast(this.getUIContext(), {
+        message: '此设备不支持文件选择器，请在下方粘贴 JSON', duration: 3000
+      });
+      return;
+    }
+    try {
       const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
       const stat = fileIo.statSync(f.fd);
       const buffer = new ArrayBuffer(stat.size);

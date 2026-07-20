@@ -40,6 +40,72 @@
           {
             "entities": ["entity.system.home"],
             "actions": ["action.system.home"]
+          },
+          {
+            "entities": ["entity.system.default"],
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              { "scheme": "file", "type": "general.json", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "general.json", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "general.plain-text", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "general.plain-text", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "com.adobe.pdf", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "com.adobe.pdf", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "general.epub", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "general.epub", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "general.ebook", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "general.ebook", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "com.amazon.azw", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "com.amazon.azw", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "com.amazon.azw3", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "com.amazon.azw3", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "com.amazon.mobi", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "com.amazon.mobi", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/json", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/json", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "text/plain", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "text/plain", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/pdf", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/pdf", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/epub+zip", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/epub+zip", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/x-mobipocket-ebook", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/x-mobipocket-ebook", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/vnd.amazon.ebook", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/vnd.amazon.ebook", "linkFeature": "FileOpen" },
+              {
+                "scheme": "file",
+                "type": "application/octet-stream",
+                "pathRegex": ".*\\.(json|txt|epub|mobi|azw|azw3|pdf)$",
+                "linkFeature": "FileOpen"
+              },
+              {
+                "scheme": "content",
+                "type": "application/octet-stream",
+                "pathRegex": ".*\\.(json|txt|epub|mobi|azw|azw3|pdf)$",
+                "linkFeature": "FileOpen"
+              }
+            ]
+          },
+          {
+            "entities": ["entity.system.default"],
+            "actions": ["ohos.want.action.sendData", "ohos.want.action.sendMultipleData"],
+            "uris": [
+              { "type": "general.json" },
+              { "type": "general.plain-text" },
+              { "type": "com.adobe.pdf" },
+              { "type": "general.epub" },
+              { "type": "general.ebook" },
+              { "type": "com.amazon.azw" },
+              { "type": "com.amazon.azw3" },
+              { "type": "com.amazon.mobi" },
+              { "type": "application/json" },
+              { "type": "text/plain" },
+              { "type": "application/pdf" },
+              { "type": "application/epub+zip" },
+              { "type": "application/x-mobipocket-ebook" },
+              { "type": "application/vnd.amazon.ebook" }
+            ]
           }
         ]
       }

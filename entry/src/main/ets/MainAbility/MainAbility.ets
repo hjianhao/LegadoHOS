@@ -14,12 +14,21 @@ import { GlobalConfig } from '../data/preferences/GlobalConfig';
 import { WebDavService } from '../service/WebDavService';
 import { CookieStore } from '../util/CookieStore';
 import { LoginInfoStore } from '../util/LoginInfoStore';
+import { ShareImportService } from '../service/ShareImportService';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[MainAbility] onCreate');
+    // 通过「打开方式/分享」冷启动：解析文件并广播给页面
+    ShareImportService.handleWant(want, this.context);
     // 提前启动异步初始化
     this.initServices();
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    console.info('[MainAbility] onNewWant');
+    // 应用已运行时再收到「打开方式/分享」
+    ShareImportService.handleWant(want, this.context);
   }
 
   private async initServices(): Promise<void> {

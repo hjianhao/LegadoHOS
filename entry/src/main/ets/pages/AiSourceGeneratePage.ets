@@ -128,7 +128,7 @@ struct AiSourceGeneratePage {
         Button($r('app.string.ui_d7d7ce790b')).fontSize(13)
           .backgroundColor(ThemeColors.transparent()).width(40).height(40)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
-      }.padding({ left: 12, right: 12, top: 44 }).width('100%')
+      }.padding({ left: 12, right: 12, top: 0 }).width('100%').expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       if (!this.isAnalyzing && this.steps.length === 0) {
         // 输入区
