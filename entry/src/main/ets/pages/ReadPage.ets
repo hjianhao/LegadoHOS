@@ -1350,6 +1350,7 @@ struct ReadPage {
    */
   private applyPendingScrollPos_(): void {
     if (!this.pendingScrollPos_) return;
+    console.info('[ReadPage] applyPendingScrollPos_ pending=' + this.pendingScrollPos_);
     setTimeout(() => { this.jumpToPendingScrollPos_(); }, 150);
   }
 
@@ -1358,12 +1359,31 @@ struct ReadPage {
     const pos = this.pendingScrollPos_;
     if (!pos) return;
     this.pendingScrollPos_ = '';
-    this.suppressReachUntil_ = Date.now() + 500;
+    this.suppressReachUntil_ = Date.now() + 800;
+    this.doJumpScroll_(pos);
+    // 首次定位可能被布局/边缘动画覆盖，延时校验；'end' 仍在顶部时补滚一次
+    setTimeout(() => {
+      const off = this.textScroller_.currentOffset();
+      const y = off ? off.yOffset : -1;
+      console.info('[ReadPage] jumpVerify pos=' + pos + ' y=' + y);
+      if (pos === 'end' && y >= 0 && y < 1) {
+        console.info('[ReadPage] jumpVerify reapply end');
+        this.suppressReachUntil_ = Date.now() + 800;
+        this.textScroller_.scrollEdge(Edge.Bottom);
+      }
+    }, 300);
+  }
+
+  private doJumpScroll_(pos: string): void {
+    const before = this.textScroller_.currentOffset();
     if (pos === 'end') {
       this.textScroller_.scrollEdge(Edge.Bottom);
     } else {
       this.textScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
     }
+    const after = this.textScroller_.currentOffset();
+    console.info('[ReadPage] doJumpScroll_ pos=' + pos + ' beforeY=' + (before ? before.yOffset : -1) +
+      ' afterY=' + (after ? after.yOffset : -1));
   }
   private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
@@ -2059,7 +2079,7 @@ struct ReadPage {
 	      } else if (this.pages.length > 0) {
         if (this.flowMode === 'scrolled') {
           // 滚动阅读模式
-          Scroll() {
+          Scroll(this.textScroller_) {
             Text(this.text)
               .fontSize(this.cfg.fontSize)
               .fontColor(this.cfg.textColor)
@@ -2076,12 +2096,28 @@ struct ReadPage {
                 bottom: this.cfg.paddingBottom,
               })
               .onClick(() => { this.showMenu = true; })
+              .onAreaChange((_old: Area, n: Area) => {
+                // 章节内容布局完成后恢复滚动位置（上一章→章末，下一章→章首）
+                if (this.pendingScrollPos_) {
+                  const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
+                  console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h);
+                  if (h > 0) this.jumpToPendingScrollPos_();
+                }
+              })
           }
           .scrollable(ScrollDirection.Vertical)
+          // 撞边即切章，禁用回弹（Spring 回弹动画会覆盖切章后的程序化定位）
+          .edgeEffect(EdgeEffect.Fade)
           .scrollBar(BarState.Off)
           .backgroundColor(this.cfg.bgColor)
-          .onReachEnd(() => { this.onNextChapter(); })
-          .onReachStart(() => { this.onPrevChapter(); })
+          .onReachEnd(() => {
+            if (Date.now() < this.suppressReachUntil_) return;
+            this.onNextChapter();
+          })
+          .onReachStart(() => {
+            if (Date.now() < this.suppressReachUntil_) return;
+            this.onPrevChapter();
+          })
           .width('100%').height('100%')
         } else {
 	        PageView({

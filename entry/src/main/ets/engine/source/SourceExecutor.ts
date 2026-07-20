@@ -3743,6 +3743,13 @@ export class SourceExecutor {
       return [];
     }
 
+    // JS 求值环境预热：章节字段含 @js: 时先同步初始化一次，
+    // 避免 200+ 并发求值与 Worker/原生桥初始化竞争，导致大量 @js: 静默失败回退原始值
+    const needsJs = (rules['tocUrlItem'] || '').includes('@js:') || (rules['tocTitle'] || '').includes('@js:');
+    if (needsJs) {
+      await JsExpressionEvaluator.processJsResultAsync('@js:result', 'warmup', { source: source });
+    }
+
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
@@ -3796,7 +3803,13 @@ export class SourceExecutor {
         // 应用 @js: 后处理（通过 JsExpressionEvaluator.processJsResult）
         if (jsPostProcess && result) {
           const processed = await JsExpressionEvaluator.processJsResultAsync(jsPostProcess, result, { source: source });
-          if (processed) result = processed;
+          if (processed) {
+            result = processed;
+          } else {
+            // @js: 失败时保留原始值会产生"看起来正常但指向错误地址"的章节，必须暴露出来
+            console.warn('[SrcEx] toc @js post-process failed, keep raw: ' + result.substring(0, 60)
+              + ' js=' + jsPostProcess.substring(0, 40));
+          }
         }
         // 应用 ## 后缀 post-processing（Legado 格式：##regex##replacement，成对处理）
         for (let pi = 0; pi < postProcessors.length; pi += 2) {
