@@ -15,6 +15,7 @@ import { WebDavService, WebDavConfig } from '../service/WebDavService';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppTitleBar } from '../components/common/AppTitleBar';
+import { WindowLayout } from '../util/WindowLayout';
 
 // PersistentStorage 持久化 WebDAV 设置
 PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
@@ -284,6 +285,7 @@ export struct BackupSettingsPage {
 
           Divider().height(30).color(ThemeColors.transparent())
         }.width('100%').padding(16)
+        .constraintSize({ maxWidth: WindowLayout.isWide ? 640 : Number.MAX_SAFE_INTEGER })
       }.layoutWeight(1)
     }
     .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))

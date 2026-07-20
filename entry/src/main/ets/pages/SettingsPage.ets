@@ -3,6 +3,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 import { NetUtil } from '../util/NetUtil';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { MangaImageLoader } from '../util/MangaImageLoader';
+import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -160,25 +161,36 @@ export struct SettingsPage {
         .backgroundColor(ThemeColors.surface(this.isDark))
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-      if (this.currentSection === 'main') {
-        this.buildMainMenu();
-      } else if (this.currentSection === 'read') {
-        this.buildReadSettings();
-      } else if (this.currentSection === 'comic') {
-        this.buildComicSettings();
-      } else if (this.currentSection === 'search') {
-      } else if (this.currentSection === 'theme') {
-        this.buildThemeSettings();
-      } else if (this.currentSection === 'backup') {
-        // backup 入口通过 click handler 直接导航，这里留空
-        Column() {}.width('100%').height('100%')
-      } else if (this.currentSection === 'network') {
-        this.buildNetSettings();
-      } else if (this.currentSection === 'tts') {
-        this.buildTtsSettings();
-      } else if (this.currentSection === 'about') {
-        this.buildAboutPage();
+      // 宽屏时表单内容限宽居中，避免横屏拉伸过宽
+      Row() {
+        Blank().layoutWeight(WindowLayout.isWide ? 1 : 0)
+        Column() {
+          if (this.currentSection === 'main') {
+            this.buildMainMenu();
+          } else if (this.currentSection === 'read') {
+            this.buildReadSettings();
+          } else if (this.currentSection === 'comic') {
+            this.buildComicSettings();
+          } else if (this.currentSection === 'search') {
+          } else if (this.currentSection === 'theme') {
+            this.buildThemeSettings();
+          } else if (this.currentSection === 'backup') {
+            // backup 入口通过 click handler 直接导航，这里留空
+            Column() {}.width('100%').height('100%')
+          } else if (this.currentSection === 'network') {
+            this.buildNetSettings();
+          } else if (this.currentSection === 'tts') {
+            this.buildTtsSettings();
+          } else if (this.currentSection === 'about') {
+            this.buildAboutPage();
+          }
+        }
+        .layoutWeight(1)
+        .constraintSize({ maxWidth: WindowLayout.isWide ? 720 : Number.MAX_SAFE_INTEGER })
+        Blank().layoutWeight(WindowLayout.isWide ? 1 : 0)
       }
+      .layoutWeight(1)
+      .width('100%')
     }
     .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }

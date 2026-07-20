@@ -9,6 +9,7 @@ import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppBackButton } from '../components/common/AppTitleBar';
+import { WindowLayout } from '../util/WindowLayout';
 
 interface PresetItem { name: string; label: string; endpoint: string; }
 
@@ -380,6 +381,7 @@ export struct AiConfigPage {
           }
         }
         .padding({ left: 16, right: 16 }).width('100%')
+        .constraintSize({ maxWidth: WindowLayout.isWide ? 640 : Number.MAX_SAFE_INTEGER })
       }
       .layoutWeight(1).scrollBar(BarState.Off)
     }
