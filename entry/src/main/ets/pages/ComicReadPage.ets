@@ -330,7 +330,16 @@ struct ComicReadPage {
 
     if (content) {
       const baseUrl: string = ch?.url || this.bookUrl || this.source_?.sourceUrl || '';
-      const urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
+      let urls: string[] = globalSourceExecutor.extractImageUrls(content, baseUrl);
+      if (urls.length === 0 && !forceRefresh) {
+        // 旧版离线缓存不含图片（下载时未保留 <img>），回源重抓并覆盖缓存
+        console.info('[ComicRead] cached content has no images, refetch chapter', idx);
+        const fresh: string = await this.fetchChapterContent_(idx);
+        if (fresh) {
+          content = fresh;
+          urls = globalSourceExecutor.extractImageUrls(content, baseUrl);
+        }
+      }
       console.info('[ComicRead] extractImageUrls: found', urls.length, 'images for chapter', idx);
       if (urls.length > 0) {
         // 在设置 imageUrls 之前确定目标页码和 Swiper index，使 Swiper 数据变化时直接从正确页渲染
@@ -687,11 +696,23 @@ struct ComicReadPage {
       const ctx = UiUtil.getHostContext(this.getUIContext());
       if (!ctx) return;
       const win: window.Window = await window.getLastWindow(ctx);
+      const barColor = showNavigation ? ThemeColors.background(this.isDark) : ThemeColors.comicCanvas(this.isDark);
+      await win.setWindowSystemBarProperties({
+        statusBarColor: barColor,
+        isStatusBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+        navigationBarColor: barColor,
+        isNavigationBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+      });
       if (visible) {
         await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
+      try {
+        await win.setSpecificSystemBarEnabled('status', visible, false);
+        await win.setSpecificSystemBarEnabled('navigation', visible && showNavigation, false);
+        await win.setSpecificSystemBarEnabled('navigationIndicator', visible && showNavigation, false);
+      } catch (_unsupportedError) { /* API 11 以下由 setWindowSystemBarEnable 兜底 */ }
     } catch (err) {
       // 部分设备可能不支持，忽略
       console.warn('[ComicRead] setSystemBar failed:', (err as Error).message);

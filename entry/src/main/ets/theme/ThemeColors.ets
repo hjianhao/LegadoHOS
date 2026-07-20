@@ -182,6 +182,23 @@ export class ThemeColors {
     return ['#333333', '#000000', '#2C3E50', '#5D4037', '#666666', '#FFFFFF', '#1A237E', '#880E4F'];
   }
 
+  /** 根据背景色决定系统栏是否使用浅色图标。支持 #RGB、#RRGGBB 和 #AARRGGBB。 */
+  static useLightSystemBarIcons(backgroundColor: string): boolean {
+    let hex = (backgroundColor || '').trim().replace('#', '');
+    if (hex.length === 3) {
+      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    } else if (hex.length === 8) {
+      hex = hex.substring(2);
+    }
+    if (hex.length !== 6) return false;
+    const value = parseInt(hex, 16);
+    if (Number.isNaN(value)) return false;
+    const red = (value >> 16) & 0xFF;
+    const green = (value >> 8) & 0xFF;
+    const blue = value & 0xFF;
+    return (red * 299 + green * 587 + blue * 114) / 1000 < 150;
+  }
+
   static coverPlaceholderPalette(): string[] {
     return ['#455A64', '#5C6BC0', '#26A69A', '#EC407A', '#AB47BC', '#42A5F5',
       '#66BB6A', '#FF7043', '#8D6E63', '#78909C', '#7E57C2', '#29B6F6'];

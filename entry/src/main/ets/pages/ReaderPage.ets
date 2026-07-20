@@ -297,11 +297,23 @@ struct ReaderPage {
       const context = UiUtil.getHostContext(this.getUIContext());
       if (!context) return;
       const win: window.Window = await window.getLastWindow(context);
+      const barColor = showNavigation ? ThemeColors.background(this.isDark) : this.cfg.bgColor;
+      await win.setWindowSystemBarProperties({
+        statusBarColor: barColor,
+        isStatusBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+        navigationBarColor: barColor,
+        isNavigationBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+      });
       if (visible) {
         await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
+      try {
+        await win.setSpecificSystemBarEnabled('status', visible, false);
+        await win.setSpecificSystemBarEnabled('navigation', visible && showNavigation, false);
+        await win.setSpecificSystemBarEnabled('navigationIndicator', visible && showNavigation, false);
+      } catch (_unsupportedError) { /* API 11 以下由 setWindowSystemBarEnable 兜底 */ }
     } catch (err) {
       console.warn('[ReaderPage] setSystemBar failed:', (err as Error).message);
     }
@@ -578,6 +590,7 @@ struct ReaderPage {
         chineseMode: this.cfg.chineseMode,
       };
     }
+    this.setSystemBarVisible_(true, false);
   }
 
   private async getStartTarget_(): Promise<string> {

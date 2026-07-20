@@ -380,6 +380,8 @@ struct ReadPage {
         zhFormat: this.cfg.zhFormat, chineseMode: this.cfg.chineseMode,
 	      };
 	    }
+      // 状态栏保留占位，但颜色和图标明暗始终跟随当前阅读背景。
+      this.setSystemBarVisible_(true, false);
 	  }
 
 	  private async loadContent(): Promise<void> {
@@ -1063,11 +1065,25 @@ struct ReadPage {
       const ctx = UiUtil.getHostContext(this.getUIContext());
       if (!ctx) return;
       const win: window.Window = await window.getLastWindow(ctx);
+      const barColor = showNavigation ? ThemeColors.background(this.isDark) : this.cfg.bgColor;
+      await win.setWindowSystemBarProperties({
+        statusBarColor: barColor,
+        isStatusBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+        navigationBarColor: barColor,
+        isNavigationBarLightIcon: ThemeColors.useLightSystemBarIcons(barColor),
+      });
       if (visible) {
         await win.setWindowSystemBarEnable(showNavigation ? ['status', 'navigation'] : ['status']);
       } else {
         await win.setWindowSystemBarEnable([]);
       }
+      // 手势导航条在新系统中是独立的 navigationIndicator，旧接口不会稳定地同步其可见性。
+      // 阅读时保留状态栏但隐藏底部两种导航形态；退出时三者一起恢复。
+      try {
+        await win.setSpecificSystemBarEnabled('status', visible, false);
+        await win.setSpecificSystemBarEnabled('navigation', visible && showNavigation, false);
+        await win.setSpecificSystemBarEnabled('navigationIndicator', visible && showNavigation, false);
+      } catch (_unsupportedError) { /* API 11 以下由 setWindowSystemBarEnable 兜底 */ }
     } catch (err) {
       console.warn('[ReadPage] setSystemBar failed:', (err as Error).message);
     }

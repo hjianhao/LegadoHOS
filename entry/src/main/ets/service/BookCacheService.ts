@@ -11,7 +11,7 @@
 import { AppDatabase } from '../data/database/AppDatabase';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookChapter, createDefaultChapter } from '../model/BookChapter';
-import { BookSource } from '../model/BookSource';
+import { BookSource, isImageSource } from '../model/BookSource';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import notificationManager from '@ohos.notificationManager';
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
@@ -149,13 +149,17 @@ export class BookCacheService {
         }
 
         try {
-          // 已缓存的跳过
+          // 已缓存的跳过；漫画源额外校验：旧版缓存不含图片（下载时未保留 <img>），视为未缓存重新下载
           const existing = await chapterTable.getChapterByIndex(req.bookId, idx);
           if (existing && (existing.isCached || existing.isDownloaded) && existing.content.length > 10) {
-            result.skipped++;
-            done++;
-            updateProgress(ch.title || '');
-            continue;
+            const badComicCache = isImageSource(req.source) &&
+              globalSourceExecutor.extractImageUrls(existing.content, ch.url || req.bookUrl).length === 0;
+            if (!badComicCache) {
+              result.skipped++;
+              done++;
+              updateProgress(ch.title || '');
+              continue;
+            }
           }
 
           const content = await this.downloadWithRetry(req, ch);
@@ -197,7 +201,7 @@ export class BookCacheService {
     let lastErr: Error | null = null;
     for (let attempt = 1; attempt <= this.maxRetry; attempt++) {
       try {
-        const content = await globalSourceExecutor.getContent(req.source, ch.url, req.bookUrl);
+        const content = await globalSourceExecutor.getContent(req.source, ch.url, req.bookUrl, isImageSource(req.source));
         if (content && content.length > 10) return content;
         if (attempt < this.maxRetry) await this.sleep(500 * attempt);
       } catch (err) {
