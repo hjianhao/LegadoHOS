@@ -5,7 +5,7 @@ import { AppTitleBar } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct ReadRecordPage {
+export struct ReadRecordPage {
   @StorageLink('isDark') isDark: boolean = false;
   aboutToAppear(): void { this.isDark = AppTheme.getInstance().isDark; }
 

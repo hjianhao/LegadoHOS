@@ -11,7 +11,7 @@ import { AppTitleBar } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct CacheManagePage {
+export struct CacheManagePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State totalSize: number = 0;
   @State stats: BookCacheStat[] = [];

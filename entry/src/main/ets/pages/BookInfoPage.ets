@@ -36,7 +36,7 @@ import { normalizeAiChapters } from '../engine/ai/AiBookImporter';
 
 @Entry
 @Component
-struct BookInfoPage {
+export struct BookInfoPage {
   @State bookName: string = '';
   @State bookAuthor: string = '';
   @State coverUrl: string = '';

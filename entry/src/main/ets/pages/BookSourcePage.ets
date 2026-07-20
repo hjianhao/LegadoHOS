@@ -17,7 +17,7 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct BookSourcePage {
+export struct BookSourcePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State sources: BookSource[] = [];
   @State filtered: BookSource[] = [];

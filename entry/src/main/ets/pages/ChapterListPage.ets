@@ -79,7 +79,7 @@ class ChapterDataSource implements IDataSource {
 
 @Entry
 @Component
-struct ChapterListPage {
+export struct ChapterListPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State from: string = '';               // 'BookInfoPage' | 'ReadPage'
   @State bookName: string = '';

@@ -12,7 +12,7 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct ReplaceRuleEditPage {
+export struct ReplaceRuleEditPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State isLoading: boolean = true;
   @State isNew: boolean = true;

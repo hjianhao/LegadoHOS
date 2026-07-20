@@ -7,7 +7,7 @@ import { UiUtil } from '../util/UiUtil';
 
 @Entry
 @Component
-struct BookSourceDebugPage {
+export struct BookSourceDebugPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State source: BookSource | null = null;
   @State keyword: string = '';

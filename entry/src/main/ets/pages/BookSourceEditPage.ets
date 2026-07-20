@@ -129,7 +129,7 @@ const TAB_LABELS: string[] = ['基本信息', '搜索', '详情/目录', '正文
 
 @Entry
 @Component
-struct BookSourceEditPage {
+export struct BookSourceEditPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State editSource: BookSource | null = null;
   @State currentTab: number = 0;

@@ -12,7 +12,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 
 @Entry
 @Component
-struct RssSourceManagePage {
+export struct RssSourceManagePage {
   @StorageProp('isDark') isDark: boolean = false;
   @State sources: RSSSource[] = [];
   @State isLoading: boolean = true;

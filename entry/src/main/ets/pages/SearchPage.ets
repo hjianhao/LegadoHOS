@@ -62,7 +62,7 @@ interface ParsedSearchScope {
 
 @Entry
 @Component
-struct SearchPage {
+export struct SearchPage {
   @State searchMode: number = 0; // 0=书源，1=在线
   @State keyword: string = '';
   @State committedKeyword: string = '';

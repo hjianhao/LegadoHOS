@@ -1,5 +1,10 @@
 /**
  * 主页面 - Tab 框架
+ *
+ * 平板适配：
+ * - 每个页签独立 Navigation + NavPathStack，支持页签内子页面导航栈
+ * - 侧栏宽度按窗口分级（96vp / 200vp）
+ * - NavDestination 路由表注册管理类页面，阅读器仍走 router（全屏目的页）
  */
 import { BookshelfPage } from './BookshelfPage';
 import { DiscoverPage } from './DiscoverPage';
@@ -11,6 +16,26 @@ import { ShareImportPayload } from '../service/ShareImportService';
 import { ImportSourceDialog } from './ImportSourceDialog';
 import { UiUtil } from '../util/UiUtil';
 import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
+import { NavRouter } from '../util/NavRouter';
+import { BookSourcePage } from './BookSourcePage';
+import { SettingsPage } from './SettingsPage';
+import { SearchPage } from './SearchPage';
+import { BookInfoPage } from './BookInfoPage';
+import { ChapterListPage } from './ChapterListPage';
+import { ChangeSourcePage } from './ChangeSourcePage';
+import { BookshelfManagePage } from './BookshelfManagePage';
+import { ReplaceRulePage } from './ReplaceRulePage';
+import { FontManagerPage } from './FontManagerPage';
+import { BackupSettingsPage } from './BackupSettingsPage';
+import { AiConfigPage } from './AiConfigPage';
+import { AiImportBookPage } from './AiImportBookPage';
+import { CacheManagePage } from './CacheManagePage';
+import { ReadRecordPage } from './ReadRecordPage';
+import { RssSourceManagePage } from './RssSourceManagePage';
+import { AboutPage } from './AboutPage';
+import { BookSourceEditPage } from './BookSourceEditPage';
+import { BookSourceDebugPage } from './BookSourceDebugPage';
+import { ReplaceRuleEditPage } from './ReplaceRuleEditPage';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
 
@@ -30,6 +55,12 @@ struct MainPage {
   private lastShareImportId: number = 0;
   private shareImportDlg?: CustomDialogController;
 
+  // 每个页签独立的导航栈
+  @State bookshelfStack: NavPathStack = new NavPathStack();
+  @State discoverStack: NavPathStack = new NavPathStack();
+  @State rssStack: NavPathStack = new NavPathStack();
+  @State myStack: NavPathStack = new NavPathStack();
+
   private tabs: TabCfg[] = [
     { icon: $r('app.media.ic_bookshelf'), label: '书架' },
     { icon: $r('app.media.ic_discover'), label: '发现' },
@@ -42,17 +73,21 @@ struct MainPage {
     return this.sizeClass >= WindowSizeClass.MEDIUM;
   }
 
-  /** 侧栏宽度：COMPACT 100%，MEDIUM/EXPANDED 96vp（图标），LARGE 200vp（图标+文字宽） */
+  /** 侧栏宽度 */
   private get sideBarWidth(): number {
-    if (!this.isWideLayout) return 0; // 底部 tab 时用 100%
+    if (!this.isWideLayout) return 0;
     if (this.sizeClass >= WindowSizeClass.LARGE) return 200;
     return 96;
   }
 
   aboutToAppear(): void {
-    // 统一启用 ArkUI 默认键盘避让，输入页和底部弹层在软键盘出现时自动压缩/平移。
     this.getUIContext().setKeyboardAvoidMode(UIKeyboardAvoidMode.RESIZE);
-    // 「打开方式/分享」冷启动时 payload 可能已就绪
+    // 注册各页签的 NavPathStack
+    NavRouter.registerStack(0, this.bookshelfStack);
+    NavRouter.registerStack(1, this.discoverStack);
+    NavRouter.registerStack(2, this.rssStack);
+    NavRouter.registerStack(3, this.myStack);
+    NavRouter.setActiveTab(0);
     this.consumeShareImport(this.pendingShareImport);
   }
 
@@ -60,7 +95,6 @@ struct MainPage {
     this.consumeShareImport(this.pendingShareImport);
   }
 
-  /** 处理「打开方式/分享」收到的文件：json 弹书源导入预览，电子书切书架（书架页自行导入） */
   private consumeShareImport(p: ShareImportPayload | null): void {
     if (!p || p.id === this.lastShareImportId) return;
     this.lastShareImportId = p.id;
@@ -98,29 +132,111 @@ struct MainPage {
     }
   }
 
+  /** NavDestination 路由表：按页面名匹配组件 */
+  @Builder
+  navDestination(name: string, _param: object) {
+    if (name === 'pages/BookSourcePage') {
+      BookSourcePage()
+    } else if (name === 'pages/SettingsPage') {
+      SettingsPage()
+    } else if (name === 'pages/SearchPage') {
+      SearchPage()
+    } else if (name === 'pages/BookInfoPage') {
+      BookInfoPage()
+    } else if (name === 'pages/ChapterListPage') {
+      ChapterListPage()
+    } else if (name === 'pages/ChangeSourcePage') {
+      ChangeSourcePage()
+    } else if (name === 'pages/BookshelfManagePage') {
+      BookshelfManagePage()
+    } else if (name === 'pages/ReplaceRulePage') {
+      ReplaceRulePage()
+    } else if (name === 'pages/FontManagerPage') {
+      FontManagerPage()
+    } else if (name === 'pages/BackupSettingsPage') {
+      BackupSettingsPage()
+    } else if (name === 'pages/AiConfigPage') {
+      AiConfigPage()
+    } else if (name === 'pages/AiImportBookPage') {
+      AiImportBookPage()
+    } else if (name === 'pages/CacheManagePage') {
+      CacheManagePage()
+    } else if (name === 'pages/ReadRecordPage') {
+      ReadRecordPage()
+    } else if (name === 'pages/RssSourceManagePage') {
+      RssSourceManagePage()
+    } else if (name === 'pages/AboutPage') {
+      AboutPage()
+    } else if (name === 'pages/BookSourceEditPage') {
+      BookSourceEditPage()
+    } else if (name === 'pages/BookSourceDebugPage') {
+      BookSourceDebugPage()
+    } else if (name === 'pages/ReplaceRuleEditPage') {
+      ReplaceRuleEditPage()
+    } else {
+      // 未注册的页面回退到空白
+      Column() {
+        Text('页面未注册: ' + name).fontSize(14).fontColor(ThemeColors.error(this.isDark))
+      }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+    }
+  }
+
   build() {
     Tabs({
       barPosition: this.isWideLayout ? BarPosition.Start : BarPosition.End,
       index: this.currentTab
     }) {
-      TabContent() { BookshelfPage() }.tabBar(this.buildTab(this.tabs[0], 0))
-      TabContent() { DiscoverPage() }.tabBar(this.buildTab(this.tabs[1], 1))
-      TabContent() { RssMainPage() }.tabBar(this.buildTab(this.tabs[2], 2))
-      TabContent() { MyPage() }.tabBar(this.buildTab(this.tabs[3], 3))
+      TabContent() {
+        Navigation(this.bookshelfStack) {
+          BookshelfPage()
+        }
+        .navDestination(this.navDestination)
+        .hideTitleBar(true)
+        .mode(NavigationMode.Stack)
+      }.tabBar(this.buildTab(this.tabs[0], 0))
+
+      TabContent() {
+        Navigation(this.discoverStack) {
+          DiscoverPage()
+        }
+        .navDestination(this.navDestination)
+        .hideTitleBar(true)
+        .mode(NavigationMode.Stack)
+      }.tabBar(this.buildTab(this.tabs[1], 1))
+
+      TabContent() {
+        Navigation(this.rssStack) {
+          RssMainPage()
+        }
+        .navDestination(this.navDestination)
+        .hideTitleBar(true)
+        .mode(NavigationMode.Stack)
+      }.tabBar(this.buildTab(this.tabs[2], 2))
+
+      TabContent() {
+        Navigation(this.myStack) {
+          MyPage()
+        }
+        .navDestination(this.navDestination)
+        .hideTitleBar(true)
+        .mode(NavigationMode.Stack)
+      }.tabBar(this.buildTab(this.tabs[3], 3))
     }
     .vertical(this.isWideLayout)
     .barWidth(this.isWideLayout ? this.sideBarWidth : '100%')
     .barHeight(this.isWideLayout ? '100%' : 64)
     .scrollable(false)
     .animationDuration(220)
-    .onChange((index: number): void => { this.currentTab = index; })
+    .onChange((index: number): void => {
+      this.currentTab = index;
+      NavRouter.setActiveTab(index);
+    })
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.background(this.isDark))
     .onAreaChange((_oldArea: Area, newArea: Area): void => {
       const width = typeof newArea.width === 'number' ? newArea.width : Number(newArea.width);
       const height = typeof newArea.height === 'number' ? newArea.height : Number(newArea.height);
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-        // px2vp 转换为 vp
         const widthVp = this.getUIContext().px2vp(width);
         const heightVp = this.getUIContext().px2vp(height);
         WindowLayout.update(widthVp, heightVp);

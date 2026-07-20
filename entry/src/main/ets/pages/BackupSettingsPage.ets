@@ -26,7 +26,7 @@ PersistentStorage.persistProp('webdav_sync_progress_plus', false);
 
 @Entry
 @Component
-struct BackupSettingsPage {
+export struct BackupSettingsPage {
   @StorageLink('webdav_url') webDavUrl: string = 'https://dav.jianguoyun.com/dav/';
   @StorageLink('webdav_user') webDavUser: string = '';
   @State webDavPwd: string = '';

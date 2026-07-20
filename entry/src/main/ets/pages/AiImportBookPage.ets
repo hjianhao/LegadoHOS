@@ -17,7 +17,7 @@ import { BookChapter } from '../model/BookChapter';
 
 @Entry
 @Component
-struct AiImportBookPage {
+export struct AiImportBookPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State importMode: number = 0;
   @State searchKeyword: string = '';

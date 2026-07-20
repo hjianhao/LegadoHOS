@@ -16,7 +16,7 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct FontManagerPage {
+export struct FontManagerPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State fontList: FontInfo[] = [];
   @State selectedIds: Set<string> = new Set();

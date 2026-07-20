@@ -19,7 +19,7 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 
 @Entry
 @Component
-struct ReplaceRulePage {
+export struct ReplaceRulePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State rules: ReplaceRule[] = [];
   @State filtered: ReplaceRule[] = [];

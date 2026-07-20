@@ -24,7 +24,7 @@ const PRESETS: PresetItem[] = [
 
 @Entry
 @Component
-struct AiConfigPage {
+export struct AiConfigPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State endpoint: string = 'https://api.openai.com/v1/chat/completions';
   @State apiKey: string = '';

@@ -54,7 +54,7 @@ struct DnsDialog {
 
 @Entry
 @Component
-struct SettingsPage {
+export struct SettingsPage {
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('isFollowSystem') isFollowSystem: boolean = false;

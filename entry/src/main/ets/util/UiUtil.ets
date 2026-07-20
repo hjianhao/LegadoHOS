@@ -1,5 +1,6 @@
 import type promptAction from '@ohos.promptAction';
 import type router from '@ohos.router';
+import { NavRouter, NavPageName } from './NavRouter';
 
 export class UiUtil {
   static getHostContext(uiContext: UIContext): Context {
@@ -73,5 +74,14 @@ export class UiUtil {
       console.warn('[UiUtil] getParams failed:', err);
       return new Object();
     }
+  }
+
+  /**
+   * 自适应弹窗对齐方式：Compact 底部，Medium+ 居中。
+   * 用于 CustomDialogController 的 alignment 参数。
+   */
+  static adaptiveDialogAlignment(): DialogAlignment {
+    const isWide = AppStorage.get<boolean>('windowIsWide') ?? false;
+    return isWide ? DialogAlignment.Center : DialogAlignment.Bottom;
   }
 }

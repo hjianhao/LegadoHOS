@@ -27,7 +27,7 @@ import { ArrayDataSource } from '../util/ArrayDataSource';
 
 @Entry
 @Component
-struct BookshelfManagePage {
+export struct BookshelfManagePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State allBooks: Book[] = [];
   @State books: Book[] = [];
