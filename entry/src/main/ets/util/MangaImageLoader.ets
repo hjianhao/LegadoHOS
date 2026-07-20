@@ -122,40 +122,50 @@ export class MangaImageLoader {
    *
    * @param url 图片 URL
    * @param source 书源（用于提取 Referer/Cookie/UA）
+   * @param forceRefresh 手动重试场景：忽略在途任务（可能是即将失败的慢请求）与缓存状态，独立重新下载
    * @returns 本地路径或原始 URL
    */
-  static async load(url: string, source?: BookSource | null, onProgress?: (percent: number) => void): Promise<string> {
+  static async load(url: string, source?: BookSource | null, onProgress?: (percent: number) => void, forceRefresh: boolean = false): Promise<string> {
     if (!url) return '';
 
     await MangaImageLoader.init();
 
     const localPath: string = MangaImageLoader.getLocalPath(url);
 
-    // 已缓存，验证缓存文件是否为有效图片（旧缓存可能存的是加密数据）
-    if (await MangaImageLoader.isCached(url)) {
-      if (await MangaImageLoader.isValidImageFile(localPath)) {
-        return localPath;
-      }
-      // 缓存无效 → 删除文件，重新下载
+    if (forceRefresh) {
+      // 手动重试：删除旧文件，不复用在途 Promise，独立发起新下载
       try { await fileFs.unlink(localPath); } catch (_) { /* ignore */ }
-      console.info('[MangaImg] Invalidated stale cache for', url.substring(0, 60));
-    }
+    } else {
+      // 已缓存，验证缓存文件是否为有效图片（旧缓存可能存的是加密数据）
+      if (await MangaImageLoader.isCached(url)) {
+        if (await MangaImageLoader.isValidImageFile(localPath)) {
+          return localPath;
+        }
+        // 缓存无效 → 删除文件，重新下载
+        try { await fileFs.unlink(localPath); } catch (_) { /* ignore */ }
+        console.info('[MangaImg] Invalidated stale cache for', url.substring(0, 60));
+      }
 
-    // 正在下载同一张图，复用 Promise
-    const existing: Promise<string> | undefined = MangaImageLoader.downloading.get(url);
-    if (existing) {
-      return existing;
+      // 正在下载同一张图，复用 Promise
+      const existing: Promise<string> | undefined = MangaImageLoader.downloading.get(url);
+      if (existing) {
+        return existing;
+      }
     }
 
     // 发起下载
     const downloadPromise: Promise<string> =
       MangaImageLoader.downloadWithQueue(url, source || null, localPath, onProgress);
-    MangaImageLoader.downloading.set(url, downloadPromise);
+    if (!forceRefresh) {
+      MangaImageLoader.downloading.set(url, downloadPromise);
+    }
     try {
       const result: string = await downloadPromise;
       return result;
     } finally {
-      MangaImageLoader.downloading.delete(url);
+      if (!forceRefresh) {
+        MangaImageLoader.downloading.delete(url);
+      }
     }
   }
 

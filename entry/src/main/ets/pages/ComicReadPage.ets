@@ -779,7 +779,7 @@ struct ComicReadPage {
   }
 
   /** 异步加载图片：先下载到本地，再更新 state 触发渲染 */
-  private async loadImage_(url: string, generation: number = this.imageLoadGeneration_): Promise<void> {
+  private async loadImage_(url: string, generation: number = this.imageLoadGeneration_, forceRefresh: boolean = false): Promise<void> {
     if (this.imagePaths.has(url) || this.failedImages.has(url)) return;
     // 检查 url 是否属于当前章节（章节切换后旧 promise 的结果应丢弃）
     if (this.imageUrls.indexOf(url) < 0) return;
@@ -792,7 +792,7 @@ struct ComicReadPage {
           newProg.set(url, percent);
           this.imageProgress = newProg;
         }
-      });
+      }, forceRefresh);
       // 异步返回后再次检查：章节可能已切换
       if (generation !== this.imageLoadGeneration_ || this.imageUrls.indexOf(url) < 0) return;
       // 清除进度
@@ -1128,7 +1128,7 @@ struct ComicReadPage {
                   const newMap = new Map<string, string>(this.imagePaths);
                   newMap.delete(url);
                   this.imagePaths = newMap;
-                  this.loadImage_(url);
+                  this.loadImage_(url, this.imageLoadGeneration_, true);
                 })
             }
             .justifyContent(FlexAlign.Center)
@@ -1228,7 +1228,7 @@ struct ComicReadPage {
               const newMap = new Map<string, string>(this.imagePaths);
               newMap.delete(url);
               this.imagePaths = newMap;
-              this.loadImage_(url);
+              this.loadImage_(url, this.imageLoadGeneration_, true);
             })
         }
         .width('100%').height(300)

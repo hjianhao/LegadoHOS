@@ -114,6 +114,12 @@ struct ReadPage {
   /** 阅读中定时上传进度的定时器 */
   private progressUploadTimer_: number = -1;
   @State flowMode: string = 'paginated';
+  /** 滚动模式：正文 Scroll 控制器 */
+  private textScroller_: Scroller = new Scroller();
+  /** 滚动模式：切章后待恢复的滚动位置（'start' 章首 / 'end' 章末，'' 无） */
+  private pendingScrollPos_: string = '';
+  /** 滚动模式：程序化滚动后在此时间戳前忽略 onReachStart/onReachEnd，避免连锁翻章 */
+  private suppressReachUntil_: number = 0;
   @State readBgColor: string = ThemeColors.readingBackgroundDefault();
   @State readTextColor: string = ThemeColors.readingTextDefault();
   @State readNightMode: boolean = false;
@@ -1308,8 +1314,15 @@ struct ReadPage {
 
   private onPrevChapter(): void {
     if (this.currentIndex > 0) {
+      const scrolled = this.flowMode === 'scrolled';
+      if (scrolled) this.pendingScrollPos_ = 'end';
       this.loadChapter(this.currentIndex - 1).then(() => {
-        this.pageIndex = Math.max(0, this.pages.length - 1);
+        if (scrolled) {
+          // 滚动模式：定位到上一章章末（对齐分页模式翻到末页的行为）
+          this.applyPendingScrollPos_();
+        } else {
+          this.pageIndex = Math.max(0, this.pages.length - 1);
+        }
       });
     }
   }
@@ -1317,12 +1330,40 @@ struct ReadPage {
     const n = this.currentIndex + 1;
     if (n >= this.totalChapters_) return;
     this.pageIndex = 0; // 新章从第 1 页开始
+    const scrolled = this.flowMode === 'scrolled';
+    if (scrolled) this.pendingScrollPos_ = 'start';
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
+      if (scrolled) this.applyPendingScrollPos_();
       return;
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
-    this.loadChapter(n);
+    this.loadChapter(n).then(() => {
+      if (scrolled) this.applyPendingScrollPos_();
+    });
+  }
+
+  /**
+   * 滚动模式：章节内容加载后恢复滚动位置。
+   * 正常由正文 Text 的 onAreaChange 在布局完成后触发 jumpToPendingScrollPos_；
+   * 这里用短延时兜底组件复用、Text 高度未变化的场景。
+   */
+  private applyPendingScrollPos_(): void {
+    if (!this.pendingScrollPos_) return;
+    setTimeout(() => { this.jumpToPendingScrollPos_(); }, 150);
+  }
+
+  /** 滚动模式：执行待恢复的滚动定位，并短暂抑制 reach 事件防止连锁翻章 */
+  private jumpToPendingScrollPos_(): void {
+    const pos = this.pendingScrollPos_;
+    if (!pos) return;
+    this.pendingScrollPos_ = '';
+    this.suppressReachUntil_ = Date.now() + 500;
+    if (pos === 'end') {
+      this.textScroller_.scrollEdge(Edge.Bottom);
+    } else {
+      this.textScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+    }
   }
   private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
