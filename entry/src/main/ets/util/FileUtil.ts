@@ -100,4 +100,28 @@ export class FileUtil {
       console.error('[FileUtil] Delete failed:', err);
     }
   }
+
+  /**
+   * 递归删除目录及其下所有文件和子目录。
+   * HarmonyOS fileFs.rmdirSync 仅能删空目录，需先递归删子项再删目录本身。
+   * 路径不存在时静默返回，不抛错。
+   */
+  static removeDirRecursive(dirPath: string): void {
+    if (!FileUtil.exists(dirPath)) return;
+    try {
+      const names: string[] = fileFs.listFileSync(dirPath);
+      for (const name of names) {
+        const child: string = `${dirPath}${dirPath.endsWith('/') ? '' : '/'}${name}`;
+        const stat = fileFs.statSync(child);
+        if (stat.isDirectory()) {
+          FileUtil.removeDirRecursive(child);
+        } else {
+          try { fileFs.unlinkSync(child); } catch (_) { /* ignore */ }
+        }
+      }
+      fileFs.rmdirSync(dirPath);
+    } catch (err) {
+      console.warn('[FileUtil] removeDirRecursive failed:', dirPath, (err as Error).message);
+    }
+  }
 }

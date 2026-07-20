@@ -11,6 +11,9 @@ import { BookCover } from '../components/BookCover';
 import { BookshelfTransferService } from '../service/BookshelfTransferService';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookExportService, ExportBookInfo, ExportOptions } from '../service/BookExportService';
+import { BookDeleter } from '../service/BookDeleter';
+import { MangaImageLoader } from '../util/MangaImageLoader';
+import { BookCoverUtil } from '../util/BookCoverUtil';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
 import { BookSource } from '../model/BookSource';
@@ -124,8 +127,8 @@ struct BookshelfManagePage {
         value: '移出', fontColor: ThemeColors.error(this.isDark),
         action: async (): Promise<void> => {
           try {
-            const bookDao = new BookTable(AppDatabase.getInstance().rdbStore);
-            await bookDao.setShelfByIds(this.selectedBookIds, false);
+            // 走统一删除函数，彻底清理 DB 记录 + 本地文件 + 缓存
+            await BookDeleter.deleteBooks(this.selectedBooks());
             UiUtil.showToast(this.getUIContext(), { message: '已移出 ' + this.selectedBookIds.length + ' 本', duration: 1500 });
             this.selectedBookIds = [];
             await this.loadData();
@@ -144,6 +147,9 @@ struct BookshelfManagePage {
       const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
       for (const id of this.selectedBookIds) {
         await chapterDao.clearContentByBookId(id);
+        // 连带清理漫画图片缓存和封面缓存
+        await MangaImageLoader.clearCacheForBook(id);
+        await BookCoverUtil.clearCacheForBook(id);
       }
       UiUtil.showToast(this.getUIContext(), { message: '已清除章节缓存', duration: 1500 });
       await this.loadData();

@@ -14,8 +14,16 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import image from '@ohos.multimedia.image';
 import { BookSource } from '../model/BookSource';
 import { processMangaImageConcurrent } from './MangaImageProcessTask';
+import { FileUtil } from './FileUtil';
 
-const CACHE_BASE_DIR: string = '/data/storage/el2/base/haps/entry/files/manga_cache/';
+/**
+ * 漫画图片缓存根目录。
+ * v3 起按 bookId 分子目录存储：manga_cache_v3/{bookId}/{md5Short(url)}.{suffix}
+ * 旧版 manga_cache/（v2，扁平结构、无 bookId）在 init 时递归删除释放空间。
+ */
+const CACHE_BASE_DIR: string = '/data/storage/el2/base/haps/entry/files/manga_cache_v3/';
+/** 旧版缓存目录（v2，扁平结构），init 时清理 */
+const LEGACY_CACHE_DIR: string = '/data/storage/el2/base/haps/entry/files/manga_cache/';
 
 /** 16位 MD5（简化版，使用 URL 的 hash） */
 function md5Short(url: string): string {
@@ -93,24 +101,23 @@ export class MangaImageLoader {
       if (!await fileFs.access(MangaImageLoader.cacheDir)) {
         await fileFs.mkdir(MangaImageLoader.cacheDir, true);
       }
+      // 清理旧版扁平缓存目录（v2，无 bookId 信息，无法迁移到子目录结构，直接删除释放空间）
+      FileUtil.removeDirRecursive(LEGACY_CACHE_DIR);
       MangaImageLoader.initialized = true;
     } catch (err) {
       console.error('[MangaImg] Init cache dir failed:', (err as Error).message);
     }
   }
 
-  /** 缓存版本号（变更后自动失效旧缓存） */
-  private static readonly CACHE_VERSION: number = 2;
-
-  /** 获取图片本地缓存路径 */
-  static getLocalPath(url: string): string {
-    return `${MangaImageLoader.cacheDir}v${MangaImageLoader.CACHE_VERSION}_${md5Short(url)}.${getImageSuffix(url)}`;
+  /** 获取图片本地缓存路径（按 bookId 分子目录） */
+  static getLocalPath(url: string, bookId: number): string {
+    return `${MangaImageLoader.cacheDir}${bookId}/${md5Short(url)}.${getImageSuffix(url)}`;
   }
 
   /** 检查图片是否已缓存 */
-  static async isCached(url: string): Promise<boolean> {
+  static async isCached(url: string, bookId: number): Promise<boolean> {
     try {
-      return await fileFs.access(MangaImageLoader.getLocalPath(url));
+      return await fileFs.access(MangaImageLoader.getLocalPath(url, bookId));
     } catch (_) {
       return false;
     }
@@ -122,32 +129,36 @@ export class MangaImageLoader {
    *
    * @param url 图片 URL
    * @param source 书源（用于提取 Referer/Cookie/UA）
+   * @param onProgress 下载进度回调
    * @param forceRefresh 手动重试场景：忽略在途任务（可能是即将失败的慢请求）与缓存状态，独立重新下载
+   * @param bookId 书籍 ID，用于按书分目录存储缓存（v3 起必传）
    * @returns 本地路径或原始 URL
    */
-  static async load(url: string, source?: BookSource | null, onProgress?: (percent: number) => void, forceRefresh: boolean = false): Promise<string> {
+  static async load(url: string, source?: BookSource | null, onProgress?: (percent: number) => void, forceRefresh: boolean = false, bookId: number = 0): Promise<string> {
     if (!url) return '';
 
     await MangaImageLoader.init();
 
-    const localPath: string = MangaImageLoader.getLocalPath(url);
+    const localPath: string = MangaImageLoader.getLocalPath(url, bookId);
+    // 在途任务去重 key 带 bookId，防不同书同 URL 冲突
+    const dedupKey: string = `${bookId}:${url}`;
 
     if (forceRefresh) {
       // 手动重试：删除旧文件，不复用在途 Promise，独立发起新下载
       try { await fileFs.unlink(localPath); } catch (_) { /* ignore */ }
     } else {
       // 已缓存，验证缓存文件是否为有效图片（旧缓存可能存的是加密数据）
-      if (await MangaImageLoader.isCached(url)) {
+      if (await MangaImageLoader.isCached(url, bookId)) {
         if (await MangaImageLoader.isValidImageFile(localPath)) {
           return localPath;
         }
-        // 缓存无效 → 删除文件，重新下载
+        // 缓存无效 -> 删除文件，重新下载
         try { await fileFs.unlink(localPath); } catch (_) { /* ignore */ }
         console.info('[MangaImg] Invalidated stale cache for', url.substring(0, 60));
       }
 
       // 正在下载同一张图，复用 Promise
-      const existing: Promise<string> | undefined = MangaImageLoader.downloading.get(url);
+      const existing: Promise<string> | undefined = MangaImageLoader.downloading.get(dedupKey);
       if (existing) {
         return existing;
       }
@@ -157,14 +168,14 @@ export class MangaImageLoader {
     const downloadPromise: Promise<string> =
       MangaImageLoader.downloadWithQueue(url, source || null, localPath, onProgress);
     if (!forceRefresh) {
-      MangaImageLoader.downloading.set(url, downloadPromise);
+      MangaImageLoader.downloading.set(dedupKey, downloadPromise);
     }
     try {
       const result: string = await downloadPromise;
       return result;
     } finally {
       if (!forceRefresh) {
-        MangaImageLoader.downloading.delete(url);
+        MangaImageLoader.downloading.delete(dedupKey);
       }
     }
   }
@@ -201,8 +212,8 @@ export class MangaImageLoader {
     await MangaImageLoader.acquireDownloadSlot_();
 
     try {
-      // 双重检查
-      if (await MangaImageLoader.isCached(url)) return localPath;
+      // 双重检查（localPath 已含 bookId 子目录）
+      if (await fileFs.access(localPath)) return localPath;
 
       const success: boolean = await MangaImageLoader.downloadImage(url, source, localPath, onProgress);
       if (success) {
@@ -272,10 +283,12 @@ export class MangaImageLoader {
       }
 
       // 使用 rcp 下载（获取 ArrayBuffer）
+      // 超时对齐安卓 HttpHelper.kt: connectTimeout=15s / readTimeout=60s。
+      // 之前 transferMs=30s 偏短，弱网下大图（>100KB）易在收到部分数据后被判超时失败。
       const sessionCfg: rcp.SessionConfiguration = {
         requestConfiguration: {
           transfer: {
-            timeout: { connectMs: 15000, transferMs: 30000 },
+            timeout: { connectMs: 15000, transferMs: 60000 },
           },
           tracing: onProgress ? {
             httpEventsHandler: {
@@ -669,62 +682,62 @@ export class MangaImageLoader {
   /**
    * 预加载图片（下载到缓存但不返回路径，不阻塞调用方）
    */
-  static preload(url: string, source?: BookSource | null): void {
+  static preload(url: string, source?: BookSource | null, bookId: number = 0): void {
     if (!url) return;
-    MangaImageLoader.load(url, source).catch((_e: Error) => { /* ignore preload errors */ });
+    MangaImageLoader.load(url, source, undefined, false, bookId).catch((_e: Error) => { /* ignore preload errors */ });
   }
 
   /**
-   * 清理指定书籍的图片缓存
-   * @param imageUrls 需要保留的图片 URL 列表
+   * 清除单本书的漫画图片缓存（删书/清缓存时调用）。
+   * 直接递归删除该书的 {bookId}/ 子目录，O(1) 定位。
    */
-  static async clearCacheExcept(imageUrls: string[]): Promise<void> {
+  static async clearCacheForBook(bookId: number): Promise<void> {
     try {
-      if (!await fileFs.access(MangaImageLoader.cacheDir)) return;
-      const retainNames: Set<string> = new Set<string>();
-      for (const url of imageUrls) {
-        retainNames.add(`v${MangaImageLoader.CACHE_VERSION}_${md5Short(url)}.${getImageSuffix(url)}`);
-      }
-      const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
-      for (const file of files) {
-        if (!retainNames.has(file)) {
-          try { await fileFs.unlink(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
-        }
-      }
+      const bookDir: string = `${MangaImageLoader.cacheDir}${bookId}/`;
+      FileUtil.removeDirRecursive(bookDir);
+      console.info('[MangaImg] Cleared cache for book:', bookId);
     } catch (err) {
-      console.warn('[MangaImg] Clear cache failed:', (err as Error).message);
+      console.warn('[MangaImg] Clear cache for book failed:', bookId, (err as Error).message);
     }
   }
 
   /**
-   * 清空全部漫画图片缓存
+   * 清空全部漫画图片缓存（设置页调用）
    */
   static async clearAllCache(): Promise<void> {
     try {
-      if (await fileFs.access(MangaImageLoader.cacheDir)) {
-        const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
-        for (const file of files) {
-          try { await fileFs.unlink(`${MangaImageLoader.cacheDir}${file}`); } catch (_) { /* ignore */ }
-        }
-        console.info('[MangaImg] Cleared all cache:', files.length, 'files');
-      }
+      FileUtil.removeDirRecursive(MangaImageLoader.cacheDir);
+      // 顺手清理可能残留的旧版目录
+      FileUtil.removeDirRecursive(LEGACY_CACHE_DIR);
+      await fileFs.mkdir(MangaImageLoader.cacheDir, true);
+      console.info('[MangaImg] Cleared all cache');
     } catch (err) {
       console.warn('[MangaImg] Clear all cache failed:', (err as Error).message);
     }
   }
 
   /**
-   * 获取缓存大小（字节）
+   * 获取缓存大小（字节）。递归遍历所有 {bookId}/ 子目录。
    */
   static async getCacheSize(): Promise<number> {
+    return MangaImageLoader.getDirSize_(MangaImageLoader.cacheDir);
+  }
+
+  /** 递归计算目录大小 */
+  private static async getDirSize_(dirPath: string): Promise<number> {
     try {
-      if (!await fileFs.access(MangaImageLoader.cacheDir)) return 0;
+      if (!await fileFs.access(dirPath)) return 0;
       let totalSize: number = 0;
-      const files: string[] = await fileFs.listFile(MangaImageLoader.cacheDir);
-      for (const file of files) {
+      const names: string[] = await fileFs.listFile(dirPath);
+      for (const name of names) {
+        const child: string = `${dirPath}${dirPath.endsWith('/') ? '' : '/'}${name}`;
         try {
-          const stat: fileFs.Stat = await fileFs.stat(`${MangaImageLoader.cacheDir}${file}`);
-          totalSize += stat.size;
+          const stat: fileFs.Stat = await fileFs.stat(child);
+          if (stat.isDirectory()) {
+            totalSize += await MangaImageLoader.getDirSize_(child);
+          } else {
+            totalSize += stat.size;
+          }
         } catch (_) { /* ignore */ }
       }
       return totalSize;

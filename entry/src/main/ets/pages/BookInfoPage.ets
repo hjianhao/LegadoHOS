@@ -13,6 +13,9 @@ import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
+import { BookDeleter } from '../service/BookDeleter';
+import { MangaImageLoader } from '../util/MangaImageLoader';
+import { BookCoverUtil } from '../util/BookCoverUtil';
 import { SearchResult } from '../model/SearchResult';
 import { BookChapter, createDefaultChapter } from '../model/BookChapter';
 import {
@@ -256,17 +259,11 @@ struct BookInfoPage {
   private async doDelete(): Promise<void> {
     try {
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-      await bookTable.updateBook({
-        id: this.bookId, name: this.bookName, author: this.bookAuthor,
-        coverUrl: this.coverUrl, customCoverPath: '', bookUrl: this.noteUrl,
-        origin: this.origin, originUrl: this.originUrl, type: 0, groupId: 0,
-        tocUrl: '', chapterCount: 0, totalChapterNum: 0, latestChapterTitle: '',
-        durChapterTitle: '', durChapterIndex: 0, durChapterPos: 0, durChapterProgress: 0,
-        isRead: false, isAudio: false, isManga: false, isShelf: false, order: 0,
-        canUpdate: true,
-        kind: '', wordCount: '', introduce: '', remark: '', lastUpdateTime: '', lastOpenTime: 0,
-        createTime: 0, updateTime: Date.now(), syncTime: 0
-      });
+      // 从 DB 查完整 Book 对象（BookDeleter 需要 originUrl/tocUrl/customCoverPath 等清理文件）
+      const book = await bookTable.getBookById(this.bookId);
+      if (book) {
+        await BookDeleter.deleteBook(book);
+      }
       this.isInShelf = false;
       this.bookId = 0;
       AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
@@ -297,6 +294,9 @@ struct BookInfoPage {
     try {
       const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
       await chapterTable.clearContentByBookId(this.bookId);
+      // 连带清理漫画图片缓存和封面缓存（保留目录和进度）
+      await MangaImageLoader.clearCacheForBook(this.bookId);
+      await BookCoverUtil.clearCacheForBook(this.bookId);
       UiUtil.showToast(this.getUIContext(), { message: '成功清理缓存', duration: 1500 });
     } catch (_e) {
       UiUtil.showToast(this.getUIContext(), { message: '清理缓存失败', duration: 1500 });
@@ -777,7 +777,8 @@ struct BookInfoPage {
       const dupBook = await bookTable.getBookByUrl(newNoteUrl);
       if (dupBook && dupBook.id !== book.id) {
         if (dupBook.isShelf) throw new Error('目标源的书籍已在书架中');
-        await bookTable.deleteBook(dupBook.id);
+        // 走统一删除函数，彻底清理 dupBook 的 DB 记录 + 缓存（修复旧实现漏删 chapters 的孤儿数据 bug）
+        await BookDeleter.deleteBook(dupBook);
       }
 
       // 快照旧记录，供提交后异常时明确恢复（ArkTS 禁止对象展开，用 JSON 深拷贝）

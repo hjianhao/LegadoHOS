@@ -257,13 +257,19 @@ export class BookCacheService {
   /** 漫画章节：下载本章全部图片到本地图片缓存（load 自带已缓存跳过/在途去重/队列） */
   private async cacheChapterImages_(req: CacheBookRequest, ch: CacheChapterItem, content: string, task: ActiveTask): Promise<void> {
     const urls: string[] = globalSourceExecutor.extractImageUrls(content, ch.url || req.bookUrl);
-    for (const u of urls) {
+    const total: number = urls.length;
+    for (let i = 0; i < total; i++) {
       if (task.cancelled) return;
+      const u: string = urls[i];
+      console.info('[BookCache] img ' + (i + 1) + '/' + total + ' ' + ch.title + ' ' + u.substring(0, 60));
       try {
-        // load 失败时不抛错而是返回原 URL，据此判断并重试一次
-        let saved: string = await MangaImageLoader.load(u, req.source);
+        // load 失败时不抛错而是返回原 URL，据此判断并重试一次。
+        // 失败后延迟 2s 再重试，避免源临时抖动下连续两次都撞同一超时窗口。
+        let saved: string = await MangaImageLoader.load(u, req.source, undefined, false, req.bookId);
         if (saved === u) {
-          saved = await MangaImageLoader.load(u, req.source);
+          await this.sleep(2000);
+          if (task.cancelled) return;
+          saved = await MangaImageLoader.load(u, req.source, undefined, false, req.bookId);
         }
         if (saved === u) {
           console.warn('[BookCache] image failed: ' + u);

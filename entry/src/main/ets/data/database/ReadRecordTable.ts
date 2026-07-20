@@ -83,4 +83,14 @@ export class ReadRecordTable {
     RdbUtil.close(rs);
     return total;
   }
+
+  /** 删除一本书的所有阅读记录及明细（删书时调用） */
+  async deleteByBookId(bookId: number): Promise<void> {
+    const detailP = new relationalStore.RdbPredicates(READ_DETAIL_TABLE);
+    detailP.equalTo('book_id', bookId);
+    await RdbUtil.delete(this.rdbStore, detailP);
+    const recordP = new relationalStore.RdbPredicates(READ_RECORD_TABLE);
+    recordP.equalTo('book_id', bookId);
+    await RdbUtil.delete(this.rdbStore, recordP);
+  }
 }

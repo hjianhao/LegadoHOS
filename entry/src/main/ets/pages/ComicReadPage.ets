@@ -518,7 +518,7 @@ struct ComicReadPage {
       if (urls.length === 0) return;
       // 相邻章节只预取封面页；进入章节后再以当前页为中心按需加载。
       console.info('[ComicRead] Preloading first image for chapter', idx);
-      MangaImageLoader.preload(urls[0], this.source_);
+      MangaImageLoader.preload(urls[0], this.source_, this.bookId_);
     } catch (_) { /* ignore */ }
   }
 
@@ -792,7 +792,7 @@ struct ComicReadPage {
           newProg.set(url, percent);
           this.imageProgress = newProg;
         }
-      }, forceRefresh);
+      }, forceRefresh, this.bookId_);
       // 异步返回后再次检查：章节可能已切换
       if (generation !== this.imageLoadGeneration_ || this.imageUrls.indexOf(url) < 0) return;
       // 清除进度
@@ -1751,7 +1751,7 @@ struct ComicReadPage {
   private async saveImageToGallery_(url: string): Promise<void> {
     try {
       // 获取本地缓存路径
-      const localPath: string = MangaImageLoader.getLocalPath(url);
+      const localPath: string = MangaImageLoader.getLocalPath(url, this.bookId_);
       if (!localPath || !await fileFs.access(localPath)) {
         UiUtil.showToast(this.getUIContext(), { message: '图片未缓存，无法保存', duration: 1500 });
         return;

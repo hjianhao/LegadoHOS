@@ -81,6 +81,13 @@ export class BookmarkTable {
     await RdbUtil.delete(this.rdbStore, p);
   }
 
+  /** 删除一本书的所有书签（删书时调用） */
+  async deleteByBookId(bookId: number): Promise<void> {
+    const p = new relationalStore.RdbPredicates(BookmarkTable.TABLE_NAME);
+    p.equalTo('book_id', bookId);
+    await RdbUtil.delete(this.rdbStore, p);
+  }
+
   private toBookmarks(rs: relationalStore.ResultSet): Bookmark[] {
     const list: Bookmark[] = [];
     while (RdbUtil.next(rs)) {

@@ -26,6 +26,9 @@ import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookSourceResolver } from '../service/BookSourceResolver';
+import { BookDeleter } from '../service/BookDeleter';
+import { MangaImageLoader } from '../util/MangaImageLoader';
+import { BookCoverUtil } from '../util/BookCoverUtil';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { localBookEngine, LocalBookEngine, ImportFileItem, LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 import { localBookTitleFromPath } from '../engine/book/LocalBookFileUtil';
@@ -453,13 +456,14 @@ export struct BookshelfPage {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
       const bookDao = new BookTable(db);
-      const chapterDao = new ChapterTable(db);
       const count = this.selectedBookIds.length;
-      // 批量删除章节和书籍记录
+      // 查出完整 Book 对象（BookDeleter 需要 originUrl/tocUrl/customCoverPath 清理文件）
+      const books: Book[] = [];
       for (const id of this.selectedBookIds) {
-        await chapterDao.deleteChaptersByBookId(id);
+        const book = await bookDao.getBookById(id);
+        if (book) books.push(book);
       }
-      await bookDao.deleteBooks(this.selectedBookIds);
+      await BookDeleter.deleteBooks(books);
       this.selectedBookIds = [];
       this.isSelectMode = false;
       UiUtil.showToast(this.getUIContext(), { message: '已删除 ' + count + ' 本', duration: 1500 });
@@ -649,42 +653,12 @@ export struct BookshelfPage {
 
   async removeFromShelf(book: Book): Promise<void> {
     try {
-      await AppDatabase.getInstance().waitForInit();
-      const db = AppDatabase.getInstance().rdbStore;
-      const chapterDao = new ChapterTable(db);
-      const bookDao = new BookTable(db);
-      // 1. 删除章节数据
-      await chapterDao.deleteChaptersByBookId(book.id);
-      // 2. 删除书籍记录
-      await bookDao.deleteBook(book.id);
-      // 3. 删除沙箱中的 EPUB 文件
-      if (book.originUrl) {
-        try {
-          if (fileFs.accessSync(book.originUrl)) {
-            fileFs.unlinkSync(book.originUrl);
-          }
-        } catch (_e) { /* 文件可能已被手动删除 */ }
-      }
-	      // 4. 删除封面文件
-	      if (book.customCoverPath) {
-	        try {
-	          if (fileFs.accessSync(book.customCoverPath)) {
-	            fileFs.unlinkSync(book.customCoverPath);
-	          }
-	        } catch (_e) { /* 封面可能不存在 */ }
-	      }
-	      // 5. 删除解压目录（UUID 目录，非空目录不会删除，待后续实现递归清理）
-	      if (book.tocUrl) {
-	        try {
-	          if (fileFs.accessSync(book.tocUrl)) {
-	            fileFs.rmdirSync(book.tocUrl);
-	          }
-	        } catch (_e) { /* 目录非空或已被删除 */ }
-	      }
+      await BookDeleter.deleteBook(book);
       UiUtil.showToast(this.getUIContext(), { message: '已删除《' + book.name + '》', duration: 1500 });
       this.loadBooks();
     } catch (e) {
       console.error('[Bookshelf] remove error:', e);
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败', duration: 1500 });
     }
   }
 
@@ -706,6 +680,9 @@ export struct BookshelfPage {
       await AppDatabase.getInstance().waitForInit();
       const chapterDao = new ChapterTable(AppDatabase.getInstance().rdbStore);
       await chapterDao.clearContentByBookId(book.id);
+      // 连带清理漫画图片缓存和封面缓存（保留目录和进度）
+      await MangaImageLoader.clearCacheForBook(book.id);
+      await BookCoverUtil.clearCacheForBook(book.id);
       UiUtil.showToast(this.getUIContext(), { message: '已清除《' + book.name + '》缓存', duration: 1500 });
     } catch (_e) {
       UiUtil.showToast(this.getUIContext(), { message: '清除缓存失败', duration: 1500 });

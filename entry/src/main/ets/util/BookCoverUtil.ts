@@ -2,6 +2,7 @@
  * 书籍封面工具
  * 支持网络封面下载、本地封面缓存、默认封面生成
  */
+import fileFs from '@ohos.file.fs';
 import { NetUtil } from './NetUtil';
 import { FileUtil } from './FileUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
@@ -14,7 +15,6 @@ export class BookCoverUtil {
    */
   static async init(): Promise<void> {
     try {
-      const fileFs = await import('@ohos.file.fs');
       if (!FileUtil.exists(this.cacheDir)) {
         fileFs.mkdirSync(this.cacheDir, true);
       }
@@ -54,7 +54,6 @@ export class BookCoverUtil {
    */
   static async clearCache(): Promise<void> {
     try {
-      const fileFs = await import('@ohos.file.fs');
       if (FileUtil.exists(this.cacheDir)) {
         fileFs.rmdirSync(this.cacheDir);
         fileFs.mkdirSync(this.cacheDir, true);
@@ -65,11 +64,24 @@ export class BookCoverUtil {
   }
 
   /**
+   * 清除单本书的封面缓存（删书/清缓存时调用）
+   */
+  static async clearCacheForBook(bookId: number): Promise<void> {
+    try {
+      const localPath = `${this.cacheDir}${bookId}.jpg`;
+      if (FileUtil.exists(localPath)) {
+        fileFs.unlinkSync(localPath);
+      }
+    } catch (err) {
+      console.warn('[BookCover] Clear cache for book failed:', bookId, (err as Error).message);
+    }
+  }
+
+  /**
    * 获取封面缓存大小
    */
   static async getCacheSize(): Promise<number> {
     try {
-      const fileFs = await import('@ohos.file.fs');
       if (!FileUtil.exists(this.cacheDir)) return 0;
 
       let totalSize = 0;

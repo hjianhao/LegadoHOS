@@ -31,6 +31,7 @@ import { BookmarkEditDialog } from '../components/reader/BookmarkEditDialog';
 import { BookProgress } from '../model/BookProgress';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookChapter } from '../model/BookChapter';
+import { BookDeleter } from '../service/BookDeleter';
 import { Book } from '../model/Book';
 import { SearchResult } from '../model/SearchResult';
 import { CacheDialog } from '../components/reader/CacheDialog';
@@ -118,8 +119,18 @@ struct ReadPage {
   private textScroller_: Scroller = new Scroller();
   /** 滚动模式：切章后待恢复的滚动位置（'start' 章首 / 'end' 章末，'' 无） */
   private pendingScrollPos_: string = '';
-  /** 滚动模式：程序化滚动后在此时间戳前忽略 onReachStart/onReachEnd，避免连锁翻章 */
+  /** 滚动模式：切章时置 false 销毁旧 Scroll（清除残留惯性滚动/回弹），内容就绪后重建 */
+  @State scrollAlive_: boolean = true;
+  /** 滚动模式：重建 Scroll 后短暂屏蔽 reach 事件（创建事件与定位着陆事件都在窗口内） */
   private suppressReachUntil_: number = 0;
+  /** 滚动模式：切章进行中（此时忽略 reach 翻章，防止并发切章互相 yank 滚动位置） */
+  private switchingChapter_: boolean = false;
+  /** 滚动模式：定位世代号，过期 jumpVerify 不再补滚 */
+  private jumpEpoch_: number = 0;
+  /** 滚动模式：Scroll 视口高度（onAreaChange 实测，vp） */
+  private scrollViewH_: number = 0;
+  /** 滚动模式：正文 Text 内容高度（onAreaChange 实测，vp） */
+  private scrollTextH_: number = 0;
   @State readBgColor: string = ThemeColors.readingBackgroundDefault();
   @State readTextColor: string = ThemeColors.readingTextDefault();
   @State readNightMode: boolean = false;
@@ -351,6 +362,8 @@ struct ReadPage {
         if (this.readFollowTheme) {
           this.readNightMode = this.isDark;
         }
+	    // 阅读模式（分页/滚动）持久化：首次渲染前恢复，避免进出后回退为默认分页
+	    this.flowMode = await s.get<string>('read_flow_mode', 'paginated') === 'scrolled' ? 'scrolled' : 'paginated';
 	      this.cacheSize_ = await s.getAutoCacheSize();
 	      // 加载自定义触控区域配置
 	      const za: number[] = [];
@@ -575,6 +588,13 @@ struct ReadPage {
 
   private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
+    // 滚动模式切章：先销毁旧 Scroll 清除残留惯性滚动/回弹，内容就绪后重建并定位
+    const rebuildScroll = this.flowMode === 'scrolled';
+    if (rebuildScroll) {
+      this.scrollAlive_ = false;
+      if (!this.pendingScrollPos_) this.pendingScrollPos_ = 'start';
+      await this.delayMs_(50);
+    }
     this.isLoading = true;
     const previousIndex = this.currentIndex;
     this.currentIndex = idx;
@@ -588,6 +608,7 @@ struct ReadPage {
 	        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
 	        this.applyChapterContent_(idx, cachedContent);
 	        this.isLoading = false;
+	        this.finishScrollRebuild_(rebuildScroll);
 	        this.saveProgress();
 	        this.preloadNextChapter_(idx);
 	        this.cacheSurrounding_(idx);
@@ -616,6 +637,7 @@ struct ReadPage {
         this.currentIndex = previousIndex;
         this.displayTitle_ = this.purifyTitle_(this.allChapters_[previousIndex]?.title || '');
         this.isLoading = false;
+        this.finishScrollRebuild_(rebuildScroll);
         return;
       } else {
         this.rawChapterContent_ = '';
@@ -628,6 +650,7 @@ struct ReadPage {
       this.text = '加载失败';
     }
     this.isLoading = false;
+    this.finishScrollRebuild_(rebuildScroll);
     // 保存阅读进度
     this.saveProgress();
     // 无缝翻页：预加载下一章
@@ -1315,7 +1338,12 @@ struct ReadPage {
   private onPrevChapter(): void {
     if (this.currentIndex > 0) {
       const scrolled = this.flowMode === 'scrolled';
-      if (scrolled) this.pendingScrollPos_ = 'end';
+      if (scrolled) {
+        // 滚动模式：切章进行中忽略新的翻章触发，防止并发切章互相 yank 滚动位置
+        if (this.switchingChapter_) return;
+        this.switchingChapter_ = true;
+        this.pendingScrollPos_ = 'end';
+      }
       this.loadChapter(this.currentIndex - 1).then(() => {
         if (scrolled) {
           // 滚动模式：定位到上一章章末（对齐分页模式翻到末页的行为）
@@ -1331,10 +1359,20 @@ struct ReadPage {
     if (n >= this.totalChapters_) return;
     this.pageIndex = 0; // 新章从第 1 页开始
     const scrolled = this.flowMode === 'scrolled';
-    if (scrolled) this.pendingScrollPos_ = 'start';
+    if (scrolled) {
+      if (this.switchingChapter_) return;
+      this.switchingChapter_ = true;
+      // 滚动模式：先销毁旧 Scroll 清除残留惯性滚动，再无缝切章
+      this.pendingScrollPos_ = 'start';
+      this.scrollAlive_ = false;
+      await this.delayMs_(50);
+    }
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
-      if (scrolled) this.applyPendingScrollPos_();
+      if (scrolled) {
+        this.finishScrollRebuild_(true);
+        this.applyPendingScrollPos_();
+      }
       return;
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
@@ -1354,22 +1392,25 @@ struct ReadPage {
     setTimeout(() => { this.jumpToPendingScrollPos_(); }, 150);
   }
 
-  /** 滚动模式：执行待恢复的滚动定位，并短暂抑制 reach 事件防止连锁翻章 */
+  /** 滚动模式：执行待恢复的滚动定位（重建后的新 Scroll 上无惯性/回弹，定位即生效） */
   private jumpToPendingScrollPos_(): void {
     const pos = this.pendingScrollPos_;
     if (!pos) return;
     this.pendingScrollPos_ = '';
-    this.suppressReachUntil_ = Date.now() + 800;
+    const epoch = ++this.jumpEpoch_;
     this.doJumpScroll_(pos);
-    // 首次定位可能被布局/边缘动画覆盖，延时校验；'end' 仍在顶部时补滚一次
+    // 首次定位可能早于布局完成，延时校验；未到位时补滚一次（仅当没有更新的定位发生时）
     setTimeout(() => {
+      if (epoch !== this.jumpEpoch_) return;
       const off = this.textScroller_.currentOffset();
       const y = off ? off.yOffset : -1;
       console.info('[ReadPage] jumpVerify pos=' + pos + ' y=' + y);
       if (pos === 'end' && y >= 0 && y < 1) {
         console.info('[ReadPage] jumpVerify reapply end');
-        this.suppressReachUntil_ = Date.now() + 800;
-        this.textScroller_.scrollEdge(Edge.Bottom);
+        this.doJumpScroll_(pos);
+      } else if (pos === 'start' && y > 1) {
+        console.info('[ReadPage] jumpVerify reapply start');
+        this.doJumpScroll_(pos);
       }
     }, 300);
   }
@@ -1377,13 +1418,51 @@ struct ReadPage {
   private doJumpScroll_(pos: string): void {
     const before = this.textScroller_.currentOffset();
     if (pos === 'end') {
-      this.textScroller_.scrollEdge(Edge.Bottom);
+      // scrollEdge 是动画滚动（着陆晚、reach 事件会落在屏蔽窗口外）；
+      // 用 animation:false 的 scrollTo 瞬移到章末。scrollTo 不钳制越界值，
+      // 目标偏移必须自己算准：maxY = 文本高 - 视口高（未测到时退回 scrollEdge）
+      const maxY = this.scrollTextH_ - this.scrollViewH_;
+      if (this.scrollTextH_ > 0 && this.scrollViewH_ > 0) {
+        this.textScroller_.scrollTo({ xOffset: 0, yOffset: Math.max(0, maxY), animation: false });
+      } else {
+        this.textScroller_.scrollEdge(Edge.Bottom);
+      }
     } else {
-      this.textScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
+      this.textScroller_.scrollTo({ xOffset: 0, yOffset: 0, animation: false });
     }
     const after = this.textScroller_.currentOffset();
     console.info('[ReadPage] doJumpScroll_ pos=' + pos + ' beforeY=' + (before ? before.yOffset : -1) +
-      ' afterY=' + (after ? after.yOffset : -1));
+      ' afterY=' + (after ? after.yOffset : -1) + ' textH=' + this.scrollTextH_ + ' viewH=' + this.scrollViewH_);
+  }
+
+  /** 滚动模式：切章重建完成——恢复 Scroll 渲染，开启 reach 屏蔽窗口，并解除切章互斥 */
+  private finishScrollRebuild_(rebuild: boolean): void {
+    if (!rebuild) return;
+    this.scrollAlive_ = true;
+    this.suppressReachUntil_ = Date.now() + 700;
+    this.switchingChapter_ = false;
+  }
+
+  private delayMs_(ms: number): Promise<void> {
+    return new Promise((resolve) => { setTimeout(resolve, ms); });
+  }
+
+  /**
+   * 切换分页/滚动阅读模式。切到滚动模式时 Scroll 在 offset 0 处创建，
+   * 会立即触发 onReachStart 误翻上一章；创建期事件在一两帧内到达，短暂时间屏蔽即可。
+   */
+  private onFlowModeChange_(mode: string): void {
+    const normalized = mode === 'scrolled' ? 'scrolled' : 'paginated';
+    if (this.flowMode === normalized) return;
+    this.flowMode = normalized;
+    if (normalized === 'scrolled') {
+      this.suppressReachUntil_ = Date.now() + 700;
+    }
+    // 持久化：退出再进入后保持上次设置的模式
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(() => SettingsStore.getInstance().put('read_flow_mode', normalized))
+      .catch(() => {});
   }
   private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
@@ -1551,7 +1630,8 @@ struct ReadPage {
       const dupBook = await bookTable.getBookByUrl(newBookUrl);
       if (dupBook && (!shelfBook || dupBook.id !== shelfBook.id)) {
         if (dupBook.isShelf) throw new Error('目标源的书籍已在书架中');
-        await bookTable.deleteBook(dupBook.id);
+        // 走统一删除函数，彻底清理 dupBook 的 DB 记录 + 缓存（修复旧实现漏删 chapters 的孤儿数据 bug）
+        await BookDeleter.deleteBook(dupBook);
       }
 
       // 6. 预验证匹配章节正文可读（loadChapter 内部会吞异常，这里主动验证）
@@ -2078,47 +2158,52 @@ struct ReadPage {
 	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
 	      } else if (this.pages.length > 0) {
         if (this.flowMode === 'scrolled') {
-          // 滚动阅读模式
-          Scroll(this.textScroller_) {
-            Text(this.text)
-              .fontSize(this.cfg.fontSize)
-              .fontColor(this.cfg.textColor)
-              .fontFamily(this.cfg.fontFamily)
-              .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
-              .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
-              .letterSpacing(this.cfg.letterSpacing)
-              .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-              .width('100%')
-              .padding({
-                left: this.cfg.paddingLeft,
-                right: this.cfg.paddingRight,
-                top: this.cfg.paddingTop,
-                bottom: this.cfg.paddingBottom,
-              })
-              .onClick(() => { this.showMenu = true; })
-              .onAreaChange((_old: Area, n: Area) => {
-                // 章节内容布局完成后恢复滚动位置（上一章→章末，下一章→章首）
-                if (this.pendingScrollPos_) {
+          // 滚动阅读模式；切章时 scrollAlive_ 短暂置 false 销毁旧 Scroll，清除残留惯性滚动
+          if (this.scrollAlive_) {
+            Scroll(this.textScroller_) {
+              Text(this.text)
+                .fontSize(this.cfg.fontSize)
+                .fontColor(this.cfg.textColor)
+                .fontFamily(this.cfg.fontFamily)
+                .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
+                .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
+                .letterSpacing(this.cfg.letterSpacing)
+                .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                .width('100%')
+                .padding({
+                  left: this.cfg.paddingLeft,
+                  right: this.cfg.paddingRight,
+                  top: this.cfg.paddingTop,
+                  bottom: this.cfg.paddingBottom,
+                })
+                .onClick(() => { this.showMenu = true; })
+                .onAreaChange((_old: Area, n: Area) => {
                   const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
-                  console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h);
-                  if (h > 0) this.jumpToPendingScrollPos_();
-                }
-              })
+                  if (h > 0) this.scrollTextH_ = h;
+                  // 章节内容布局完成后恢复滚动位置（上一章→章末，下一章→章首）
+                  if (this.pendingScrollPos_) {
+                    console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h);
+                    if (h > 0) this.jumpToPendingScrollPos_();
+                  }
+                })
+            }
+            .scrollable(ScrollDirection.Vertical)
+            .scrollBar(BarState.Off)
+            .backgroundColor(this.cfg.bgColor)
+            .onAreaChange((_old: Area, n: Area) => {
+              const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
+              if (h > 0) this.scrollViewH_ = h;
+            })
+            .onReachEnd(() => {
+              if (Date.now() < this.suppressReachUntil_) return;
+              this.onNextChapter();
+            })
+            .onReachStart(() => {
+              if (Date.now() < this.suppressReachUntil_) return;
+              this.onPrevChapter();
+            })
+            .width('100%').height('100%')
           }
-          .scrollable(ScrollDirection.Vertical)
-          // 撞边即切章，禁用回弹（Spring 回弹动画会覆盖切章后的程序化定位）
-          .edgeEffect(EdgeEffect.Fade)
-          .scrollBar(BarState.Off)
-          .backgroundColor(this.cfg.bgColor)
-          .onReachEnd(() => {
-            if (Date.now() < this.suppressReachUntil_) return;
-            this.onNextChapter();
-          })
-          .onReachStart(() => {
-            if (Date.now() < this.suppressReachUntil_) return;
-            this.onPrevChapter();
-          })
-          .width('100%').height('100%')
         } else {
 	        PageView({
           pages: this.pages, chapterTitle: this.displayTitle_,
@@ -2320,7 +2405,7 @@ struct ReadPage {
             txtEncoding: this.txtEncoding_,
             flowMode: this.flowMode,
             onEncodingChange: (enc: string) => { this.changeTxtEncoding_(enc); },
-            onFlowModeChange: (mode: string) => { this.flowMode = mode; },
+            onFlowModeChange: (mode: string) => { this.onFlowModeChange_(mode); },
           })
         }.width('100%').height('100%')
       }
