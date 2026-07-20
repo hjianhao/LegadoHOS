@@ -42,6 +42,12 @@ export struct PageView {
   @Prop chapterTitle: string = '';
   @Prop totalChapters: number = 0;
   @Prop dualPage: boolean = false;
+  /** 是否单页限宽居中（横屏但不满足双页条件时） */
+  @Prop centeredSingle: boolean = false;
+  /** 单页限宽模式下的最大内容宽度（vp） */
+  @Prop maxContentWidth: number = 0;
+  /** 双页模式中间页缝宽度（vp） */
+  @Prop dualPageGutter: number = 8;
   @Prop chapterIndex: number = 0;
   @Prop config: PageViewConfig = {
     animType: PageTurnAnim.SLIDE, bgColor: ThemeColors.readingBackgroundDefault(), textColor: ThemeColors.readingTextDefault(),
@@ -76,9 +82,13 @@ export struct PageView {
 
   prevPage(): void {
     const idx = this.safePageIndex();
-    console.info('[PageView] prevPage pages=' + this.pages.length + ' idx=' + idx);
-    if (idx > 0) {
-      this.onPageTurn?.({ direction: 'prev', currentPage: idx - 1, totalPages: this.pages.length });
+    const step = this.dualPage ? 2 : 1;
+    console.info('[PageView] prevPage pages=' + this.pages.length + ' idx=' + idx + ' step=' + step);
+    if (idx - step >= 0) {
+      this.onPageTurn?.({ direction: 'prev', currentPage: idx - step, totalPages: this.pages.length });
+    } else if (idx > 0) {
+      // 双页模式下剩余不足一个跨页，退到第 0 页
+      this.onPageTurn?.({ direction: 'prev', currentPage: 0, totalPages: this.pages.length });
     } else {
       this.onPrevChapter?.();
     }
@@ -86,9 +96,13 @@ export struct PageView {
 
   nextPage(): void {
     const idx = this.safePageIndex();
-    console.info('[PageView] nextPage pages=' + this.pages.length + ' idx=' + idx + ' last?=' + (idx >= this.pages.length - 1));
-    if (idx < this.pages.length - 1) {
-      this.onPageTurn?.({ direction: 'next', currentPage: idx + 1, totalPages: this.pages.length });
+    const step = this.dualPage ? 2 : 1;
+    console.info('[PageView] nextPage pages=' + this.pages.length + ' idx=' + idx + ' step=' + step + ' last?=' + (idx >= this.pages.length - 1));
+    if (idx + step < this.pages.length) {
+      this.onPageTurn?.({ direction: 'next', currentPage: idx + step, totalPages: this.pages.length });
+    } else if (idx < this.pages.length - 1) {
+      // 双页模式下剩余不足一个跨页，进到最后一页
+      this.onPageTurn?.({ direction: 'next', currentPage: this.pages.length - 1, totalPages: this.pages.length });
     } else {
       this.onNextChapter?.();
     }
@@ -214,6 +228,49 @@ export struct PageView {
     return FontWeight.Normal;
   }
 
+  /** 渲染指定页码的正文 Text（供单页/双页/居中单页复用） */
+  @Builder
+  private renderPageText_(pageIdx: number) {
+    if (pageIdx >= 0 && pageIdx < this.pages.length) {
+      Text(this.buildPageContentForPage_(pageIdx))
+        .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+        .fontFamily(this.config.fontFamily)
+        .fontWeight(this.getFontWeight())
+        .lineHeight(this.config.fontSize * this.config.lineHeight)
+        .letterSpacing(this.config.letterSpacing)
+        .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+        .width('100%')
+        .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+        .copyOption(CopyOptions.LocalDevice)
+        .editMenuOptions({
+          onCreateMenu: (menuItems: Array<TextMenuItem>) => {
+            return menuItems;
+          },
+          onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+            if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+              const pageText = this.buildPageContentForPage_(pageIdx);
+              this.onAskKimi?.(pageText.substring(range.start, range.end));
+              return true;
+            }
+            return false;
+          },
+        } as EditMenuOptions)
+    }
+  }
+
+  /** 构建指定页码的页面文本内容 */
+  private buildPageContentForPage_(pageIdx: number): string {
+    if (pageIdx < 0 || pageIdx >= this.pages.length) return '';
+    const page = this.pages[pageIdx];
+    let text = '';
+    for (let i = 0; i < page.lines.length; i++) {
+      const line = page.lines[i];
+      text += line.text;
+      if (i < page.lines.length - 1) text += '\n';
+    }
+    return text;
+  }
+
   build() {
     Column() {
       // 隐藏的测量文本（测量字宽和行高，用于 TextLayout 精确估算）
@@ -233,41 +290,59 @@ export struct PageView {
           .fontSize(12).fontColor(this.config.titleColor)
           .width('100%').textAlign(TextAlign.Center)
       }
-		      Column() {
-		        if (this.pages.length > 0) {
-		          Text(this.buildPageContent())
-		            .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-		            .fontFamily(this.config.fontFamily)
-		            .fontWeight(this.getFontWeight())
-		            .lineHeight(this.config.fontSize * this.config.lineHeight)
-		            .letterSpacing(this.config.letterSpacing)
-		            .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-		            .width('100%')
-		            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-		            .copyOption(CopyOptions.LocalDevice)
-		            .editMenuOptions({
-		              onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-		                return menuItems;
-		              },
-		              onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-		                if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-		                  const pageText = this.buildPageContent();
-		                  this.onAskKimi?.(pageText.substring(range.start, range.end));
-		                  return true;
-		                }
-		                return false;
-		              },
-		            } as EditMenuOptions)
-		            .onClick((event: ClickEvent) => {
-		              this.handleClick_(event.x, event.y);
-		            })
-		        }
-		      }
-		      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-		      .clip(true)
-		      .onClick((event: ClickEvent) => {
-		        this.handleClick_(event.x, event.y);
-		      })
+	      Column() {
+	        if (this.pages.length > 0) {
+	          if (this.dualPage && this.safePageIndex() < this.pages.length - 1) {
+	            // 双页模式：左右两页并排，中间页缝
+	            Row() {
+	              Column() {
+	                this.renderPageText_(this.safePageIndex())
+	              }
+	              .layoutWeight(1).height('100%').clip(true)
+	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
+
+	              // 页缝分隔
+	              Divider().vertical(true).strokeWidth(1)
+	                .color(this.config.bgColor)
+	                .width(this.dualPageGutter)
+	                .opacity(0.5)
+
+	              Column() {
+	                this.renderPageText_(this.safePageIndex() + 1)
+	              }
+	              .layoutWeight(1).height('100%').clip(true)
+	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
+	            }
+	            .width('100%').layoutWeight(1)
+	          } else if (this.centeredSingle && this.maxContentWidth > 0) {
+	            // 单页限宽居中：内容居中，两侧留白
+	            Row() {
+	              Blank().layoutWeight(1)
+	              Column() {
+	                this.renderPageText_(this.safePageIndex())
+	              }
+	              .constraintSize({ maxWidth: this.maxContentWidth })
+	              .width('100%')
+	              .layoutWeight(0)
+	              .clip(true)
+	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
+	              Blank().layoutWeight(1)
+	            }
+	            .width('100%').layoutWeight(1)
+	          } else {
+	            // 标准单页
+	            Column() {
+	              this.renderPageText_(this.safePageIndex())
+	            }
+	            .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
+	            .clip(true)
+	            .onClick((event: ClickEvent) => {
+	              this.handleClick_(event.x, event.y);
+	            })
+	          }
+	        }
+	      }
+	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)

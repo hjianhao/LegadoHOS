@@ -24,6 +24,7 @@ import { StylePanel } from '../components/reader/StylePanel';
 import { ThemeColors } from '../theme/ThemeColors';
 import { UiUtil } from '../util/UiUtil';
 import { EpubServer, EpubFontResource } from '../utils/EpubServer';
+import { WindowLayout } from '../util/WindowLayout';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { HtmlUtil } from '../util/HtmlUtil';
 import { AloudChapterText, releaseGlobalAloudEngine, setAloudChapterProvider } from '../service/ReadAloudEngine';
@@ -1305,6 +1306,14 @@ struct ReaderPage {
   private applyStyleNow_(): void {
     this.runJs_('window.applyStyle && window.applyStyle(' + JSON.stringify(this.toWebStyle_()) + ')');
     this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(this.zoneActions) + ')');
+    // 横屏时注入 CSS 限制 EPUB 正文最大宽度并居中，避免行长过长
+    if (WindowLayout.isLandscape && WindowLayout.widthVp >= 840) {
+      const maxW = 720;
+      const css = `#reader-content,#foliate-content,.content,body>div{max-width:${maxW}px !important;margin:0 auto !important;}`;
+      this.runJs_(`var s=document.getElementById('legado-landscape-css');if(!s){s=document.createElement('style');s.id='legado-landscape-css';document.head.appendChild(s);}s.textContent=${JSON.stringify(css)}`);
+    } else {
+      this.runJs_(`var s=document.getElementById('legado-landscape-css');if(s)s.remove();`);
+    }
   }
 
   private toWebStyle_(): WebReaderStyle {

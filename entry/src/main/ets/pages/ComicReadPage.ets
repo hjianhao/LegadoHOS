@@ -13,6 +13,7 @@ import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ThemeColors } from '../theme/ThemeColors';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
+import { WindowLayout } from '../util/WindowLayout';
 import { NetUtil } from '../util/NetUtil';
 import { ContentCleaner } from '../util/ContentCleaner';
 import { MangaImageLoader } from '../util/MangaImageLoader';
@@ -1071,9 +1072,20 @@ struct ComicReadPage {
       this.handleComicClick_(event.x, event.y);
     })
     .padding({
-      left: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
-      right: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+      left: this.comicSidePadding_(),
+      right: this.comicSidePadding_(),
     })
+  }
+
+  /** 横屏条漫模式自动居中限宽（最大 720vp），用户设置的 sidePadding 叠加 */
+  private comicSidePadding_(): string {
+    if (WindowLayout.isLandscape && WindowLayout.widthVp >= 840) {
+      const excess = Math.max(0, WindowLayout.widthVp - 720);
+      const userPad = this.comicSidePadding > 0 ? this.comicSidePadding : 0;
+      const totalPercent = (excess / 2 / WindowLayout.widthVp * 100) + userPad;
+      return `${Math.min(45, totalPercent)}%`;
+    }
+    return this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : '0';
   }
 
   @Builder
@@ -1105,8 +1117,8 @@ struct ComicReadPage {
       this.handleComicClick_(event.x, event.y);
     })
     .padding({
-      left: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
-      right: this.comicSidePadding > 0 ? `${this.comicSidePadding}%` : 0,
+      left: this.comicSidePadding_(),
+      right: this.comicSidePadding_(),
     })
   }
 

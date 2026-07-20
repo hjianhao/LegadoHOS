@@ -327,6 +327,38 @@ export class SettingsStore {
   async getPaddingRight(): Promise<number> { return await this.get('padding_right', 20); }
   async setPaddingRight(v: number): Promise<void> { await this.put('padding_right', v); }
 
+  // ---- 横屏排版设置 ----
+
+  /** 横屏排版模式：'auto'（自动） | 'single'（单页居中） | 'dual'（双页） */
+  async getReadLandscapeLayout(): Promise<string> { return await this.get('read_landscape_layout', 'auto'); }
+  async setReadLandscapeLayout(v: string): Promise<void> { await this.put('read_landscape_layout', v); }
+
+  /**
+   * 横屏单页模式下的正文最大宽度（vp），0 表示不限。
+   * 默认 600vp，用户可调 400-900。
+   */
+  async getReadMaxContentWidth(): Promise<number> { return await this.get('read_max_content_width', 600); }
+  async setReadMaxContentWidth(v: number): Promise<void> { await this.put('read_max_content_width', v); }
+
+  /** 双页模式中间页缝宽度（vp），默认 8 */
+  async getReadDualPageGutter(): Promise<number> { return await this.get('read_dual_page_gutter', 8); }
+  async setReadDualPageGutter(v: number): Promise<void> { await this.put('read_dual_page_gutter', v); }
+
+  /** 是否记住每本书的横屏排版设置（默认关） */
+  async getReadRememberPerBook(): Promise<boolean> { return await this.get('read_remember_per_book', false); }
+  async setReadRememberPerBook(v: boolean): Promise<void> { await this.put('read_remember_per_book', v); }
+
+  /** 获取单本书的横屏排版覆盖设置（无覆盖返回 null） */
+  async getBookLandscapeLayout(bookUrl: string): Promise<string | null> {
+    const key = 'book_landscape_layout_' + bookUrl;
+    const v = await this.get(key, '');
+    return v || null;
+  }
+  async setBookLandscapeLayout(bookUrl: string, layout: string): Promise<void> {
+    const key = 'book_landscape_layout_' + bookUrl;
+    await this.put(key, layout);
+  }
+
   async getChineseMode(): Promise<string> { return await this.get('chinese_mode', 'original'); }
   async setChineseMode(v: string): Promise<void> { await this.put('chinese_mode', v); }
 

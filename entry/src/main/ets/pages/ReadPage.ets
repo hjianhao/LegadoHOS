@@ -18,6 +18,7 @@ import { ReadTopMenu } from '../components/reader/ReadTopMenu';
 import { ReadProgressBar } from '../components/reader/ReadProgressBar';
 import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
+import { WindowLayout } from '../util/WindowLayout';
 import { HtmlUtil } from '../util/HtmlUtil';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
@@ -115,6 +116,18 @@ struct ReadPage {
   /** 阅读中定时上传进度的定时器 */
   private progressUploadTimer_: number = -1;
   @State flowMode: string = 'paginated';
+  /** 横屏排版模式：'auto' | 'single' | 'dual' */
+  @State landscapeLayout_: string = 'auto';
+  /** 横屏单页模式下正文最大宽度（vp），0=不限 */
+  @State maxContentWidth_: number = 600;
+  /** 双页模式中间页缝宽度（vp） */
+  @State dualPageGutter_: number = 8;
+  /** 当前是否实际使用双页渲染（由 landscapeLayout_ + 窗口尺寸+ 流模式综合判断） */
+  @State isDualPage_: boolean = false;
+  /** 当前是否实际使用单页限宽居中 */
+  @State isCenteredSingle_: boolean = false;
+  /** 重排版前保存的字符偏移，用于旋转/尺寸变化后恢复阅读位置 */
+  private preserveCharOffset_: number = -1;
   /** 滚动模式：正文 Scroll 控制器 */
   private textScroller_: Scroller = new Scroller();
   /** 滚动模式：切章后待恢复的滚动位置（'start' 章首 / 'end' 章末，'' 无） */
@@ -364,6 +377,15 @@ struct ReadPage {
         }
 	    // 阅读模式（分页/滚动）持久化：首次渲染前恢复，避免进出后回退为默认分页
 	    this.flowMode = await s.get<string>('read_flow_mode', 'paginated') === 'scrolled' ? 'scrolled' : 'paginated';
+	    // 横屏排版设置
+	    this.landscapeLayout_ = await s.getReadLandscapeLayout();
+	    this.maxContentWidth_ = await s.getReadMaxContentWidth();
+	    this.dualPageGutter_ = await s.getReadDualPageGutter();
+	    // 单本书覆盖
+	    if (this.bookUrl && await s.getReadRememberPerBook()) {
+	      const perBook = await s.getBookLandscapeLayout(this.bookUrl);
+	      if (perBook) this.landscapeLayout_ = perBook;
+	    }
 	      this.cacheSize_ = await s.getAutoCacheSize();
 	      // 加载自定义触控区域配置
 	      const za: number[] = [];
@@ -1186,7 +1208,55 @@ struct ReadPage {
       .trim();
   }
 
+  /**
+   * 根据横屏排版设置和当前窗口尺寸，判断是否应使用双页模式。
+   * - 竖屏：始终单页
+   * - 滚动模式：始终单列
+   * - 'auto'：横屏 + 宽度 >= 1000vp -> 双页
+   * - 'dual'：横屏 + 宽度 >= 840vp -> 双页
+   * - 'single' 或其他：单页
+   */
+  private computeDualPage_(): boolean {
+    if (this.flowMode === 'scrolled') return false;
+    if (!WindowLayout.isLandscape) return false;
+    const w = WindowLayout.widthVp;
+    if (this.landscapeLayout_ === 'dual') return w >= 840;
+    if (this.landscapeLayout_ === 'auto') return w >= 1000;
+    return false;
+  }
+
+  /**
+   * 判断是否应使用单页限宽居中模式。
+   * 横屏且非双页时，正文最大宽度受 maxContentWidth_ 限制并居中。
+   */
+  private computeCenteredSingle_(): boolean {
+    if (this.isDualPage_) return false;
+    if (!WindowLayout.isLandscape) return false;
+    return this.maxContentWidth_ > 0 && this.pageW > this.maxContentWidth_;
+  }
+
+  /** 计算传入 TextLayout 的有效分页宽度 */
+  private effectiveLayoutWidth_(): number {
+    if (this.isDualPage_) {
+      // 双页模式：单页宽度 = (总宽 - 页缝) / 2
+      return Math.max(200, (this.pageW - this.dualPageGutter_) / 2);
+    }
+    if (this.isCenteredSingle_ && this.maxContentWidth_ > 0) {
+      return Math.min(this.pageW, this.maxContentWidth_);
+    }
+    return this.pageW;
+  }
+
   private layoutText(text: string): void {
+    // 重排版前保存当前页的字符偏移，用于旋转/尺寸变化后恢复位置
+    if (this.pages.length > 0 && this.pageIndex < this.pages.length) {
+      this.preserveCharOffset_ = this.pages[this.pageIndex].startOffset;
+    }
+
+    // 先更新双页/居中单页状态
+    this.isDualPage_ = this.computeDualPage_();
+    this.isCenteredSingle_ = this.computeCenteredSingle_();
+
     text = this.normalizeReaderText_(text);
     const lc: LayoutConfig = {
       fontFamily: this.cfg.fontFamily,
@@ -1213,9 +1283,31 @@ struct ReadPage {
     const footerH = this.cfg.showFooter ? this.footerH_() : 0;
     // 页脚叠加在正文区域上方，需从可用于排版的高度中扣除
     const layoutH = Math.max(this.pageH * 0.5, this.pageH - footerH);
-    this.pages = TextLayout.splitIntoPages(text, lc, this.pageW, layoutH, this.measureUtil_ || undefined);
+    // 用有效分页宽度（已处理双页/限宽居中）
+    const effectiveW = this.effectiveLayoutWidth_();
+    this.pages = TextLayout.splitIntoPages(text, lc, effectiveW, layoutH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
-    if (this.pageIndex >= this.pages.length) this.pageIndex = Math.max(0, this.pages.length - 1);
+
+    // 恢复阅读位置：找到包含 preserveCharOffset_ 的页
+    if (this.preserveCharOffset_ >= 0) {
+      let foundIdx = -1;
+      for (let i = 0; i < this.pages.length; i++) {
+        const p = this.pages[i];
+        if (this.preserveCharOffset_ >= p.startOffset && this.preserveCharOffset_ < p.endOffset) {
+          foundIdx = i;
+          break;
+        }
+      }
+      if (foundIdx >= 0) {
+        this.pageIndex = foundIdx;
+      } else {
+        // 找不到精确页，尽量接近原位置
+        this.pageIndex = Math.min(this.pageIndex, this.pages.length - 1);
+      }
+      this.preserveCharOffset_ = -1;
+    } else {
+      if (this.pageIndex >= this.pages.length) this.pageIndex = Math.max(0, this.pages.length - 1);
+    }
   }
 
   private styleTimer_: number = -1;
@@ -1334,6 +1426,26 @@ struct ReadPage {
   }
 
   private onPageTurn(ev: PageTurnEvent): void { this.pageIndex = ev.currentPage; }
+
+  /** 横屏排版模式变更：持久化 + 重新分页 */
+  private onLandscapeLayoutChange_(layout: string): void {
+    this.landscapeLayout_ = layout;
+    (async () => {
+      try {
+        const s = SettingsStore.getInstance();
+        await s.init(UiUtil.getHostContext(this.getUIContext()));
+        await s.setReadLandscapeLayout(layout);
+        // 记住本书设置
+        if (this.bookUrl && await s.getReadRememberPerBook()) {
+          await s.setBookLandscapeLayout(this.bookUrl, layout);
+        }
+      } catch (_e) { /* ignore */ }
+    })();
+    // 重新分页以应用新的横屏排版
+    if (this.text) {
+      this.layoutText(this.text);
+    }
+  }
 
   private onPrevChapter(): void {
     if (this.currentIndex > 0) {
@@ -2161,31 +2273,38 @@ struct ReadPage {
           // 滚动阅读模式；切章时 scrollAlive_ 短暂置 false 销毁旧 Scroll，清除残留惯性滚动
           if (this.scrollAlive_) {
             Scroll(this.textScroller_) {
-              Text(this.text)
-                .fontSize(this.cfg.fontSize)
-                .fontColor(this.cfg.textColor)
-                .fontFamily(this.cfg.fontFamily)
-                .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
-                .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
-                .letterSpacing(this.cfg.letterSpacing)
-                .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-                .width('100%')
-                .padding({
-                  left: this.cfg.paddingLeft,
-                  right: this.cfg.paddingRight,
-                  top: this.cfg.paddingTop,
-                  bottom: this.cfg.paddingBottom,
+              // 横屏滚动模式：正文限宽居中
+              Row() {
+                Blank().layoutWeight(this.isCenteredSingle_ ? 1 : 0)
+                Text(this.text)
+                  .fontSize(this.cfg.fontSize)
+                  .fontColor(this.cfg.textColor)
+                  .fontFamily(this.cfg.fontFamily)
+                  .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
+                  .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
+                  .letterSpacing(this.cfg.letterSpacing)
+                  .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                  .width(this.isCenteredSingle_ && this.maxContentWidth_ > 0 ? this.maxContentWidth_ : '100%')
+                  .constraintSize({ maxWidth: this.isCenteredSingle_ && this.maxContentWidth_ > 0 ? this.maxContentWidth_ : Number.MAX_SAFE_INTEGER })
+                  .padding({
+                    left: this.cfg.paddingLeft,
+                    right: this.cfg.paddingRight,
+                    top: this.cfg.paddingTop,
+                    bottom: this.cfg.paddingBottom,
                 })
                 .onClick(() => { this.showMenu = true; })
                 .onAreaChange((_old: Area, n: Area) => {
                   const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
                   if (h > 0) this.scrollTextH_ = h;
-                  // 章节内容布局完成后恢复滚动位置（上一章→章末，下一章→章首）
+                  // 章节内容布局完成后恢复滚动位置（上一章->章末，下一章->章首）
                   if (this.pendingScrollPos_) {
                     console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h);
                     if (h > 0) this.jumpToPendingScrollPos_();
                   }
                 })
+                Blank().layoutWeight(this.isCenteredSingle_ ? 1 : 0)
+              }
+              .width('100%')
             }
             .scrollable(ScrollDirection.Vertical)
             .scrollBar(BarState.Off)
@@ -2209,6 +2328,10 @@ struct ReadPage {
           pages: this.pages, chapterTitle: this.displayTitle_,
           chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
           zoneActions: this.zoneActions,
+          dualPage: this.isDualPage_,
+          centeredSingle: this.isCenteredSingle_,
+          maxContentWidth: this.maxContentWidth_,
+          dualPageGutter: this.dualPageGutter_,
           config: {
             animType: this.cfg.animType, bgColor: this.cfg.bgColor, textColor: this.cfg.textColor,
             titleColor: this.cfg.titleColor, fontSize: this.cfg.fontSize, fontWeight: this.cfg.fontWeight,
@@ -2306,6 +2429,9 @@ struct ReadPage {
             dayBgColor: this.readBgColor,
             dayTextColor: this.readTextColor,
             onNightModeToggle: (night: boolean) => { this.onNightModeToggle(night); },
+            landscapeLayout: this.landscapeLayout_,
+            flowMode: this.flowMode,
+            onLandscapeLayoutChange: (layout: string) => { this.onLandscapeLayoutChange_(layout); },
           })
         }.width('100%').height('100%')
       }
