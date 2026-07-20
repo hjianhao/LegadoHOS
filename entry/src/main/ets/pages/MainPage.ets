@@ -123,7 +123,7 @@ struct MainPage {
             UiUtil.showToast(this.getUIContext(), { message: '书源已导入', duration: 1500 });
           }
         }),
-        autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
+        autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
       });
       this.shareImportDlg.open();
     } catch (e) {

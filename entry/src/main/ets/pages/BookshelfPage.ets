@@ -132,7 +132,7 @@ export struct BookshelfPage {
         }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.groupDlg = new CustomDialogController({
@@ -144,7 +144,7 @@ export struct BookshelfPage {
         }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.addUrlDlg = new CustomDialogController({
@@ -154,7 +154,7 @@ export struct BookshelfPage {
         onSuccess: () => { this.loadBooks(); }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.importDlg = new CustomDialogController({
@@ -164,7 +164,7 @@ export struct BookshelfPage {
         onImportSuccess: () => { this.loadBooks(); }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.exportDlg = new CustomDialogController({
@@ -173,7 +173,7 @@ export struct BookshelfPage {
         books: this.exportBooks
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.loadShelfData();

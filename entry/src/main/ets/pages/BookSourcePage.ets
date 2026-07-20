@@ -55,12 +55,12 @@ export struct BookSourcePage {
     this.importDlg = new CustomDialogController({
       builder: ImportSourceDialog({
         controller: this.importDlg!, onImportSuccess: () => { this.load(); }
-      }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
+      }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.groupManageDlg = new CustomDialogController({
       builder: GroupManageDialog({
         controller: this.groupManageDlg!, onGroupChanged: () => { this.load(); }
-      }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
+      }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.load();
   }
@@ -244,7 +244,7 @@ export struct BookSourcePage {
       builder: SourceGroupAssignDialog({
         controller: this.groupAssignDlg!, sourceIds: ids,
         onChanged: () => { this.selectedUrls = []; this.syncSelectedSet_(); this.isSelectMode_ = false; this.load(); }
-      }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
+      }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.groupAssignDlg.open();
   }
@@ -340,7 +340,7 @@ export struct BookSourcePage {
     this.checkConfigDlg = new CustomDialogController({
       builder: SourceCheckConfigDialog({
         controller: this.checkConfigDlg!, onStart: (config: CheckConfig) => { this.startCheck(config); }
-      }), autoCancel: true, alignment: DialogAlignment.Bottom, customStyle: true
+      }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.checkConfigDlg.open();
   }

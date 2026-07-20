@@ -672,7 +672,7 @@ export struct BookInfoPage {
         onAddAsNew: (result: SearchResult) => { this.addSourceAsNewBook(result); }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.sourceDlg.open();
@@ -1016,7 +1016,7 @@ export struct BookInfoPage {
         onSelect: (cover: string) => { this.updateCover(cover); }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.coverDlg.open();
@@ -1039,7 +1039,7 @@ export struct BookInfoPage {
         }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.groupDlg.open();
@@ -1052,7 +1052,7 @@ export struct BookInfoPage {
         bookName: this.bookName,
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.readRecordDlg.open();

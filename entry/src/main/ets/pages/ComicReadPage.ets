@@ -1680,7 +1680,7 @@ struct ComicReadPage {
         onReplace: (result: SearchResult) => { this.replaceSource_(result); },
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true,
     });
     this.sourceDlg.open();

@@ -21,7 +21,7 @@ export struct RssSourceManagePage {
   private importDialogController: CustomDialogController = new CustomDialogController({
     builder: RssImportDialog({ onImportSuccess: () => { this.loadData(); } }),
     autoCancel: true,
-    alignment: DialogAlignment.Bottom,
+    alignment: UiUtil.adaptiveDialogAlignment(),
     customStyle: true,
     cornerRadius: 16,
   });

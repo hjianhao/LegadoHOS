@@ -1894,7 +1894,7 @@ struct ReadPage {
         },
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.sourceDlg.open();
@@ -1921,7 +1921,7 @@ struct ReadPage {
         ]
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.optionDlg.open();
@@ -1948,7 +1948,7 @@ struct ReadPage {
         ]
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.optionDlg.open();
@@ -1998,7 +1998,7 @@ struct ReadPage {
         options: options
       }),
       autoCancel: true,
-      alignment: DialogAlignment.Bottom,
+      alignment: UiUtil.adaptiveDialogAlignment(),
       customStyle: true
     });
     this.optionDlg.open();
@@ -2067,7 +2067,7 @@ struct ReadPage {
           onPick: (idx: number) => { this.fetchAndReplaceChapter_(newSource, newBookUrl, toc, idx); },
         }),
         autoCancel: true,
-        alignment: DialogAlignment.Bottom,
+        alignment: UiUtil.adaptiveDialogAlignment(),
         customStyle: true
       });
       this.chapterPickDlg.open();
@@ -2541,6 +2541,17 @@ struct ReadPage {
       const w = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       const h = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
       if (w > 0 && h > 0) { this.pageW = w; this.pageH = h; if (this.text) this.layoutText(this.text); }
+    })
+    // 键盘翻页：方向键/ PageUp/ PageDown（平板键盘/外接键盘）
+    .onKeyEvent((event: KeyEvent) => {
+      if (event.type !== KeyType.Down) return;
+      // 菜单/设置面板打开时不处理翻页
+      if (this.showMenu || this.showStyle || this.showCacheDialog || this.showZoneConfig || this.showAloud || this.showBookmarkDlg || this.showCloudProgressDlg) return;
+      if (event.keyCode === 2540 /* LEFT */ || event.keyCode === 2542 /* UP */ || event.keyCode === 2538 /* PAGE_UP */) {
+        this.onPageTurn({ direction: 'prev', currentPage: Math.max(0, this.pageIndex - (this.isDualPage_ ? 2 : 1)), totalPages: this.pages.length });
+      } else if (event.keyCode === 2541 /* RIGHT */ || event.keyCode === 2543 /* DOWN */ || event.keyCode === 2539 /* PAGE_DOWN */) {
+        this.onPageTurn({ direction: 'next', currentPage: Math.min(this.pages.length - 1, this.pageIndex + (this.isDualPage_ ? 2 : 1)), totalPages: this.pages.length });
+      }
     })
   }
 }
