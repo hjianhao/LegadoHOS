@@ -1236,49 +1236,85 @@ struct ComicReadPage {
       } else {
         // 图片显示
         if (this.imagePaths.has(url)) {
-          Image(this.imagePaths.get(url) as string)
-            .width('100%')
-            .objectFit(ImageFit.Auto)
-            .scale({ x: this.imageScale, y: this.imageScale })
-            .translate({ x: this.panOffsetX, y: this.panOffsetY })
-            .opacity(1)
-            .animation({ duration: 300, curve: Curve.EaseInOut })
-            .onError(() => {
-              const newSet = new Set<string>(this.failedImages);
-              newSet.add(url);
-              this.failedImages = newSet;
-            })
-            .gesture(
-              PinchGesture({ fingers: 2 })
-                .onActionStart((_event: GestureEvent) => {
-                  this.pinchStartScale_ = this.imageScale;
-                })
-                .onActionUpdate((event: GestureEvent) => {
-                  const newScale: number = this.pinchStartScale_ * event.scale;
-                  this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
-                  this.onScaleChange_();
-                })
-            )
-            .gesture(
-              PanGesture()
-                .onActionStart((_event: GestureEvent) => {
-                  this.panStartX_ = this.panOffsetX;
-                  this.panStartY_ = this.panOffsetY;
-                })
-                .onActionUpdate((event: GestureEvent) => {
-                  if (this.imageScale > 1.0) {
-                    this.clampPanOffset_(this.panStartX_ + event.offsetX, this.panStartY_ + event.offsetY);
-                  }
-                })
-            )
-            .gesture(
-              TapGesture({ count: 2 })
-                .onAction(() => { this.onDoubleTap(); })
-            )
-            .gesture(
-              LongPressGesture()
-                .onAction(() => { this.saveImageToGallery_(url); })
-            )
+          if (this.imageScale > 1.0) {
+            // 放大状态：挂 PanGesture 支持拖拽平移（外层滚动/翻页此时已禁用）
+            Image(this.imagePaths.get(url) as string)
+              .width('100%')
+              .objectFit(ImageFit.Auto)
+              .scale({ x: this.imageScale, y: this.imageScale })
+              .translate({ x: this.panOffsetX, y: this.panOffsetY })
+              .opacity(1)
+              .animation({ duration: 300, curve: Curve.EaseInOut })
+              .onError(() => {
+                const newSet = new Set<string>(this.failedImages);
+                newSet.add(url);
+                this.failedImages = newSet;
+              })
+              .gesture(
+                PinchGesture({ fingers: 2 })
+                  .onActionStart((_event: GestureEvent) => {
+                    this.pinchStartScale_ = this.imageScale;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    const newScale: number = this.pinchStartScale_ * event.scale;
+                    this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                    this.onScaleChange_();
+                  })
+              )
+              .gesture(
+                PanGesture()
+                  .onActionStart((_event: GestureEvent) => {
+                    this.panStartX_ = this.panOffsetX;
+                    this.panStartY_ = this.panOffsetY;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    if (this.imageScale > 1.0) {
+                      this.clampPanOffset_(this.panStartX_ + event.offsetX, this.panStartY_ + event.offsetY);
+                    }
+                  })
+              )
+              .gesture(
+                TapGesture({ count: 2 })
+                  .onAction(() => { this.onDoubleTap(); })
+              )
+              .gesture(
+                LongPressGesture()
+                  .onAction(() => { this.saveImageToGallery_(url); })
+              )
+          } else {
+            // 原始尺寸：不挂 PanGesture，否则会抢赢条漫 List 滚动 / 翻页 Swiper 滑动手势
+            Image(this.imagePaths.get(url) as string)
+              .width('100%')
+              .objectFit(ImageFit.Auto)
+              .scale({ x: this.imageScale, y: this.imageScale })
+              .translate({ x: this.panOffsetX, y: this.panOffsetY })
+              .opacity(1)
+              .animation({ duration: 300, curve: Curve.EaseInOut })
+              .onError(() => {
+                const newSet = new Set<string>(this.failedImages);
+                newSet.add(url);
+                this.failedImages = newSet;
+              })
+              .gesture(
+                PinchGesture({ fingers: 2 })
+                  .onActionStart((_event: GestureEvent) => {
+                    this.pinchStartScale_ = this.imageScale;
+                  })
+                  .onActionUpdate((event: GestureEvent) => {
+                    const newScale: number = this.pinchStartScale_ * event.scale;
+                    this.imageScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+                    this.onScaleChange_();
+                  })
+              )
+              .gesture(
+                TapGesture({ count: 2 })
+                  .onAction(() => { this.onDoubleTap(); })
+              )
+              .gesture(
+                LongPressGesture()
+                  .onAction(() => { this.saveImageToGallery_(url); })
+              )
+          }
         } else {
           // 加载中占位，异步触发下载
           Column() {
