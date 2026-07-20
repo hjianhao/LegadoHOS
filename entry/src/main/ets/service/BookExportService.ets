@@ -55,6 +55,12 @@ export interface ExportResult {
   error: string;
 }
 
+/** 目录与缓存统计 */
+export interface CacheStats {
+  total: number;
+  cached: number;
+}
+
 export class BookExportService {
   /** 建议文件名：`书名 作者：xxx.txt/epub`，过滤文件系统非法字符 */
   static suggestFileName(book: ExportBookInfo, ext: string = '.txt'): string {
@@ -64,7 +70,7 @@ export class BookExportService {
   }
 
   /** 目录与缓存统计 */
-  static async getCacheStats(bookId: number): Promise<{ total: number; cached: number }> {
+  static async getCacheStats(bookId: number): Promise<CacheStats> {
     await AppDatabase.getInstance().waitForInit();
     const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
     const chapters = await chapterTable.getChaptersByBookId(bookId);

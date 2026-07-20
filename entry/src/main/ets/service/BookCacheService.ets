@@ -58,6 +58,12 @@ interface ActiveTask {
   total: number;
 }
 
+/** 缓存任务进度快照 */
+export interface CacheProgress {
+  done: number;
+  total: number;
+}
+
 export class BookCacheService {
   private static instance_: BookCacheService;
 
@@ -89,7 +95,7 @@ export class BookCacheService {
   }
 
   /** 查询进行中任务的进度（供缓存管理页轮询），无任务返回 null */
-  getProgress(bookId: number): { done: number; total: number } | null {
+  getProgress(bookId: number): CacheProgress | null {
     const task = this.activeTasks_.get(bookId);
     if (!task) return null;
     return { done: task.done, total: task.total };
