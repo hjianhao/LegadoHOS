@@ -28,6 +28,7 @@ import {
 } from '../components/BookInfoSheets';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { WindowLayout } from '../util/WindowLayout';
 import { ExportBookDialog } from '../components/ExportBookDialog';
 import * as ChapterMatcher from '../util/ChapterMatcher';
 import { BookSourceResolver } from '../service/BookSourceResolver';
@@ -1155,18 +1156,19 @@ export struct BookInfoPage {
   build() {
     Stack() {
       // 背景层：对齐 Android BookInfoBackdrop，使用封面大图 + 遮罩
+      // 高度自适应：窗口高度的 50%，上限 500vp（横屏时不会占满整个屏幕）
       Column() {
         if (this.getEffectiveCoverUrl()) {
           Image(this.getEffectiveCoverUrl())
             .width('100%')
-            .height(500)
+            .height(Math.min(500, WindowLayout.heightVp * 0.5))
             .objectFit(ImageFit.Cover)
             .blur(24)
             .opacity(0.72)
         } else {
           Column()
             .width('100%')
-            .height(500)
+            .height(Math.min(500, WindowLayout.heightVp * 0.5))
             .backgroundColor(this.getCoverColor())
         }
         Blank()

@@ -12,6 +12,7 @@
  */
 import { Book } from '../model/Book';
 import { ThemeColors } from '../theme/ThemeColors';
+import { WindowLayout } from '../util/WindowLayout';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
@@ -69,6 +70,25 @@ export struct BookshelfPage {
   @StorageLink('gc_sortOrder') sortOrder: number = 0;
   @StorageLink('gc_layoutMode') layoutMode: number = 0;
   @StorageLink('gc_gridColumns') gridColumns: number = 3;
+
+  /**
+   * 根据窗口宽度自适应计算宫格列数。
+   * 用户配置的 gridColumns 作为"密度偏好"，在不同窗口规格下按合理范围 clamp：
+   * - COMPACT (<600vp)：2-3 列
+   * - MEDIUM (600-839vp)：3-5 列
+   * - EXPANDED (840-1199vp)：5-7 列
+   * - LARGE (>=1200vp)：7-9 列
+   */
+  @StorageProp('windowWidthVp') windowWidthVp: number = 360;
+  private computeGridColumns_(): number {
+    const w = this.windowWidthVp > 0 ? this.windowWidthVp : WindowLayout.widthVp;
+    const user = this.gridColumns;
+    if (w < 600) return Math.max(2, Math.min(3, user));
+    if (w < 840) return Math.max(3, Math.min(5, user));
+    if (w < 1200) return Math.max(5, Math.min(7, user));
+    return Math.max(7, Math.min(9, user));
+  }
+
   @StorageLink('gc_gridStyle') gridStyle: number = 0;
   @StorageLink('gc_showDivider') showDivider: boolean = true;
   @StorageLink('gc_coverWidth') coverWidth: number = 84;
@@ -924,7 +944,7 @@ export struct BookshelfPage {
                 .gesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
               }, (book: Book): string => String(book.id))
             }.width('100%').margin({ top: 4 })
-	          } else {
+		          } else {
 		            Grid() {
 		              LazyForEach(this.bookDataSource_, (book: Book) => {
 		                GridItem() {
@@ -932,7 +952,7 @@ export struct BookshelfPage {
 		                }.onClick(() => { this.isSelectMode ? this.toggleBookSelection(book.id) : this.continueRead(book); })
 		                .priorityGesture(LongPressGesture().onAction(() => { this.onBookLongPress(book); }))
 		              }, (book: Book): string => String(book.id))
-			            }.columnsTemplate(new Array(Math.max(1, this.gridColumns)).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
+			            }.columnsTemplate(new Array(Math.max(1, this.computeGridColumns_())).fill('1fr').join(' ')).columnsGap(8).rowsGap(8)
 			            .padding({ left: 16, right: 16, top: 8 })
 			          }
 	        }.layoutWeight(1).width('100%').onRefreshing(() => { this.onRefresh(); }).refreshOffset(64)
@@ -958,17 +978,22 @@ export struct BookshelfPage {
       .position({ top: 8, right: 8 }).backgroundColor(ThemeColors.surface(this.isDark))
       .borderRadius(12).shadow({ radius: 8, color: ThemeColors.shadow(this.isDark) }).width(180)
     }
-    // 导入进度遮罩
+    // 导入进度遮罩（居中 + 最大宽度 420vp）
     if (this.isImporting) {
       Column() {
-        LoadingProgress().color(ThemeColors.primary(this.isDark)).width(48).height(48)
-        Text(this.importProgress || '正在导入...')
-          .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
-          .margin({ top: 12 }).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Column() {
+          LoadingProgress().color(ThemeColors.primary(this.isDark)).width(48).height(48)
+          Text(this.importProgress || '正在导入...')
+            .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+            .margin({ top: 12 }).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .padding(24).backgroundColor(ThemeColors.surface(this.isDark))
+        .borderRadius(12).alignItems(HorizontalAlign.Center)
+        .constraintSize({ maxWidth: 420 })
       }
-      .padding(24).backgroundColor(ThemeColors.surface(this.isDark))
-      .borderRadius(12).alignItems(HorizontalAlign.Center)
-      .position({ top: '40%', left: '10%' }).width('80%')
+      .width('100%').height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
     }
   }
   .width('100%').height('100%')
