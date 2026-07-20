@@ -12,6 +12,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookChapter, createDefaultChapter } from '../model/BookChapter';
 import { BookSource, isImageSource } from '../model/BookSource';
+import { MangaImageLoader } from '../util/MangaImageLoader';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import notificationManager from '@ohos.notificationManager';
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
@@ -151,10 +152,15 @@ export class BookCacheService {
         try {
           // 已缓存的跳过；漫画源额外校验：旧版缓存不含图片（下载时未保留 <img>），视为未缓存重新下载
           const existing = await chapterTable.getChapterByIndex(req.bookId, idx);
+          const isImage = isImageSource(req.source);
           if (existing && (existing.isCached || existing.isDownloaded) && existing.content.length > 10) {
-            const badComicCache = isImageSource(req.source) &&
+            const badComicCache = isImage &&
               globalSourceExecutor.extractImageUrls(existing.content, ch.url || req.bookUrl).length === 0;
             if (!badComicCache) {
+              // 内容已缓存；漫画源仍需补齐本章图片（离线可看的必要条件）
+              if (isImage) {
+                await this.cacheChapterImages_(req, ch, existing.content, task);
+              }
               result.skipped++;
               done++;
               updateProgress(ch.title || '');
@@ -167,6 +173,9 @@ export class BookCacheService {
 
           if (content && content.length > 10) {
             await this.saveContent(chapterTable, req.bookId, idx, ch, content, existing);
+            if (isImage) {
+              await this.cacheChapterImages_(req, ch, content, task);
+            }
             result.success++;
           } else {
             result.failed++;
@@ -236,6 +245,19 @@ export class BookCacheService {
       newCh.createTime = now;
       newCh.updateTime = now;
       await chapterTable.insertChapters([newCh]);
+    }
+  }
+
+  /** 漫画章节：下载本章全部图片到本地图片缓存（load 自带已缓存跳过/在途去重/队列） */
+  private async cacheChapterImages_(req: CacheBookRequest, ch: CacheChapterItem, content: string, task: ActiveTask): Promise<void> {
+    const urls: string[] = globalSourceExecutor.extractImageUrls(content, ch.url || req.bookUrl);
+    for (const u of urls) {
+      if (task.cancelled) return;
+      try {
+        await MangaImageLoader.load(u, req.source);
+      } catch (err) {
+        console.warn('[BookCache] image failed: ' + (err as Error).message);
+      }
     }
   }
 
