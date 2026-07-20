@@ -361,7 +361,7 @@ struct ComicReadPage {
         setTimeout(() => {
           if (this.readMode === READ_MODE_WEBTOON) {
             if (gotoLastPage) {
-              this.listScroller_.scrollToIndex(targetPage);
+              this.listScroller_.scrollToIndex(targetPage + 1); // List 第 0 项是章首提示，图片索引需 +1
             } else {
               this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
             }
@@ -613,7 +613,7 @@ struct ComicReadPage {
     setTimeout(() => {
       if (this.readMode === READ_MODE_WEBTOON) {
         if (gotoLastPage) {
-          this.listScroller_.scrollToIndex(targetPage);
+          this.listScroller_.scrollToIndex(targetPage + 1); // List 第 0 项是章首提示，图片索引需 +1
         } else {
           this.listScroller_.scrollTo({ xOffset: 0, yOffset: 0 });
         }
@@ -1065,6 +1065,15 @@ struct ComicReadPage {
         this.onNextChapter();
       }
       this.justLoadedChapter_ = false;
+    })
+    .onScrollIndex((start: number) => {
+      // 滚动时同步页脚页码：List 第 0 项是章首提示，图片从第 1 项开始
+      if (this.isLoading || this.chapterSwitching_ || this.imageUrls.length === 0) return;
+      const idx: number = Math.min(Math.max(start - 1, 0), this.imageUrls.length - 1);
+      if (idx !== this.currentPageIndex) {
+        this.currentPageIndex = idx;
+        this.saveProgress();
+      }
     })
     .onClick((event: ClickEvent) => {
       this.handleComicClick_(event.x, event.y);
