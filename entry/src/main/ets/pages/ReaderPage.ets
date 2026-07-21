@@ -1263,6 +1263,28 @@ struct ReaderPage {
       .catch(() => {});
   }
 
+  /** EPUB 双页模式是否激活 */
+  private isDualPageActive_(): boolean {
+    return !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual'
+      && this.flowMode !== 'scrolled';
+  }
+
+  /**
+   * 双页模式下翻页：调用 rendition.next() 两次（或 rendition.prev() 两次），
+   * 因为 epub.js 的 spread 模式下每次 next/prev 只翻一个虚拟页。
+   */
+  private epubNextPage_(): void {
+    if (!this.controllerAttached_) return;
+    this.runJs_('window.nextPage && window.nextPage()');
+    this.runJs_('window.nextPage && window.nextPage()');
+  }
+
+  private epubPrevPage_(): void {
+    if (!this.controllerAttached_) return;
+    this.runJs_('window.prevPage && window.prevPage()');
+    this.runJs_('window.prevPage && window.prevPage()');
+  }
+
   private onPdfModeChange_(mode: string): void {
     const normalized = mode === 'reflow' ? 'reflow' : 'original';
     if (this.pdfMode === normalized) return;
@@ -1343,7 +1365,7 @@ struct ReaderPage {
     return {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
-      dualPage: false, // EPUB 暂不支持双页模式
+      dualPage: !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual',
       pdfMode: this.pdfMode,
       pdfAutoCrop: this.pdfAutoCrop,
       pdfDarken: this.pdfDarken,
@@ -1469,10 +1491,18 @@ struct ReaderPage {
         this.showMenu = true;
         break;
       case ClickAction.NEXT_PAGE:
-        this.runJs_('window.nextPage && window.nextPage()');
+        if (this.isDualPageActive_()) {
+          this.epubNextPage_();
+        } else {
+          this.runJs_('window.nextPage && window.nextPage()');
+        }
         break;
       case ClickAction.PREV_PAGE:
-        this.runJs_('window.prevPage && window.prevPage()');
+        if (this.isDualPageActive_()) {
+          this.epubPrevPage_();
+        } else {
+          this.runJs_('window.prevPage && window.prevPage()');
+        }
         break;
       case ClickAction.NEXT_CHAPTER:
         this.goToChapterIndex_(this.currentIndex + 1);

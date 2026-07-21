@@ -17,6 +17,7 @@ import { ImportSourceDialog } from './ImportSourceDialog';
 import { UiUtil } from '../util/UiUtil';
 import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
 import { NavRouter } from '../util/NavRouter';
+import display from '@ohos.display';
 import { BookSourcePage } from './BookSourcePage';
 import { SettingsPage } from './SettingsPage';
 import { SearchPage } from './SearchPage';
@@ -51,12 +52,6 @@ interface TabCfg {
 struct MainPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State currentTab: number = 0;
-  /** 用 number 接 AppStorage，避免 enum @StorageProp 不同步 */
-  @StorageProp('windowSizeClass') sizeClassNum: number = 0;
-  @StorageProp('windowIsWide') isWideFlag: boolean = false;
-  @StorageProp('windowWidthVp') windowWidthVp: number = 360;
-  /** 本地实测宽度（vp），不依赖 AppStorage */
-  @State localWidthVp: number = 0;
   @StorageLink('pendingShareImport') @Watch('onShareImport') pendingShareImport: ShareImportPayload | null = null;
 
   private lastShareImportId: number = 0;
@@ -75,42 +70,33 @@ struct MainPage {
     { icon: $r('app.media.ic_profile'), label: '我的' },
   ];
 
-  /** 当前窗口尺寸分级（多源综合，避免单点失效） */
-  private get sizeClass(): WindowSizeClass {
-    if (this.localWidthVp >= 1200 || this.windowWidthVp >= 1200) {
-      return WindowSizeClass.LARGE;
-    }
-    if (this.localWidthVp >= 840 || this.windowWidthVp >= 840) {
-      return WindowSizeClass.EXPANDED;
-    }
-    if (this.localWidthVp >= 600 || this.windowWidthVp >= 600 ||
-      this.isWideFlag || this.sizeClassNum >= WindowSizeClass.MEDIUM) {
-      return WindowSizeClass.MEDIUM;
-    }
-    return WindowSizeClass.COMPACT;
-  }
-
-  /** 是否使用宽屏侧栏布局（>= MEDIUM） */
-  private get isWideLayout(): boolean {
-    return this.sizeClass >= WindowSizeClass.MEDIUM;
-  }
-
-  /** 侧栏宽度 */
-  private get sideBarWidth(): number {
-    if (!this.isWideLayout) return 0;
-    if (this.sizeClass >= WindowSizeClass.LARGE) return 200;
-    return 96;
-  }
-
   aboutToAppear(): void {
+    // 仅同步窗口尺寸给子页（如「我的」分栏），不改底部四页签位置
+    this.probeWindowSize('aboutToAppear');
     this.getUIContext().setKeyboardAvoidMode(UIKeyboardAvoidMode.RESIZE);
-    // 注册各页签的 NavPathStack
     NavRouter.registerStack(0, this.bookshelfStack);
     NavRouter.registerStack(1, this.discoverStack);
     NavRouter.registerStack(2, this.rssStack);
     NavRouter.registerStack(3, this.myStack);
     NavRouter.setActiveTab(0);
     this.consumeShareImport(this.pendingShareImport);
+  }
+
+  /** 探测屏幕尺寸写入 WindowLayout，供 MyPage 等使用；主页签始终底部 */
+  private probeWindowSize(reason: string): void {
+    try {
+      const d = display.getDefaultDisplaySync();
+      const density = d.densityPixels > 0.1 ? d.densityPixels : 2.5;
+      const wVp = d.width / density;
+      const hVp = d.height / density;
+      if (wVp > 0 && hVp > 0) {
+        WindowLayout.update(wVp, hVp);
+        console.info('[MainPage] window wVp=' + wVp.toFixed(1) + ' hVp=' + hVp.toFixed(1) +
+          ' reason=' + reason);
+      }
+    } catch (e) {
+      console.warn('[MainPage] display probe failed:', e);
+    }
   }
 
   private onShareImport(): void {
@@ -208,8 +194,9 @@ struct MainPage {
   }
 
   build() {
+    // 主页签固定底部（用户明确要求不改四页签位置）；宽屏适配只在各子页内做
     Tabs({
-      barPosition: this.isWideLayout ? BarPosition.Start : BarPosition.End,
+      barPosition: BarPosition.End,
       index: this.currentTab
     }) {
       TabContent() {
@@ -240,7 +227,7 @@ struct MainPage {
       }.tabBar(this.buildTab(this.tabs[2], 2))
 
       TabContent() {
-        // 分栏在 MyPage 内部手写实现；Navigation 保持 Stack，避免 NavDestination 空白页
+        // 「我的」页内左右分栏；Navigation 保持 Stack
         Navigation(this.myStack) {
           MyPage()
         }
@@ -249,9 +236,9 @@ struct MainPage {
         .mode(NavigationMode.Stack)
       }.tabBar(this.buildTab(this.tabs[3], 3))
     }
-    .vertical(this.isWideLayout)
-    .barWidth(this.isWideLayout ? this.sideBarWidth : '100%')
-    .barHeight(this.isWideLayout ? '100%' : 64)
+    .vertical(false)
+    .barWidth('100%')
+    .barHeight(64)
     .scrollable(false)
     .animationDuration(220)
     .onChange((index: number): void => {
@@ -264,8 +251,6 @@ struct MainPage {
       const width = typeof newArea.width === 'number' ? newArea.width : Number(newArea.width);
       const height = typeof newArea.height === 'number' ? newArea.height : Number(newArea.height);
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-        // Area 的 width/height 单位为 vp
-        this.localWidthVp = width;
         WindowLayout.update(width, height);
       }
     })
@@ -288,7 +273,7 @@ struct MainPage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
-    .width(this.isWideLayout ? this.sideBarWidth : '100%')
+    .width('100%')
     .height(56)
     .justifyContent(FlexAlign.Center)
     .accessibilityText(tab.label)

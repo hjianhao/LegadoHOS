@@ -3,8 +3,9 @@ import { ThemeColors } from '../theme/ThemeColors';
 import { NetUtil } from '../util/NetUtil';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { MangaImageLoader } from '../util/MangaImageLoader';
-import { WindowSizeClass } from '../util/WindowLayout';
+import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
 import { ContentMaxWidth } from '../components/common/ResponsiveLayout';
+import display from '@ohos.display';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -68,10 +69,14 @@ export struct SettingsPage {
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('isFollowSystem') isFollowSystem: boolean = false;
-  @StorageProp('windowSizeClass') sizeClassNum: number = 0;
-  @StorageProp('windowIsWide') isWideFlag: boolean = false;
-  @StorageProp('windowWidthVp') windowWidthVp: number = 360;
   @State localWidthVp: number = 0;
+  /**
+   * 是否在「我的」右侧内嵌。
+   * 内嵌时只显示设置二级菜单（单列），不再二次左右分栏。
+   */
+  @State isEmbeddedInMy: boolean = false;
+  /** 全屏宽屏时的双栏开关（内嵌时强制关闭） */
+  @State useSettingsSplit: boolean = false;
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
@@ -102,32 +107,25 @@ export struct SettingsPage {
   ];
 
   private get sizeClass(): WindowSizeClass {
-    if (this.localWidthVp >= 1200 || this.windowWidthVp >= 1200) {
+    if (this.localWidthVp >= 1200) {
       return WindowSizeClass.LARGE;
     }
-    if (this.localWidthVp >= 840 || this.windowWidthVp >= 840) {
+    if (this.localWidthVp >= 840) {
       return WindowSizeClass.EXPANDED;
     }
-    if (this.localWidthVp >= 600 || this.windowWidthVp >= 600 ||
-      this.isWideFlag || this.sizeClassNum >= WindowSizeClass.MEDIUM) {
+    if (this.localWidthVp >= 600 || this.useSettingsSplit) {
       return WindowSizeClass.MEDIUM;
     }
     return WindowSizeClass.COMPACT;
   }
 
-  /**
-   * 宽屏双栏：左分类 + 右配置。
-   * 已嵌在「我的」右侧时仍启用（形成 我的菜单 | 设置分类 | 配置）。
-   */
+  /** 宽屏双栏：仅全屏设置页启用；嵌在「我的」右侧时关闭 */
   private get isSettingsSplit(): boolean {
-    return this.sizeClass >= WindowSizeClass.MEDIUM;
+    return this.useSettingsSplit && !this.isEmbeddedInMy;
   }
 
-  /**
-   * 实际展示的分类 key。
-   * 宽屏下若仍是 main（sizeClass 晚到），回退到 read，避免右侧空白。
-   */
   private get activeSection(): string {
+    // 双栏内容区：main 视为第一项
     if (this.isSettingsSplit && (this.currentSection === 'main' || this.currentSection.length === 0)) {
       return 'read';
     }
@@ -158,6 +156,35 @@ export struct SettingsPage {
     this.syncWebViewNetwork();
     this.loadReadSettings();
     this.loadTtsSettings();
+
+    // 是否嵌在「我的」右侧
+    try {
+      const emb = AppStorage.get<string>('myEmbeddedDetail') ?? '';
+      this.isEmbeddedInMy = emb === 'pages/SettingsPage';
+    } catch (_e) {
+      this.isEmbeddedInMy = false;
+    }
+
+    // 全屏宽屏才启用设置内二次分栏；内嵌时只展示二级菜单列表
+    if (this.isEmbeddedInMy) {
+      this.useSettingsSplit = false;
+      this.currentSection = 'main';
+    } else {
+      try {
+        const d = display.getDefaultDisplaySync();
+        const density = d.densityPixels > 0.1 ? d.densityPixels : 2.5;
+        this.localWidthVp = d.width / density;
+        this.useSettingsSplit = this.localWidthVp >= 600;
+      } catch (_e) {
+        this.localWidthVp = WindowLayout.widthVp;
+        this.useSettingsSplit = WindowLayout.shouldUseWideLayout();
+      }
+      if (this.useSettingsSplit && this.currentSection === 'main') {
+        this.currentSection = 'read';
+      }
+    }
+    console.info('[SettingsPage] embedded=' + this.isEmbeddedInMy +
+      ' split=' + this.isSettingsSplit + ' section=' + this.currentSection);
   }
 
   private async loadReadSettings(): Promise<void> {
@@ -223,9 +250,16 @@ export struct SettingsPage {
       Row() {
         // 嵌在「我的」右侧时仍显示返回（清空右侧）；双栏下不进入子 section 返回逻辑
         AppBackButton({ onBack: () => {
-          // 宽屏双栏 / 主列表：直接 back（内嵌时 UiUtil 会清空右侧）
-          // 手机子 section：先回到主列表
-          if (this.isSettingsSplit || this.currentSection === 'main') {
+          // 内嵌 + 二级页：先回到设置菜单；内嵌 + 菜单：交给 MyPage 清空/还原
+          // 全屏双栏 / 全屏主列表：router back
+          // 全屏子 section：回主列表
+          if (this.isEmbeddedInMy) {
+            if (this.currentSection === 'main') {
+              UiUtil.back(this.getUIContext());
+            } else {
+              this.currentSection = 'main';
+            }
+          } else if (this.isSettingsSplit || this.currentSection === 'main') {
             UiUtil.back(this.getUIContext());
           } else {
             this.currentSection = 'main';
@@ -253,8 +287,12 @@ export struct SettingsPage {
     .backgroundColor(ThemeColors.background(this.isDark))
     .onAreaChange((_o: Area, area: Area) => {
       const w = typeof area.width === 'number' ? area.width : Number(area.width);
-      if (Number.isFinite(w) && w > 0 && Math.abs(w - this.localWidthVp) > 0.5) {
+      if (Number.isFinite(w) && w > 0) {
         this.localWidthVp = w;
+        // 内嵌时不开启二次分栏
+        if (!this.isEmbeddedInMy && w >= 600) {
+          this.useSettingsSplit = true;
+        }
       }
     })
   }

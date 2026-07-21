@@ -105,9 +105,9 @@ export default class MainAbility extends UIAbility {
     console.info('[MainAbility] onWindowStageCreate');
     try {
       AppStorage.setOrCreate<object>('abilityContext', this.context);
-      // 必须先注册 AppStorage 键，再 loadContent，否则 @StorageProp 绑不到更新
       WindowLayout.ensureAppStorageKeys();
-      // 先读真实窗口尺寸再进首页，避免平板首帧仍按手机 COMPACT 布局
+      // 先 display 再 window，保证首帧前 AppStorage 已是宽屏
+      this.applyDisplaySize();
       this.bindWindowLayout(windowStage);
       windowStage.loadContent('pages/MainPage');
     } catch (err) {

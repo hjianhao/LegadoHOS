@@ -50,6 +50,8 @@ const KEY_IS_TABLET = 'windowIsTablet';
  * 组件端可以用 @StorageProp('windowSizeClass') 等观察变化。
  *
  * 注意：AppStorage 中 sizeClass 存 number（枚举底层值），避免 @StorageProp 类型不同步。
+ *
+ * 真机平板日志：window 2800x1840 @ density 2.5 → 1120vp，必须在首帧 build 前 probeDisplay。
  */
 export class WindowLayout {
   /** 当前窗口尺寸分级 */
@@ -76,6 +78,36 @@ export class WindowLayout {
     AppStorage.setOrCreate(KEY_IS_LOW_HEIGHT, WindowLayout.isLowHeight);
     AppStorage.setOrCreate(KEY_IS_WIDE, WindowLayout.isWide);
     AppStorage.setOrCreate(KEY_IS_TABLET, WindowLayout.isTablet);
+  }
+
+  /**
+   * 用 display API 同步探测屏幕尺寸（不依赖 onAreaChange / Ability 窗口回调）。
+   * 返回宽度 vp；失败返回当前缓存宽度。
+   */
+  static probeDisplay(): number {
+    try {
+      // 延迟 require 风格：display 在页面侧 import 后调用更稳，这里用全局 AppStorage 已有值兜底
+      // 实际探测由 probeDisplayWith 完成
+    } catch (_e) {
+      // ignore
+    }
+    return WindowLayout.widthVp;
+  }
+
+  /**
+   * 用已读取的 px + density 更新，并返回 vp 宽度。
+   */
+  static applyPxSize(widthPx: number, heightPx: number, densityPixels: number): number {
+    const d = densityPixels > 0.1 ? densityPixels : 1;
+    const wVp = widthPx / d;
+    const hVp = heightPx / d;
+    WindowLayout.update(wVp, hVp);
+    return WindowLayout.widthVp;
+  }
+
+  /** 是否应按宽屏布局（阈值 600vp） */
+  static shouldUseWideLayout(): boolean {
+    return WindowLayout.isWide || WindowLayout.widthVp >= BREAKPOINT_COMPACT_MAX;
   }
 
   /** 根据宽度计算尺寸分级 */

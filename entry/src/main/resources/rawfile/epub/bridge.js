@@ -23,14 +23,9 @@
   var ACTION_NEXT_PAGE = 1;
   var ACTION_PREV_PAGE = 2;
   var BOOK_FONT_FAMILY = '__book__';
-  var SINGLE_PAGE_GAP = 0;
-  var DUAL_PAGE_GAP = 32;
-  var DUAL_PAGE_MIN_WIDTH = 840;
+  var PAGE_GAP = 0;
   var livePageFrame = 0;
   var lastLivePageKey = '';
-  var activeFlowMode = '';
-  var activeSpreadMode = '';
-  var activeLayoutGap = -1;
 
   function emit(type, data) {
     eventQueue.push({ type: type, data: data || {}, time: Date.now() });
@@ -212,13 +207,20 @@
   function applyRootStyle() {
     var v = currentStyleValues();
     var bg = v.bg;
+    var isDual = currentStyle.dualPage === true;
     document.documentElement.style.backgroundColor = bg;
     document.body.style.backgroundColor = bg;
     var frame = document.getElementById('reader-frame');
     if (frame) {
       frame.style.backgroundColor = bg;
-      frame.style.paddingLeft = v.pl + 'px';
-      frame.style.paddingRight = v.pr + 'px';
+      // 双页模式下减少 padding，让两页有更多可用宽度
+      if (isDual) {
+        frame.style.paddingLeft = Math.min(v.pl, 8) + 'px';
+        frame.style.paddingRight = Math.min(v.pr, 8) + 'px';
+      } else {
+        frame.style.paddingLeft = v.pl + 'px';
+        frame.style.paddingRight = v.pr + 'px';
+      }
       frame.style.boxSizing = 'border-box';
     }
     var viewer = document.getElementById('viewer');
@@ -288,6 +290,8 @@
 
   function currentThemeRules() {
     var v = currentStyleValues();
+    var isDual = currentStyle.dualPage === true;
+    var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
     var bodyRule = {
       'background': v.bg + ' !important',
       'color': v.color + ' !important',
@@ -325,7 +329,7 @@
       },
       'img,svg': {
         'max-width': '100% !important',
-        'max-height': v.flowMode === 'scrolled' ? 'none !important' : '85vh !important',
+        'max-height': imgMaxH + ' !important',
         'object-fit': 'contain !important',
         'page-break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important',
         'break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important'
@@ -349,33 +353,36 @@
     }
   }
 
-  function injectStyle(doc) {
-    if (!doc || !doc.documentElement) return;
-    var style = doc.getElementById('legado-reader-style');
-    if (!style) {
-      style = doc.createElement('style');
-      style.id = 'legado-reader-style';
-      (doc.head || doc.documentElement).appendChild(style);
-    }
+	function injectStyle(doc) {
+	  if (!doc || !doc.documentElement) return;
+	  var style = doc.getElementById('legado-reader-style');
+	  if (!style) {
+	    style = doc.createElement('style');
+	    style.id = 'legado-reader-style';
+	    (doc.head || doc.documentElement).appendChild(style);
+	  }
 
-    var v = currentStyleValues();
-    var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-    var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var v = currentStyleValues();
+	  var isDual = currentStyle.dualPage === true;
+	  var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
 
-    style.textContent =
-      fontFaceCss() +
-      'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
-      'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
-      'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
-      'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-      'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
-      'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
-      'letter-spacing:' + v.letterSpacing + 'px !important;}' +
-      'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
-      'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
-      'img,svg{max-width:100% !important;max-height:' + (v.flowMode === 'scrolled' ? 'none' : '85vh') + ' !important;object-fit:contain !important;' +
-      'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
-      'table{max-width:100% !important;}a{color:inherit !important;}';
+	  style.textContent =
+	    fontFaceCss() +
+	    'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
+	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
+	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
+	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
+	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
+	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
+	    'letter-spacing:' + v.letterSpacing + 'px !important;}' +
+	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
+	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
+	    'img,svg{max-width:100% !important;max-height:' + imgMaxH + ' !important;object-fit:contain !important;' +
+	    'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
+	    'table{max-width:100% !important;}a{color:inherit !important;}' +
+	    '.epub-container{max-width:100% !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
     if (doc.body) {
@@ -458,22 +465,6 @@
     } catch (e2) {}
 
     return { width: 0, height: 0, source: 'doc' };
-  }
-
-  function dualPageEnabled() {
-    if (cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') return false;
-    if (currentStyle.dualPage !== true) return false;
-    var viewport = frameViewportSize();
-    return viewport.width >= DUAL_PAGE_MIN_WIDTH && viewport.width > viewport.height;
-  }
-
-  function currentLayoutSettings() {
-    var dualPage = dualPageEnabled();
-    return {
-      spread: dualPage ? 'always' : 'none',
-      minSpreadWidth: dualPage ? DUAL_PAGE_MIN_WIDTH : 999999,
-      gap: dualPage ? DUAL_PAGE_GAP : SINGLE_PAGE_GAP
-    };
   }
 
   function tapViewportWidth() {
@@ -765,10 +756,9 @@
     if (!rendition) return;
     var run = function () {
       try {
-        applySpreadLayout();
+        syncLayoutSettings();
         rendition.resize();
         syncLayoutSettings();
-        alignToSpreadBoundary();
       } catch (e) {}
     };
     try {
@@ -781,76 +771,47 @@
     }
   }
 
-  function syncLayoutSettings() {
-    if (!rendition) return;
-    var layoutSettings = currentLayoutSettings();
-    try {
-      if (rendition.settings) {
-        rendition.settings.gap = layoutSettings.gap;
-        rendition.settings.spread = layoutSettings.spread;
-        rendition.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
-      }
-    } catch (e) {}
-    try {
-      if (rendition.manager && rendition.manager.settings) {
-        rendition.manager.settings.gap = layoutSettings.gap;
-        rendition.manager.settings.spread = layoutSettings.spread;
-        rendition.manager.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
-      }
-    } catch (e2) {}
-    try {
-      var liveLayout = rendition.manager && rendition.manager.layout;
-      if (liveLayout && liveLayout.settings) {
-        liveLayout.settings.gap = layoutSettings.gap;
-        liveLayout.settings.spread = layoutSettings.spread;
-        liveLayout.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
-      }
-    } catch (e3) {}
-  }
-
-  function applySpreadLayout() {
-    if (!rendition) return;
-    var layoutSettings = currentLayoutSettings();
-    var layoutChanged = activeSpreadMode !== layoutSettings.spread || activeLayoutGap !== layoutSettings.gap;
-    syncLayoutSettings();
-    if (!layoutChanged) return;
-    try {
-      if (rendition.spread) rendition.spread(layoutSettings.spread, layoutSettings.minSpreadWidth);
-    } catch (e) {}
-    activeSpreadMode = layoutSettings.spread;
-    activeLayoutGap = layoutSettings.gap;
-  }
-
-  function alignToSpreadBoundary() {
-    if (!rendition || !dualPageEnabled()) return;
-    try {
-      var manager = rendition.manager;
-      var container = manager && manager.container;
-      var layout = manager && manager.layout;
-      var delta = Number(layout && layout.delta || 0);
-      var currentLeft = Number(container && container.scrollLeft || 0);
-      if (!manager || !container || delta <= 0) return;
-      var alignedLeft = Math.round(currentLeft / delta) * delta;
-      if (Math.abs(alignedLeft - currentLeft) > 1) {
-        manager.scrollTo(alignedLeft, Number(container.scrollTop || 0), true);
-      }
-    } catch (e) {}
-  }
+	function syncLayoutSettings() {
+	  if (!rendition) return;
+	  var isDual = currentStyle.dualPage === true;
+	  try {
+	    if (rendition.settings) {
+	      rendition.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e) {}
+	  try {
+	    if (rendition.manager && rendition.manager.settings) {
+	      rendition.manager.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.manager.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.manager.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e2) {}
+	  try {
+	    if (rendition.layout && rendition.layout.settings) {
+	      rendition.layout.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.layout.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.layout.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e3) {}
+	}
 
   function applyFlowLayout() {
     if (!rendition) return;
     var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
-    var flowMode = scrolled ? 'scrolled-doc' : 'paginated';
-    if (activeFlowMode !== flowMode) {
-      try {
-        if (rendition.flow) rendition.flow(flowMode);
-      } catch (e) {}
-      activeFlowMode = flowMode;
-    }
-    applySpreadLayout();
+    var isDual = currentStyle.dualPage === true && !scrolled;
+    syncLayoutSettings();
+    try {
+      if (rendition.spread) rendition.spread(isDual ? 'auto' : 'none', isDual ? 840 : 999999);
+    } catch (e) {}
+    try {
+      if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
+    } catch (e2) {}
+    syncLayoutSettings();
     try {
       if (rendition.manager && rendition.manager.updateLayout) rendition.manager.updateLayout();
-    } catch (e2) {}
+    } catch (e3) {}
   }
 
   function setupContentHook() {
@@ -950,10 +911,20 @@
   function displayBook(target) {
     var displayTarget = target || undefined;
     var promise = rendition.display(displayTarget);
-    return Promise.resolve(promise).catch(function (err) {
+    return Promise.resolve(promise).then(function () {
+      // epub.js 的 spread 模式在首次 display 后可能不生效，
+      // 强制重新应用布局和 resize 以触发双页渲染
+      applyFlowLayout();
+      syncLayoutSettings();
+      rendition.resize();
+      return promise;
+    }).catch(function (err) {
       if (!displayTarget) throw err;
       emit('debug', { message: 'display target failed, fallback to first spine: ' + errorMessage(err) });
-      return rendition.display();
+      return rendition.display().then(function () {
+        applyFlowLayout();
+        rendition.resize();
+      });
     });
   }
 
@@ -965,19 +936,16 @@
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
-      activeFlowMode = '';
-      activeSpreadMode = '';
-      activeLayoutGap = -1;
-      book = ePub(bookUrl);
-      var initialLayoutSettings = currentLayoutSettings();
-      rendition = book.renderTo('viewer', {
-        width: '100%',
-        height: '100%',
-        manager: 'default',
-        spread: initialLayoutSettings.spread,
-        minSpreadWidth: initialLayoutSettings.minSpreadWidth,
-        evenSpreads: false,
-        gap: initialLayoutSettings.gap,
+	      book = ePub(bookUrl);
+	      var isDual = currentStyle.dualPage === true;
+	      rendition = book.renderTo('viewer', {
+	        width: '100%',
+	        height: '100%',
+	        manager: 'default',
+	        spread: isDual ? 'auto' : 'none',
+	        minSpreadWidth: isDual ? 840 : 999999,
+	        evenSpreads: false,
+	        gap: isDual ? 24 : PAGE_GAP,
         flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();
@@ -988,7 +956,6 @@
       emitBookInfo();
 
       displayBook(target).then(function () {
-        alignToSpreadBoundary();
         loading(false);
         emit('ready', {});
       }).catch(function (err) {
@@ -1049,7 +1016,6 @@
     }
     var result = rendition.next();
     Promise.resolve(result).then(function () {
-      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'nextPage failed: ' + errorMessage(err) });
@@ -1065,7 +1031,6 @@
     }
     var result = rendition.prev();
     Promise.resolve(result).then(function () {
-      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'prevPage failed: ' + errorMessage(err) });
@@ -1132,9 +1097,5 @@
     if (bookUrl) {
       window.loadBook(bookUrl, qs('target'));
     }
-
-    window.addEventListener('resize', function () {
-      resizeRenditionSoon();
-    });
   });
 })();
