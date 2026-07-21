@@ -44,6 +44,14 @@ export class UiUtil {
   }
 
   static pushUrl(uiContext: UIContext, options: router.RouterOptions, mode?: router.RouterMode): void {
+    // 优先走页签内 NavPathStack，支持平板 Navigation Split 分栏
+    const url = options.url ?? '';
+    if (typeof url === 'string' && url.length > 0) {
+      const pageName = (url.startsWith('pages/') ? url.substring('pages/'.length) : url) as NavPageName;
+      if (NavRouter.push(pageName, options.params as object | undefined)) {
+        return;
+      }
+    }
     try {
       if (mode !== undefined) {
         uiContext.getRouter().pushUrl(options, mode).catch((err: Error) => {
@@ -60,6 +68,10 @@ export class UiUtil {
   }
 
   static back(uiContext: UIContext, options?: router.RouterOptions): void {
+    // 优先弹出 Navigation 栈（平板分栏右侧详情）
+    if (NavRouter.depth() > 0 && NavRouter.back()) {
+      return;
+    }
     try {
       uiContext.getRouter().back(options);
     } catch (err) {

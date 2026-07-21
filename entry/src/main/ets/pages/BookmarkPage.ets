@@ -23,7 +23,7 @@ interface BookmarkGroup {
 
 @Entry
 @Component
-struct BookmarkPage {
+export struct BookmarkPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State groups: BookmarkGroup[] = [];
   @State searchText: string = '';

@@ -1254,9 +1254,12 @@ struct ReaderPage {
 
   private onReaderLandscapeLayoutChange_(mode: string): void {
     if (this.landscapeLayout_ === mode) return;
+    // EPUB 暂不支持横屏双页模式，强制回退单页
+    if (mode === 'dual') {
+      UiUtil.showToast(this.getUIContext(), { message: 'EPUB 暂不支持双页模式', duration: 2000 });
+      return;
+    }
     this.landscapeLayout_ = mode;
-    // EPUB 仅支持分页模式下的双页
-    if (mode === 'dual' && this.flowMode === 'scrolled') return;
     this.applyStyleNow_();
     SettingsStore.getInstance()
       .init(UiUtil.getHostContext(this.getUIContext()))

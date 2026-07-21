@@ -36,6 +36,8 @@ import { AboutPage } from './AboutPage';
 import { BookSourceEditPage } from './BookSourceEditPage';
 import { BookSourceDebugPage } from './BookSourceDebugPage';
 import { ReplaceRuleEditPage } from './ReplaceRuleEditPage';
+import { BookmarkPage } from './BookmarkPage';
+import { WebServicePage } from './WebServicePage';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
 
@@ -71,6 +73,20 @@ struct MainPage {
   /** 是否使用宽屏侧栏布局（>= MEDIUM） */
   private get isWideLayout(): boolean {
     return this.sizeClass >= WindowSizeClass.MEDIUM;
+  }
+
+  /**
+   * 「我的」页签是否启用 Navigation 左右分栏。
+   * EXPANDED+ 才分栏，避免 MEDIUM 下侧栏+导航+内容三栏过窄。
+   */
+  private get isMySplitLayout(): boolean {
+    return this.sizeClass >= WindowSizeClass.EXPANDED;
+  }
+
+  /** 「我的」左侧导航栏宽度（vp） */
+  private get myNavBarWidth(): number {
+    if (this.sizeClass >= WindowSizeClass.LARGE) return 360;
+    return 300;
   }
 
   /** 侧栏宽度 */
@@ -167,6 +183,10 @@ struct MainPage {
       RssSourceManagePage()
     } else if (name === 'pages/AboutPage') {
       AboutPage()
+    } else if (name === 'pages/BookmarkPage') {
+      BookmarkPage()
+    } else if (name === 'pages/WebServicePage') {
+      WebServicePage()
     } else if (name === 'pages/BookSourceEditPage') {
       BookSourceEditPage()
     } else if (name === 'pages/BookSourceDebugPage') {
@@ -214,12 +234,14 @@ struct MainPage {
       }.tabBar(this.buildTab(this.tabs[2], 2))
 
       TabContent() {
+        // 平板 EXPANDED+：Navigation Split —— 左「我的」导航，右子页面（类系统设置）
         Navigation(this.myStack) {
           MyPage()
         }
         .navDestination(this.navDestination)
         .hideTitleBar(true)
-        .mode(NavigationMode.Stack)
+        .mode(this.isMySplitLayout ? NavigationMode.Split : NavigationMode.Stack)
+        .navBarWidth(this.isMySplitLayout ? this.myNavBarWidth : '100%')
       }.tabBar(this.buildTab(this.tabs[3], 3))
     }
     .vertical(this.isWideLayout)

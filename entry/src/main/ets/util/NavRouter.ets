@@ -87,6 +87,11 @@ export class NavRouter {
     return NavRouter.stacks.get(tabIndex) ?? null;
   }
 
+  /** 规范化页面名为 `pages/Xxx` 形式 */
+  private static normalizeName(pageName: string): string {
+    return pageName.startsWith('pages/') ? pageName : 'pages/' + pageName;
+  }
+
   /**
    * Push 一个页面到当前活跃页签的导航栈。
    *
@@ -101,12 +106,36 @@ export class NavRouter {
       return false;
     }
     try {
-      const nameWithPath = pageName.startsWith('pages/') ? pageName : 'pages/' + pageName;
-      stack.pushPath({ name: nameWithPath, param: param });
+      stack.pushPath({ name: NavRouter.normalizeName(pageName), param: param });
       return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[NavRouter] push failed: ' + msg);
+      return false;
+    }
+  }
+
+  /**
+   * 替换当前栈顶页面（无栈顶时 push）。
+   * 用于平板分栏：左侧菜单切换右侧详情时避免无限堆栈。
+   */
+  static replace(pageName: NavPageName, param?: object): boolean {
+    const stack = NavRouter.activeStack;
+    if (!stack) {
+      console.warn('[NavRouter] No active stack, falling back to router for replace ' + pageName);
+      return false;
+    }
+    try {
+      const nameWithPath = NavRouter.normalizeName(pageName);
+      if (stack.size() > 0) {
+        stack.replacePath({ name: nameWithPath, param: param });
+      } else {
+        stack.pushPath({ name: nameWithPath, param: param });
+      }
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[NavRouter] replace failed: ' + msg);
       return false;
     }
   }

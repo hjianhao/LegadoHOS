@@ -207,20 +207,13 @@
   function applyRootStyle() {
     var v = currentStyleValues();
     var bg = v.bg;
-    var isDual = currentStyle.dualPage === true;
     document.documentElement.style.backgroundColor = bg;
     document.body.style.backgroundColor = bg;
     var frame = document.getElementById('reader-frame');
     if (frame) {
       frame.style.backgroundColor = bg;
-      // 双页模式下减少 padding，让两页有更多可用宽度
-      if (isDual) {
-        frame.style.paddingLeft = Math.min(v.pl, 8) + 'px';
-        frame.style.paddingRight = Math.min(v.pr, 8) + 'px';
-      } else {
-        frame.style.paddingLeft = v.pl + 'px';
-        frame.style.paddingRight = v.pr + 'px';
-      }
+      frame.style.paddingLeft = v.pl + 'px';
+      frame.style.paddingRight = v.pr + 'px';
       frame.style.boxSizing = 'border-box';
     }
     var viewer = document.getElementById('viewer');
@@ -290,8 +283,6 @@
 
   function currentThemeRules() {
     var v = currentStyleValues();
-    var isDual = currentStyle.dualPage === true;
-    var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
     var bodyRule = {
       'background': v.bg + ' !important',
       'color': v.color + ' !important',
@@ -329,7 +320,7 @@
       },
       'img,svg': {
         'max-width': '100% !important',
-        'max-height': imgMaxH + ' !important',
+        'max-height': v.flowMode === 'scrolled' ? 'none !important' : '85vh !important',
         'object-fit': 'contain !important',
         'page-break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important',
         'break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important'
@@ -353,36 +344,33 @@
     }
   }
 
-	function injectStyle(doc) {
-	  if (!doc || !doc.documentElement) return;
-	  var style = doc.getElementById('legado-reader-style');
-	  if (!style) {
-	    style = doc.createElement('style');
-	    style.id = 'legado-reader-style';
-	    (doc.head || doc.documentElement).appendChild(style);
-	  }
+  function injectStyle(doc) {
+    if (!doc || !doc.documentElement) return;
+    var style = doc.getElementById('legado-reader-style');
+    if (!style) {
+      style = doc.createElement('style');
+      style.id = 'legado-reader-style';
+      (doc.head || doc.documentElement).appendChild(style);
+    }
 
-	  var v = currentStyleValues();
-	  var isDual = currentStyle.dualPage === true;
-	  var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-	  var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-	  var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
+    var v = currentStyleValues();
+    var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+    var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
 
-	  style.textContent =
-	    fontFaceCss() +
-	    'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
-	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
-	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
-	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
-	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
-	    'letter-spacing:' + v.letterSpacing + 'px !important;}' +
-	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
-	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
-	    'img,svg{max-width:100% !important;max-height:' + imgMaxH + ' !important;object-fit:contain !important;' +
-	    'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
-	    'table{max-width:100% !important;}a{color:inherit !important;}' +
-	    '.epub-container{max-width:100% !important;}';
+    style.textContent =
+      fontFaceCss() +
+      'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
+      'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
+      'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
+      'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
+      'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
+      'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
+      'letter-spacing:' + v.letterSpacing + 'px !important;}' +
+      'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
+      'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
+      'img,svg{max-width:100% !important;max-height:' + (v.flowMode === 'scrolled' ? 'none' : '85vh') + ' !important;object-fit:contain !important;' +
+      'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
+      'table{max-width:100% !important;}a{color:inherit !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
     if (doc.body) {
@@ -771,39 +759,37 @@
     }
   }
 
-	function syncLayoutSettings() {
-	  if (!rendition) return;
-	  var isDual = currentStyle.dualPage === true;
-	  try {
-	    if (rendition.settings) {
-	      rendition.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e) {}
-	  try {
-	    if (rendition.manager && rendition.manager.settings) {
-	      rendition.manager.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.manager.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.manager.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e2) {}
-	  try {
-	    if (rendition.layout && rendition.layout.settings) {
-	      rendition.layout.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.layout.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.layout.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e3) {}
-	}
+  function syncLayoutSettings() {
+    if (!rendition) return;
+    try {
+      if (rendition.settings) {
+        rendition.settings.gap = PAGE_GAP;
+        rendition.settings.spread = 'none';
+        rendition.settings.minSpreadWidth = 999999;
+      }
+    } catch (e) {}
+    try {
+      if (rendition.manager && rendition.manager.settings) {
+        rendition.manager.settings.gap = PAGE_GAP;
+        rendition.manager.settings.spread = 'none';
+        rendition.manager.settings.minSpreadWidth = 999999;
+      }
+    } catch (e2) {}
+    try {
+      if (rendition.layout && rendition.layout.settings) {
+        rendition.layout.settings.gap = PAGE_GAP;
+        rendition.layout.settings.spread = 'none';
+        rendition.layout.settings.minSpreadWidth = 999999;
+      }
+    } catch (e3) {}
+  }
 
   function applyFlowLayout() {
     if (!rendition) return;
     var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
-    var isDual = currentStyle.dualPage === true && !scrolled;
     syncLayoutSettings();
     try {
-      if (rendition.spread) rendition.spread(isDual ? 'auto' : 'none', isDual ? 840 : 999999);
+      if (rendition.spread) rendition.spread('none', 999999);
     } catch (e) {}
     try {
       if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
@@ -911,20 +897,10 @@
   function displayBook(target) {
     var displayTarget = target || undefined;
     var promise = rendition.display(displayTarget);
-    return Promise.resolve(promise).then(function () {
-      // epub.js 的 spread 模式在首次 display 后可能不生效，
-      // 强制重新应用布局和 resize 以触发双页渲染
-      applyFlowLayout();
-      syncLayoutSettings();
-      rendition.resize();
-      return promise;
-    }).catch(function (err) {
+    return Promise.resolve(promise).catch(function (err) {
       if (!displayTarget) throw err;
       emit('debug', { message: 'display target failed, fallback to first spine: ' + errorMessage(err) });
-      return rendition.display().then(function () {
-        applyFlowLayout();
-        rendition.resize();
-      });
+      return rendition.display();
     });
   }
 
@@ -936,16 +912,15 @@
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
-	      book = ePub(bookUrl);
-	      var isDual = currentStyle.dualPage === true;
-	      rendition = book.renderTo('viewer', {
-	        width: '100%',
-	        height: '100%',
-	        manager: 'default',
-	        spread: isDual ? 'auto' : 'none',
-	        minSpreadWidth: isDual ? 840 : 999999,
-	        evenSpreads: false,
-	        gap: isDual ? 24 : PAGE_GAP,
+      book = ePub(bookUrl);
+      rendition = book.renderTo('viewer', {
+        width: '100%',
+        height: '100%',
+        manager: 'default',
+        spread: 'none',
+        minSpreadWidth: 999999,
+        evenSpreads: false,
+        gap: PAGE_GAP,
         flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();

@@ -4,6 +4,7 @@ import { NetUtil } from '../util/NetUtil';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { MangaImageLoader } from '../util/MangaImageLoader';
 import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
+import { ContentMaxWidth } from '../components/common/ResponsiveLayout';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -13,6 +14,15 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 
 interface SettingItem { icon: string; title: string; key: string; }
 interface ReadModeOption { mode: number; label: string; }
+
+/** 设置分类（内嵌详情页；page 非空时跳转子页面） */
+interface SettingCategory {
+  icon: string;
+  title: string;
+  key: string;
+  /** 独立子页面路由，空字符串表示内嵌 section */
+  page: string;
+}
 
 @CustomDialog
 struct DnsDialog {
@@ -59,6 +69,7 @@ export struct SettingsPage {
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('isFollowSystem') isFollowSystem: boolean = false;
+  @StorageProp('windowSizeClass') sizeClass: WindowSizeClass = WindowSizeClass.COMPACT;
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
@@ -75,6 +86,34 @@ export struct SettingsPage {
   @State ttsAzureKey: string = '';
   @State showTtsAzureKey: boolean = false;
 
+  private readonly categories: SettingCategory[] = [
+    { icon: '读', title: '阅读设置', key: 'read', page: '' },
+    { icon: '声', title: '语音朗读设置', key: 'tts', page: '' },
+    { icon: '漫', title: '漫画设置', key: 'comic', page: '' },
+    { icon: '搜', title: '搜索设置', key: 'search', page: '' },
+    { icon: 'AI', title: '大模型配置', key: 'ai', page: 'pages/AiConfigPage' },
+    { icon: '网', title: '网络设置', key: 'network', page: '' },
+    { icon: '题', title: '主题设置', key: 'theme', page: '' },
+    { icon: '存', title: '缓存管理', key: 'cacheManage', page: 'pages/CacheManagePage' },
+    { icon: '备', title: '备份与恢复', key: 'backup', page: 'pages/BackupSettingsPage' },
+    { icon: '关', title: '关于', key: 'about', page: '' },
+  ];
+
+  /** 宽屏：左侧分类 + 右侧配置（类系统设置） */
+  private get isSettingsSplit(): boolean {
+    return this.sizeClass >= WindowSizeClass.MEDIUM;
+  }
+
+  /** 当前分类标题（右侧顶栏） */
+  private sectionTitle(): string {
+    for (let i = 0; i < this.categories.length; i++) {
+      if (this.categories[i].key === this.currentSection) {
+        return this.categories[i].title;
+      }
+    }
+    return '设置';
+  }
+
 	  aboutToAppear(): void {
 	    // 从 AppTheme 同步主题模式状态（确保 @StorageLink 获取到正确的初始值）
 	    this.isDark = AppTheme.getInstance().isDark;
@@ -89,6 +128,10 @@ export struct SettingsPage {
     this.syncWebViewNetwork();
     this.loadReadSettings();
     this.loadTtsSettings();
+    // 宽屏默认展示第一项配置，避免右侧空白
+    if (this.isSettingsSplit && this.currentSection === 'main') {
+      this.currentSection = 'read';
+    }
   }
 
   private async loadReadSettings(): Promise<void> {
@@ -150,89 +193,184 @@ export struct SettingsPage {
 
   build() {
     Column() {
+      // 顶栏：宽屏双栏时标题固定为「设置」；窄屏在子 section 时显示分类名
       Row() {
         AppBackButton({ onBack: () => {
-          if (this.currentSection === 'main') UiUtil.back(this.getUIContext());
-          else this.currentSection = 'main';
+          if (this.isSettingsSplit || this.currentSection === 'main') {
+            UiUtil.back(this.getUIContext());
+          } else {
+            this.currentSection = 'main';
+          }
         } })
-        Text($r('app.string.common_settings')).fontSize(20).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark))
+        Text(this.isSettingsSplit || this.currentSection === 'main'
+          ? '设置'
+          : this.sectionTitle())
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onBackground(this.isDark))
         Blank()
       }.height(56).padding({ left: 4, right: 12 }).width('100%')
         .backgroundColor(ThemeColors.surface(this.isDark))
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
-      // 宽屏时表单内容限宽居中，避免横屏拉伸过宽
-      Row() {
-        Blank().layoutWeight(WindowLayout.isWide ? 1 : 0)
+      if (this.isSettingsSplit) {
+        // 平板/宽屏：左分类导航 + 右配置内容（类鸿蒙系统设置）
+        Row() {
+          Column() {
+            this.buildCategoryList(true)
+          }
+          .width(this.sizeClass >= WindowSizeClass.LARGE ? 280 : 240)
+          .height('100%')
+          .backgroundColor(ThemeColors.surface(this.isDark))
+
+          Divider()
+            .vertical(true)
+            .strokeWidth(0.5)
+            .color(ThemeColors.outlineVariant(this.isDark))
+
+          Column() {
+            // 右侧当前分类标题
+            Text(this.sectionTitle())
+              .fontSize(18)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(ThemeColors.onBackground(this.isDark))
+              .width('100%')
+              .padding({ left: 20, right: 20, top: 16, bottom: 8 })
+            Scroll() {
+              Column() {
+                this.buildSectionContent()
+              }
+              .width('100%')
+              .constraintSize({ maxWidth: ContentMaxWidth.FORM })
+              .alignItems(HorizontalAlign.Start)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .align(Alignment.TopStart)
+            .scrollBar(BarState.Auto)
+          }
+          .layoutWeight(1)
+          .height('100%')
+          .padding({ left: 8, right: 16, bottom: 16 })
+          .alignItems(HorizontalAlign.Start)
+        }
+        .layoutWeight(1)
+        .width('100%')
+      } else {
+        // 手机：单列逐级进入
         Column() {
           if (this.currentSection === 'main') {
-            this.buildMainMenu();
-          } else if (this.currentSection === 'read') {
-            this.buildReadSettings();
-          } else if (this.currentSection === 'comic') {
-            this.buildComicSettings();
-          } else if (this.currentSection === 'search') {
-          } else if (this.currentSection === 'theme') {
-            this.buildThemeSettings();
-          } else if (this.currentSection === 'backup') {
-            // backup 入口通过 click handler 直接导航，这里留空
-            Column() {}.width('100%').height('100%')
-          } else if (this.currentSection === 'network') {
-            this.buildNetSettings();
-          } else if (this.currentSection === 'tts') {
-            this.buildTtsSettings();
-          } else if (this.currentSection === 'about') {
-            this.buildAboutPage();
+            this.buildCategoryList(false)
+          } else {
+            this.buildSectionContent()
           }
         }
         .layoutWeight(1)
-        .constraintSize({ maxWidth: WindowLayout.isWide ? 720 : Number.MAX_SAFE_INTEGER })
-        Blank().layoutWeight(WindowLayout.isWide ? 1 : 0)
+        .width('100%')
       }
-      .layoutWeight(1)
-      .width('100%')
     }
     .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 
+  /** 打开设置分类：内嵌 section 或跳转子页 */
+  private openCategory(item: SettingCategory): void {
+    if (item.page.length > 0) {
+      UiUtil.pushUrl(this.getUIContext(), { url: item.page });
+      return;
+    }
+    this.currentSection = item.key;
+  }
+
   @Builder
-  buildMainMenu() {
+  buildCategoryList(splitMode: boolean) {
     List() {
-      ForEach([
-	        { icon: '读', title: '阅读设置', key: 'read' },
-	        { icon: '声', title: '语音朗读设置', key: 'tts' },
-	        { icon: '漫', title: '漫画设置', key: 'comic' },
-        { icon: '搜', title: '搜索设置', key: 'search' },
-        { icon: 'AI', title: '大模型配置', key: 'ai' },
-        { icon: '网', title: '网络设置', key: 'network' },
-        { icon: '题', title: '主题设置', key: 'theme' },
-	        { icon: '存', title: '缓存管理', key: 'cacheManage' },
-	        { icon: '备', title: '备份与恢复', key: 'backup' },
-	        { icon: '关', title: '关于', key: 'about' },
-	      ] as SettingItem[], (item: SettingItem) => {
+      ForEach(this.categories, (item: SettingCategory) => {
         ListItem() {
           Row() {
-            Text(item.icon).fontSize(22).margin({ right: 14 }).fontColor(ThemeColors.onBackground(this.isDark))
-            Text(item.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onBackground(this.isDark))
-            Blank()
-            Text($r('app.string.ui_091385be99')).fontSize(18).fontColor(ThemeColors.onBackground(this.isDark))
-          }.padding(16).width('100%')
+            if (splitMode) {
+              Column()
+                .width(3)
+                .height(24)
+                .borderRadius(2)
+                .backgroundColor(this.currentSection === item.key
+                  ? ThemeColors.primary(this.isDark)
+                  : ThemeColors.transparent())
+                .margin({ right: 10 })
+            }
+            Text(item.icon)
+              .fontSize(splitMode ? 18 : 22)
+              .margin({ right: 12 })
+              .fontColor(this.currentSection === item.key && splitMode
+                ? ThemeColors.primary(this.isDark)
+                : ThemeColors.onBackground(this.isDark))
+            Text(item.title)
+              .fontSize(splitMode ? 15 : 16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.currentSection === item.key && splitMode
+                ? ThemeColors.primary(this.isDark)
+                : ThemeColors.onBackground(this.isDark))
+              .layoutWeight(1)
+            if (!splitMode) {
+              Text($r('app.string.ui_091385be99'))
+                .fontSize(18)
+                .fontColor(ThemeColors.secondaryText(this.isDark))
+            }
+          }
+          .padding(splitMode
+            ? { left: 12, right: 12, top: 12, bottom: 12 }
+            : { left: 16, right: 16, top: 16, bottom: 16 })
+          .width('100%')
+          .backgroundColor(splitMode && this.currentSection === item.key
+            ? ThemeColors.primaryContainer(this.isDark)
+            : ThemeColors.transparent())
+          .borderRadius(splitMode ? 10 : 0)
         }
-        .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+        .margin(splitMode ? { left: 8, right: 8, top: 2, bottom: 2 } : {})
+        .border(splitMode
+          ? { width: 0 }
+          : { width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
         .accessibilityText(item.title)
-		        .onClick(() => {
-		          if (item.key === 'backup') {
-		            this.getUIContext().getRouter().pushUrl({ url: 'pages/BackupSettingsPage' }).catch(() => {});
-		          } else if (item.key === 'ai') {
-		            this.getUIContext().getRouter().pushUrl({ url: 'pages/AiConfigPage' }).catch(() => {});
-		          } else if (item.key === 'cacheManage') {
-		            this.getUIContext().getRouter().pushUrl({ url: 'pages/CacheManagePage' }).catch(() => {});
-		          } else {
-		            this.currentSection = item.key;
-		          }
-	        })
-      })
-    }.width('100%')
+        .onClick(() => {
+          this.openCategory(item);
+        })
+      }, (item: SettingCategory) => item.key)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .scrollBar(splitMode ? BarState.Auto : BarState.Off)
+  }
+
+  @Builder
+  buildSectionContent() {
+    if (this.currentSection === 'read') {
+      this.buildReadSettings();
+    } else if (this.currentSection === 'comic') {
+      this.buildComicSettings();
+    } else if (this.currentSection === 'search') {
+      this.buildSearchSettings();
+    } else if (this.currentSection === 'theme') {
+      this.buildThemeSettings();
+    } else if (this.currentSection === 'network') {
+      this.buildNetSettings();
+    } else if (this.currentSection === 'tts') {
+      this.buildTtsSettings();
+    } else if (this.currentSection === 'about') {
+      this.buildAboutPage();
+    } else {
+      Column() {
+        Text('请选择左侧分类')
+          .fontSize(14)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+      }
+      .width('100%')
+      .padding(24)
+      .alignItems(HorizontalAlign.Start)
+    }
+  }
+
+  @Builder
+  buildMainMenu() {
+    this.buildCategoryList(false)
   }
 
   @Builder
