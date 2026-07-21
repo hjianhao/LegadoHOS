@@ -244,6 +244,15 @@ export struct PageView {
     return text;
   }
 
+  /** 计算双页模式下右页的 X 偏移量（左页宽度 + 页缝） */
+  private rightPageOffset_(): number {
+    if (this.pageWidth <= 0) return 0;
+    const gutter = this.dualPageGutter;
+    const leftRightPadding = this.config.paddingLeft + this.config.paddingRight;
+    const halfW = (this.pageWidth - leftRightPadding - gutter) / 2;
+    return halfW + gutter;
+  }
+
   build() {
     Column() {
       // 隐藏的测量文本（测量字宽和行高，用于 TextLayout 精确估算）
@@ -290,6 +299,10 @@ export struct PageView {
 	                      return false;
 	                    },
 	                  } as EditMenuOptions)
+	                  .onClick((event: ClickEvent) => {
+	                    // 左页：event.x 相对于左页 Text，补回 paddingLeft
+	                    this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
+	                  })
 	              }
 	              .layoutWeight(1).height('100%').clip(true)
 
@@ -322,6 +335,10 @@ export struct PageView {
 	                        return false;
 	                      },
 	                    } as EditMenuOptions)
+	                    .onClick((event: ClickEvent) => {
+	                      // 右页：event.x 相对于右页 Text，补回 paddingLeft + 左页宽度 + 页缝
+	                      this.handleClick_(event.x + this.config.paddingLeft + this.rightPageOffset_(), event.y + this.config.paddingTop);
+	                    })
 	                }
 	                .layoutWeight(1).height('100%').clip(true)
 	              } else {
@@ -332,40 +349,39 @@ export struct PageView {
 	            .width('100%').layoutWeight(1)
 	          } else {
 	            // 标准单页：内容铺满整个屏幕，留白由用户设置的边距控制
-		            Column() {
-		              Text(this.buildPageContent())
-		                .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-		                .fontFamily(this.config.fontFamily)
-		                .fontWeight(this.getFontWeight())
-		                .lineHeight(this.config.fontSize * this.config.lineHeight)
-		                .letterSpacing(this.config.letterSpacing)
-		                .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-		                .width('100%')
-		                .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-		                .copyOption(CopyOptions.LocalDevice)
-		                .editMenuOptions({
-		                  onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-		                  onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-		                    if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-		                      const pageText = this.buildPageContent();
-		                      this.onAskKimi?.(pageText.substring(range.start, range.end));
-		                      return true;
-		                    }
-		                    return false;
-		                  },
-		                } as EditMenuOptions)
-		            }
-		            .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
+	            Column() {
+	              Text(this.buildPageContent())
+	                .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+	                .fontFamily(this.config.fontFamily)
+	                .fontWeight(this.getFontWeight())
+	                .lineHeight(this.config.fontSize * this.config.lineHeight)
+	                .letterSpacing(this.config.letterSpacing)
+	                .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+	                .width('100%')
+	                .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+	                .copyOption(CopyOptions.LocalDevice)
+	                .editMenuOptions({
+	                  onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+	                  onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+	                    if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+	                      const pageText = this.buildPageContent();
+	                      this.onAskKimi?.(pageText.substring(range.start, range.end));
+	                      return true;
+	                    }
+	                    return false;
+	                  },
+	                } as EditMenuOptions)
+	                .onClick((event: ClickEvent) => {
+	                  // event.x 相对于全宽 Text，补回 paddingLeft 与 pageWidth 坐标系对齐
+	                  this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
+	                })
+	            }
+	            .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
 	            .clip(true)
 	          }
 	        }
 	      }
 	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-	      .onClick((event: ClickEvent) => {
-	        // 外层 Column 的 event.x/y 相对于自身（已扣除外层 padding），
-	        // 补回 padding 偏移以匹配 pageWidth/pageHeight 坐标系
-	        this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
-	      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
