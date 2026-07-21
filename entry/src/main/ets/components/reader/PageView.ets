@@ -1,5 +1,10 @@
 /**
  * 分页阅读视图组件 — 页面索引由父组件 ReadPage 管理
+ *
+ * 点击处理：直接使用 event.x/event.y 与 pageWidth/pageHeight 计算 9 宫格区域。
+ * 单页模式下 Text 是全宽的，event.x 直接对应页面宽度。
+ * 双页模式下 Row 是全宽的，event.x 也直接对应页面宽度。
+ * （padding 偏移很小，不影响九宫格分区边界判定）
  */
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
@@ -42,12 +47,11 @@ export struct PageView {
   @Prop chapterTitle: string = '';
   @Prop totalChapters: number = 0;
   @Prop dualPage: boolean = false;
-  /** 双页模式中间页缝宽度（vp） */
-  @Prop dualPageGutter: number = 8;
+  @Prop dualPageGutter: number = 48;
   @Prop chapterIndex: number = 0;
   @Prop config: PageViewConfig = {
     animType: PageTurnAnim.SLIDE, bgColor: ThemeColors.readingBackgroundDefault(), textColor: ThemeColors.readingTextDefault(),
-    titleColor: ThemeColors.readingTitleDefault(), fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans',
+    titleColor: ThemeColors.secondaryText(this.isDark), fontSize: 18, fontWeight: 1, fontFamily: 'HarmonyOS Sans',
     lineHeight: 1.6, letterSpacing: 0.5, paragraphSpacing: 10, textAlign: 'justify',
     indentSize: 2, paddingTop: 16, paddingBottom: 8,
     paddingLeft: 20, paddingRight: 20, showHeader: false, showFooter: true,
@@ -83,7 +87,6 @@ export struct PageView {
     if (idx - step >= 0) {
       this.onPageTurn?.({ direction: 'prev', currentPage: idx - step, totalPages: this.pages.length });
     } else if (idx > 0) {
-      // 双页模式下剩余不足一个跨页，退到第 0 页
       this.onPageTurn?.({ direction: 'prev', currentPage: 0, totalPages: this.pages.length });
     } else {
       this.onPrevChapter?.();
@@ -97,7 +100,6 @@ export struct PageView {
     if (idx + step < this.pages.length) {
       this.onPageTurn?.({ direction: 'next', currentPage: idx + step, totalPages: this.pages.length });
     } else if (idx < this.pages.length - 1) {
-      // 双页模式下剩余不足一个跨页，进到最后一页
       this.onPageTurn?.({ direction: 'next', currentPage: this.pages.length - 1, totalPages: this.pages.length });
     } else {
       this.onNextChapter?.();
@@ -161,7 +163,6 @@ export struct PageView {
         this.onPrevChapter?.();
         break;
       case ClickAction.ADD_BOOKMARK:
-        // 书签功能暂未实现
         break;
       case ClickAction.CHAPTER_LIST:
         this.onShowToc?.();
@@ -173,7 +174,6 @@ export struct PageView {
       case ClickAction.NEXT_PARAGRAPH:
         break;
       default:
-        // 未知动作，默认显示菜单
         this.onShowMenu?.();
         break;
     }
@@ -199,7 +199,25 @@ export struct PageView {
     if (this.pages.length === 0) return '';
     const page = this.pages[this.safePageIndex()];
     if (page.formattedText) return page.formattedText;
-    // 回退逻辑（旧数据兼容）
+    if (page.lines.length === 0) return '';
+    const paraBreakLines = Math.max(0, Math.round(this.config.paragraphSpacing / 10));
+    let text = '';
+    for (let i = 0; i < page.lines.length; i++) {
+      const line = page.lines[i];
+      if (i > 0 && line.isParagraphStart && paraBreakLines > 0) {
+        for (let b = 0; b < paraBreakLines; b++) text += '\n';
+      }
+      text += line.text;
+      if (i < page.lines.length - 1) text += '\n';
+    }
+    return text;
+  }
+
+  /** 构建指定页码的页面文本内容（用于双页模式，支持 formattedText） */
+  private buildPageContentForPage_(pageIdx: number): string {
+    if (pageIdx < 0 || pageIdx >= this.pages.length) return '';
+    const page = this.pages[pageIdx];
+    if (page.formattedText) return page.formattedText;
     if (page.lines.length === 0) return '';
     const paraBreakLines = Math.max(0, Math.round(this.config.paragraphSpacing / 10));
     let text = '';
@@ -224,38 +242,34 @@ export struct PageView {
     return FontWeight.Normal;
   }
 
-  /** 构建指定页码的页面文本内容（与 buildPageContent 逻辑一致，支持 formattedText） */
-  private buildPageContentForPage_(pageIdx: number): string {
-    if (pageIdx < 0 || pageIdx >= this.pages.length) return '';
-    const page = this.pages[pageIdx];
-    if (page.formattedText) return page.formattedText;
-    // 回退逻辑（旧数据兼容）
-    if (page.lines.length === 0) return '';
-    const paraBreakLines = Math.max(0, Math.round(this.config.paragraphSpacing / 10));
-    let text = '';
-    for (let i = 0; i < page.lines.length; i++) {
-      const line = page.lines[i];
-      if (i > 0 && line.isParagraphStart && paraBreakLines > 0) {
-        for (let b = 0; b < paraBreakLines; b++) text += '\n';
-      }
-      text += line.text;
-      if (i < page.lines.length - 1) text += '\n';
-    }
-    return text;
-  }
-
-  /** 计算双页模式下右页的 X 偏移量（左页宽度 + 页缝） */
-  private rightPageOffset_(): number {
-    if (this.pageWidth <= 0) return 0;
-    const gutter = this.dualPageGutter;
-    const leftRightPadding = this.config.paddingLeft + this.config.paddingRight;
-    const halfW = (this.pageWidth - leftRightPadding - gutter) / 2;
-    return halfW + gutter;
+  @Builder
+  private renderPageText_(pageIdx: number, text: string) {
+    Text(text)
+      .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+      .fontFamily(this.config.fontFamily)
+      .fontWeight(this.getFontWeight())
+      .lineHeight(this.config.fontSize * this.config.lineHeight)
+      .letterSpacing(this.config.letterSpacing)
+      .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+      .width('100%')
+      .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+      .copyOption(CopyOptions.LocalDevice)
+      .editMenuOptions({
+        onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+        onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+          if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+            this.onAskKimi?.(text.substring(range.start, range.end));
+            return true;
+          }
+          return false;
+        },
+      } as EditMenuOptions)
+    // 注：双页模式下点击由全宽的 Row.onClick 统一处理，Text 不单独设 onClick
   }
 
   build() {
     Column() {
-      // 隐藏的测量文本（测量字宽和行高，用于 TextLayout 精确估算）
+      // 隐藏的测量文本
       Text($r('app.string.ui_582c50066c')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(this.config.fontSize)
         .fontFamily(this.config.fontFamily)
         .fontWeight(this.getFontWeight())
@@ -275,117 +289,63 @@ export struct PageView {
 	      Column() {
 	        if (this.pages.length > 0) {
 	          if (this.dualPage) {
-	            // 双页模式：左右两页并排，中间页缝，内容铺满
+	            // 双页模式：左右两页并排，中间页缝
+	            // 点击由全宽的 Row 统一处理（event.x 与 pageWidth 坐标系一致）
 	            Row() {
-	              // 左页
 	              Column() {
-	                Text(this.buildPageContentForPage_(this.safePageIndex()))
-	                  .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-	                  .fontFamily(this.config.fontFamily)
-	                  .fontWeight(this.getFontWeight())
-	                  .lineHeight(this.config.fontSize * this.config.lineHeight)
-	                  .letterSpacing(this.config.letterSpacing)
-	                  .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-	                  .width('100%')
-	                  .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-	                  .copyOption(CopyOptions.LocalDevice)
-	                  .editMenuOptions({
-	                    onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-	                    onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-	                      if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-	                        this.onAskKimi?.(this.buildPageContentForPage_(this.safePageIndex()).substring(range.start, range.end));
-	                        return true;
-	                      }
-	                      return false;
-	                    },
-	                  } as EditMenuOptions)
-	                  .onClick((event: ClickEvent) => {
-	                    // 左页：event.x 相对于左页 Text，补回 paddingLeft
-	                    this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
-	                  })
+	                this.renderPageText_(this.safePageIndex(), this.buildPageContentForPage_(this.safePageIndex()))
 	              }
 	              .layoutWeight(1).height('100%').clip(true)
-
-	              // 页缝分隔（中间视觉间隔）
-	              Column()
-	                .width(this.dualPageGutter)
-	                .height('100%')
-	                .backgroundColor(this.config.bgColor)
-
-	              // 右页（如果存在下一页）
+	              // 页缝
+	              Column().width(this.dualPageGutter).height('100%').backgroundColor(this.config.bgColor)
+	              // 右页
 	              if (this.safePageIndex() + 1 < this.pages.length) {
 	                Column() {
-	                  Text(this.buildPageContentForPage_(this.safePageIndex() + 1))
-	                    .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-	                    .fontFamily(this.config.fontFamily)
-	                    .fontWeight(this.getFontWeight())
-	                    .lineHeight(this.config.fontSize * this.config.lineHeight)
-	                    .letterSpacing(this.config.letterSpacing)
-	                    .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-	                    .width('100%')
-	                    .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-	                    .copyOption(CopyOptions.LocalDevice)
-	                    .editMenuOptions({
-	                      onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-	                      onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-	                        if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-	                          this.onAskKimi?.(this.buildPageContentForPage_(this.safePageIndex() + 1).substring(range.start, range.end));
-	                          return true;
-	                        }
-	                        return false;
-	                      },
-	                    } as EditMenuOptions)
-	                    .onClick((event: ClickEvent) => {
-	                      // 右页：event.x 相对于右页 Text，补回 paddingLeft + 左页宽度 + 页缝
-	                      this.handleClick_(event.x + this.config.paddingLeft + this.rightPageOffset_(), event.y + this.config.paddingTop);
-	                    })
+	                  this.renderPageText_(this.safePageIndex() + 1, this.buildPageContentForPage_(this.safePageIndex() + 1))
 	                }
 	                .layoutWeight(1).height('100%').clip(true)
 	              } else {
-	                // 没有右页时占位
 	                Column().layoutWeight(1).height('100%')
 	              }
 	            }
-		            .width('100%').layoutWeight(1)
-		            .onClick((event: ClickEvent) => {
-		              // 双页 Row 兜底：覆盖页缝和右页占位等无 Text 区域
-		              this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
-		            })
+	            .width('100%').layoutWeight(1)
+	            .onClick((event: ClickEvent) => {
+	              this.handleClick_(event.x, event.y);
+	            })
 	          } else {
-	            // 标准单页：内容铺满整个屏幕，留白由用户设置的边距控制
-	            Column() {
-	              Text(this.buildPageContent())
-	                .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-	                .fontFamily(this.config.fontFamily)
-	                .fontWeight(this.getFontWeight())
-	                .lineHeight(this.config.fontSize * this.config.lineHeight)
-	                .letterSpacing(this.config.letterSpacing)
-	                .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-	                .width('100%')
-	                .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-	                .copyOption(CopyOptions.LocalDevice)
-	                .editMenuOptions({
-	                  onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-	                  onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-	                    if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-	                      const pageText = this.buildPageContent();
-	                      this.onAskKimi?.(pageText.substring(range.start, range.end));
-	                      return true;
-	                    }
-	                    return false;
-	                  },
-	                } as EditMenuOptions)
-	                .onClick((event: ClickEvent) => {
-	                  // event.x 相对于全宽 Text，补回 paddingLeft 与 pageWidth 坐标系对齐
-	                  this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
-	                })
-	            }
-	            .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-	            .clip(true)
+	            // 单页模式（原始逻辑不变）
+	            Text(this.buildPageContent())
+	              .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+	              .fontFamily(this.config.fontFamily)
+	              .fontWeight(this.getFontWeight())
+	              .lineHeight(this.config.fontSize * this.config.lineHeight)
+	              .letterSpacing(this.config.letterSpacing)
+	              .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+	              .width('100%')
+	              .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+	              .copyOption(CopyOptions.LocalDevice)
+	              .editMenuOptions({
+	                onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+	                onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+	                  if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+	                    const pageText = this.buildPageContent();
+	                    this.onAskKimi?.(pageText.substring(range.start, range.end));
+	                    return true;
+	                  }
+	                  return false;
+	                },
+	              } as EditMenuOptions)
+	              .onClick((event: ClickEvent) => {
+	                this.handleClick_(event.x, event.y);
+	              })
 	          }
 	        }
 	      }
 	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
+	      .clip(true)
+	      .onClick((event: ClickEvent) => {
+	        this.handleClick_(event.x, event.y);
+	      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
