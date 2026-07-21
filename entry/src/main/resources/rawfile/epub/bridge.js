@@ -301,16 +301,12 @@
       'letter-spacing': v.letterSpacing + 'px !important',
       'text-align': v.textAlign + ' !important',
       'box-sizing': 'border-box !important',
-      'padding': v.pt + 'px 0 ' + v.pb + 'px 0 !important',
-      'max-width': isDual ? '100% !important' : 'none',
-      'overflow-wrap': 'break-word !important'
+      'padding': v.pt + 'px 0 ' + v.pb + 'px 0 !important'
     };
     var bodyAllRule = {
       'box-sizing': 'border-box !important',
       'font-weight': v.weight + ' !important',
-      'letter-spacing': v.letterSpacing + 'px !important',
-      'max-width': isDual ? '100% !important' : 'none',
-      'overflow-wrap': 'break-word !important'
+      'letter-spacing': v.letterSpacing + 'px !important'
     };
     if (!v.useBookFont) {
       bodyRule['font-family'] = v.familyCss + ' !important';
@@ -378,17 +374,15 @@
 	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
 	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
 	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;' +
-	    'max-width:' + (isDual ? '100%' : 'none') + ' !important;overflow-wrap:break-word !important;}' +
+	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
 	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
-	    'letter-spacing:' + v.letterSpacing + 'px !important;' +
-	    'max-width:' + (isDual ? '100% !important' : 'none') + ';overflow-wrap:break-word !important;}' +
+	    'letter-spacing:' + v.letterSpacing + 'px !important;}' +
 	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
-	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;' +
-	    'max-width:' + (isDual ? '100% !important' : 'none') + ';}' +
+	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
 	    'img,svg{max-width:100% !important;max-height:' + imgMaxH + ' !important;object-fit:contain !important;' +
 	    'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
-	    'table{max-width:100% !important;}a{color:inherit !important;}';
+	    'table{max-width:100% !important;}a{color:inherit !important;}' +
+	    '.epub-container{max-width:100% !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
     if (doc.body) {
@@ -917,10 +911,20 @@
   function displayBook(target) {
     var displayTarget = target || undefined;
     var promise = rendition.display(displayTarget);
-    return Promise.resolve(promise).catch(function (err) {
+    return Promise.resolve(promise).then(function () {
+      // epub.js 的 spread 模式在首次 display 后可能不生效，
+      // 强制重新应用布局和 resize 以触发双页渲染
+      applyFlowLayout();
+      syncLayoutSettings();
+      rendition.resize();
+      return promise;
+    }).catch(function (err) {
       if (!displayTarget) throw err;
       emit('debug', { message: 'display target failed, fallback to first spine: ' + errorMessage(err) });
-      return rendition.display();
+      return rendition.display().then(function () {
+        applyFlowLayout();
+        rendition.resize();
+      });
     });
   }
 
