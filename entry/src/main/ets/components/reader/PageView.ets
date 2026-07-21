@@ -346,7 +346,11 @@ export struct PageView {
 	                Column().layoutWeight(1).height('100%')
 	              }
 	            }
-	            .width('100%').layoutWeight(1)
+		            .width('100%').layoutWeight(1)
+		            .onClick((event: ClickEvent) => {
+		              // 双页 Row 兜底：覆盖页缝和右页占位等无 Text 区域
+		              this.handleClick_(event.x + this.config.paddingLeft, event.y + this.config.paddingTop);
+		            })
 	          } else {
 	            // 标准单页：内容铺满整个屏幕，留白由用户设置的边距控制
 	            Column() {
