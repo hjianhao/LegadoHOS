@@ -13,6 +13,7 @@ import { avSession } from '@kit.AVSessionKit';
 import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../../util/UiUtil';
 import { ThemeColors } from '../../theme/ThemeColors';
+import { ReaderInsets } from '../../util/ReaderInsets';
 
 @Component
 export struct ReadAloudPanel {
@@ -1156,5 +1157,6 @@ export struct ReadAloudPanel {
     }
     .width('100%').backgroundColor(ThemeColors.surface(this.isDark))
     .borderRadius({ topLeft: 16, topRight: 16 })
+    .padding({ bottom: ReaderInsets.sheetBottomPad() })
   }
 }

@@ -1,10 +1,11 @@
 /**
  * 分页阅读视图组件 — 页面索引由父组件 ReadPage 管理
  *
- * 点击处理：直接使用 event.x/event.y 与 pageWidth/pageHeight 计算 9 宫格区域。
- * 单页模式下 Text 是全宽的，event.x 直接对应页面宽度。
- * 双页模式下 Row 是全宽的，event.x 也直接对应页面宽度。
- * （padding 偏移很小，不影响九宫格分区边界判定）
+ * 九宫格分区使用「内容区」宽高（不含外层 padding / 页眉页脚），
+ * 与点击坐标同一坐标系。
+ *
+ * 双页模式：左右 Text 会拦截点击（可选择文本），不能只绑 Row.onClick；
+ * 需在左右页 / 页缝分别 onClick，并把局部 x 映射回整页内容区坐标。
  */
 import { LayoutPage, LayoutLine } from '../../engine/book/TextLayout';
 import { ClickZone, ClickAction } from './ClickAction';
@@ -42,11 +43,11 @@ export interface PageViewConfig {
 @Component
 export struct PageView {
   @StorageLink('isDark') isDark: boolean = false;
-  @Prop pages: LayoutPage[] = [];
-  @Prop pageIndex: number = 0;
+  @Prop @Watch('onDisplaySourceChange_') pages: LayoutPage[] = [];
+  @Prop @Watch('onDisplaySourceChange_') pageIndex: number = 0;
   @Prop chapterTitle: string = '';
   @Prop totalChapters: number = 0;
-  @Prop dualPage: boolean = false;
+  @Prop @Watch('onDisplaySourceChange_') dualPage: boolean = false;
   @Prop dualPageGutter: number = 48;
   @Prop chapterIndex: number = 0;
   @Prop config: PageViewConfig = {
@@ -62,7 +63,10 @@ export struct PageView {
   onPageTurn?: (event: PageTurnEvent) => void;
   onShowMenu?: () => void;
   onShowToc?: () => void;
+  /** 显式「上一章」：落到上一章开头 */
   onPrevChapter?: () => void;
+  /** 上一页跨章：落到上一章末尾（连续阅读） */
+  onPrevChapterAtEnd?: () => void;
   onNextChapter?: () => void;
   onToggleReadAloud?: () => void;
 
@@ -73,6 +77,36 @@ export struct PageView {
   @Prop zoneActions: number[] = [];
   onAskKimi?: (text: string) => void;
   onAskXiaoYi?: (text: string) => void;
+
+  /**
+   * 用 @State 持有当前展示正文，保证 pageIndex 变化时 Text 一定刷新。
+   * 仅靠 @Prop + 内联表达式时，textSelectable 的 Text 仍可能不更新字符串。
+   */
+  @State private leftText_: string = '';
+  @State private rightText_: string = '';
+  @State private hasRightPage_: boolean = false;
+  @State private displayIdx_: number = 0;
+
+  aboutToAppear(): void {
+    this.refreshDisplayTexts_();
+  }
+
+  private onDisplaySourceChange_(): void {
+    this.refreshDisplayTexts_();
+  }
+
+  private refreshDisplayTexts_(): void {
+    const idx = this.safePageIndex();
+    this.displayIdx_ = idx;
+    this.leftText_ = this.buildPageContentForPage_(idx);
+    this.hasRightPage_ = this.dualPage && (idx + 1 < this.pages.length);
+    this.rightText_ = this.hasRightPage_ ? this.buildPageContentForPage_(idx + 1) : '';
+    console.info('[PageView] refreshDisplay idx=' + idx +
+      ' dual=' + this.dualPage +
+      ' leftLen=' + this.leftText_.length +
+      ' rightLen=' + this.rightText_.length +
+      ' pages=' + this.pages.length);
+  }
 
   private safePageIndex(): number {
     if (this.pages.length === 0) return 0;
@@ -89,7 +123,12 @@ export struct PageView {
     } else if (idx > 0) {
       this.onPageTurn?.({ direction: 'prev', currentPage: 0, totalPages: this.pages.length });
     } else {
-      this.onPrevChapter?.();
+      // 章首再上一页：连续阅读 → 上一章末页
+      if (this.onPrevChapterAtEnd) {
+        this.onPrevChapterAtEnd();
+      } else {
+        this.onPrevChapter?.();
+      }
     }
   }
 
@@ -122,12 +161,39 @@ export struct PageView {
     }
   }
 
-  /** 统一点击处理（Text 和父 Column 共享同一逻辑） */
+  /** 九宫格用内容区尺寸（不含根布局 padding / 页眉页脚） */
+  private zoneWidth_(): number {
+    if (this.contentWidth > 0) return this.contentWidth;
+    if (this.pageWidth > 0) {
+      return Math.max(1, this.pageWidth - this.config.paddingLeft - this.config.paddingRight);
+    }
+    return 360;
+  }
+
+  private zoneHeight_(): number {
+    if (this.contentHeight > 0) return this.contentHeight;
+    if (this.pageHeight > 0) {
+      return Math.max(1, this.pageHeight - this.config.paddingTop - this.config.paddingBottom);
+    }
+    return 640;
+  }
+
+  /** 双页左栏内容宽度（不含页缝） */
+  private dualPaneWidth_(): number {
+    return Math.max(1, (this.zoneWidth_() - this.dualPageGutter) / 2);
+  }
+
+  /**
+   * @param x 相对「整页内容区」左上角的 x
+   * @param y 相对「整页内容区」左上角的 y
+   */
   private handleClick_(x: number, y: number): void {
-    console.info('[PageView] click! x=' + x + ' y=' + y + ' w=' + (this.pageWidth > 0 ? this.pageWidth : 360) + ' h=' + (this.pageHeight > 0 ? this.pageHeight : 640));
-    const w = this.pageWidth > 0 ? this.pageWidth : 360;
-    const h = this.pageHeight > 0 ? this.pageHeight : 640;
-    const x3 = w / 3; const y3 = h / 3;
+    const w = this.zoneWidth_();
+    const h = this.zoneHeight_();
+    console.info('[PageView] click! x=' + x.toFixed(1) + ' y=' + y.toFixed(1) +
+      ' w=' + w.toFixed(1) + ' h=' + h.toFixed(1) + ' dual=' + this.dualPage);
+    const x3 = w / 3;
+    const y3 = h / 3;
     let zone: number = ClickZone.MC;
     if (y < y3) {
       zone = x < x3 ? ClickZone.TL : (x > w - x3 ? ClickZone.TR : ClickZone.TC);
@@ -137,6 +203,11 @@ export struct PageView {
       zone = x < x3 ? ClickZone.BL : (x > w - x3 ? ClickZone.BR : ClickZone.BC);
     }
     this.dispatchZoneAction(zone);
+  }
+
+  /** 双页局部坐标 → 内容区坐标后分发 */
+  private handleDualPaneClick_(localX: number, localY: number, offsetX: number): void {
+    this.handleClick_(localX + offsetX, localY);
   }
 
   /** 根据区域动作配置执行对应操作 */
@@ -160,6 +231,7 @@ export struct PageView {
         this.onNextChapter?.();
         break;
       case ClickAction.PREV_CHAPTER:
+        // 显式上一章 → 章首（不是章末）
         this.onPrevChapter?.();
         break;
       case ClickAction.ADD_BOOKMARK:
@@ -242,31 +314,6 @@ export struct PageView {
     return FontWeight.Normal;
   }
 
-  @Builder
-  private renderPageText_(pageIdx: number, text: string) {
-    Text(text)
-      .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-      .fontFamily(this.config.fontFamily)
-      .fontWeight(this.getFontWeight())
-      .lineHeight(this.config.fontSize * this.config.lineHeight)
-      .letterSpacing(this.config.letterSpacing)
-      .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-      .width('100%')
-      .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-      .copyOption(CopyOptions.LocalDevice)
-      .editMenuOptions({
-        onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-        onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-          if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-            this.onAskKimi?.(text.substring(range.start, range.end));
-            return true;
-          }
-          return false;
-        },
-      } as EditMenuOptions)
-    // 注：双页模式下点击由全宽的 Row.onClick 统一处理，Text 不单独设 onClick
-  }
-
   build() {
     Column() {
       // 隐藏的测量文本
@@ -286,66 +333,133 @@ export struct PageView {
           .fontSize(12).fontColor(this.config.titleColor)
           .width('100%').textAlign(TextAlign.Center)
       }
-	      Column() {
-	        if (this.pages.length > 0) {
-	          if (this.dualPage) {
-	            // 双页模式：左右两页并排，中间页缝
-	            // 点击由全宽的 Row 统一处理（event.x 与 pageWidth 坐标系一致）
-	            Row() {
-	              Column() {
-	                this.renderPageText_(this.safePageIndex(), this.buildPageContentForPage_(this.safePageIndex()))
-	              }
-	              .layoutWeight(1).height('100%').clip(true)
-	              // 页缝
-	              Column().width(this.dualPageGutter).height('100%').backgroundColor(this.config.bgColor)
-	              // 右页
-	              if (this.safePageIndex() + 1 < this.pages.length) {
-	                Column() {
-	                  this.renderPageText_(this.safePageIndex() + 1, this.buildPageContentForPage_(this.safePageIndex() + 1))
-	                }
-	                .layoutWeight(1).height('100%').clip(true)
-	              } else {
-	                Column().layoutWeight(1).height('100%')
-	              }
-	            }
-	            .width('100%').layoutWeight(1)
-	            .onClick((event: ClickEvent) => {
-	              this.handleClick_(event.x, event.y);
-	            })
-	          } else {
-	            // 单页模式（原始逻辑不变）
-	            Text(this.buildPageContent())
-	              .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-	              .fontFamily(this.config.fontFamily)
-	              .fontWeight(this.getFontWeight())
-	              .lineHeight(this.config.fontSize * this.config.lineHeight)
-	              .letterSpacing(this.config.letterSpacing)
-	              .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-	              .width('100%')
-	              .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-	              .copyOption(CopyOptions.LocalDevice)
-	              .editMenuOptions({
-	                onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-	                onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-	                  if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-	                    const pageText = this.buildPageContent();
-	                    this.onAskKimi?.(pageText.substring(range.start, range.end));
-	                    return true;
-	                  }
-	                  return false;
-	                },
-	              } as EditMenuOptions)
-	              .onClick((event: ClickEvent) => {
-	                this.handleClick_(event.x, event.y);
-	              })
-	          }
-	        }
-	      }
-	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-	      .clip(true)
-	      .onClick((event: ClickEvent) => {
-	        this.handleClick_(event.x, event.y);
-	      })
+      Column() {
+        if (this.pages.length > 0) {
+          if (this.dualPage) {
+            // 双页：Text 绑定 @State leftText_/rightText_（由 @Watch pageIndex 刷新）
+            Row() {
+              Column() {
+                Text(this.leftText_)
+                  .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+                  .fontFamily(this.config.fontFamily)
+                  .fontWeight(this.getFontWeight())
+                  .lineHeight(this.config.fontSize * this.config.lineHeight)
+                  .letterSpacing(this.config.letterSpacing)
+                  .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                  .width('100%')
+                  .height('100%')
+                  .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+                  .copyOption(CopyOptions.LocalDevice)
+                  .editMenuOptions({
+                    onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+                    onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+                      if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+                        this.onAskKimi?.(this.leftText_.substring(range.start, range.end));
+                        return true;
+                      }
+                      return false;
+                    },
+                  } as EditMenuOptions)
+                  .onClick((event: ClickEvent) => {
+                    this.handleDualPaneClick_(event.x, event.y, 0);
+                  })
+              }
+              .layoutWeight(1).height('100%').clip(true)
+
+              Column()
+                .width(this.dualPageGutter)
+                .height('100%')
+                .backgroundColor(this.config.bgColor)
+                .onClick((event: ClickEvent) => {
+                  this.handleDualPaneClick_(event.x, event.y, this.dualPaneWidth_());
+                })
+
+              if (this.hasRightPage_) {
+                Column() {
+                  Text(this.rightText_)
+                    .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+                    .fontFamily(this.config.fontFamily)
+                    .fontWeight(this.getFontWeight())
+                    .lineHeight(this.config.fontSize * this.config.lineHeight)
+                    .letterSpacing(this.config.letterSpacing)
+                    .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                    .width('100%')
+                    .height('100%')
+                    .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+                    .copyOption(CopyOptions.LocalDevice)
+                    .editMenuOptions({
+                      onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+                      onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+                        if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+                          this.onAskKimi?.(this.rightText_.substring(range.start, range.end));
+                          return true;
+                        }
+                        return false;
+                      },
+                    } as EditMenuOptions)
+                    .onClick((event: ClickEvent) => {
+                      this.handleDualPaneClick_(
+                        event.x,
+                        event.y,
+                        this.dualPaneWidth_() + this.dualPageGutter
+                      );
+                    })
+                }
+                .layoutWeight(1).height('100%').clip(true)
+              } else {
+                Column()
+                  .layoutWeight(1)
+                  .height('100%')
+                  .onClick((event: ClickEvent) => {
+                    this.handleDualPaneClick_(
+                      event.x,
+                      event.y,
+                      this.dualPaneWidth_() + this.dualPageGutter
+                    );
+                  })
+              }
+            }
+            .width('100%')
+            .height('100%')
+          } else {
+            // 单页：同样绑定 @State leftText_
+            Text(this.leftText_)
+              .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+              .fontFamily(this.config.fontFamily)
+              .fontWeight(this.getFontWeight())
+              .lineHeight(this.config.fontSize * this.config.lineHeight)
+              .letterSpacing(this.config.letterSpacing)
+              .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+              .width('100%')
+              .height('100%')
+              .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+              .copyOption(CopyOptions.LocalDevice)
+              .editMenuOptions({
+                onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+                onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+                  if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+                    this.onAskKimi?.(this.leftText_.substring(range.start, range.end));
+                    return true;
+                  }
+                  return false;
+                },
+              } as EditMenuOptions)
+              .onClick((event: ClickEvent) => {
+                this.handleClick_(event.x, event.y);
+              })
+          }
+        }
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
+      .clip(true)
+      .onAreaChange((_old: Area, n: Area) => {
+        const w = typeof n.width === 'number' ? n.width : Number(n.width) || 0;
+        const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
+        if (w > 0) this.contentWidth = w;
+        if (h > 0) this.contentHeight = h;
+      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
@@ -371,12 +485,12 @@ export struct PageView {
     .onAreaChange((_old: Area, n: Area) => {
       this.pageWidth = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       this.pageHeight = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
-      console.info('[PageView] area w=' + this.pageWidth + ' h=' + this.pageHeight +
-        ' padTop=' + this.config.paddingTop + ' padBottom=' + this.config.paddingBottom +
-        ' showHeader=' + this.config.showHeader + ' showFooter=' + this.config.showFooter);
     })
   }
 
   private pageWidth: number = 0;
   private pageHeight: number = 0;
+  /** 正文内容区（layoutWeight 中间列）实测尺寸，九宫格以此为准 */
+  private contentWidth: number = 0;
+  private contentHeight: number = 0;
 }

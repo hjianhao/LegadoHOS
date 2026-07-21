@@ -1426,21 +1426,30 @@ struct ReadPage {
     }
   }
 
-  private onPrevChapter(): void {
+  /**
+   * 切到上一章。
+   * @param atEnd true：定位到上一章末尾（分页「上一页」跨章 / 滚动上滑跨章，连续阅读）
+   *             false：定位到上一章开头（显式「上一章」动作 / 进度条上一章）
+   */
+  private onPrevChapter(atEnd: boolean = false): void {
     if (this.currentIndex > 0) {
       const scrolled = this.flowMode === 'scrolled';
       if (scrolled) {
         // 滚动模式：切章进行中忽略新的翻章触发，防止并发切章互相 yank 滚动位置
         if (this.switchingChapter_) return;
         this.switchingChapter_ = true;
-        this.pendingScrollPos_ = 'end';
+        // 连续阅读回退到章末；显式上一章回到章首
+        this.pendingScrollPos_ = atEnd ? 'end' : 'start';
+      } else if (!atEnd) {
+        // 分页显式上一章：先置 0，避免 layoutText 仍按旧页码夹到末页闪一下
+        this.pageIndex = 0;
       }
       this.loadChapter(this.currentIndex - 1).then(() => {
         if (scrolled) {
-          // 滚动模式：定位到上一章章末（对齐分页模式翻到末页的行为）
           this.applyPendingScrollPos_();
         } else {
-          this.pageIndex = Math.max(0, this.pages.length - 1);
+          // 分页：显式上一章 → 第 1 页；上一页跨章 → 末页
+          this.pageIndex = atEnd ? Math.max(0, this.pages.length - 1) : 0;
         }
       });
     }
@@ -1539,23 +1548,50 @@ struct ReadPage {
   }
 
   /**
-   * 切换分页/滚动阅读模式。切到滚动模式时 Scroll 在 offset 0 处创建，
-   * 会立即触发 onReachStart 误翻上一章；创建期事件在一两帧内到达，短暂时间屏蔽即可。
+   * 切换分页/滚动阅读模式。
+   * - 切到滚动：Scroll 在 offset 0 创建会误触发 onReachStart，短暂屏蔽
+   * - 切到分页：必须立刻 layoutText，否则 isDualPage_ 仍是滚动期的 false，
+   *   双页要等到下次排版（如翻页后的尺寸回调）才出现
    */
   private onFlowModeChange_(mode: string): void {
     const normalized = mode === 'scrolled' ? 'scrolled' : 'paginated';
     if (this.flowMode === normalized) return;
+
+    // 切换前记住字符偏移，重新分页后尽量停在原阅读位置
+    if (this.pages.length > 0 && this.pageIndex >= 0 && this.pageIndex < this.pages.length) {
+      this.preserveCharOffset_ = this.pages[this.pageIndex].startOffset;
+    }
+
     this.flowMode = normalized;
     if (normalized === 'scrolled') {
       this.suppressReachUntil_ = Date.now() + 700;
+      // 确保从分页切回滚动时 Scroll 会重建
+      this.scrollAlive_ = true;
     }
+
+    // 立刻按新模式重算双页 + 重新分页（滚动期 dual 恒为 false，分页 dual 才生效）
+    if (this.text) {
+      this.layoutText(this.text);
+    } else {
+      this.isDualPage_ = this.computeDualPage_();
+    }
+    console.info('[ReadPage] flowMode=' + this.flowMode + ' dual=' + this.isDualPage_ +
+      ' pages=' + this.pages.length + ' pageIdx=' + this.pageIndex);
+
     // 持久化：退出再进入后保持上次设置的模式
     SettingsStore.getInstance()
       .init(UiUtil.getHostContext(this.getUIContext()))
       .then(() => SettingsStore.getInstance().put('read_flow_mode', normalized))
       .catch(() => {});
   }
-  private onPrevPage(): void { if (this.pageIndex > 0) this.pageIndex--; else this.onPrevChapter(); }
+  /** 上一页：章内回退；已在章首则跨到上一章末页（连续阅读） */
+  private onPrevPage(): void {
+    if (this.pageIndex > 0) {
+      this.pageIndex--;
+    } else {
+      this.onPrevChapter(true);
+    }
+  }
   private onNextPage(): void { if (this.pageIndex < this.pages.length - 1) this.pageIndex++; else this.onNextChapter(); }
 
   private onOpenToc(): void {
@@ -2291,7 +2327,8 @@ struct ReadPage {
             })
             .onReachStart(() => {
               if (Date.now() < this.suppressReachUntil_) return;
-              this.onPrevChapter();
+              // 滚动上滑跨章：落到上一章末尾
+              this.onPrevChapter(true);
             })
             .width('100%').height('100%')
           }
@@ -2313,7 +2350,9 @@ struct ReadPage {
             brightness: this.cfg.brightness, zhFormat: this.cfg.zhFormat, chineseMode: this.cfg.chineseMode,
           },
           onPageTurn: (ev: PageTurnEvent) => { this.onPageTurn(ev); },
-          onPrevChapter: () => { this.onPrevChapter(); },
+          // 触控「上一章」→ 章首；「上一页」跨章由 PageView 调 onPrevChapterAtEnd
+          onPrevChapter: () => { this.onPrevChapter(false); },
+          onPrevChapterAtEnd: () => { this.onPrevChapter(true); },
           onNextChapter: () => { this.onNextChapter(); },
           onShowMenu: () => { this.showMenu = true; },
           onShowToc: () => { this.onOpenToc(); },
@@ -2372,7 +2411,7 @@ struct ReadPage {
           ReadProgressBar({
             currentIndex: this.currentIndex,
             total: this.totalChapters_,
-            onPrevious: () => { this.showMenu = false; this.onPrevChapter(); },
+            onPrevious: () => { this.showMenu = false; this.onPrevChapter(false); },
             onNext: () => { this.showMenu = false; this.onNextChapter(); },
             onSeek: (index: number) => {
               this.showMenu = false;
@@ -2484,7 +2523,7 @@ struct ReadPage {
             onDismiss: () => { this.showAloud = false; },
             onGoToPosition: (charIdx: number, chapterIdx?: number) => { this.goToReadingPosition_(charIdx, chapterIdx); },
             onNextChapter: () => { this.showAloud = false; this.onNextChapter(); },
-            onPrevChapter: () => { this.showAloud = false; this.onPrevChapter(); },
+            onPrevChapter: () => { this.showAloud = false; this.onPrevChapter(false); },
           })
         }.width('100%').height('100%')
       }

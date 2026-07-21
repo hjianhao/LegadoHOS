@@ -74,6 +74,8 @@ interface WebReaderStyle {
   animType: number;
   flowMode: string;
   dualPage: boolean;
+  /** 双页中间页缝（px），对齐 SettingsStore read_dual_page_gutter */
+  dualPageGutter: number;
   pdfMode: string;
   pdfAutoCrop: boolean;
   pdfDarken: number;
@@ -165,6 +167,8 @@ struct ReaderPage {
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
   @State landscapeLayout_: string = 'single';
+  /** 双页中间页缝（vp/px），默认与 SettingsStore read_dual_page_gutter 一致 */
+  @State dualPageGutter_: number = 48;
   @State pdfMode: string = 'original';
   @State pdfOrientation: string = 'auto';
   @State pdfAutoCrop: boolean = false;
@@ -551,6 +555,12 @@ struct ReaderPage {
     this.readFollowTheme = await followThemePromise;
 	    this.flowMode = await flowModePromise === 'scrolled' ? 'scrolled' : 'paginated';
 	    this.landscapeLayout_ = await landscapeLayoutPromise;
+    try {
+      const gutter = await s.getReadDualPageGutter();
+      this.dualPageGutter_ = Number.isFinite(gutter) && gutter > 0 ? Math.min(120, Math.round(gutter)) : 48;
+    } catch (_e) {
+      this.dualPageGutter_ = 48;
+    }
     this.pdfAutoCrop = await pdfAutoCropPromise;
     this.pdfDarken = Math.min(100, Math.max(0, await pdfDarkenPromise));
     this.pdfWhiten = Math.min(100, Math.max(0, await pdfWhitenPromise));
@@ -1263,32 +1273,6 @@ struct ReaderPage {
       .catch(() => {});
   }
 
-  /** EPUB 双页模式是否激活 */
-  private isDualPageActive_(): boolean {
-    return !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual'
-      && this.flowMode !== 'scrolled';
-  }
-
-  /**
-   * 双页模式下翻页：调用 rendition.next() 两次（或 rendition.prev() 两次），
-   * 因为 epub.js 的 spread 模式下每次 next/prev 只翻一个虚拟页。
-   */
-  private epubNextPage_(): void {
-    if (!this.controllerAttached_) return;
-    // epub.js spread 模式下 rendition.next() 返回 Promise，
-    // 必须等第一次完成后再翻第二次，否则两个 next() 并行执行导致页面错位
-    this.controller.runJavaScript('window.nextPage && window.nextPage()', () => {
-      this.runJs_('window.nextPage && window.nextPage()');
-    });
-  }
-
-  private epubPrevPage_(): void {
-    if (!this.controllerAttached_) return;
-    this.controller.runJavaScript('window.prevPage && window.prevPage()', () => {
-      this.runJs_('window.prevPage && window.prevPage()');
-    });
-  }
-
   private onPdfModeChange_(mode: string): void {
     const normalized = mode === 'reflow' ? 'reflow' : 'original';
     if (this.pdfMode === normalized) return;
@@ -1370,6 +1354,7 @@ struct ReaderPage {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
       dualPage: !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual',
+      dualPageGutter: this.dualPageGutter_,
       pdfMode: this.pdfMode,
       pdfAutoCrop: this.pdfAutoCrop,
       pdfDarken: this.pdfDarken,
@@ -1485,6 +1470,38 @@ struct ReaderPage {
     this.doReaderAction_(action, tap.zone);
   }
 
+  /**
+   * 拦截层点击：epub.js 先做链接命中（WebView 触摸被挡住时唯一通路），
+   * 未命中再执行九宫格动作。
+   */
+  private handleOverlayTap_(x: number, y: number, action: number, zone: number): void {
+    // PDF / foliate 走各自逻辑；epub.js 需要链接命中
+    if (this.isFoliate_ || this.isPdf_ || !this.controllerAttached_) {
+      this.doReaderAction_(action, zone);
+      return;
+    }
+    const js = 'window.hitTestLinkAt ? window.hitTestLinkAt(' +
+      Number(x).toFixed(2) + ',' + Number(y).toFixed(2) + ') : "0"';
+    try {
+      this.controller.runJavaScript(js, (err: BusinessError, result: string) => {
+        if (!err && this.isLinkHitResult_(result)) {
+          console.info('[ReaderPage] overlay tap hit link x=' + x.toFixed(1) + ' y=' + y.toFixed(1));
+          return;
+        }
+        this.doReaderAction_(action, zone);
+      });
+    } catch (_e) {
+      this.doReaderAction_(action, zone);
+    }
+  }
+
+  private isLinkHitResult_(result: string): boolean {
+    if (!result) return false;
+    const t = result.trim();
+    // JS 可能返回 1 / "1" / '"1"'
+    return t === '1' || t === '"1"' || t === "'1'";
+  }
+
   /** 按动作代码执行读者操作（用于 WebView 拦截层和 bridge.js 回调） */
   private doReaderAction_(action: number, zone?: number): void {
     console.info(`[ReaderPage] reader action=${action} zone=${zone ?? -1}`);
@@ -1495,18 +1512,11 @@ struct ReaderPage {
         this.showMenu = true;
         break;
       case ClickAction.NEXT_PAGE:
-        if (this.isDualPageActive_()) {
-          this.epubNextPage_();
-        } else {
-          this.runJs_('window.nextPage && window.nextPage()');
-        }
+        // epub.js spread 下 next() 已按整屏（两栏）步进，只需一次
+        this.runJs_('window.nextPage && window.nextPage()');
         break;
       case ClickAction.PREV_PAGE:
-        if (this.isDualPageActive_()) {
-          this.epubPrevPage_();
-        } else {
-          this.runJs_('window.prevPage && window.prevPage()');
-        }
+        this.runJs_('window.prevPage && window.prevPage()');
         break;
       case ClickAction.NEXT_CHAPTER:
         this.goToChapterIndex_(this.currentIndex + 1);
@@ -1564,13 +1574,13 @@ struct ReaderPage {
 	        this.LoadingLayer()
 	      }
 
-      // 透明触摸拦截层：WebView 的 ArkUI 手势识别器拦截了 DOM 触摸事件，
-      // 导致 bridge.js 的 touchstart/touchend 无法触发。
-      // 拦截触摸后按 9 宫格区域 + zoneActions 配置分发动作。
+      // 触摸层：只绑短按（九宫格 + 链接命中），不要用 Block。
+      // Block 会吞掉全部触摸，导致长按选字/系统文本菜单无法触发。
+      // Transparent：本层可响应 Tap，下层 WebView 仍可收到长按做原生选择。
       if (!this.showMenu && !this.isLoading) {
         Column()
           .width('100%').height('100%')
-          .hitTestBehavior(HitTestMode.Block)
+          .hitTestBehavior(HitTestMode.Transparent)
           .gesture(
             TapGesture({ count: 1 })
               .onAction((event: GestureEvent) => {
@@ -1578,9 +1588,10 @@ struct ReaderPage {
                 const h = WindowLayout.heightVp > 0 ? WindowLayout.heightVp : 640;
                 const touch = event.fingerList?.[0];
                 if (!touch) { this.showMenu = true; return; }
-                const x = touch.localX; const y = touch.localY;
-                // 按 9 宫格计算区域（与 PageView.handleClick_ 一致）
-                const x3 = w / 3; const y3 = h / 3;
+                const x = touch.localX;
+                const y = touch.localY;
+                const x3 = w / 3;
+                const y3 = h / 3;
                 let zone: number = 4;
                 if (y < y3) {
                   zone = x < x3 ? 0 : (x > w - x3 ? 2 : 1);
@@ -1591,7 +1602,7 @@ struct ReaderPage {
                 }
                 const actions = this.zoneActions.length === 9 ? this.zoneActions : [];
                 const action = actions[zone] ?? -1;
-                this.doReaderAction_(action, zone);
+                this.handleOverlayTap_(x, y, action, zone);
               })
           )
       }

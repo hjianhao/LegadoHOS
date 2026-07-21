@@ -1,5 +1,6 @@
 /** 阅读底部高频菜单。搜索、书签及网络工具由顶部菜单承载。 */
 import { ThemeColors } from '../../theme/ThemeColors';
+import { ReaderInsets } from '../../util/ReaderInsets';
 
 @Component
 export struct ReadBottomMenu {
@@ -34,7 +35,7 @@ export struct ReadBottomMenu {
       }.height(48).layoutWeight(1).justifyContent(FlexAlign.Center)
       .accessibilityText($r('app.string.ui_bc0832465e')).onClick(() => { this.onSettings?.() })
     }.width('100%').justifyContent(FlexAlign.SpaceAround)
-    .padding({top: 12, bottom: 16, left: 8, right: 8})
+    .padding({ top: 12, bottom: ReaderInsets.sheetBottomPad(), left: 8, right: 8 })
     .backgroundColor(ThemeColors.surface(this.isDark))
   }
 }

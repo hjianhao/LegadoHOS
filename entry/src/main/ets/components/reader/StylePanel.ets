@@ -4,6 +4,7 @@
 import { PageViewConfig, PageTurnAnim } from './PageView';
 import { ThemeColors } from '../../theme/ThemeColors';
 import { FontInfo } from '../../utils/FontManager';
+import { ReaderInsets } from '../../util/ReaderInsets';
 
 @Component
 export struct StylePanel {
@@ -55,21 +56,35 @@ export struct StylePanel {
         Text($r('app.string.ui_3de1b2251f')).fontSize(16).fontWeight(FontWeight.Bold).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1).textAlign(TextAlign.Start)
         Button($r('app.string.ui_0951b9a022')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).backgroundColor(ThemeColors.transparent())
           .accessibilityText($r('app.string.common_close')).onClick(() => { this.onDismiss?.(); })
-      }.width('100%').padding({ left: 12, right: 12, top: 8 })
+      }.width('100%').padding({ left: 12, right: 12, top: 8, bottom: 4 })
 
       // Tab 栏
       Row() {
         this.tabBtn('字体', 0); this.tabBtn('间距', 1); this.tabBtn('边距', 2); this.tabBtn('颜色', 3); this.tabBtn('其他', 4)
-      }.width('100%').padding({ top: 2 })
+      }.width('100%').padding({ top: 2, bottom: 4 })
 
-      // 内容
-      if (this.activeTab === 0) { this.buildFont() }
-      else if (this.activeTab === 1) { this.buildSpacing() }
-      else if (this.activeTab === 2) { this.buildPadding() }
-      else if (this.activeTab === 3) { this.buildColors() }
-      else if (this.activeTab === 4) { this.buildOther() }
+      // 内容区限高 + 可滚动，避免最后一项滑条落入系统手势导航带
+      Scroll() {
+        Column() {
+          if (this.activeTab === 0) { this.buildFont() }
+          else if (this.activeTab === 1) { this.buildSpacing() }
+          else if (this.activeTab === 2) { this.buildPadding() }
+          else if (this.activeTab === 3) { this.buildColors() }
+          else if (this.activeTab === 4) { this.buildOther() }
+        }
+        .width('100%')
+        .padding({ bottom: 8 })
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: ReaderInsets.sheetContentMaxHeight() })
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
+      .align(Alignment.Top)
     }
-    .width('100%').backgroundColor(ThemeColors.surface(this.isDark)).borderRadius({ topLeft: 16, topRight: 16 }).padding({ left: 8, right: 8 })
+    .width('100%')
+    .backgroundColor(ThemeColors.surface(this.isDark))
+    .borderRadius({ topLeft: 16, topRight: 16 })
+    .padding({ left: 8, right: 8, bottom: ReaderInsets.sheetBottomPad() })
   }
 
   @Builder tabBtn(label: string, idx: number) {
@@ -185,7 +200,7 @@ export struct StylePanel {
       Slider({ value: this.cfg.paddingRight, min: 0, max: 40, step: 2 }).layoutWeight(1).margin({ left: 4, right: 4 })
         .onChange((v: number) => { this.cfg.paddingRight = v; this.emitChange(); })
       Text(String(this.cfg.paddingRight)).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width(30).textAlign(TextAlign.End)
-    }.width('100%').margin({ bottom: 6 })
+    }.width('100%').margin({ bottom: 12 })
   }
 
   // ===== 颜色 =====

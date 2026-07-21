@@ -7,6 +7,7 @@ import { ClickAction, ACTION_LABELS, DEFAULT_ZONE_ACTIONS } from './ClickAction'
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { UiUtil } from '../../util/UiUtil';
 import { ThemeColors } from '../../theme/ThemeColors';
+import { ReaderInsets } from '../../util/ReaderInsets';
 
 @Component
 export struct ClickActionConfig {
@@ -151,7 +152,8 @@ export struct ClickActionConfig {
         })
     }
     .width('100%').backgroundColor(ThemeColors.surface(this.isDark))
-    .borderRadius({ topLeft: 16, topRight: 16 }).padding({ bottom: 12 })
+    .borderRadius({ topLeft: 16, topRight: 16 })
+    .padding({ bottom: ReaderInsets.sheetBottomPad() })
   }
 
   // ===== 阅读模式选择项 =====

@@ -23,9 +23,15 @@
   var ACTION_NEXT_PAGE = 1;
   var ACTION_PREV_PAGE = 2;
   var BOOK_FONT_FAMILY = '__book__';
+  // 单页无 column-gap；双页用 gutter 作为两页中间的页缝。
+  // 翻页对齐靠 alignToSpreadBoundary + 不覆盖左右 padding，而不是强制 gap=0。
   var PAGE_GAP = 0;
+  var DEFAULT_DUAL_PAGE_GAP = 48;
   var livePageFrame = 0;
   var lastLivePageKey = '';
+  var activeFlowMode = '';
+  var activeSpreadMode = '';
+  var activeLayoutGap = -1;
 
   function emit(type, data) {
     eventQueue.push({ type: type, data: data || {}, time: Date.now() });
@@ -207,20 +213,18 @@
   function applyRootStyle() {
     var v = currentStyleValues();
     var bg = v.bg;
-    var isDual = currentStyle.dualPage === true;
     document.documentElement.style.backgroundColor = bg;
     document.body.style.backgroundColor = bg;
     var frame = document.getElementById('reader-frame');
     if (frame) {
       frame.style.backgroundColor = bg;
-      // 双页模式下减少 padding，让两页有更多可用宽度
-      if (isDual) {
-        frame.style.paddingLeft = Math.min(v.pl, 8) + 'px';
-        frame.style.paddingRight = Math.min(v.pr, 8) + 'px';
-      } else {
-        frame.style.paddingLeft = v.pl + 'px';
-        frame.style.paddingRight = v.pr + 'px';
-      }
+      // 左右边距作用在外层 frame，不写进 iframe body：
+      // body 左右 padding 由 epub.js columns() 用于双页 column-gap，覆盖会破坏分栏对齐。
+      // 单页 / 双页均尊重风格设置的 paddingLeft / paddingRight。
+      frame.style.paddingLeft = Math.max(0, v.pl) + 'px';
+      frame.style.paddingRight = Math.max(0, v.pr) + 'px';
+      frame.style.paddingTop = '0px';
+      frame.style.paddingBottom = '0px';
       frame.style.boxSizing = 'border-box';
     }
     var viewer = document.getElementById('viewer');
@@ -292,6 +296,7 @@
     var v = currentStyleValues();
     var isDual = currentStyle.dualPage === true;
     var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
+    // 只设上下 padding，左右留给 epub.js columns() 控制，避免破坏双页分栏对齐
     var bodyRule = {
       'background': v.bg + ' !important',
       'color': v.color + ' !important',
@@ -301,7 +306,8 @@
       'letter-spacing': v.letterSpacing + 'px !important',
       'text-align': v.textAlign + ' !important',
       'box-sizing': 'border-box !important',
-      'padding': v.pt + 'px 0 ' + v.pb + 'px 0 !important'
+      'padding-top': v.pt + 'px !important',
+      'padding-bottom': v.pb + 'px !important'
     };
     var bodyAllRule = {
       'box-sizing': 'border-box !important',
@@ -368,21 +374,21 @@
 	  var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
 	  var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
 
+	  // 上下 padding 用 !important；左右不写，保留 epub.js 的 column gap 半宽 padding
 	  style.textContent =
 	    fontFaceCss() +
 	    'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
 	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
 	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
 	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
+	    'box-sizing:border-box !important;padding-top:' + v.pt + 'px !important;padding-bottom:' + v.pb + 'px !important;}' +
 	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
 	    'letter-spacing:' + v.letterSpacing + 'px !important;}' +
 	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
 	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
 	    'img,svg{max-width:100% !important;max-height:' + imgMaxH + ' !important;object-fit:contain !important;' +
 	    'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
-	    'table{max-width:100% !important;}a{color:inherit !important;}' +
-	    '.epub-container{max-width:100% !important;}';
+	    'table{max-width:100% !important;}a{color:inherit !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
     if (doc.body) {
@@ -398,8 +404,9 @@
       doc.body.style.lineHeight = String(v.lineHeight);
       doc.body.style.letterSpacing = v.letterSpacing + 'px';
       doc.body.style.boxSizing = 'border-box';
-      doc.body.style.paddingLeft = '0px';
-      doc.body.style.paddingRight = '0px';
+      // 不要清掉 paddingLeft/Right：epub.js columns() 依赖它们做双页列间距
+      doc.body.style.paddingTop = v.pt + 'px';
+      doc.body.style.paddingBottom = v.pb + 'px';
     }
   }
 
@@ -752,13 +759,38 @@
     }, 120);
   }
 
+  function dualPageEnabled() {
+    if (cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') return false;
+    return currentStyle.dualPage === true;
+  }
+
+  /** 双页中间页缝宽度（px），与原生 PageView dualPageGutter 默认 48 对齐 */
+  function dualPageGap() {
+    var g = Number(currentStyle.dualPageGutter);
+    if (!Number.isFinite(g) || g < 0) g = DEFAULT_DUAL_PAGE_GAP;
+    if (g > 120) g = 120;
+    // 偶数更利于 epub.js 半 gap padding 对称
+    return Math.round(g / 2) * 2;
+  }
+
+  function currentLayoutSettings() {
+    var dual = dualPageEnabled();
+    return {
+      // always：用户显式开双页时强制两栏，不依赖 minSpreadWidth 阈值
+      spread: dual ? 'always' : 'none',
+      minSpreadWidth: dual ? 1 : 999999,
+      gap: dual ? dualPageGap() : PAGE_GAP
+    };
+  }
+
   function resizeRenditionSoon() {
     if (!rendition) return;
     var run = function () {
       try {
-        syncLayoutSettings();
+        applySpreadLayout();
         rendition.resize();
         syncLayoutSettings();
+        alignToSpreadBoundary();
       } catch (e) {}
     };
     try {
@@ -771,47 +803,101 @@
     }
   }
 
-	function syncLayoutSettings() {
-	  if (!rendition) return;
-	  var isDual = currentStyle.dualPage === true;
-	  try {
-	    if (rendition.settings) {
-	      rendition.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e) {}
-	  try {
-	    if (rendition.manager && rendition.manager.settings) {
-	      rendition.manager.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.manager.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.manager.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e2) {}
-	  try {
-	    if (rendition.layout && rendition.layout.settings) {
-	      rendition.layout.settings.gap = isDual ? 24 : PAGE_GAP;
-	      rendition.layout.settings.spread = isDual ? 'auto' : 'none';
-	      rendition.layout.settings.minSpreadWidth = isDual ? 840 : 999999;
-	    }
-	  } catch (e3) {}
-	}
+  function syncLayoutSettings() {
+    if (!rendition) return;
+    var layoutSettings = currentLayoutSettings();
+    try {
+      if (rendition.settings) {
+        rendition.settings.gap = layoutSettings.gap;
+        rendition.settings.spread = layoutSettings.spread;
+        rendition.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
+      }
+    } catch (e) {}
+    try {
+      if (rendition.manager && rendition.manager.settings) {
+        rendition.manager.settings.gap = layoutSettings.gap;
+        rendition.manager.settings.spread = layoutSettings.spread;
+        rendition.manager.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
+      }
+    } catch (e2) {}
+    try {
+      var liveLayout = (rendition.manager && rendition.manager.layout) || rendition.layout;
+      if (liveLayout) {
+        if (liveLayout.settings) {
+          liveLayout.settings.gap = layoutSettings.gap;
+          liveLayout.settings.spread = layoutSettings.spread;
+          liveLayout.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
+        }
+        // 直接驱动 Layout 内部 _spread / _minSpreadWidth
+        if (typeof liveLayout.spread === 'function') {
+          liveLayout.spread(layoutSettings.spread, layoutSettings.minSpreadWidth);
+        }
+      }
+    } catch (e3) {}
+  }
+
+  function applySpreadLayout() {
+    if (!rendition) return;
+    var layoutSettings = currentLayoutSettings();
+    var layoutChanged = activeSpreadMode !== layoutSettings.spread
+      || activeLayoutGap !== layoutSettings.gap;
+    syncLayoutSettings();
+    try {
+      if (rendition.spread) {
+        rendition.spread(layoutSettings.spread, layoutSettings.minSpreadWidth);
+      }
+    } catch (e) {}
+    activeSpreadMode = layoutSettings.spread;
+    activeLayoutGap = layoutSettings.gap;
+    if (layoutChanged) {
+      try {
+        if (rendition.manager && rendition.manager.updateLayout) {
+          rendition.manager.updateLayout();
+        }
+      } catch (e2) {}
+    }
+  }
+
+  /**
+   * 将 scrollLeft 对齐到 delta 整数倍。
+   * 双页下若 scroll 停在半栏位置，会看到「半页 | 整页 | 半页」。
+   */
+  function alignToSpreadBoundary() {
+    if (!rendition || !dualPageEnabled()) return;
+    try {
+      var manager = rendition.manager;
+      var container = manager && manager.container;
+      var layout = manager && manager.layout;
+      var delta = Number(layout && layout.delta || 0);
+      var currentLeft = Number(container && container.scrollLeft || 0);
+      if (!manager || !container || delta <= 0) return;
+      var alignedLeft = Math.round(currentLeft / delta) * delta;
+      if (Math.abs(alignedLeft - currentLeft) > 1) {
+        if (typeof manager.scrollTo === 'function') {
+          manager.scrollTo(alignedLeft, Number(container.scrollTop || 0), true);
+        } else {
+          container.scrollLeft = alignedLeft;
+        }
+      }
+    } catch (e) {}
+  }
 
   function applyFlowLayout() {
     if (!rendition) return;
     var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
-    var isDual = currentStyle.dualPage === true && !scrolled;
-    syncLayoutSettings();
+    var flowMode = scrolled ? 'scrolled-doc' : 'paginated';
+    if (activeFlowMode !== flowMode) {
+      try {
+        if (rendition.flow) rendition.flow(flowMode);
+      } catch (e) {}
+      activeFlowMode = flowMode;
+    }
+    applySpreadLayout();
     try {
-      if (rendition.spread) rendition.spread(isDual ? 'auto' : 'none', isDual ? 840 : 999999);
-    } catch (e) {}
-    try {
-      if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
+      if (rendition.manager && rendition.manager.updateLayout) {
+        rendition.manager.updateLayout();
+      }
     } catch (e2) {}
-    syncLayoutSettings();
-    try {
-      if (rendition.manager && rendition.manager.updateLayout) rendition.manager.updateLayout();
-    } catch (e3) {}
   }
 
   function setupContentHook() {
@@ -844,6 +930,8 @@
     });
 
     rendition.on('relocated', function (location) {
+      // 跳转 / 翻页后兜底对齐，避免停在半栏位置
+      alignToSpreadBoundary();
       if (!location) return;
       var start = location.start || {};
       var displayed = start.displayed || {};
@@ -912,18 +1000,19 @@
     var displayTarget = target || undefined;
     var promise = rendition.display(displayTarget);
     return Promise.resolve(promise).then(function () {
-      // epub.js 的 spread 模式在首次 display 后可能不生效，
-      // 强制重新应用布局和 resize 以触发双页渲染
+      // epub.js 的 spread 在首次 display 后可能未生效，强制刷新布局
       applyFlowLayout();
       syncLayoutSettings();
-      rendition.resize();
+      try { rendition.resize(); } catch (e) {}
+      alignToSpreadBoundary();
       return promise;
     }).catch(function (err) {
       if (!displayTarget) throw err;
       emit('debug', { message: 'display target failed, fallback to first spine: ' + errorMessage(err) });
       return rendition.display().then(function () {
         applyFlowLayout();
-        rendition.resize();
+        try { rendition.resize(); } catch (e2) {}
+        alignToSpreadBoundary();
       });
     });
   }
@@ -936,16 +1025,19 @@
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
-	      book = ePub(bookUrl);
-	      var isDual = currentStyle.dualPage === true;
-	      rendition = book.renderTo('viewer', {
-	        width: '100%',
-	        height: '100%',
-	        manager: 'default',
-	        spread: isDual ? 'auto' : 'none',
-	        minSpreadWidth: isDual ? 840 : 999999,
-	        evenSpreads: false,
-	        gap: isDual ? 24 : PAGE_GAP,
+      activeFlowMode = '';
+      activeSpreadMode = '';
+      activeLayoutGap = -1;
+      book = ePub(bookUrl);
+      var layoutSettings = currentLayoutSettings();
+      rendition = book.renderTo('viewer', {
+        width: '100%',
+        height: '100%',
+        manager: 'default',
+        spread: layoutSettings.spread,
+        minSpreadWidth: layoutSettings.minSpreadWidth,
+        evenSpreads: false,
+        gap: layoutSettings.gap,
         flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();
@@ -956,6 +1048,7 @@
       emitBookInfo();
 
       displayBook(target).then(function () {
+        alignToSpreadBoundary();
         loading(false);
         emit('ready', {});
       }).catch(function (err) {
@@ -1014,8 +1107,10 @@
       var needNextChapter = scrollCurrentBy_(1);
       if (!needNextChapter) return;
     }
+    // epub.js spread 模式下 next() 已按 layout.delta（整屏=两栏）滚动，只需调用一次
     var result = rendition.next();
     Promise.resolve(result).then(function () {
+      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'nextPage failed: ' + errorMessage(err) });
@@ -1031,6 +1126,7 @@
     }
     var result = rendition.prev();
     Promise.resolve(result).then(function () {
+      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'prevPage failed: ' + errorMessage(err) });
@@ -1042,8 +1138,254 @@
   };
 
   window.goToHref = function (href) {
-    if (rendition && href) rendition.display(href);
+    if (!rendition || !href) return;
+    navigateInternalHref_(href);
   };
+
+  /**
+   * 在 (clientX, clientY) 处命中检测 a[href]。
+   * 供 ArkTS 触摸层调用：命中则内部跳转并返回 "1"，否则返回 "0"。
+   */
+  window.hitTestLinkAt = function (clientX, clientY) {
+    try {
+      var x = Number(clientX);
+      var y = Number(clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return '0';
+
+      var href = findLinkHrefAt_(x, y);
+      if (!href) return '0';
+
+      if (/^(https?:|mailto:|tel:)/i.test(href)) {
+        emit('externalLink', { href: href });
+        return '1';
+      }
+      if (/^javascript:/i.test(href)) return '0';
+
+      if (navigateInternalHref_(href)) return '1';
+      return '0';
+    } catch (e) {
+      emit('debug', { message: 'hitTestLinkAt failed: ' + errorMessage(e) });
+      return '0';
+    }
+  };
+
+  function findLinkHrefAt_(clientX, clientY) {
+    function linkFromElement(el) {
+      while (el && el.nodeType === 1) {
+        if (String(el.tagName || '').toLowerCase() === 'a') {
+          var h = el.getAttribute('href');
+          if (h) return h;
+        }
+        el = el.parentElement;
+      }
+      return '';
+    }
+
+    function searchDoc(doc, x, y) {
+      if (!doc || !doc.elementFromPoint) return '';
+      var el = null;
+      try {
+        el = doc.elementFromPoint(x, y);
+      } catch (e) {
+        return '';
+      }
+      if (!el) return '';
+      var tag = String(el.tagName || '').toLowerCase();
+      if (tag === 'iframe') {
+        try {
+          var rect = el.getBoundingClientRect();
+          var idoc = el.contentDocument;
+          if (idoc) {
+            var nested = searchDoc(idoc, x - rect.left, y - rect.top);
+            if (nested) return nested;
+          }
+        } catch (e2) {}
+      }
+      return linkFromElement(el);
+    }
+
+    var href = searchDoc(document, clientX, clientY);
+    if (href) return href;
+
+    try {
+      var iframes = document.querySelectorAll('iframe');
+      for (var i = 0; i < iframes.length; i++) {
+        var fr = iframes[i];
+        var r = fr.getBoundingClientRect();
+        if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) {
+          continue;
+        }
+        try {
+          var idoc = fr.contentDocument;
+          if (!idoc) continue;
+          href = searchDoc(idoc, clientX - r.left, clientY - r.top);
+          if (href) return href;
+        } catch (e3) {}
+      }
+    } catch (e4) {}
+
+    return '';
+  }
+
+  /** 当前阅读章节在 spine 中的路径（含目录前缀，如 Text/part0151.xhtml） */
+  function currentSectionHref_() {
+    try {
+      if (rendition && rendition.location && rendition.location.start && book && book.spine) {
+        var section = book.spine.get(rendition.location.start.index);
+        if (section && section.href) return section.href;
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  /**
+   * 解析 EPUB 内链相对路径。
+   * 例：当前 Text/part0151.xhtml，链接 part0151.xhtml#notef1
+   * → Text/part0151.xhtml#notef1（否则 spine.get 报 No Section Found）
+   */
+  function resolveHrefForDisplay_(href) {
+    if (!href) return href;
+    if (/^(https?:|mailto:|tel:|epubcfi\()/i.test(href)) return href;
+
+    var baseHref = currentSectionHref_();
+
+    // section.resolve（epub.js 内置）
+    try {
+      if (book && book.spine && rendition && rendition.location && rendition.location.start) {
+        var sec = book.spine.get(rendition.location.start.index);
+        if (sec && typeof sec.resolve === 'function') {
+          var resolvedBySection = sec.resolve(href);
+          if (resolvedBySection) return resolvedBySection;
+        }
+      }
+    } catch (e) {}
+
+    // book.resolve
+    try {
+      if (book && typeof book.resolve === 'function') {
+        var resolvedByBook = book.resolve(href, false);
+        if (resolvedByBook) {
+          // book.resolve 可能返回绝对 URL，取 path 部分
+          var asPath = String(resolvedByBook);
+          var pathMatch = asPath.match(/\/book\/(.+)$/) || asPath.match(/OEBPS\/(.+)$/i);
+          if (pathMatch) return pathMatch[1] + (href.indexOf('#') >= 0 && pathMatch[1].indexOf('#') < 0
+            ? href.slice(href.indexOf('#')) : '');
+          if (asPath.indexOf('://') < 0) return asPath;
+        }
+      }
+    } catch (e2) {}
+
+    return resolveRelativePath_(baseHref, href);
+  }
+
+  function resolveRelativePath_(baseHref, href) {
+    var hash = '';
+    var path = String(href || '');
+    var hi = path.indexOf('#');
+    if (hi >= 0) {
+      hash = path.slice(hi);
+      path = path.slice(0, hi);
+    }
+    // 纯锚点
+    if (!path) {
+      return (baseHref || '').split('#')[0] + hash;
+    }
+    // 去掉开头 /
+    if (path.charAt(0) === '/') path = path.slice(1);
+
+    var baseDir = '';
+    if (baseHref) {
+      var clean = String(baseHref).split('#')[0];
+      var slash = clean.lastIndexOf('/');
+      baseDir = slash >= 0 ? clean.slice(0, slash + 1) : '';
+    }
+
+    var combined = baseDir + path;
+    var parts = combined.split('/');
+    var stack = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p || p === '.') continue;
+      if (p === '..') {
+        if (stack.length) stack.pop();
+        continue;
+      }
+      stack.push(p);
+    }
+    var resolved = stack.join('/') + hash;
+
+    // 用 spine 校验 / 按文件名回退匹配
+    if (book && book.spine) {
+      var noHash = resolved.split('#')[0];
+      try {
+        if (book.spine.get(resolved) || book.spine.get(noHash)) return resolved;
+      } catch (e3) {}
+      var fileName = noHash.split('/').pop();
+      if (fileName) {
+        for (var j = 0; j < book.spine.length; j++) {
+          try {
+            var s = book.spine.get(j);
+            if (!s || !s.href) continue;
+            var sh = s.href.split('#')[0];
+            var sn = sh.split('/').pop();
+            if (sh === noHash || sh === fileName || sn === fileName ||
+                sh.endsWith('/' + fileName)) {
+              return sh + hash;
+            }
+          } catch (e4) {}
+        }
+      }
+    }
+    return resolved;
+  }
+
+  function navigateInternalHref_(href) {
+    if (!rendition || !href) return false;
+    try {
+      var target = resolveHrefForDisplay_(href);
+      emit('debug', { message: 'navigate link raw=' + href + ' resolved=' + target });
+
+      // 优先校验 spine，避免 display 抛 No Section Found
+      var pathOnly = String(target).split('#')[0];
+      var sectionOk = false;
+      if (book && book.spine) {
+        try {
+          sectionOk = !!(book.spine.get(pathOnly) || book.spine.get(target));
+        } catch (e) {
+          sectionOk = false;
+        }
+        if (!sectionOk) {
+          // 再试一次按文件名匹配
+          var retry = resolveRelativePath_(currentSectionHref_(), href);
+          if (retry !== target) {
+            target = retry;
+            pathOnly = String(target).split('#')[0];
+            try {
+              sectionOk = !!(book.spine.get(pathOnly) || book.spine.get(target));
+            } catch (e2) {}
+          }
+        }
+      }
+
+      if (!sectionOk && pathOnly) {
+        emit('debug', { message: 'navigate href no spine section: ' + target });
+        // 仍尝试 display，部分版本可接受 canonical
+      }
+
+      var result = rendition.display(target);
+      Promise.resolve(result).then(function () {
+        try { applyFlowLayout(); } catch (e3) {}
+        alignToSpreadBoundary();
+        applyToCurrentContentsSoon();
+      }).catch(function (err) {
+        emit('debug', { message: 'navigate href failed: ' + errorMessage(err) + ' href=' + target });
+      });
+      return true;
+    } catch (e4) {
+      emit('debug', { message: 'navigate href error: ' + errorMessage(e4) });
+      return false;
+    }
+  }
 
   window.applyStyle = function (style) {
     currentStyle = parseStyle(style);

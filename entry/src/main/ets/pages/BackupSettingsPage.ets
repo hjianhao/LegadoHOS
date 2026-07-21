@@ -50,7 +50,12 @@ export struct BackupSettingsPage {
   private async loadPassword(): Promise<void> {
     try {
       const s = SettingsStore.getInstance();
-      try { await s.init(UiUtil.getHostContext(this.getUIContext())); } catch (_) {}
+      // aboutToAppear 中 getUIContext 可能不可用，尝试多种方式获取 Context
+      try { await s.init(UiUtil.getHostContext(this.getUIContext())); } catch (_) {
+        try { await s.init(getContext(this) as Context); } catch (_2) {
+          try { await s.init(globalThis.getContext() as Context); } catch (_3) {}
+        }
+      }
       this.webDavPwd = await s.getWebDavPassword();
     } catch (_) { /* ignore */ }
   }
@@ -86,6 +91,8 @@ export struct BackupSettingsPage {
   private async testConnection(): Promise<void> {
     this.isBusy = true;
     this.statusText = '测试连接中...';
+    // 确保密码已加载
+    if (!this.webDavPwd) await this.loadPassword();
     this.applyWebDavConfig();
     try {
       const ok = await WebDavService.getInstance().testConnection();
