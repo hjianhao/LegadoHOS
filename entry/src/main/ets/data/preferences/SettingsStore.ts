@@ -329,16 +329,9 @@ export class SettingsStore {
 
   // ---- 横屏排版设置 ----
 
-  /** 横屏排版模式：'auto'（自动） | 'single'（单页居中） | 'dual'（双页） */
+  /** 横屏排版模式：'auto'（自动） | 'single'（单页铺满） | 'dual'（双页） */
   async getReadLandscapeLayout(): Promise<string> { return await this.get('read_landscape_layout', 'auto'); }
   async setReadLandscapeLayout(v: string): Promise<void> { await this.put('read_landscape_layout', v); }
-
-  /**
-   * 横屏单页模式下的正文最大宽度（vp），0 表示不限。
-   * 默认 800vp，用户可调 400-1200。
-   */
-  async getReadMaxContentWidth(): Promise<number> { return await this.get('read_max_content_width', 800); }
-  async setReadMaxContentWidth(v: number): Promise<void> { await this.put('read_max_content_width', v); }
 
   /** 双页模式中间页缝宽度（vp），默认 8 */
   async getReadDualPageGutter(): Promise<number> { return await this.get('read_dual_page_gutter', 8); }

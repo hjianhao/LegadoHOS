@@ -118,14 +118,10 @@ struct ReadPage {
   @State flowMode: string = 'paginated';
   /** 横屏排版模式：'auto' | 'single' | 'dual' */
   @State landscapeLayout_: string = 'auto';
-  /** 横屏单页模式下正文最大宽度（vp），0=不限 */
-  @State maxContentWidth_: number = 600;
   /** 双页模式中间页缝宽度（vp） */
   @State dualPageGutter_: number = 8;
   /** 当前是否实际使用双页渲染（由 landscapeLayout_ + 窗口尺寸+ 流模式综合判断） */
   @State isDualPage_: boolean = false;
-  /** 当前是否实际使用单页限宽居中 */
-  @State isCenteredSingle_: boolean = false;
   /** 重排版前保存的字符偏移，用于旋转/尺寸变化后恢复阅读位置 */
   private preserveCharOffset_: number = -1;
   /** 滚动模式：正文 Scroll 控制器 */
@@ -379,7 +375,6 @@ struct ReadPage {
 	    this.flowMode = await s.get<string>('read_flow_mode', 'paginated') === 'scrolled' ? 'scrolled' : 'paginated';
 	    // 横屏排版设置
 	    this.landscapeLayout_ = await s.getReadLandscapeLayout();
-	    this.maxContentWidth_ = await s.getReadMaxContentWidth();
 	    this.dualPageGutter_ = await s.getReadDualPageGutter();
 	    // 单本书覆盖
 	    if (this.bookUrl && await s.getReadRememberPerBook()) {
@@ -1225,32 +1220,19 @@ struct ReadPage {
     return false;
   }
 
-  /**
-   * 判断是否应使用单页限宽居中模式。
-   * 横屏且非双页时，正文最大宽度受 maxContentWidth_ 限制并居中。
-   */
-  private computeCenteredSingle_(): boolean {
-    if (this.isDualPage_) return false;
-    if (!WindowLayout.isLandscape) return false;
-    return this.maxContentWidth_ > 0 && this.pageW > this.maxContentWidth_;
-  }
-
   /** 计算传入 TextLayout 的有效分页宽度 */
   private effectiveLayoutWidth_(): number {
     if (this.isDualPage_) {
-      // 双页模式：单页宽度 = (总宽 - 页缝) / 2
+      // 双页模式：单页宽度 = (总宽 - 页缝) / 2，内容铺满
       return Math.max(200, (this.pageW - this.dualPageGutter_) / 2);
     }
-    if (this.isCenteredSingle_ && this.maxContentWidth_ > 0) {
-      return Math.min(this.pageW, this.maxContentWidth_);
-    }
+    // 单页模式：铺满整个屏幕宽度，留白由用户设置的边距控制
     return this.pageW;
   }
 
   private layoutText(text: string): void {
-    // 先更新双页/居中单页状态
+    // 先更新双页状态
     this.isDualPage_ = this.computeDualPage_();
-    this.isCenteredSingle_ = this.computeCenteredSingle_();
 
     text = this.normalizeReaderText_(text);
     const lc: LayoutConfig = {
@@ -2270,24 +2252,20 @@ struct ReadPage {
           // 滚动阅读模式；切章时 scrollAlive_ 短暂置 false 销毁旧 Scroll，清除残留惯性滚动
           if (this.scrollAlive_) {
             Scroll(this.textScroller_) {
-              // 横屏滚动模式：正文限宽居中
-              Row() {
-                Blank().layoutWeight(this.isCenteredSingle_ ? 1 : 0)
-                Text(this.text)
-                  .fontSize(this.cfg.fontSize)
-                  .fontColor(this.cfg.textColor)
-                  .fontFamily(this.cfg.fontFamily)
-                  .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
-                  .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
-                  .letterSpacing(this.cfg.letterSpacing)
-                  .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-                  .width(this.isCenteredSingle_ && this.maxContentWidth_ > 0 ? this.maxContentWidth_ : '100%')
-                  .constraintSize({ maxWidth: this.isCenteredSingle_ && this.maxContentWidth_ > 0 ? this.maxContentWidth_ : Number.MAX_SAFE_INTEGER })
-                  .padding({
-                    left: this.cfg.paddingLeft,
-                    right: this.cfg.paddingRight,
-                    top: this.cfg.paddingTop,
-                    bottom: this.cfg.paddingBottom,
+              Text(this.text)
+                .fontSize(this.cfg.fontSize)
+                .fontColor(this.cfg.textColor)
+                .fontFamily(this.cfg.fontFamily)
+                .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
+                .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
+                .letterSpacing(this.cfg.letterSpacing)
+                .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                .width('100%')
+                .padding({
+                  left: this.cfg.paddingLeft,
+                  right: this.cfg.paddingRight,
+                  top: this.cfg.paddingTop,
+                  bottom: this.cfg.paddingBottom,
                 })
                 .onClick(() => { this.showMenu = true; })
                 .onAreaChange((_old: Area, n: Area) => {
@@ -2299,9 +2277,6 @@ struct ReadPage {
                     if (h > 0) this.jumpToPendingScrollPos_();
                   }
                 })
-                Blank().layoutWeight(this.isCenteredSingle_ ? 1 : 0)
-              }
-              .width('100%')
             }
             .scrollable(ScrollDirection.Vertical)
             .scrollBar(BarState.Off)
@@ -2326,8 +2301,6 @@ struct ReadPage {
           chapterIndex: this.currentIndex, pageIndex: this.pageIndex, totalChapters: this.totalChapters_,
           zoneActions: this.zoneActions,
           dualPage: this.isDualPage_,
-          centeredSingle: this.isCenteredSingle_,
-          maxContentWidth: this.maxContentWidth_,
           dualPageGutter: this.dualPageGutter_,
           config: {
             animType: this.cfg.animType, bgColor: this.cfg.bgColor, textColor: this.cfg.textColor,

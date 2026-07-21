@@ -290,10 +290,9 @@ export struct StylePanel {
       if (this.flowMode !== 'scrolled') {
         this.landscapeChip('双页', 'dual')
       }
-    }.width('100%').margin({ bottom: 10 })
-    if (this.landscapeLayout === 'single' || (this.landscapeLayout === 'auto' && this.flowMode === 'scrolled')) {
-      Text('单页模式下正文最大宽度用于限制横屏行长，自动居中。').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 8 })
-    }
+    }.width('100%').margin({ bottom: 6 })
+    Text('单页模式内容铺满屏幕，留白由边距控制；双页模式左右并排连续两页。')
+      .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 8 })
     if (this.showPdfEnhance) {
       Text($r('app.string.ui_0f68d35084')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
       Row() {

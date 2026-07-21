@@ -42,10 +42,6 @@ export struct PageView {
   @Prop chapterTitle: string = '';
   @Prop totalChapters: number = 0;
   @Prop dualPage: boolean = false;
-  /** 是否单页限宽居中（横屏但不满足双页条件时） */
-  @Prop centeredSingle: boolean = false;
-  /** 单页限宽模式下的最大内容宽度（vp） */
-  @Prop maxContentWidth: number = 0;
   /** 双页模式中间页缝宽度（vp） */
   @Prop dualPageGutter: number = 8;
   @Prop chapterIndex: number = 0;
@@ -300,7 +296,7 @@ export struct PageView {
 	      Column() {
 	        if (this.pages.length > 0) {
 	          if (this.dualPage && this.safePageIndex() < this.pages.length - 1) {
-	            // 双页模式：左右两页并排，中间页缝
+	            // 双页模式：左右两页并排，中间页缝，内容铺满
 	            Row() {
 	              Column() {
 	                this.renderPageText_(this.safePageIndex())
@@ -320,22 +316,8 @@ export struct PageView {
 	            }
 	            .width('100%').layoutWeight(1)
 	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
-	          } else if (this.centeredSingle && this.maxContentWidth > 0) {
-	            // 单页限宽居中：内容居中，两侧留白（onClick 在外层 Row 上，空白区域也可点击）
-	            Row() {
-	              Blank().layoutWeight(1)
-	              Column() {
-	                this.renderPageText_(this.safePageIndex())
-	              }
-	              .constraintSize({ maxWidth: this.maxContentWidth })
-	              .layoutWeight(1)
-	              .clip(true)
-	              Blank().layoutWeight(1)
-	            }
-	            .width('100%').layoutWeight(1)
-	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	          } else {
-	            // 标准单页
+	            // 标准单页：内容铺满整个屏幕，留白由用户设置的边距控制
 	            Column() {
 	              this.renderPageText_(this.safePageIndex())
 	            }
