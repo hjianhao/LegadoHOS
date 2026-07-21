@@ -32,7 +32,7 @@ export const BREAKPOINT_EXPANDED_MAX = 1200;
 export const LOW_HEIGHT_THRESHOLD = 480;
 
 /** 阅读器横屏限宽默认值（vp），0 表示不限 */
-export const DEFAULT_READ_MAX_CONTENT_WIDTH = 600;
+export const DEFAULT_READ_MAX_CONTENT_WIDTH = 800;
 
 /** AppStorage 键名 */
 const KEY_SIZE_CLASS = 'windowSizeClass';

@@ -306,7 +306,6 @@ export struct PageView {
 	                this.renderPageText_(this.safePageIndex())
 	              }
 	              .layoutWeight(1).height('100%').clip(true)
-	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 
 	              // 页缝分隔
 	              Divider().vertical(true).strokeWidth(1)
@@ -318,11 +317,11 @@ export struct PageView {
 	                this.renderPageText_(this.safePageIndex() + 1)
 	              }
 	              .layoutWeight(1).height('100%').clip(true)
-	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	            }
 	            .width('100%').layoutWeight(1)
+	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	          } else if (this.centeredSingle && this.maxContentWidth > 0) {
-	            // 单页限宽居中：内容居中，两侧留白
+	            // 单页限宽居中：内容居中，两侧留白（onClick 在外层 Row 上，空白区域也可点击）
 	            Row() {
 	              Blank().layoutWeight(1)
 	              Column() {
@@ -331,10 +330,10 @@ export struct PageView {
 	              .constraintSize({ maxWidth: this.maxContentWidth })
 	              .layoutWeight(1)
 	              .clip(true)
-	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	              Blank().layoutWeight(1)
 	            }
 	            .width('100%').layoutWeight(1)
+	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	          } else {
 	            // 标准单页
 	            Column() {
@@ -349,6 +348,9 @@ export struct PageView {
 	        }
 	      }
 	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
+	      .onClick((event: ClickEvent) => {
+	        this.handleClick_(event.x, event.y);
+	      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)

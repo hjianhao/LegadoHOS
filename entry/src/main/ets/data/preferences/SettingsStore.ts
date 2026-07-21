@@ -335,9 +335,9 @@ export class SettingsStore {
 
   /**
    * 横屏单页模式下的正文最大宽度（vp），0 表示不限。
-   * 默认 600vp，用户可调 400-900。
+   * 默认 800vp，用户可调 400-1200。
    */
-  async getReadMaxContentWidth(): Promise<number> { return await this.get('read_max_content_width', 600); }
+  async getReadMaxContentWidth(): Promise<number> { return await this.get('read_max_content_width', 800); }
   async setReadMaxContentWidth(v: number): Promise<void> { await this.put('read_max_content_width', v); }
 
   /** 双页模式中间页缝宽度（vp），默认 8 */
