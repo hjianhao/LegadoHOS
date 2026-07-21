@@ -207,13 +207,20 @@
   function applyRootStyle() {
     var v = currentStyleValues();
     var bg = v.bg;
+    var isDual = currentStyle.dualPage === true;
     document.documentElement.style.backgroundColor = bg;
     document.body.style.backgroundColor = bg;
     var frame = document.getElementById('reader-frame');
     if (frame) {
       frame.style.backgroundColor = bg;
-      frame.style.paddingLeft = v.pl + 'px';
-      frame.style.paddingRight = v.pr + 'px';
+      // 双页模式下减少 padding，让两页有更多可用宽度
+      if (isDual) {
+        frame.style.paddingLeft = Math.min(v.pl, 8) + 'px';
+        frame.style.paddingRight = Math.min(v.pr, 8) + 'px';
+      } else {
+        frame.style.paddingLeft = v.pl + 'px';
+        frame.style.paddingRight = v.pr + 'px';
+      }
       frame.style.boxSizing = 'border-box';
     }
     var viewer = document.getElementById('viewer');
@@ -283,6 +290,8 @@
 
   function currentThemeRules() {
     var v = currentStyleValues();
+    var isDual = currentStyle.dualPage === true;
+    var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
     var bodyRule = {
       'background': v.bg + ' !important',
       'color': v.color + ' !important',
@@ -292,12 +301,16 @@
       'letter-spacing': v.letterSpacing + 'px !important',
       'text-align': v.textAlign + ' !important',
       'box-sizing': 'border-box !important',
-      'padding': v.pt + 'px 0 ' + v.pb + 'px 0 !important'
+      'padding': v.pt + 'px 0 ' + v.pb + 'px 0 !important',
+      'max-width': isDual ? '100% !important' : 'none',
+      'overflow-wrap': 'break-word !important'
     };
     var bodyAllRule = {
       'box-sizing': 'border-box !important',
       'font-weight': v.weight + ' !important',
-      'letter-spacing': v.letterSpacing + 'px !important'
+      'letter-spacing': v.letterSpacing + 'px !important',
+      'max-width': isDual ? '100% !important' : 'none',
+      'overflow-wrap': 'break-word !important'
     };
     if (!v.useBookFont) {
       bodyRule['font-family'] = v.familyCss + ' !important';
@@ -320,7 +333,7 @@
       },
       'img,svg': {
         'max-width': '100% !important',
-        'max-height': v.flowMode === 'scrolled' ? 'none !important' : '85vh !important',
+        'max-height': imgMaxH + ' !important',
         'object-fit': 'contain !important',
         'page-break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important',
         'break-inside': v.flowMode === 'scrolled' ? 'auto !important' : 'avoid !important'
@@ -344,33 +357,38 @@
     }
   }
 
-  function injectStyle(doc) {
-    if (!doc || !doc.documentElement) return;
-    var style = doc.getElementById('legado-reader-style');
-    if (!style) {
-      style = doc.createElement('style');
-      style.id = 'legado-reader-style';
-      (doc.head || doc.documentElement).appendChild(style);
-    }
+	function injectStyle(doc) {
+	  if (!doc || !doc.documentElement) return;
+	  var style = doc.getElementById('legado-reader-style');
+	  if (!style) {
+	    style = doc.createElement('style');
+	    style.id = 'legado-reader-style';
+	    (doc.head || doc.documentElement).appendChild(style);
+	  }
 
-    var v = currentStyleValues();
-    var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-    var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var v = currentStyleValues();
+	  var isDual = currentStyle.dualPage === true;
+	  var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+	  var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
 
-    style.textContent =
-      fontFaceCss() +
-      'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
-      'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
-      'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
-      'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-      'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;}' +
-      'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
-      'letter-spacing:' + v.letterSpacing + 'px !important;}' +
-      'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
-      'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;}' +
-      'img,svg{max-width:100% !important;max-height:' + (v.flowMode === 'scrolled' ? 'none' : '85vh') + ' !important;object-fit:contain !important;' +
-      'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
-      'table{max-width:100% !important;}a{color:inherit !important;}';
+	  style.textContent =
+	    fontFaceCss() +
+	    'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
+	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
+	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
+	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
+	    'box-sizing:border-box !important;padding:' + v.pt + 'px 0 ' + v.pb + 'px 0 !important;' +
+	    'max-width:' + (isDual ? '100%' : 'none') + ' !important;overflow-wrap:break-word !important;}' +
+	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
+	    'letter-spacing:' + v.letterSpacing + 'px !important;' +
+	    'max-width:' + (isDual ? '100% !important' : 'none') + ';overflow-wrap:break-word !important;}' +
+	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
+	    'font-weight:' + v.weight + ' !important;letter-spacing:' + v.letterSpacing + 'px !important;' +
+	    'max-width:' + (isDual ? '100% !important' : 'none') + ';}' +
+	    'img,svg{max-width:100% !important;max-height:' + imgMaxH + ' !important;object-fit:contain !important;' +
+	    'page-break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;break-inside:' + (v.flowMode === 'scrolled' ? 'auto' : 'avoid') + ' !important;}' +
+	    'table{max-width:100% !important;}a{color:inherit !important;}';
 
     doc.documentElement.style.backgroundColor = v.bg;
     if (doc.body) {
