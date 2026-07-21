@@ -48,6 +48,8 @@ const KEY_IS_TABLET = 'windowIsTablet';
  *
  * 静态字段与 AppStorage 双向同步：update() 同时更新两者，
  * 组件端可以用 @StorageProp('windowSizeClass') 等观察变化。
+ *
+ * 注意：AppStorage 中 sizeClass 存 number（枚举底层值），避免 @StorageProp 类型不同步。
  */
 export class WindowLayout {
   /** 当前窗口尺寸分级 */
@@ -65,6 +67,17 @@ export class WindowLayout {
   /** 是否平板级宽屏（>= EXPANDED） */
   static isTablet: boolean = false;
 
+  /** 确保 AppStorage 键已创建（须在首屏组件创建前调用） */
+  static ensureAppStorageKeys(): void {
+    AppStorage.setOrCreate(KEY_SIZE_CLASS, WindowLayout.current as number);
+    AppStorage.setOrCreate(KEY_WIDTH_VP, WindowLayout.widthVp);
+    AppStorage.setOrCreate(KEY_HEIGHT_VP, WindowLayout.heightVp);
+    AppStorage.setOrCreate(KEY_IS_LANDSCAPE, WindowLayout.isLandscape);
+    AppStorage.setOrCreate(KEY_IS_LOW_HEIGHT, WindowLayout.isLowHeight);
+    AppStorage.setOrCreate(KEY_IS_WIDE, WindowLayout.isWide);
+    AppStorage.setOrCreate(KEY_IS_TABLET, WindowLayout.isTablet);
+  }
+
   /** 根据宽度计算尺寸分级 */
   static classify(widthVp: number): WindowSizeClass {
     if (widthVp < BREAKPOINT_COMPACT_MAX) return WindowSizeClass.COMPACT;
@@ -74,42 +87,65 @@ export class WindowLayout {
   }
 
   /**
-   * 更新窗口尺寸（在根容器 onAreaChange 中调用）。
-   * 同时写入静态字段和 AppStorage，让 @StorageProp 能感知变化。
+   * 更新窗口尺寸（Ability / onAreaChange / windowSizeChange 均可调用）。
+   * width/height 必须是 vp。
    */
   static update(widthVp: number, heightVp: number): void {
     if (widthVp <= 0 || heightVp <= 0) return;
-    const sizeClass = WindowLayout.classify(widthVp);
-    const isLandscape = widthVp > heightVp;
-    const isLowHeight = heightVp < LOW_HEIGHT_THRESHOLD;
+    // 容错：若误传了 px（常见平板物理宽 > 2000），按 density 粗略换算
+    let w = widthVp;
+    let h = heightVp;
+    if (w > 2000 || h > 3000) {
+      // 粗略用 2.0～3.5 常见密度；优先用已缓存的 width 反推不可用，直接 /2.5 更稳妥
+      const scale = 2.5;
+      console.warn('[WindowLayout] value looks like px, convert /' + scale +
+        ' from ' + w + 'x' + h);
+      w = w / scale;
+      h = h / scale;
+    }
+
+    const sizeClass = WindowLayout.classify(w);
+    const isLandscape = w > h;
+    const isLowHeight = h < LOW_HEIGHT_THRESHOLD;
     const isWide = sizeClass >= WindowSizeClass.MEDIUM;
     const isTablet = sizeClass >= WindowSizeClass.EXPANDED;
 
     // 跳过无变化的情况，减少不必要的重渲染
     if (
-      widthVp === WindowLayout.widthVp &&
-      heightVp === WindowLayout.heightVp &&
+      Math.abs(w - WindowLayout.widthVp) < 0.5 &&
+      Math.abs(h - WindowLayout.heightVp) < 0.5 &&
       sizeClass === WindowLayout.current
     ) {
       return;
     }
 
-    WindowLayout.widthVp = widthVp;
-    WindowLayout.heightVp = heightVp;
+    WindowLayout.widthVp = w;
+    WindowLayout.heightVp = h;
     WindowLayout.current = sizeClass;
     WindowLayout.isLandscape = isLandscape;
     WindowLayout.isLowHeight = isLowHeight;
     WindowLayout.isWide = isWide;
     WindowLayout.isTablet = isTablet;
 
-    // 同步到 AppStorage，让 @StorageProp 消费者能感知
-    AppStorage.setOrCreate(KEY_SIZE_CLASS, sizeClass);
-    AppStorage.setOrCreate(KEY_WIDTH_VP, widthVp);
-    AppStorage.setOrCreate(KEY_HEIGHT_VP, heightVp);
+    // 同步到 AppStorage（number/boolean，保证 @StorageProp 可观察）
+    AppStorage.setOrCreate(KEY_SIZE_CLASS, sizeClass as number);
+    AppStorage.setOrCreate(KEY_WIDTH_VP, w);
+    AppStorage.setOrCreate(KEY_HEIGHT_VP, h);
     AppStorage.setOrCreate(KEY_IS_LANDSCAPE, isLandscape);
     AppStorage.setOrCreate(KEY_IS_LOW_HEIGHT, isLowHeight);
     AppStorage.setOrCreate(KEY_IS_WIDE, isWide);
     AppStorage.setOrCreate(KEY_IS_TABLET, isTablet);
+
+    console.info('[WindowLayout] update w=' + w.toFixed(1) + ' h=' + h.toFixed(1) +
+      ' class=' + sizeClass + ' wide=' + isWide);
+  }
+
+  /**
+   * 用物理像素 + 屏幕密度更新（Ability / window API 常用 px）。
+   */
+  static updateFromPx(widthPx: number, heightPx: number, densityPixels: number): void {
+    const d = densityPixels > 0.1 ? densityPixels : 1;
+    WindowLayout.update(widthPx / d, heightPx / d);
   }
 
   /** 获取适合弹窗的对齐方式：Compact 底部，Medium+ 居中 */

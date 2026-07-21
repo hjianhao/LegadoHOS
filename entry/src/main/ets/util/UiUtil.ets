@@ -43,15 +43,22 @@ export class UiUtil {
     }
   }
 
-  static pushUrl(uiContext: UIContext, options: router.RouterOptions, mode?: router.RouterMode): void {
-    // 优先走页签内 NavPathStack，支持平板 Navigation Split 分栏
-    const url = options.url ?? '';
-    if (typeof url === 'string' && url.length > 0) {
+  /**
+   * 在「我的」等页签 Navigation 内 push（支持平板 Split）。
+   * 失败时回退 classic router。阅读器等全屏页请直接用本方法的 classic 路径，
+   * 或继续调用本 pushUrl（不强制进 Nav 栈，避免盖在阅读器下看不见）。
+   */
+  static pushInNav(uiContext: UIContext, url: string, params?: object): void {
+    if (url.length > 0) {
       const pageName = (url.startsWith('pages/') ? url.substring('pages/'.length) : url) as NavPageName;
-      if (NavRouter.push(pageName, options.params as object | undefined)) {
+      if (NavRouter.isNavPage(pageName) && NavRouter.push(pageName, params)) {
         return;
       }
     }
+    UiUtil.pushUrl(uiContext, { url: url, params: params });
+  }
+
+  static pushUrl(uiContext: UIContext, options: router.RouterOptions, mode?: router.RouterMode): void {
     try {
       if (mode !== undefined) {
         uiContext.getRouter().pushUrl(options, mode).catch((err: Error) => {
@@ -68,10 +75,32 @@ export class UiUtil {
   }
 
   static back(uiContext: UIContext, options?: router.RouterOptions): void {
-    // 优先弹出 Navigation 栈（平板分栏右侧详情）
+    // 1) classic router 有上层页（如内嵌设置里再打开 AI/备份）时先 pop
+    // 注意：getLength() 返回 string
+    try {
+      const len = Number(uiContext.getRouter().getLength());
+      if (Number.isFinite(len) && len > 1) {
+        uiContext.getRouter().back(options);
+        return;
+      }
+    } catch (_e) {
+      // ignore，继续后续策略
+    }
+    // 2) 「我的」宽屏内嵌详情：清空右侧
+    try {
+      const embedded = AppStorage.get<string>('myEmbeddedDetail') ?? '';
+      if (embedded.length > 0) {
+        AppStorage.setOrCreate('myEmbeddedDetail', '');
+        return;
+      }
+    } catch (_e) {
+      // ignore
+    }
+    // 3) Navigation 栈
     if (NavRouter.depth() > 0 && NavRouter.back()) {
       return;
     }
+    // 4) classic router 兜底
     try {
       uiContext.getRouter().back(options);
     } catch (err) {

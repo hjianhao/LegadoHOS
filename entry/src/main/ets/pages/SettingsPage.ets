@@ -3,7 +3,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 import { NetUtil } from '../util/NetUtil';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { MangaImageLoader } from '../util/MangaImageLoader';
-import { WindowLayout, WindowSizeClass } from '../util/WindowLayout';
+import { WindowSizeClass } from '../util/WindowLayout';
 import { ContentMaxWidth } from '../components/common/ResponsiveLayout';
 
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
@@ -12,7 +12,6 @@ import { UiUtil } from '../util/UiUtil';
 import { EpubEngineConfig, EpubEngineType } from '../engine/EpubEngineConfig';
 import { AppBackButton } from '../components/common/AppTitleBar';
 
-interface SettingItem { icon: string; title: string; key: string; }
 interface ReadModeOption { mode: number; label: string; }
 
 /** 设置分类（内嵌详情页；page 非空时跳转子页面） */
@@ -69,7 +68,10 @@ export struct SettingsPage {
   @State currentSection: string = 'main';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('isFollowSystem') isFollowSystem: boolean = false;
-  @StorageProp('windowSizeClass') sizeClass: WindowSizeClass = WindowSizeClass.COMPACT;
+  @StorageProp('windowSizeClass') sizeClassNum: number = 0;
+  @StorageProp('windowIsWide') isWideFlag: boolean = false;
+  @StorageProp('windowWidthVp') windowWidthVp: number = 360;
+  @State localWidthVp: number = 0;
   @State searchConcurrency: number = 16;
   @State dnsServers: string = '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
   @State dnsEnabled: boolean = true;
@@ -99,26 +101,54 @@ export struct SettingsPage {
     { icon: '关', title: '关于', key: 'about', page: '' },
   ];
 
-  /** 宽屏：左侧分类 + 右侧配置（类系统设置） */
+  private get sizeClass(): WindowSizeClass {
+    if (this.localWidthVp >= 1200 || this.windowWidthVp >= 1200) {
+      return WindowSizeClass.LARGE;
+    }
+    if (this.localWidthVp >= 840 || this.windowWidthVp >= 840) {
+      return WindowSizeClass.EXPANDED;
+    }
+    if (this.localWidthVp >= 600 || this.windowWidthVp >= 600 ||
+      this.isWideFlag || this.sizeClassNum >= WindowSizeClass.MEDIUM) {
+      return WindowSizeClass.MEDIUM;
+    }
+    return WindowSizeClass.COMPACT;
+  }
+
+  /**
+   * 宽屏双栏：左分类 + 右配置。
+   * 已嵌在「我的」右侧时仍启用（形成 我的菜单 | 设置分类 | 配置）。
+   */
   private get isSettingsSplit(): boolean {
     return this.sizeClass >= WindowSizeClass.MEDIUM;
   }
 
-  /** 当前分类标题（右侧顶栏） */
+  /**
+   * 实际展示的分类 key。
+   * 宽屏下若仍是 main（sizeClass 晚到），回退到 read，避免右侧空白。
+   */
+  private get activeSection(): string {
+    if (this.isSettingsSplit && (this.currentSection === 'main' || this.currentSection.length === 0)) {
+      return 'read';
+    }
+    return this.currentSection;
+  }
+
+  /** 当前分类标题 */
   private sectionTitle(): string {
+    const key = this.activeSection;
     for (let i = 0; i < this.categories.length; i++) {
-      if (this.categories[i].key === this.currentSection) {
+      if (this.categories[i].key === key) {
         return this.categories[i].title;
       }
     }
     return '设置';
   }
 
-	  aboutToAppear(): void {
-	    // 从 AppTheme 同步主题模式状态（确保 @StorageLink 获取到正确的初始值）
-	    this.isDark = AppTheme.getInstance().isDark;
-	    this.isFollowSystem = AppTheme.getInstance().isFollowSystem;
-	    this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
+  aboutToAppear(): void {
+    this.isDark = AppTheme.getInstance().isDark;
+    this.isFollowSystem = AppTheme.getInstance().isFollowSystem;
+    this.searchConcurrency = AppStorage.get<number>('searchConcurrency') || 16;
     this.dnsServers = AppStorage.get<string>('dnsServers') || '8.8.8.8,114.114.114.114,223.5.5.5,1.1.1.1';
     this.dnsEnabled = AppStorage.get<boolean>('dnsEnabled') !== false;
     NetUtil.setDns(this.dnsServers, this.dnsEnabled);
@@ -128,10 +158,6 @@ export struct SettingsPage {
     this.syncWebViewNetwork();
     this.loadReadSettings();
     this.loadTtsSettings();
-    // 宽屏默认展示第一项配置，避免右侧空白
-    if (this.isSettingsSplit && this.currentSection === 'main') {
-      this.currentSection = 'read';
-    }
   }
 
   private async loadReadSettings(): Promise<void> {
@@ -193,9 +219,12 @@ export struct SettingsPage {
 
   build() {
     Column() {
-      // 顶栏：宽屏双栏时标题固定为「设置」；窄屏在子 section 时显示分类名
+      // 顶栏
       Row() {
+        // 嵌在「我的」右侧时仍显示返回（清空右侧）；双栏下不进入子 section 返回逻辑
         AppBackButton({ onBack: () => {
+          // 宽屏双栏 / 主列表：直接 back（内嵌时 UiUtil 会清空右侧）
+          // 手机子 section：先回到主列表
           if (this.isSettingsSplit || this.currentSection === 'main') {
             UiUtil.back(this.getUIContext());
           } else {
@@ -214,67 +243,92 @@ export struct SettingsPage {
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
       if (this.isSettingsSplit) {
-        // 平板/宽屏：左分类导航 + 右配置内容（类鸿蒙系统设置）
-        Row() {
-          Column() {
-            this.buildCategoryList(true)
-          }
-          .width(this.sizeClass >= WindowSizeClass.LARGE ? 280 : 240)
-          .height('100%')
-          .backgroundColor(ThemeColors.surface(this.isDark))
-
-          Divider()
-            .vertical(true)
-            .strokeWidth(0.5)
-            .color(ThemeColors.outlineVariant(this.isDark))
-
-          Column() {
-            // 右侧当前分类标题
-            Text(this.sectionTitle())
-              .fontSize(18)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(ThemeColors.onBackground(this.isDark))
-              .width('100%')
-              .padding({ left: 20, right: 20, top: 16, bottom: 8 })
-            Scroll() {
-              Column() {
-                this.buildSectionContent()
-              }
-              .width('100%')
-              .constraintSize({ maxWidth: ContentMaxWidth.FORM })
-              .alignItems(HorizontalAlign.Start)
-            }
-            .width('100%')
-            .layoutWeight(1)
-            .align(Alignment.TopStart)
-            .scrollBar(BarState.Auto)
-          }
-          .layoutWeight(1)
-          .height('100%')
-          .padding({ left: 8, right: 16, bottom: 16 })
-          .alignItems(HorizontalAlign.Start)
-        }
-        .layoutWeight(1)
-        .width('100%')
+        this.buildSplitBody()
       } else {
-        // 手机：单列逐级进入
-        Column() {
-          if (this.currentSection === 'main') {
-            this.buildCategoryList(false)
-          } else {
-            this.buildSectionContent()
-          }
-        }
-        .layoutWeight(1)
-        .width('100%')
+        this.buildCompactBody()
       }
     }
-    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
+    .width('100%')
+    .height('100%')
+    .backgroundColor(ThemeColors.background(this.isDark))
+    .onAreaChange((_o: Area, area: Area) => {
+      const w = typeof area.width === 'number' ? area.width : Number(area.width);
+      if (Number.isFinite(w) && w > 0 && Math.abs(w - this.localWidthVp) > 0.5) {
+        this.localWidthVp = w;
+      }
+    })
   }
 
-  /** 打开设置分类：内嵌 section 或跳转子页 */
+  /** 宽屏：左分类 + 右配置 */
+  @Builder
+  private buildSplitBody() {
+    Row() {
+      Column() {
+        this.buildCategoryList(true)
+      }
+      .width(this.sizeClass >= WindowSizeClass.LARGE ? 260 : 220)
+      .height('100%')
+      .backgroundColor(ThemeColors.surface(this.isDark))
+
+      Divider()
+        .vertical(true)
+        .strokeWidth(0.5)
+        .color(ThemeColors.outlineVariant(this.isDark))
+
+      Column() {
+        Text(this.sectionTitle())
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(ThemeColors.onBackground(this.isDark))
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+        Scroll() {
+          Column() {
+            this.buildSectionContent()
+          }
+          .width('100%')
+          .constraintSize({ maxWidth: ContentMaxWidth.FORM })
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+        .align(Alignment.TopStart)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .padding({ left: 4, right: 12, bottom: 12 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .layoutWeight(1)
+    .width('100%')
+  }
+
+  /** 手机：单列逐级 */
+  @Builder
+  private buildCompactBody() {
+    if (this.currentSection === 'main') {
+      this.buildCategoryList(false)
+    } else {
+      Scroll() {
+        Column() {
+          this.buildSectionContent()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+    }
+  }
+
+  /** 打开设置分类：内嵌 section 或 classic router 打开独立子页 */
   private openCategory(item: SettingCategory): void {
     if (item.page.length > 0) {
+      // 独立子页必须走 classic router，NavPathStack 当前会空白
       UiUtil.pushUrl(this.getUIContext(), { url: item.page });
       return;
     }
@@ -292,7 +346,7 @@ export struct SettingsPage {
                 .width(3)
                 .height(24)
                 .borderRadius(2)
-                .backgroundColor(this.currentSection === item.key
+                .backgroundColor(this.activeSection === item.key
                   ? ThemeColors.primary(this.isDark)
                   : ThemeColors.transparent())
                 .margin({ right: 10 })
@@ -300,13 +354,13 @@ export struct SettingsPage {
             Text(item.icon)
               .fontSize(splitMode ? 18 : 22)
               .margin({ right: 12 })
-              .fontColor(this.currentSection === item.key && splitMode
+              .fontColor(this.activeSection === item.key && splitMode
                 ? ThemeColors.primary(this.isDark)
                 : ThemeColors.onBackground(this.isDark))
             Text(item.title)
               .fontSize(splitMode ? 15 : 16)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.currentSection === item.key && splitMode
+              .fontColor(this.activeSection === item.key && splitMode
                 ? ThemeColors.primary(this.isDark)
                 : ThemeColors.onBackground(this.isDark))
               .layoutWeight(1)
@@ -320,12 +374,12 @@ export struct SettingsPage {
             ? { left: 12, right: 12, top: 12, bottom: 12 }
             : { left: 16, right: 16, top: 16, bottom: 16 })
           .width('100%')
-          .backgroundColor(splitMode && this.currentSection === item.key
+          .backgroundColor(splitMode && this.activeSection === item.key
             ? ThemeColors.primaryContainer(this.isDark)
             : ThemeColors.transparent())
           .borderRadius(splitMode ? 10 : 0)
         }
-        .margin(splitMode ? { left: 8, right: 8, top: 2, bottom: 2 } : {})
+        .margin(splitMode ? { left: 8, right: 8, top: 2, bottom: 2 } : { left: 0, right: 0, top: 0, bottom: 0 })
         .border(splitMode
           ? { width: 0 }
           : { width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
@@ -342,19 +396,19 @@ export struct SettingsPage {
 
   @Builder
   buildSectionContent() {
-    if (this.currentSection === 'read') {
+    if (this.activeSection === 'read') {
       this.buildReadSettings();
-    } else if (this.currentSection === 'comic') {
+    } else if (this.activeSection === 'comic') {
       this.buildComicSettings();
-    } else if (this.currentSection === 'search') {
+    } else if (this.activeSection === 'search') {
       this.buildSearchSettings();
-    } else if (this.currentSection === 'theme') {
+    } else if (this.activeSection === 'theme') {
       this.buildThemeSettings();
-    } else if (this.currentSection === 'network') {
+    } else if (this.activeSection === 'network') {
       this.buildNetSettings();
-    } else if (this.currentSection === 'tts') {
+    } else if (this.activeSection === 'tts') {
       this.buildTtsSettings();
-    } else if (this.currentSection === 'about') {
+    } else if (this.activeSection === 'about') {
       this.buildAboutPage();
     } else {
       Column() {
@@ -465,85 +519,81 @@ export struct SettingsPage {
 
   @Builder
   buildTtsSettings() {
-    Scroll() {
+    Column() {
+      Text($r('app.string.ui_a0d3218048')).fontSize(16).fontWeight(FontWeight.Medium)
+        .padding({ left: 16, right: 16, top: 16, bottom: 8 })
+        .alignSelf(ItemAlign.Start)
+        .fontColor(ThemeColors.onBackground(this.isDark))
+
+      Text($r('app.string.ui_2f5f1495cc')).fontSize(15).fontWeight(FontWeight.Bold)
+        .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+        .alignSelf(ItemAlign.Start)
+        .fontColor(ThemeColors.onBackground(this.isDark))
+
+      Text($r('app.string.ui_2a1cad5f9e')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+        .alignSelf(ItemAlign.Start)
       Column() {
-        Text($r('app.string.ui_a0d3218048')).fontSize(16).fontWeight(FontWeight.Medium)
-          .padding({ left: 16, right: 16, top: 16, bottom: 8 })
-          .alignSelf(ItemAlign.Start)
-          .fontColor(ThemeColors.onBackground(this.isDark))
-
-        Text($r('app.string.ui_2f5f1495cc')).fontSize(15).fontWeight(FontWeight.Bold)
-          .padding({ left: 16, right: 16, top: 12, bottom: 4 })
-          .alignSelf(ItemAlign.Start)
-          .fontColor(ThemeColors.onBackground(this.isDark))
-
-        Text($r('app.string.ui_2a1cad5f9e')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
-          .padding({ left: 16, right: 16, top: 8, bottom: 4 })
-          .alignSelf(ItemAlign.Start)
-        Column() {
-          TextInput({ text: this.ttsAzureEndpoint, placeholder: $r('app.string.ui_298b8d3d76') })
-            .fontSize(13)
-            .height(48)
-            .width('100%')
-            .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
-            .onChange((v: string) => { this.ttsAzureEndpoint = v; })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16 })
-        Text($r('app.string.ui_44aaab081d'))
-          .fontSize(11)
-          .fontColor(ThemeColors.secondaryText(this.isDark))
-          .padding({ left: 16, right: 16, top: 4, bottom: 8 })
-
-        Text($r('app.string.ui_0d1965e139')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
-          .padding({ left: 16, right: 16, top: 8, bottom: 4 })
-          .alignSelf(ItemAlign.Start)
-        Row() {
-          TextInput({ text: this.ttsAzureKey, placeholder: $r('app.string.ui_81474dc689') })
-            .fontSize(13)
-            .layoutWeight(1)
-            .height(48).fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
-            .type(this.showTtsAzureKey ? InputType.Normal : InputType.Password)
-            .onChange((v: string) => { this.ttsAzureKey = v; })
-          Button(this.showTtsAzureKey ? '隐藏' : '显示')
-            .fontSize(12)
-            .height(40)
-            .padding({ left: 10, right: 10 })
-            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .margin({ left: 8 })
-            .onClick(() => { this.showTtsAzureKey = !this.showTtsAzureKey; })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16 })
-
-        Text($r('app.string.ui_7701f53574'))
-          .fontSize(11)
-          .fontColor(ThemeColors.secondaryText(this.isDark))
-          .padding({ left: 16, right: 16, top: 16, bottom: 12 })
-
-        Column() {
-          Button($r('app.string.ui_ea7c1a58fa'))
-            .fontSize(14)
-            .height(44)
-            .width('100%')
-            .backgroundColor(ThemeColors.primary(this.isDark))
-            .fontColor(ThemeColors.onPrimary(this.isDark))
-            .onClick(() => { this.saveTtsSettings(); })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 8, bottom: 16 })
-
-        Text($r('app.string.ui_2932250412'))
-          .fontSize(12)
-          .fontColor(ThemeColors.secondaryText(this.isDark))
-          .padding({ left: 16, right: 16, bottom: 16 })
+        TextInput({ text: this.ttsAzureEndpoint, placeholder: $r('app.string.ui_298b8d3d76') })
+          .fontSize(13)
+          .height(48)
+          .width('100%')
+          .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+          .onChange((v: string) => { this.ttsAzureEndpoint = v; })
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
+      .padding({ left: 16, right: 16 })
+      Text($r('app.string.ui_44aaab081d'))
+        .fontSize(11)
+        .fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, top: 4, bottom: 8 })
+
+      Text($r('app.string.ui_0d1965e139')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+        .alignSelf(ItemAlign.Start)
+      Row() {
+        TextInput({ text: this.ttsAzureKey, placeholder: $r('app.string.ui_81474dc689') })
+          .fontSize(13)
+          .layoutWeight(1)
+          .height(48).fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+          .type(this.showTtsAzureKey ? InputType.Normal : InputType.Password)
+          .onChange((v: string) => { this.ttsAzureKey = v; })
+        Button(this.showTtsAzureKey ? '隐藏' : '显示')
+          .fontSize(12)
+          .height(40)
+          .padding({ left: 10, right: 10 })
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .margin({ left: 8 })
+          .onClick(() => { this.showTtsAzureKey = !this.showTtsAzureKey; })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16 })
+
+      Text($r('app.string.ui_7701f53574'))
+        .fontSize(11)
+        .fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+
+      Column() {
+        Button($r('app.string.ui_ea7c1a58fa'))
+          .fontSize(14)
+          .height(44)
+          .width('100%')
+          .backgroundColor(ThemeColors.primary(this.isDark))
+          .fontColor(ThemeColors.onPrimary(this.isDark))
+          .onClick(() => { this.saveTtsSettings(); })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+
+      Text($r('app.string.ui_2932250412'))
+        .fontSize(12)
+        .fontColor(ThemeColors.secondaryText(this.isDark))
+        .padding({ left: 16, right: 16, bottom: 16 })
     }
     .width('100%')
-    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder

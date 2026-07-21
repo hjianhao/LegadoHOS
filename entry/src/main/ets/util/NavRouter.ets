@@ -42,6 +42,17 @@ export type NavPageName =
   | 'AboutPage'
   | 'GroupManagePage';
 
+/** 已注册到 MainPage.navDestination 的页面集合（用于 UiUtil 判断是否可走 Nav 栈） */
+const NAV_PAGE_SET: Set<string> = new Set<string>([
+  'BookSourcePage', 'BookSourceEditPage', 'BookSourceDebugPage',
+  'ReplaceRulePage', 'ReplaceRuleEditPage', 'SettingsPage', 'SearchPage',
+  'BookInfoPage', 'ChapterListPage', 'ChangeSourcePage', 'BookshelfManagePage',
+  'BookmarkPage', 'FontManagerPage', 'BackupSettingsPage', 'AiConfigPage',
+  'AiImportBookPage', 'AiSourceGeneratePage', 'CacheManagePage', 'ReadRecordPage',
+  'RssSourceManagePage', 'RssSortPage', 'RssArticlesPage', 'WebServicePage',
+  'AboutPage', 'GroupManagePage',
+]);
+
 /**
  * NavRouter 单例 - 管理当前活跃的 NavPathStack。
  * NavPathStack 是 ArkUI 全局类型，不需要 import。
@@ -52,6 +63,12 @@ export class NavRouter {
 
   /** 各页签的 NavPathStack 引用，由 MainPage 注入 */
   private static stacks: Map<number, NavPathStack> = new Map();
+
+  /** 是否为已注册的 Navigation 目标页 */
+  static isNavPage(pageName: string): boolean {
+    const bare = pageName.startsWith('pages/') ? pageName.substring('pages/'.length) : pageName;
+    return NAV_PAGE_SET.has(bare);
+  }
 
   /**
    * 注册页签对应的 NavPathStack。

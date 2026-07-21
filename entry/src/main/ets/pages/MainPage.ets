@@ -51,7 +51,12 @@ interface TabCfg {
 struct MainPage {
   @StorageLink('isDark') isDark: boolean = false;
   @State currentTab: number = 0;
-  @StorageProp('windowSizeClass') sizeClass: WindowSizeClass = WindowSizeClass.COMPACT;
+  /** 用 number 接 AppStorage，避免 enum @StorageProp 不同步 */
+  @StorageProp('windowSizeClass') sizeClassNum: number = 0;
+  @StorageProp('windowIsWide') isWideFlag: boolean = false;
+  @StorageProp('windowWidthVp') windowWidthVp: number = 360;
+  /** 本地实测宽度（vp），不依赖 AppStorage */
+  @State localWidthVp: number = 0;
   @StorageLink('pendingShareImport') @Watch('onShareImport') pendingShareImport: ShareImportPayload | null = null;
 
   private lastShareImportId: number = 0;
@@ -70,23 +75,24 @@ struct MainPage {
     { icon: $r('app.media.ic_profile'), label: '我的' },
   ];
 
+  /** 当前窗口尺寸分级（多源综合，避免单点失效） */
+  private get sizeClass(): WindowSizeClass {
+    if (this.localWidthVp >= 1200 || this.windowWidthVp >= 1200) {
+      return WindowSizeClass.LARGE;
+    }
+    if (this.localWidthVp >= 840 || this.windowWidthVp >= 840) {
+      return WindowSizeClass.EXPANDED;
+    }
+    if (this.localWidthVp >= 600 || this.windowWidthVp >= 600 ||
+      this.isWideFlag || this.sizeClassNum >= WindowSizeClass.MEDIUM) {
+      return WindowSizeClass.MEDIUM;
+    }
+    return WindowSizeClass.COMPACT;
+  }
+
   /** 是否使用宽屏侧栏布局（>= MEDIUM） */
   private get isWideLayout(): boolean {
     return this.sizeClass >= WindowSizeClass.MEDIUM;
-  }
-
-  /**
-   * 「我的」页签是否启用 Navigation 左右分栏。
-   * EXPANDED+ 才分栏，避免 MEDIUM 下侧栏+导航+内容三栏过窄。
-   */
-  private get isMySplitLayout(): boolean {
-    return this.sizeClass >= WindowSizeClass.EXPANDED;
-  }
-
-  /** 「我的」左侧导航栏宽度（vp） */
-  private get myNavBarWidth(): number {
-    if (this.sizeClass >= WindowSizeClass.LARGE) return 360;
-    return 300;
   }
 
   /** 侧栏宽度 */
@@ -234,14 +240,13 @@ struct MainPage {
       }.tabBar(this.buildTab(this.tabs[2], 2))
 
       TabContent() {
-        // 平板 EXPANDED+：Navigation Split —— 左「我的」导航，右子页面（类系统设置）
+        // 分栏在 MyPage 内部手写实现；Navigation 保持 Stack，避免 NavDestination 空白页
         Navigation(this.myStack) {
           MyPage()
         }
         .navDestination(this.navDestination)
         .hideTitleBar(true)
-        .mode(this.isMySplitLayout ? NavigationMode.Split : NavigationMode.Stack)
-        .navBarWidth(this.isMySplitLayout ? this.myNavBarWidth : '100%')
+        .mode(NavigationMode.Stack)
       }.tabBar(this.buildTab(this.tabs[3], 3))
     }
     .vertical(this.isWideLayout)
@@ -259,7 +264,8 @@ struct MainPage {
       const width = typeof newArea.width === 'number' ? newArea.width : Number(newArea.width);
       const height = typeof newArea.height === 'number' ? newArea.height : Number(newArea.height);
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-        // Area 的 width/height 单位为 vp，直接使用
+        // Area 的 width/height 单位为 vp
+        this.localWidthVp = width;
         WindowLayout.update(width, height);
       }
     })

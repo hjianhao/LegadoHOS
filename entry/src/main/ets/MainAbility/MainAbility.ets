@@ -8,6 +8,7 @@
 import UIAbility from '@ohos.app.ability.UIAbility';
 import { Want, AbilityConstant, Configuration } from '@kit.AbilityKit';
 import Window from '@ohos.window';
+import display from '@ohos.display';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
 import { GlobalConfig } from '../data/preferences/GlobalConfig';
@@ -15,6 +16,7 @@ import { WebDavService } from '../service/WebDavService';
 import { CookieStore } from '../util/CookieStore';
 import { LoginInfoStore } from '../util/LoginInfoStore';
 import { ShareImportService } from '../service/ShareImportService';
+import { WindowLayout } from '../util/WindowLayout';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -103,10 +105,93 @@ export default class MainAbility extends UIAbility {
     console.info('[MainAbility] onWindowStageCreate');
     try {
       AppStorage.setOrCreate<object>('abilityContext', this.context);
+      // 必须先注册 AppStorage 键，再 loadContent，否则 @StorageProp 绑不到更新
+      WindowLayout.ensureAppStorageKeys();
+      // 先读真实窗口尺寸再进首页，避免平板首帧仍按手机 COMPACT 布局
+      this.bindWindowLayout(windowStage);
       windowStage.loadContent('pages/MainPage');
     } catch (err) {
       console.error('[MainAbility] loadContent failed:', err);
     }
+  }
+
+  /**
+   * 从主窗口同步宽高到 WindowLayout，并监听旋转/分屏。
+   * 日志中真机平板 window rect 为 2800x1840 px @ density≈2.5 → ~1120vp（应走宽屏）。
+   */
+  private bindWindowLayout(windowStage: Window.WindowStage): void {
+    try {
+      // API 12+：同步取主窗口
+      const win: Window.Window = windowStage.getMainWindowSync();
+      this.applyWindowSize(win);
+      try {
+        win.on('windowSizeChange', (size: Size) => {
+          // windowSizeChange 回调单位为 px
+          WindowLayout.updateFromPx(size.width, size.height, this.readDensity());
+        });
+      } catch (e) {
+        console.warn('[MainAbility] windowSizeChange subscribe failed:', e);
+      }
+      return;
+    } catch (e1) {
+      console.warn('[MainAbility] getMainWindowSync failed:', e1);
+    }
+    // 回退 Promise 接口
+    try {
+      windowStage.getMainWindow().then((win: Window.Window) => {
+        this.applyWindowSize(win);
+        try {
+          win.on('windowSizeChange', (size: Size) => {
+            WindowLayout.updateFromPx(size.width, size.height, this.readDensity());
+          });
+        } catch (_e) {
+          // ignore
+        }
+      }).catch((e: Error) => {
+        console.warn('[MainAbility] getMainWindow failed:', e?.message ?? e);
+        this.applyDisplaySize();
+      });
+    } catch (e2) {
+      console.warn('[MainAbility] bindWindowLayout fallback display:', e2);
+      this.applyDisplaySize();
+    }
+  }
+
+  private applyWindowSize(win: Window.Window): void {
+    try {
+      const rect = win.getWindowProperties().windowRect;
+      const density = this.readDensity();
+      console.info('[MainAbility] windowRect px=' + rect.width + 'x' + rect.height +
+        ' density=' + density);
+      WindowLayout.updateFromPx(rect.width, rect.height, density);
+    } catch (e) {
+      console.warn('[MainAbility] applyWindowSize failed:', e);
+      this.applyDisplaySize();
+    }
+  }
+
+  private applyDisplaySize(): void {
+    try {
+      const d = display.getDefaultDisplaySync();
+      const density = d.densityPixels > 0 ? d.densityPixels : 1;
+      console.info('[MainAbility] display px=' + d.width + 'x' + d.height +
+        ' density=' + density);
+      WindowLayout.updateFromPx(d.width, d.height, density);
+    } catch (e) {
+      console.warn('[MainAbility] applyDisplaySize failed:', e);
+    }
+  }
+
+  private readDensity(): number {
+    try {
+      const d = display.getDefaultDisplaySync();
+      if (d.densityPixels > 0.1) {
+        return d.densityPixels;
+      }
+    } catch (_e) {
+      // ignore
+    }
+    return 2.5;
   }
 
   onWindowStageDestroy(): void {

@@ -1253,17 +1253,13 @@ struct ReaderPage {
   }
 
   private onReaderLandscapeLayoutChange_(mode: string): void {
-    if (this.landscapeLayout_ === mode) return;
-    // EPUB 暂不支持横屏双页模式，强制回退单页
-    if (mode === 'dual') {
-      UiUtil.showToast(this.getUIContext(), { message: 'EPUB 暂不支持双页模式', duration: 2000 });
-      return;
-    }
-    this.landscapeLayout_ = mode;
+    const normalized = mode === 'dual' ? 'dual' : 'single';
+    if (this.landscapeLayout_ === normalized) return;
+    this.landscapeLayout_ = normalized;
     this.applyStyleNow_();
     SettingsStore.getInstance()
       .init(UiUtil.getHostContext(this.getUIContext()))
-      .then(() => SettingsStore.getInstance().setReadLandscapeLayout(mode))
+      .then(() => SettingsStore.getInstance().setReadLandscapeLayout(normalized))
       .catch(() => {});
   }
 
@@ -1325,8 +1321,10 @@ struct ReaderPage {
   private applyStyleNow_(): void {
     this.runJs_('window.applyStyle && window.applyStyle(' + JSON.stringify(this.toWebStyle_()) + ')');
     this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(this.zoneActions) + ')');
-    // 横屏时注入 CSS 限制 EPUB 正文最大宽度并居中，避免行长过长
-    if (WindowLayout.isLandscape && WindowLayout.widthVp >= 840) {
+    // 单页横屏限制正文宽度；双页模式必须保留完整视口供 epub.js 切成两栏。
+    const limitLandscapeWidth = WindowLayout.isLandscape && WindowLayout.widthVp >= 840 &&
+      (this.isFoliate_ || this.isPdf_ || this.landscapeLayout_ !== 'dual');
+    if (limitLandscapeWidth) {
       const maxW = 720;
       const css = `#reader-content,#foliate-content,.content,body>div{max-width:${maxW}px !important;margin:0 auto !important;}`;
       this.runJs_(`var s=document.getElementById('legado-landscape-css');if(!s){s=document.createElement('style');s.id='legado-landscape-css';document.head.appendChild(s);}s.textContent=${JSON.stringify(css)}`);
@@ -1345,7 +1343,7 @@ struct ReaderPage {
     return {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
-      dualPage: !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual',
+      dualPage: false, // EPUB 暂不支持双页模式
       pdfMode: this.pdfMode,
       pdfAutoCrop: this.pdfAutoCrop,
       pdfDarken: this.pdfDarken,

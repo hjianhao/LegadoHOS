@@ -23,9 +23,14 @@
   var ACTION_NEXT_PAGE = 1;
   var ACTION_PREV_PAGE = 2;
   var BOOK_FONT_FAMILY = '__book__';
-  var PAGE_GAP = 0;
+  var SINGLE_PAGE_GAP = 0;
+  var DUAL_PAGE_GAP = 32;
+  var DUAL_PAGE_MIN_WIDTH = 840;
   var livePageFrame = 0;
   var lastLivePageKey = '';
+  var activeFlowMode = '';
+  var activeSpreadMode = '';
+  var activeLayoutGap = -1;
 
   function emit(type, data) {
     eventQueue.push({ type: type, data: data || {}, time: Date.now() });
@@ -455,6 +460,22 @@
     return { width: 0, height: 0, source: 'doc' };
   }
 
+  function dualPageEnabled() {
+    if (cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') return false;
+    if (currentStyle.dualPage !== true) return false;
+    var viewport = frameViewportSize();
+    return viewport.width >= DUAL_PAGE_MIN_WIDTH && viewport.width > viewport.height;
+  }
+
+  function currentLayoutSettings() {
+    var dualPage = dualPageEnabled();
+    return {
+      spread: dualPage ? 'always' : 'none',
+      minSpreadWidth: dualPage ? DUAL_PAGE_MIN_WIDTH : 999999,
+      gap: dualPage ? DUAL_PAGE_GAP : SINGLE_PAGE_GAP
+    };
+  }
+
   function tapViewportWidth() {
     var frameSize = frameViewportSize();
     if (frameSize.width > 0) return frameSize.width;
@@ -744,9 +765,10 @@
     if (!rendition) return;
     var run = function () {
       try {
-        syncLayoutSettings();
+        applySpreadLayout();
         rendition.resize();
         syncLayoutSettings();
+        alignToSpreadBoundary();
       } catch (e) {}
     };
     try {
@@ -761,43 +783,74 @@
 
   function syncLayoutSettings() {
     if (!rendition) return;
+    var layoutSettings = currentLayoutSettings();
     try {
       if (rendition.settings) {
-        rendition.settings.gap = PAGE_GAP;
-        rendition.settings.spread = 'none';
-        rendition.settings.minSpreadWidth = 999999;
+        rendition.settings.gap = layoutSettings.gap;
+        rendition.settings.spread = layoutSettings.spread;
+        rendition.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
       }
     } catch (e) {}
     try {
       if (rendition.manager && rendition.manager.settings) {
-        rendition.manager.settings.gap = PAGE_GAP;
-        rendition.manager.settings.spread = 'none';
-        rendition.manager.settings.minSpreadWidth = 999999;
+        rendition.manager.settings.gap = layoutSettings.gap;
+        rendition.manager.settings.spread = layoutSettings.spread;
+        rendition.manager.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
       }
     } catch (e2) {}
     try {
-      if (rendition.layout && rendition.layout.settings) {
-        rendition.layout.settings.gap = PAGE_GAP;
-        rendition.layout.settings.spread = 'none';
-        rendition.layout.settings.minSpreadWidth = 999999;
+      var liveLayout = rendition.manager && rendition.manager.layout;
+      if (liveLayout && liveLayout.settings) {
+        liveLayout.settings.gap = layoutSettings.gap;
+        liveLayout.settings.spread = layoutSettings.spread;
+        liveLayout.settings.minSpreadWidth = layoutSettings.minSpreadWidth;
       }
     } catch (e3) {}
+  }
+
+  function applySpreadLayout() {
+    if (!rendition) return;
+    var layoutSettings = currentLayoutSettings();
+    var layoutChanged = activeSpreadMode !== layoutSettings.spread || activeLayoutGap !== layoutSettings.gap;
+    syncLayoutSettings();
+    if (!layoutChanged) return;
+    try {
+      if (rendition.spread) rendition.spread(layoutSettings.spread, layoutSettings.minSpreadWidth);
+    } catch (e) {}
+    activeSpreadMode = layoutSettings.spread;
+    activeLayoutGap = layoutSettings.gap;
+  }
+
+  function alignToSpreadBoundary() {
+    if (!rendition || !dualPageEnabled()) return;
+    try {
+      var manager = rendition.manager;
+      var container = manager && manager.container;
+      var layout = manager && manager.layout;
+      var delta = Number(layout && layout.delta || 0);
+      var currentLeft = Number(container && container.scrollLeft || 0);
+      if (!manager || !container || delta <= 0) return;
+      var alignedLeft = Math.round(currentLeft / delta) * delta;
+      if (Math.abs(alignedLeft - currentLeft) > 1) {
+        manager.scrollTo(alignedLeft, Number(container.scrollTop || 0), true);
+      }
+    } catch (e) {}
   }
 
   function applyFlowLayout() {
     if (!rendition) return;
     var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
-    syncLayoutSettings();
-    try {
-      if (rendition.spread) rendition.spread('none', 999999);
-    } catch (e) {}
-    try {
-      if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
-    } catch (e2) {}
-    syncLayoutSettings();
+    var flowMode = scrolled ? 'scrolled-doc' : 'paginated';
+    if (activeFlowMode !== flowMode) {
+      try {
+        if (rendition.flow) rendition.flow(flowMode);
+      } catch (e) {}
+      activeFlowMode = flowMode;
+    }
+    applySpreadLayout();
     try {
       if (rendition.manager && rendition.manager.updateLayout) rendition.manager.updateLayout();
-    } catch (e3) {}
+    } catch (e2) {}
   }
 
   function setupContentHook() {
@@ -912,15 +965,19 @@
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
+      activeFlowMode = '';
+      activeSpreadMode = '';
+      activeLayoutGap = -1;
       book = ePub(bookUrl);
+      var initialLayoutSettings = currentLayoutSettings();
       rendition = book.renderTo('viewer', {
         width: '100%',
         height: '100%',
         manager: 'default',
-        spread: 'none',
-        minSpreadWidth: 999999,
+        spread: initialLayoutSettings.spread,
+        minSpreadWidth: initialLayoutSettings.minSpreadWidth,
         evenSpreads: false,
-        gap: PAGE_GAP,
+        gap: initialLayoutSettings.gap,
         flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();
@@ -931,6 +988,7 @@
       emitBookInfo();
 
       displayBook(target).then(function () {
+        alignToSpreadBoundary();
         loading(false);
         emit('ready', {});
       }).catch(function (err) {
@@ -991,6 +1049,7 @@
     }
     var result = rendition.next();
     Promise.resolve(result).then(function () {
+      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'nextPage failed: ' + errorMessage(err) });
@@ -1006,6 +1065,7 @@
     }
     var result = rendition.prev();
     Promise.resolve(result).then(function () {
+      alignToSpreadBoundary();
       applyToCurrentContentsSoon();
     }).catch(function (err) {
       emit('debug', { message: 'prevPage failed: ' + errorMessage(err) });
@@ -1072,5 +1132,9 @@
     if (bookUrl) {
       window.loadBook(bookUrl, qs('target'));
     }
+
+    window.addEventListener('resize', function () {
+      resizeRenditionSoon();
+    });
   });
 })();
