@@ -1500,8 +1500,18 @@ struct ReaderPage {
           this.applyStyleNow_();
         })
 
-      if (this.isLoading || this.loadError) {
-        this.LoadingLayer()
+	      if (this.isLoading || this.loadError) {
+	        this.LoadingLayer()
+	      }
+
+      // 透明触摸拦截层：WebView 的 ArkUI 手势识别器拦截了 DOM 触摸事件，
+      // 导致 bridge.js 的 touchstart/touchend 无法触发。在 WebView 上方叠一层
+      // 透明 Column 捕获单击显示菜单。菜单显示后移除拦截层，让菜单按钮可交互。
+      if (!this.showMenu && !this.isLoading) {
+        Column()
+          .width('100%').height('100%')
+          .hitTestBehavior(HitTestMode.Block)
+          .onClick(() => { this.showMenu = true; })
       }
 
       if (!this.isLoading && !this.loadError && this.cfg.showFooter) {
@@ -1532,17 +1542,6 @@ struct ReaderPage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.cfg.bgColor)
-    .gesture(
-      TapGesture({ count: 1 })
-        .onAction(() => {
-          // WebView 拦截了 ArkUI 触摸事件导致 foliate bridge 的 touchstart 不触发，
-          // 菜单无法通过 JS 回调显示。在根 Stack 上叠加 TapGesture 作为兜底。
-          // 与 WebView 的 PanRecognizer（滚动）不冲突。
-          if (!this.showMenu && !this.isLoading) {
-            this.showMenu = true;
-          }
-        })
-    )
   }
 
   @Builder
