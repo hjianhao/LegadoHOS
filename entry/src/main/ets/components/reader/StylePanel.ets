@@ -35,10 +35,6 @@ export struct StylePanel {
   @Prop pdfWhiten: number = 0;
   @State editingDayBgColor: string = '';
   @State editingDayTextColor: string = '';
-  /** 横屏排版模式：'auto' | 'single' | 'dual' */
-  @Prop landscapeLayout: string = 'auto';
-  /** 是否滚动模式（滚动模式不显示双页选项） */
-  @Prop flowMode: string = 'paginated';
 
   onChange?: (config: PageViewConfig) => void;
   onDismiss?: () => void;
@@ -46,8 +42,6 @@ export struct StylePanel {
   onPdfModeChange?: (mode: string) => void;
   onPdfOrientationChange?: (mode: string) => void;
   onPdfEnhanceChange?: (autoCrop: boolean, darken: number, whiten: number) => void;
-  /** 横屏排版模式变更回调 */
-  onLandscapeLayoutChange?: (layout: string) => void;
 
   aboutToAppear(): void {
     this.editingDayBgColor = this.dayBgColor || this.cfg.bgColor;
@@ -282,17 +276,6 @@ export struct StylePanel {
   // ===== 其他 =====
   @Builder buildOther() {
     Column() { }.width('100%').padding(12)
-    // 横屏排版设置（仅文本翻页模式显示双页选项）
-    Text('横屏排版').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
-    Row() {
-      this.landscapeChip('自动', 'auto')
-      this.landscapeChip('单页', 'single')
-      if (this.flowMode !== 'scrolled') {
-        this.landscapeChip('双页', 'dual')
-      }
-    }.width('100%').margin({ bottom: 6 })
-    Text('单页模式内容铺满屏幕，留白由边距控制；双页模式左右并排连续两页。')
-      .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 8 })
     if (this.showPdfEnhance) {
       Text($r('app.string.ui_0f68d35084')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width('100%').margin({ bottom: 4 })
       Row() {
@@ -339,17 +322,6 @@ export struct StylePanel {
       this.zhChip('简体', 'simplified')
       this.zhChip('繁体', 'traditional')
     }.width('100%')
-  }
-
-  @Builder landscapeChip(label: string, mode: string) {
-    Column() {
-      Text(label).fontSize(13)
-        .fontColor(this.landscapeLayout === mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
-        .padding({ top: 6, bottom: 6, left: 20, right: 20 })
-    }
-    .backgroundColor(this.landscapeLayout === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-    .borderRadius(16).margin({ right: 8 })
-    .onClick(() => { this.onLandscapeLayoutChange?.(mode); })
   }
 
   @Builder pdfModeChip(label: string, mode: string) {

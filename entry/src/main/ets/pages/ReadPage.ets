@@ -13,6 +13,7 @@ import { convertChinese } from '../util/ChineseConverter';
 import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../components/reader/PageView';
 import { ClickAction, DEFAULT_ZONE_ACTIONS } from '../components/reader/ClickAction';
 import { StylePanel } from '../components/reader/StylePanel';
+import { LandscapeLayoutPanel } from '../components/reader/LandscapeLayoutPanel';
 import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
 import { ReadTopMenu } from '../components/reader/ReadTopMenu';
 import { ReadProgressBar } from '../components/reader/ReadProgressBar';
@@ -100,6 +101,7 @@ struct ReadPage {
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
   @State showAloud: boolean = false;
+  @State showLandscapeLayout: boolean = false;
   @State showBookmarkDlg: boolean = false;
   /** 书签草稿（原文/笔记初值） */
   @State bookmarkDraftText_: string = '';
@@ -116,10 +118,10 @@ struct ReadPage {
   /** 阅读中定时上传进度的定时器 */
   private progressUploadTimer_: number = -1;
   @State flowMode: string = 'paginated';
-  /** 横屏排版模式：'auto' | 'single' | 'dual' */
-  @State landscapeLayout_: string = 'auto';
+  /** 横屏排版模式：'single' | 'dual' */
+  @State landscapeLayout_: string = 'single';
   /** 双页模式中间页缝宽度（vp） */
-  @State dualPageGutter_: number = 24;
+  @State dualPageGutter_: number = 48;
   /** 当前是否实际使用双页渲染（由 landscapeLayout_ + 窗口尺寸+ 流模式综合判断） */
   @State isDualPage_: boolean = false;
   /** 重排版前保存的字符偏移，用于旋转/尺寸变化后恢复阅读位置 */
@@ -1207,7 +1209,6 @@ struct ReadPage {
    * 根据横屏排版设置和当前窗口尺寸，判断是否应使用双页模式。
    * - 竖屏：始终单页
    * - 滚动模式：始终单列
-   * - 'auto'：横屏 + 宽度 >= 1000vp -> 双页
    * - 'dual'：横屏 + 宽度 >= 840vp -> 双页
    * - 'single' 或其他：单页
    */
@@ -1216,7 +1217,6 @@ struct ReadPage {
     if (!WindowLayout.isLandscape) return false;
     const w = WindowLayout.widthVp;
     if (this.landscapeLayout_ === 'dual') return w >= 840;
-    if (this.landscapeLayout_ === 'auto') return w >= 1000;
     return false;
   }
 
@@ -2366,6 +2366,7 @@ struct ReadPage {
             onBack: () => { UiUtil.back(this.getUIContext()); },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
             onBookmark: () => { this.showMenu = false; this.addBookmark_(); },
+            onLandscape: () => { this.showMenu = false; this.showLandscapeLayout = true; },
             onMore: () => { this.showReadToolsMenu_(); },
           })
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
@@ -2399,9 +2400,16 @@ struct ReadPage {
             dayBgColor: this.readBgColor,
             dayTextColor: this.readTextColor,
             onNightModeToggle: (night: boolean) => { this.onNightModeToggle(night); },
-            landscapeLayout: this.landscapeLayout_,
-            flowMode: this.flowMode,
-            onLandscapeLayoutChange: (layout: string) => { this.onLandscapeLayoutChange_(layout); },
+          })
+        }.width('100%').height('100%')
+      }
+      if (this.showLandscapeLayout) {
+        Column() {
+          Column().width('100%').layoutWeight(1).onClick(() => { this.showLandscapeLayout = false; })
+          LandscapeLayoutPanel({
+            mode: this.landscapeLayout_,
+            onDismiss: () => { this.showLandscapeLayout = false; },
+            onChange: (mode: string) => { this.onLandscapeLayoutChange_(mode); },
           })
         }.width('100%').height('100%')
       }
