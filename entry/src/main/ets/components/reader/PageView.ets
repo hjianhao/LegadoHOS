@@ -251,6 +251,9 @@ export struct PageView {
             return false;
           },
         } as EditMenuOptions)
+        .onClick((event: ClickEvent) => {
+          this.handleClick_(event.x, event.y);
+        })
     }
   }
 
