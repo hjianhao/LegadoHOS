@@ -1455,7 +1455,12 @@ struct ReaderPage {
 
   private dispatchTapAction_(tap: TapActionEvent): void {
     const action = typeof tap.action === 'number' ? tap.action : ClickAction.NONE;
-    console.info(`[ReaderPage] publication tap zone=${tap.zone ?? -1} action=${action}`);
+    this.doReaderAction_(action, tap.zone);
+  }
+
+  /** 按动作代码执行读者操作（用于 WebView 拦截层和 bridge.js 回调） */
+  private doReaderAction_(action: number, zone?: number): void {
+    console.info(`[ReaderPage] reader action=${action} zone=${zone ?? -1}`);
     switch (action) {
       case ClickAction.NONE:
         break;
@@ -1476,6 +1481,9 @@ struct ReaderPage {
         break;
       case ClickAction.CHAPTER_LIST:
         this.showToc = true;
+        break;
+      case ClickAction.READ_ALOUD:
+        this.showAloud = true;
         break;
       default:
         this.showMenu = true;
@@ -1522,8 +1530,8 @@ struct ReaderPage {
 	      }
 
       // 透明触摸拦截层：WebView 的 ArkUI 手势识别器拦截了 DOM 触摸事件，
-      // 导致 bridge.js 的 touchstart/touchend 无法触发。在 WebView 上方叠一层透明 Column，
-      // 根据点击区域分发：左右各 1/3 区域转发翻页，中间 1/3 区域显示菜单。
+      // 导致 bridge.js 的 touchstart/touchend 无法触发。
+      // 拦截触摸后按 9 宫格区域 + zoneActions 配置分发动作。
       if (!this.showMenu && !this.isLoading) {
         Column()
           .width('100%').height('100%')
@@ -1532,19 +1540,23 @@ struct ReaderPage {
             TapGesture({ count: 1 })
               .onAction((event: GestureEvent) => {
                 const w = WindowLayout.widthVp > 0 ? WindowLayout.widthVp : 360;
+                const h = WindowLayout.heightVp > 0 ? WindowLayout.heightVp : 640;
                 const touch = event.fingerList?.[0];
-                const x = touch ? touch.localX : 0;
-                // 左右 1/3 → 翻页；中间 1/3 → 菜单
-                if (x < w / 3) {
-                  // 左 1/3：上一页
-                  this.runJs_('window.prevPage && window.prevPage()');
-                } else if (x > w * 2 / 3) {
-                  // 右 1/3：下一页
-                  this.runJs_('window.nextPage && window.nextPage()');
+                if (!touch) { this.showMenu = true; return; }
+                const x = touch.localX; const y = touch.localY;
+                // 按 9 宫格计算区域（与 PageView.handleClick_ 一致）
+                const x3 = w / 3; const y3 = h / 3;
+                let zone: number = 4;
+                if (y < y3) {
+                  zone = x < x3 ? 0 : (x > w - x3 ? 2 : 1);
+                } else if (y < y3 * 2) {
+                  zone = x < x3 ? 3 : (x > w - x3 ? 5 : 4);
                 } else {
-                  // 中间 1/3：菜单
-                  this.showMenu = true;
+                  zone = x < x3 ? 6 : (x > w - x3 ? 8 : 7);
                 }
+                const actions = this.zoneActions.length === 9 ? this.zoneActions : [];
+                const action = actions[zone] ?? -1;
+                this.doReaderAction_(action, zone);
               })
           )
       }
