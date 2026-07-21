@@ -1217,7 +1217,6 @@ struct ReadPage {
     if (this.landscapeLayout_ === 'dual') return w >= 840;
     return false;
   }
-
   /** 计算传入 TextLayout 的有效分页宽度 */
   private effectiveLayoutWidth_(): number {
     if (this.isDualPage_) {
@@ -1407,6 +1406,9 @@ struct ReadPage {
   /** 横屏排版模式变更：持久化 + 重新分页 */
   private onLandscapeLayoutChange_(layout: string): void {
     this.landscapeLayout_ = layout;
+    console.info('[ReadPage] onLandscapeLayoutChange: ' + layout +
+      ' isLandscape=' + WindowLayout.isLandscape + ' widthVp=' + WindowLayout.widthVp +
+      ' flowMode=' + this.flowMode);
     (async () => {
       try {
         const s = SettingsStore.getInstance();
