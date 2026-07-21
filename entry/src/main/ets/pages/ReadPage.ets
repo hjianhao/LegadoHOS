@@ -2511,6 +2511,9 @@ struct ReadPage {
       const w = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       const h = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
       if (w > 0 && h > 0) {
+        // 同步更新全局窗口布局状态（ReadPage 通过 router 打开，不在 MainPage 内）
+        // Area 的 width/height 单位为 vp
+        WindowLayout.update(w, h);
         // 旋转/尺寸变化时保存当前页字符偏移，供 layoutText 恢复位置
         if (this.pages.length > 0 && this.pageIndex < this.pages.length && this.text) {
           this.preserveCharOffset_ = this.pages[this.pageIndex].startOffset;

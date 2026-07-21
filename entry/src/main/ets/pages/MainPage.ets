@@ -237,9 +237,8 @@ struct MainPage {
       const width = typeof newArea.width === 'number' ? newArea.width : Number(newArea.width);
       const height = typeof newArea.height === 'number' ? newArea.height : Number(newArea.height);
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-        const widthVp = this.getUIContext().px2vp(width);
-        const heightVp = this.getUIContext().px2vp(height);
-        WindowLayout.update(widthVp, heightVp);
+        // Area 的 width/height 单位为 vp，直接使用
+        WindowLayout.update(width, height);
       }
     })
   }
