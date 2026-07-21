@@ -759,37 +759,39 @@
     }
   }
 
-  function syncLayoutSettings() {
-    if (!rendition) return;
-    try {
-      if (rendition.settings) {
-        rendition.settings.gap = PAGE_GAP;
-        rendition.settings.spread = 'none';
-        rendition.settings.minSpreadWidth = 999999;
-      }
-    } catch (e) {}
-    try {
-      if (rendition.manager && rendition.manager.settings) {
-        rendition.manager.settings.gap = PAGE_GAP;
-        rendition.manager.settings.spread = 'none';
-        rendition.manager.settings.minSpreadWidth = 999999;
-      }
-    } catch (e2) {}
-    try {
-      if (rendition.layout && rendition.layout.settings) {
-        rendition.layout.settings.gap = PAGE_GAP;
-        rendition.layout.settings.spread = 'none';
-        rendition.layout.settings.minSpreadWidth = 999999;
-      }
-    } catch (e3) {}
-  }
+	function syncLayoutSettings() {
+	  if (!rendition) return;
+	  var isDual = currentStyle.dualPage === true;
+	  try {
+	    if (rendition.settings) {
+	      rendition.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e) {}
+	  try {
+	    if (rendition.manager && rendition.manager.settings) {
+	      rendition.manager.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.manager.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.manager.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e2) {}
+	  try {
+	    if (rendition.layout && rendition.layout.settings) {
+	      rendition.layout.settings.gap = isDual ? 24 : PAGE_GAP;
+	      rendition.layout.settings.spread = isDual ? 'auto' : 'none';
+	      rendition.layout.settings.minSpreadWidth = isDual ? 840 : 999999;
+	    }
+	  } catch (e3) {}
+	}
 
   function applyFlowLayout() {
     if (!rendition) return;
     var scrolled = cssValue(currentStyle.flowMode, 'paginated') === 'scrolled';
+    var isDual = currentStyle.dualPage === true && !scrolled;
     syncLayoutSettings();
     try {
-      if (rendition.spread) rendition.spread('none', 999999);
+      if (rendition.spread) rendition.spread(isDual ? 'auto' : 'none', isDual ? 840 : 999999);
     } catch (e) {}
     try {
       if (rendition.flow) rendition.flow(scrolled ? 'scrolled-doc' : 'paginated');
@@ -912,15 +914,16 @@
       if (book) {
         try { book.destroy(); } catch (e) {}
       }
-      book = ePub(bookUrl);
-      rendition = book.renderTo('viewer', {
-        width: '100%',
-        height: '100%',
-        manager: 'default',
-        spread: 'none',
-        minSpreadWidth: 999999,
-        evenSpreads: false,
-        gap: PAGE_GAP,
+	      book = ePub(bookUrl);
+	      var isDual = currentStyle.dualPage === true;
+	      rendition = book.renderTo('viewer', {
+	        width: '100%',
+	        height: '100%',
+	        manager: 'default',
+	        spread: isDual ? 'auto' : 'none',
+	        minSpreadWidth: isDual ? 840 : 999999,
+	        evenSpreads: false,
+	        gap: isDual ? 24 : PAGE_GAP,
         flow: cssValue(currentStyle.flowMode, 'paginated') === 'scrolled' ? 'scrolled-doc' : 'paginated'
       });
       applyFlowLayout();

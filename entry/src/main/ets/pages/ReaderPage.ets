@@ -73,6 +73,7 @@ interface EpubTocItem {
 interface WebReaderStyle {
   animType: number;
   flowMode: string;
+  dualPage: boolean;
   pdfMode: string;
   pdfAutoCrop: boolean;
   pdfDarken: number;
@@ -163,6 +164,7 @@ struct ReaderPage {
   @State readNightMode: boolean = false;
   @State readFollowTheme: boolean = true;
   @State flowMode: string = 'paginated';
+  @State landscapeLayout_: string = 'single';
   @State pdfMode: string = 'original';
   @State pdfOrientation: string = 'auto';
   @State pdfAutoCrop: boolean = false;
@@ -480,7 +482,8 @@ struct ReaderPage {
     const textColorPromise = s.get<string>(EPUB_READ_TEXT_KEY, ThemeColors.readingTextDefault());
     const nightModePromise = s.get<boolean>(EPUB_READ_NIGHT_MODE_KEY, false);
     const followThemePromise = s.get<boolean>(EPUB_READ_FOLLOW_THEME_KEY, true);
-    const flowModePromise = s.get<string>(EPUB_FLOW_MODE_KEY, 'paginated');
+	    const flowModePromise = s.get<string>(EPUB_FLOW_MODE_KEY, 'paginated');
+	    const landscapeLayoutPromise = s.getReadLandscapeLayout();
     const pdfAutoCropPromise = s.get<boolean>(PDF_AUTO_CROP_KEY, false);
     const pdfDarkenPromise = s.get<number>(PDF_DARKEN_KEY, 0);
     const pdfWhitenPromise = s.get<number>(PDF_WHITEN_KEY, 0);
@@ -546,7 +549,8 @@ struct ReaderPage {
     }
     this.readNightMode = await nightModePromise;
     this.readFollowTheme = await followThemePromise;
-    this.flowMode = await flowModePromise === 'scrolled' ? 'scrolled' : 'paginated';
+	    this.flowMode = await flowModePromise === 'scrolled' ? 'scrolled' : 'paginated';
+	    this.landscapeLayout_ = await landscapeLayoutPromise;
     this.pdfAutoCrop = await pdfAutoCropPromise;
     this.pdfDarken = Math.min(100, Math.max(0, await pdfDarkenPromise));
     this.pdfWhiten = Math.min(100, Math.max(0, await pdfWhitenPromise));
@@ -1248,6 +1252,18 @@ struct ReaderPage {
       .catch(() => {});
   }
 
+  private onReaderLandscapeLayoutChange_(mode: string): void {
+    if (this.landscapeLayout_ === mode) return;
+    this.landscapeLayout_ = mode;
+    // EPUB 仅支持分页模式下的双页
+    if (mode === 'dual' && this.flowMode === 'scrolled') return;
+    this.applyStyleNow_();
+    SettingsStore.getInstance()
+      .init(UiUtil.getHostContext(this.getUIContext()))
+      .then(() => SettingsStore.getInstance().setReadLandscapeLayout(mode))
+      .catch(() => {});
+  }
+
   private onPdfModeChange_(mode: string): void {
     const normalized = mode === 'reflow' ? 'reflow' : 'original';
     if (this.pdfMode === normalized) return;
@@ -1326,6 +1342,7 @@ struct ReaderPage {
     return {
       animType: this.cfg.animType,
       flowMode: this.flowMode,
+      dualPage: !this.isFoliate_ && !this.isPdf_ && this.landscapeLayout_ === 'dual',
       pdfMode: this.pdfMode,
       pdfAutoCrop: this.pdfAutoCrop,
       pdfDarken: this.pdfDarken,
@@ -1505,13 +1522,31 @@ struct ReaderPage {
 	      }
 
       // 透明触摸拦截层：WebView 的 ArkUI 手势识别器拦截了 DOM 触摸事件，
-      // 导致 bridge.js 的 touchstart/touchend 无法触发。在 WebView 上方叠一层
-      // 透明 Column 捕获单击显示菜单。菜单显示后移除拦截层，让菜单按钮可交互。
+      // 导致 bridge.js 的 touchstart/touchend 无法触发。在 WebView 上方叠一层透明 Column，
+      // 根据点击区域分发：左右各 1/3 区域转发翻页，中间 1/3 区域显示菜单。
       if (!this.showMenu && !this.isLoading) {
         Column()
           .width('100%').height('100%')
           .hitTestBehavior(HitTestMode.Block)
-          .onClick(() => { this.showMenu = true; })
+          .gesture(
+            TapGesture({ count: 1 })
+              .onAction((event: GestureEvent) => {
+                const w = WindowLayout.widthVp > 0 ? WindowLayout.widthVp : 360;
+                const touch = event.fingerList?.[0];
+                const x = touch ? touch.localX : 0;
+                // 左右 1/3 → 翻页；中间 1/3 → 菜单
+                if (x < w / 3) {
+                  // 左 1/3：上一页
+                  this.runJs_('window.prevPage && window.prevPage()');
+                } else if (x > w * 2 / 3) {
+                  // 右 1/3：下一页
+                  this.runJs_('window.nextPage && window.nextPage()');
+                } else {
+                  // 中间 1/3：菜单
+                  this.showMenu = true;
+                }
+              })
+          )
       }
 
       if (!this.isLoading && !this.loadError && this.cfg.showFooter) {
@@ -1774,15 +1809,17 @@ struct ReaderPage {
   ZoneConfigLayer() {
     Column() {
       Blank().layoutWeight(1).onClick(() => { this.showZoneConfig = false; })
-	      ClickActionConfig({
-	        onDismiss: () => { this.showZoneConfig = false; },
-	        onChanged: (actions: number[]) => {
-	          this.zoneActions = actions;
-	          this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(actions) + ')');
-	        },
-	        flowMode: this.flowMode,
-	        onFlowModeChange: (mode: string) => { this.onFlowModeChange_(mode); },
-	      })
+		      ClickActionConfig({
+        onDismiss: () => { this.showZoneConfig = false; },
+        onChanged: (actions: number[]) => {
+          this.zoneActions = actions;
+          this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(actions) + ')');
+        },
+        flowMode: this.flowMode,
+        landscapeLayout: this.landscapeLayout_,
+        onFlowModeChange: (mode: string) => { this.onFlowModeChange_(mode); },
+        onLandscapeLayoutChange: (mode: string) => { this.onReaderLandscapeLayoutChange_(mode); },
+      })
     }
     .width('100%')
     .height('100%')
