@@ -1532,6 +1532,17 @@ struct ReaderPage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.cfg.bgColor)
+    .gesture(
+      TapGesture({ count: 1 })
+        .onAction(() => {
+          // WebView 拦截了 ArkUI 触摸事件导致 foliate bridge 的 touchstart 不触发，
+          // 菜单无法通过 JS 回调显示。在根 Stack 上叠加 TapGesture 作为兜底。
+          // 与 WebView 的 PanRecognizer（滚动）不冲突。
+          if (!this.showMenu && !this.isLoading) {
+            this.showMenu = true;
+          }
+        })
+    )
   }
 
   @Builder
