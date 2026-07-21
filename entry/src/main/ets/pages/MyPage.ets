@@ -20,6 +20,9 @@ import { ReadRecordPage } from './ReadRecordPage';
 import { BookmarkPage } from './BookmarkPage';
 import { WebServicePage } from './WebServicePage';
 import { AboutPage } from './AboutPage';
+import { AiConfigPage } from './AiConfigPage';
+import { CacheManagePage } from './CacheManagePage';
+import { BackupSettingsPage } from './BackupSettingsPage';
 
 interface MenuEntry {
   icon: string;
@@ -37,11 +40,12 @@ export struct MyPage {
   @State localWidthVp: number = 0;
   @State useSplitNav: boolean = false;
   /**
-   * 当前详情页。用 @State 驱动右侧重建；同时写入 AppStorage 供 UiUtil.back 清空。
+   * 当前详情页。@State 驱动 UI；与 AppStorage myEmbeddedDetail 双向同步
+   * （Settings 内 AI/缓存/备份 通过写 AppStorage 切换右侧，避免 router 全屏）
    */
   @State selectedPage: string = '';
-  /** UiUtil.back 清空详情时递增，驱动本页同步 */
-  @StorageLink('myEmbeddedDetailCleared') @Watch('onEmbeddedCleared') embeddedClearToken: number = 0;
+  /** 监听 Settings 等子页请求切换右侧详情 / UiUtil.back 清空 */
+  @StorageLink('myEmbeddedDetail') @Watch('onStorageDetailChanged') storageDetail: string = '';
 
   private readonly menuItems: MenuEntry[] = [
     { icon: '设', title: '设置', desc: '阅读、搜索、主题等全局设置', page: 'pages/SettingsPage' },
@@ -57,7 +61,6 @@ export struct MyPage {
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
     AppStorage.setOrCreate('myEmbeddedDetail', '');
-    AppStorage.setOrCreate('myEmbeddedDetailCleared', 0);
     this.syncSplitFromDisplay('aboutToAppear');
     // 宽屏默认打开设置，避免右侧空白被误认为「没分栏」
     if (this.useSplitNav && this.selectedPage.length === 0) {
@@ -69,10 +72,21 @@ export struct MyPage {
     this.syncSplitFromDisplay('onPageShow');
   }
 
-  private onEmbeddedCleared(): void {
-    // 子页点返回：右侧回到默认「设置」（不销毁分栏）
-    if (this.useSplitNav) {
-      this.selectPage('pages/SettingsPage');
+  /**
+   * AppStorage myEmbeddedDetail 变化：
+   * - Settings 请求打开 AI/缓存/备份
+   * - UiUtil.back 从子页回到设置
+   */
+  private onStorageDetailChanged(): void {
+    if (!this.useSplitNav) {
+      return;
+    }
+    if (this.storageDetail.length === 0) {
+      return;
+    }
+    if (this.storageDetail !== this.selectedPage) {
+      console.info('[MyPage] storage detail -> ' + this.storageDetail);
+      this.selectedPage = this.storageDetail;
     }
   }
 
@@ -104,12 +118,19 @@ export struct MyPage {
 
   private selectPage(page: string): void {
     this.selectedPage = page;
-    AppStorage.setOrCreate('myEmbeddedDetail', page);
+    // 与 StorageLink 同步；值相同则跳过，避免 Watch 死循环
+    const cur = AppStorage.get<string>('myEmbeddedDetail') ?? '';
+    if (cur !== page) {
+      AppStorage.setOrCreate('myEmbeddedDetail', page);
+    }
   }
 
   private clearDetail(): void {
     this.selectedPage = '';
-    AppStorage.setOrCreate('myEmbeddedDetail', '');
+    const cur = AppStorage.get<string>('myEmbeddedDetail') ?? '';
+    if (cur.length > 0) {
+      AppStorage.setOrCreate('myEmbeddedDetail', '');
+    }
   }
 
   goTo(page: string): void {
@@ -260,6 +281,12 @@ export struct MyPage {
     Column() {
       if (this.selectedPage === 'pages/SettingsPage') {
         SettingsPage()
+      } else if (this.selectedPage === 'pages/AiConfigPage') {
+        AiConfigPage()
+      } else if (this.selectedPage === 'pages/CacheManagePage') {
+        CacheManagePage()
+      } else if (this.selectedPage === 'pages/BackupSettingsPage') {
+        BackupSettingsPage()
       } else if (this.selectedPage === 'pages/BookSourcePage') {
         BookSourcePage()
       } else if (this.selectedPage === 'pages/ReplaceRulePage') {

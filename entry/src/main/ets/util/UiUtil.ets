@@ -86,13 +86,14 @@ export class UiUtil {
     } catch (_e) {
       // ignore，继续后续策略
     }
-    // 2) 「我的」宽屏内嵌详情：通知清空右侧（MyPage 监听 AppStorage）
+    // 2) 「我的」宽屏内嵌详情栈：
+    //    AI/缓存/备份 → 设置；已在设置则吞掉返回（左侧还可点其他项）
     try {
       const embedded = AppStorage.get<string>('myEmbeddedDetail') ?? '';
       if (embedded.length > 0) {
-        AppStorage.setOrCreate('myEmbeddedDetail', '');
-        // 发事件标记，MyPage onPageShow / 轮询 Storage 时会同步 @State
-        AppStorage.setOrCreate('myEmbeddedDetailCleared', Date.now());
+        if (embedded !== 'pages/SettingsPage') {
+          AppStorage.setOrCreate('myEmbeddedDetail', 'pages/SettingsPage');
+        }
         return;
       }
     } catch (_e) {

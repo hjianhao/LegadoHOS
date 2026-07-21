@@ -1275,14 +1275,18 @@ struct ReaderPage {
    */
   private epubNextPage_(): void {
     if (!this.controllerAttached_) return;
-    this.runJs_('window.nextPage && window.nextPage()');
-    this.runJs_('window.nextPage && window.nextPage()');
+    // epub.js spread 模式下 rendition.next() 返回 Promise，
+    // 必须等第一次完成后再翻第二次，否则两个 next() 并行执行导致页面错位
+    this.controller.runJavaScript('window.nextPage && window.nextPage()', () => {
+      this.runJs_('window.nextPage && window.nextPage()');
+    });
   }
 
   private epubPrevPage_(): void {
     if (!this.controllerAttached_) return;
-    this.runJs_('window.prevPage && window.prevPage()');
-    this.runJs_('window.prevPage && window.prevPage()');
+    this.controller.runJavaScript('window.prevPage && window.prevPage()', () => {
+      this.runJs_('window.prevPage && window.prevPage()');
+    });
   }
 
   private onPdfModeChange_(mode: string): void {

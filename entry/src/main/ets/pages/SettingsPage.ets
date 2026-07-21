@@ -124,25 +124,6 @@ export struct SettingsPage {
     return this.useSettingsSplit && !this.isEmbeddedInMy;
   }
 
-  private get activeSection(): string {
-    // 双栏内容区：main 视为第一项
-    if (this.isSettingsSplit && (this.currentSection === 'main' || this.currentSection.length === 0)) {
-      return 'read';
-    }
-    return this.currentSection;
-  }
-
-  /** 当前分类标题 */
-  private sectionTitle(): string {
-    const key = this.activeSection;
-    for (let i = 0; i < this.categories.length; i++) {
-      if (this.categories[i].key === key) {
-        return this.categories[i].title;
-      }
-    }
-    return '设置';
-  }
-
   aboutToAppear(): void {
     this.isDark = AppTheme.getInstance().isDark;
     this.isFollowSystem = AppTheme.getInstance().isFollowSystem;
@@ -248,11 +229,7 @@ export struct SettingsPage {
     Column() {
       // 顶栏
       Row() {
-        // 嵌在「我的」右侧时仍显示返回（清空右侧）；双栏下不进入子 section 返回逻辑
         AppBackButton({ onBack: () => {
-          // 内嵌 + 二级页：先回到设置菜单；内嵌 + 菜单：交给 MyPage 清空/还原
-          // 全屏双栏 / 全屏主列表：router back
-          // 全屏子 section：回主列表
           if (this.isEmbeddedInMy) {
             if (this.currentSection === 'main') {
               UiUtil.back(this.getUIContext());
@@ -267,7 +244,7 @@ export struct SettingsPage {
         } })
         Text(this.isSettingsSplit || this.currentSection === 'main'
           ? '设置'
-          : this.sectionTitle())
+          : this.sectionTitleOf(this.currentSection))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -276,10 +253,70 @@ export struct SettingsPage {
         .backgroundColor(ThemeColors.surface(this.isDark))
         .border({ width: { bottom: 0.5 }, color: ThemeColors.outlineVariant(this.isDark) })
 
+      // 内容区：分支全部写在 build() 内，避免嵌套 @Builder if-else 不随 @State 重建
       if (this.isSettingsSplit) {
-        this.buildSplitBody()
+        // 全屏宽屏：左分类 + 右详情
+        Row() {
+          Column() {
+            this.buildCategoryList(true)
+          }
+          .width(this.sizeClass >= WindowSizeClass.LARGE ? 260 : 220)
+          .constraintSize({ minWidth: 200, maxWidth: 280 })
+          .height('100%')
+          .flexShrink(0)
+          .backgroundColor(ThemeColors.surface(this.isDark))
+
+          Column()
+            .width(1)
+            .height('100%')
+            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+            .flexShrink(0)
+
+          Column() {
+            Text(this.sectionTitleOf(this.contentSectionKey()))
+              .fontSize(18)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(ThemeColors.onBackground(this.isDark))
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+            Scroll() {
+              Column() {
+                this.buildSectionByKey()
+              }
+              .width('100%')
+              .constraintSize({ maxWidth: ContentMaxWidth.FORM })
+              .alignItems(HorizontalAlign.Start)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .scrollBar(BarState.Auto)
+            .align(Alignment.TopStart)
+            .edgeEffect(EdgeEffect.Spring)
+          }
+          .layoutWeight(1)
+          .constraintSize({ minWidth: 0 })
+          .height('100%')
+          .padding({ left: 4, right: 12, bottom: 12 })
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else if (this.currentSection === 'main') {
+        // 内嵌 / 手机：二级菜单列表
+        this.buildCategoryList(false)
       } else {
-        this.buildCompactBody()
+        // 内嵌 / 手机：具体子设置（直接按 currentSection 分支，不经嵌套 Builder）
+        Scroll() {
+          Column() {
+            this.buildSectionByKey()
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+        .edgeEffect(EdgeEffect.Spring)
       }
     }
     .width('100%')
@@ -289,7 +326,6 @@ export struct SettingsPage {
       const w = typeof area.width === 'number' ? area.width : Number(area.width);
       if (Number.isFinite(w) && w > 0) {
         this.localWidthVp = w;
-        // 内嵌时不开启二次分栏
         if (!this.isEmbeddedInMy && w >= 600) {
           this.useSettingsSplit = true;
         }
@@ -297,80 +333,73 @@ export struct SettingsPage {
     })
   }
 
-  /** 宽屏：左分类 + 右配置 */
-  @Builder
-  private buildSplitBody() {
-    Row() {
-      Column() {
-        this.buildCategoryList(true)
-      }
-      .width(this.sizeClass >= WindowSizeClass.LARGE ? 260 : 220)
-      .height('100%')
-      .backgroundColor(ThemeColors.surface(this.isDark))
-
-      Divider()
-        .vertical(true)
-        .strokeWidth(0.5)
-        .color(ThemeColors.outlineVariant(this.isDark))
-
-      Column() {
-        Text(this.sectionTitle())
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(ThemeColors.onBackground(this.isDark))
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 4 })
-        Scroll() {
-          Column() {
-            this.buildSectionContent()
-          }
-          .width('100%')
-          .constraintSize({ maxWidth: ContentMaxWidth.FORM })
-          .alignItems(HorizontalAlign.Start)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .scrollBar(BarState.Auto)
-        .align(Alignment.TopStart)
-        .edgeEffect(EdgeEffect.Spring)
-      }
-      .layoutWeight(1)
-      .height('100%')
-      .padding({ left: 4, right: 12, bottom: 12 })
-      .alignItems(HorizontalAlign.Start)
+  /** 双栏右侧 / 标题用的 section key（main 时默认 read） */
+  private contentSectionKey(): string {
+    if (this.currentSection === 'main' || this.currentSection.length === 0) {
+      return 'read';
     }
-    .layoutWeight(1)
-    .width('100%')
+    return this.currentSection;
   }
 
-  /** 手机：单列逐级 */
-  @Builder
-  private buildCompactBody() {
-    if (this.currentSection === 'main') {
-      this.buildCategoryList(false)
-    } else {
-      Scroll() {
-        Column() {
-          this.buildSectionContent()
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
+  private sectionTitleOf(key: string): string {
+    for (let i = 0; i < this.categories.length; i++) {
+      if (this.categories[i].key === key) {
+        return this.categories[i].title;
       }
-      .width('100%')
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
     }
+    return '设置';
   }
 
   /** 打开设置分类：内嵌 section 或 classic router 打开独立子页 */
   private openCategory(item: SettingCategory): void {
+    console.info('[SettingsPage] openCategory key=' + item.key + ' page=' + item.page +
+      ' embedded=' + this.isEmbeddedInMy + ' beforeSection=' + this.currentSection);
     if (item.page.length > 0) {
-      // 独立子页必须走 classic router，NavPathStack 当前会空白
+      if (this.isEmbeddedInMy) {
+        // 嵌在「我的」右侧：切换右侧详情，禁止 router 全屏
+        console.info('[SettingsPage] embed navigate to ' + item.page);
+        AppStorage.setOrCreate('myEmbeddedDetail', item.page);
+        return;
+      }
       UiUtil.pushUrl(this.getUIContext(), { url: item.page });
       return;
     }
     this.currentSection = item.key;
+    console.info('[SettingsPage] currentSection now=' + this.currentSection);
+  }
+
+  /**
+   * 按 currentSection 渲染子设置。
+   * 直接读 @State，避免 @Builder(param) 参数不随状态刷新。
+   */
+  @Builder
+  buildSectionByKey() {
+    if (this.currentSection === 'read') {
+      this.buildReadSettings()
+    } else if (this.currentSection === 'tts') {
+      this.buildTtsSettings()
+    } else if (this.currentSection === 'comic') {
+      this.buildComicSettings()
+    } else if (this.currentSection === 'search') {
+      this.buildSearchSettings()
+    } else if (this.currentSection === 'theme') {
+      this.buildThemeSettings()
+    } else if (this.currentSection === 'network') {
+      this.buildNetSettings()
+    } else if (this.currentSection === 'about') {
+      this.buildAboutPage()
+    } else if (this.currentSection === 'main' && this.isSettingsSplit) {
+      // 全屏双栏默认阅读设置
+      this.buildReadSettings()
+    } else {
+      Column() {
+        Text('未知设置项: ' + this.currentSection)
+          .fontSize(14)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+      }
+      .width('100%')
+      .padding(24)
+    }
   }
 
   @Builder
@@ -384,7 +413,7 @@ export struct SettingsPage {
                 .width(3)
                 .height(24)
                 .borderRadius(2)
-                .backgroundColor(this.activeSection === item.key
+                .backgroundColor(this.contentSectionKey() === item.key
                   ? ThemeColors.primary(this.isDark)
                   : ThemeColors.transparent())
                 .margin({ right: 10 })
@@ -392,13 +421,13 @@ export struct SettingsPage {
             Text(item.icon)
               .fontSize(splitMode ? 18 : 22)
               .margin({ right: 12 })
-              .fontColor(this.activeSection === item.key && splitMode
+              .fontColor(this.contentSectionKey() === item.key && splitMode
                 ? ThemeColors.primary(this.isDark)
                 : ThemeColors.onBackground(this.isDark))
             Text(item.title)
               .fontSize(splitMode ? 15 : 16)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.activeSection === item.key && splitMode
+              .fontColor(this.contentSectionKey() === item.key && splitMode
                 ? ThemeColors.primary(this.isDark)
                 : ThemeColors.onBackground(this.isDark))
               .layoutWeight(1)
@@ -412,7 +441,7 @@ export struct SettingsPage {
             ? { left: 12, right: 12, top: 12, bottom: 12 }
             : { left: 16, right: 16, top: 16, bottom: 16 })
           .width('100%')
-          .backgroundColor(splitMode && this.activeSection === item.key
+          .backgroundColor(splitMode && this.contentSectionKey() === item.key
             ? ThemeColors.primaryContainer(this.isDark)
             : ThemeColors.transparent())
           .borderRadius(splitMode ? 10 : 0)
@@ -430,39 +459,6 @@ export struct SettingsPage {
     .width('100%')
     .layoutWeight(1)
     .scrollBar(splitMode ? BarState.Auto : BarState.Off)
-  }
-
-  @Builder
-  buildSectionContent() {
-    if (this.activeSection === 'read') {
-      this.buildReadSettings();
-    } else if (this.activeSection === 'comic') {
-      this.buildComicSettings();
-    } else if (this.activeSection === 'search') {
-      this.buildSearchSettings();
-    } else if (this.activeSection === 'theme') {
-      this.buildThemeSettings();
-    } else if (this.activeSection === 'network') {
-      this.buildNetSettings();
-    } else if (this.activeSection === 'tts') {
-      this.buildTtsSettings();
-    } else if (this.activeSection === 'about') {
-      this.buildAboutPage();
-    } else {
-      Column() {
-        Text('请选择左侧分类')
-          .fontSize(14)
-          .fontColor(ThemeColors.secondaryText(this.isDark))
-      }
-      .width('100%')
-      .padding(24)
-      .alignItems(HorizontalAlign.Start)
-    }
-  }
-
-  @Builder
-  buildMainMenu() {
-    this.buildCategoryList(false)
   }
 
   @Builder
