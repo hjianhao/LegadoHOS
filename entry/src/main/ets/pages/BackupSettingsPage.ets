@@ -12,7 +12,6 @@ import { AppTheme } from '../theme/AppTheme';
 import { UiUtil } from '../util/UiUtil';
 import { BackupService } from '../service/BackupService';
 import { WebDavService, WebDavConfig } from '../service/WebDavService';
-import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppTitleBar } from '../components/common/AppTitleBar';
 import { WindowLayout } from '../util/WindowLayout';
@@ -20,6 +19,7 @@ import { WindowLayout } from '../util/WindowLayout';
 // PersistentStorage 持久化 WebDAV 设置
 PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
 PersistentStorage.persistProp('webdav_user', '');
+PersistentStorage.persistProp('webdav_password', '');
 PersistentStorage.persistProp('webdav_path', 'legadohos');
 PersistentStorage.persistProp('webdav_auto_sync', false);
 PersistentStorage.persistProp('webdav_sync_progress', true);
@@ -30,7 +30,7 @@ PersistentStorage.persistProp('webdav_sync_progress_plus', false);
 export struct BackupSettingsPage {
   @StorageLink('webdav_url') webDavUrl: string = 'https://dav.jianguoyun.com/dav/';
   @StorageLink('webdav_user') webDavUser: string = '';
-  @State webDavPwd: string = '';
+  @StorageLink('webdav_password') webDavPwd: string = '';
   @StorageLink('webdav_path') webDavPath: string = 'legadohos';
   @StorageLink('webdav_auto_sync') webDavAutoSync: boolean = false;
   @StorageLink('webdav_sync_progress') syncProgress: boolean = true;
@@ -43,29 +43,7 @@ export struct BackupSettingsPage {
   @State manualBackupName: string = '';
 
   aboutToAppear(): void {
-    // 从 SettingsStore 加载加密的密码
-    this.loadPassword();
-  }
-
-  private async loadPassword(): Promise<void> {
-    try {
-      const s = SettingsStore.getInstance();
-      // aboutToAppear 中 getUIContext 可能不可用，尝试多种方式获取 Context
-      try { await s.init(UiUtil.getHostContext(this.getUIContext())); } catch (_) {
-        try { await s.init(getContext(this) as Context); } catch (_2) {
-          try { await s.init(globalThis.getContext() as Context); } catch (_3) {}
-        }
-      }
-      this.webDavPwd = await s.getWebDavPassword();
-    } catch (_) { /* ignore */ }
-  }
-
-  private async savePassword(pwd: string): Promise<void> {
-    try {
-      const s = SettingsStore.getInstance();
-      try { await s.init(UiUtil.getHostContext(this.getUIContext())); } catch (_) {}
-      await s.setWebDavPassword(pwd);
-    } catch (_) { /* ignore */ }
+    // 密码已由 @StorageLink('webdav_password') 自动从 PersistentStorage 恢复
   }
 
   private applyWebDavConfig(): void {
@@ -92,7 +70,9 @@ export struct BackupSettingsPage {
     this.isBusy = true;
     this.statusText = '测试连接中...';
     // 确保密码已加载
-    if (!this.webDavPwd) await this.loadPassword();
+    if (!this.webDavPwd) {
+      // @StorageLink 已自动从 PersistentStorage 恢复，无需手动加载
+    }
     this.applyWebDavConfig();
     try {
       const ok = await WebDavService.getInstance().testConnection();
@@ -221,7 +201,7 @@ export struct BackupSettingsPage {
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
             .type(InputType.Password)
-            .onChange((v: string) => { this.webDavPwd = v; this.savePassword(v); })
+            .onChange((v: string) => { this.webDavPwd = v; })
           TextInput({ placeholder: $r('app.string.ui_5aa328deb8'), text: this.webDavPath })
             .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
             .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
