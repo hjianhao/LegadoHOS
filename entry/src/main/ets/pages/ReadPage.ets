@@ -1248,11 +1248,6 @@ struct ReadPage {
   }
 
   private layoutText(text: string): void {
-    // 重排版前保存当前页的字符偏移，用于旋转/尺寸变化后恢复位置
-    if (this.pages.length > 0 && this.pageIndex < this.pages.length) {
-      this.preserveCharOffset_ = this.pages[this.pageIndex].startOffset;
-    }
-
     // 先更新双页/居中单页状态
     this.isDualPage_ = this.computeDualPage_();
     this.isCenteredSingle_ = this.computeCenteredSingle_();
@@ -1288,7 +1283,9 @@ struct ReadPage {
     this.pages = TextLayout.splitIntoPages(text, lc, effectiveW, layoutH, this.measureUtil_ || undefined);
     if (this.pages.length === 0) this.pages = [{ lines: [], startOffset: 0, endOffset: 0 }];
 
-    // 恢复阅读位置：找到包含 preserveCharOffset_ 的页
+    // 旋转/尺寸变化后恢复阅读位置：找到包含 preserveCharOffset_ 的页
+    // 注意：preserveCharOffset_ 仅由 onAreaChange（resize/rotation）设置，
+    // 新章节加载时不设此值，pageIndex 由 applyChapterContent_ 的 pendingCharPos_ 逻辑处理。
     if (this.preserveCharOffset_ >= 0) {
       let foundIdx = -1;
       for (let i = 0; i < this.pages.length; i++) {
@@ -2540,17 +2537,14 @@ struct ReadPage {
     .onAreaChange((_old: Area, n: Area) => {
       const w = typeof n.width === 'number' ? n.width : Number(n.width) || 360;
       const h = typeof n.height === 'number' ? n.height : Number(n.height) || 640;
-      if (w > 0 && h > 0) { this.pageW = w; this.pageH = h; if (this.text) this.layoutText(this.text); }
-    })
-    // 键盘翻页：方向键/ PageUp/ PageDown（平板键盘/外接键盘）
-    .onKeyEvent((event: KeyEvent) => {
-      if (event.type !== KeyType.Down) return;
-      // 菜单/设置面板打开时不处理翻页
-      if (this.showMenu || this.showStyle || this.showCacheDialog || this.showZoneConfig || this.showAloud || this.showBookmarkDlg || this.showCloudProgressDlg) return;
-      if (event.keyCode === 2540 /* LEFT */ || event.keyCode === 2542 /* UP */ || event.keyCode === 2538 /* PAGE_UP */) {
-        this.onPageTurn({ direction: 'prev', currentPage: Math.max(0, this.pageIndex - (this.isDualPage_ ? 2 : 1)), totalPages: this.pages.length });
-      } else if (event.keyCode === 2541 /* RIGHT */ || event.keyCode === 2543 /* DOWN */ || event.keyCode === 2539 /* PAGE_DOWN */) {
-        this.onPageTurn({ direction: 'next', currentPage: Math.min(this.pages.length - 1, this.pageIndex + (this.isDualPage_ ? 2 : 1)), totalPages: this.pages.length });
+      if (w > 0 && h > 0) {
+        // 旋转/尺寸变化时保存当前页字符偏移，供 layoutText 恢复位置
+        if (this.pages.length > 0 && this.pageIndex < this.pages.length && this.text) {
+          this.preserveCharOffset_ = this.pages[this.pageIndex].startOffset;
+        }
+        this.pageW = w;
+        this.pageH = h;
+        if (this.text) this.layoutText(this.text);
       }
     })
   }

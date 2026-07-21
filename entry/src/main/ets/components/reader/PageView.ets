@@ -258,13 +258,20 @@ export struct PageView {
     }
   }
 
-  /** 构建指定页码的页面文本内容 */
+  /** 构建指定页码的页面文本内容（与 buildPageContent 逻辑一致，支持 formattedText） */
   private buildPageContentForPage_(pageIdx: number): string {
     if (pageIdx < 0 || pageIdx >= this.pages.length) return '';
     const page = this.pages[pageIdx];
+    if (page.formattedText) return page.formattedText;
+    // 回退逻辑（旧数据兼容）
+    if (page.lines.length === 0) return '';
+    const paraBreakLines = Math.max(0, Math.round(this.config.paragraphSpacing / 10));
     let text = '';
     for (let i = 0; i < page.lines.length; i++) {
       const line = page.lines[i];
+      if (i > 0 && line.isParagraphStart && paraBreakLines > 0) {
+        for (let b = 0; b < paraBreakLines; b++) text += '\n';
+      }
       text += line.text;
       if (i < page.lines.length - 1) text += '\n';
     }
@@ -322,8 +329,7 @@ export struct PageView {
 	                this.renderPageText_(this.safePageIndex())
 	              }
 	              .constraintSize({ maxWidth: this.maxContentWidth })
-	              .width('100%')
-	              .layoutWeight(0)
+	              .layoutWeight(1)
 	              .clip(true)
 	              .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	              Blank().layoutWeight(1)
