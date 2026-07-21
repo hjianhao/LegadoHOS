@@ -20,11 +20,14 @@ export struct ClickActionConfig {
   @Prop txtEncoding: string = 'utf-8';
   // 阅读模式
   @Prop flowMode: string = 'paginated';
+  // 横屏排版模式
+  @Prop landscapeLayout: string = 'single';
 
   onDismiss?: () => void;
   onChanged?: (actions: number[]) => void;
   onEncodingChange?: (encoding: string) => void;
   onFlowModeChange?: (mode: string) => void;
+  onLandscapeLayoutChange?: (mode: string) => void;
 
   aboutToAppear(): void {
     this.loadActions();
@@ -99,6 +102,20 @@ export struct ClickActionConfig {
       Row().width('100%').height(1)
         .backgroundColor(ThemeColors.outlineVariant(this.isDark)).margin({ top: 4, bottom: 6 })
 
+      // ===== 横屏排版（单页 / 双页） =====
+      Text('横屏排版').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+        .padding({ left: 12, right: 12, top: 6 })
+      Row() {
+        this.landscapeChip('单页', 'single')
+        if (this.flowMode !== 'scrolled') {
+          this.landscapeChip('双页', 'dual')
+        }
+      }.width('100%').padding({ left: 12, right: 12, bottom: 6 })
+
+      // 分隔线
+      Row().width('100%').height(1)
+        .backgroundColor(ThemeColors.outlineVariant(this.isDark)).margin({ top: 4, bottom: 6 })
+
       // ===== 触控区域设置 =====
       Text($r('app.string.ui_ee2972614e')).fontSize(14).fontWeight(FontWeight.Bold)
         .fontColor(ThemeColors.onBackground(this.isDark))
@@ -144,6 +161,18 @@ export struct ClickActionConfig {
     .backgroundColor(this.flowMode === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
     .borderRadius(16).margin({ right: 8 })
     .onClick(() => { this.onFlowModeChange?.(mode); })
+  }
+
+  // ===== 横屏排版选择项 =====
+  @Builder landscapeChip(label: string, mode: string) {
+    Column() {
+      Text(label).fontSize(13)
+        .fontColor(this.landscapeLayout === mode ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+        .padding({ top: 6, bottom: 6, left: 20, right: 20 })
+    }
+    .backgroundColor(this.landscapeLayout === mode ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+    .borderRadius(16).margin({ right: 8 })
+    .onClick(() => { this.onLandscapeLayoutChange?.(mode); })
   }
 
   // ===== 触控区域 =====

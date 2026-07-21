@@ -1098,7 +1098,7 @@ export struct BookshelfPage {
             .backgroundColor(this.isSelected(book.id) ? ThemeColors.primary(this.isDark) : ThemeColors.strongScrim(this.isDark))
             .borderRadius(14).position({ top: 4, left: 4 })
         }
-      }.width('100%').height(172)
+      }.width('100%').height(Math.round(this.coverWidth * 1.5 * 1.4))
       if (this.gridStyle !== 2) {
         Text(book.name).fontSize(13).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onBackground(this.isDark))
           .maxLines(this.gridStyle === 1 ? 1 : this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')

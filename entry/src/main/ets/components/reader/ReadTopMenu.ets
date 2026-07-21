@@ -14,7 +14,6 @@ export struct ReadTopMenu {
   onSearch?: () => void;
   onBookmark?: () => void;
   onMore?: () => void;
-  onLandscape?: () => void;
 
   build() {
     Column() {
@@ -63,16 +62,6 @@ export struct ReadTopMenu {
           .backgroundColor(ThemeColors.transparent())
           .accessibilityText($r('app.string.ui_820f5b6440'))
           .onClick(() => { this.onBookmark?.(); })
-        }
-        if (this.onLandscape) {
-          Button() {
-            Text('双页')
-              .fontSize(13).fontColor(ThemeColors.onSurface(this.isDark))
-          }
-          .height(44)
-          .backgroundColor(ThemeColors.transparent())
-          .accessibilityText('横屏排版')
-          .onClick(() => { this.onLandscape?.(); })
         }
         if (this.onMore) {
           Button() {

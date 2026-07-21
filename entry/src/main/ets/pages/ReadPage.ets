@@ -13,7 +13,6 @@ import { convertChinese } from '../util/ChineseConverter';
 import { PageView, PageViewConfig, PageTurnAnim, PageTurnEvent } from '../components/reader/PageView';
 import { ClickAction, DEFAULT_ZONE_ACTIONS } from '../components/reader/ClickAction';
 import { StylePanel } from '../components/reader/StylePanel';
-import { LandscapeLayoutPanel } from '../components/reader/LandscapeLayoutPanel';
 import { ReadBottomMenu } from '../components/reader/ReadBottomMenu';
 import { ReadTopMenu } from '../components/reader/ReadTopMenu';
 import { ReadProgressBar } from '../components/reader/ReadProgressBar';
@@ -101,7 +100,6 @@ struct ReadPage {
   @State showCacheDialog: boolean = false;
   @State showZoneConfig: boolean = false;
   @State showAloud: boolean = false;
-  @State showLandscapeLayout: boolean = false;
   @State showBookmarkDlg: boolean = false;
   /** 书签草稿（原文/笔记初值） */
   @State bookmarkDraftText_: string = '';
@@ -2366,7 +2364,6 @@ struct ReadPage {
             onBack: () => { UiUtil.back(this.getUIContext()); },
             onSearch: () => { this.showMenu = false; this.onOpenSearchContent(); },
             onBookmark: () => { this.showMenu = false; this.addBookmark_(); },
-            onLandscape: () => { this.showMenu = false; this.showLandscapeLayout = true; },
             onMore: () => { this.showReadToolsMenu_(); },
           })
           Column().width('100%').layoutWeight(1).onClick(() => { this.showMenu = false; })
@@ -2400,16 +2397,6 @@ struct ReadPage {
             dayBgColor: this.readBgColor,
             dayTextColor: this.readTextColor,
             onNightModeToggle: (night: boolean) => { this.onNightModeToggle(night); },
-          })
-        }.width('100%').height('100%')
-      }
-      if (this.showLandscapeLayout) {
-        Column() {
-          Column().width('100%').layoutWeight(1).onClick(() => { this.showLandscapeLayout = false; })
-          LandscapeLayoutPanel({
-            mode: this.landscapeLayout_,
-            onDismiss: () => { this.showLandscapeLayout = false; },
-            onChange: (mode: string) => { this.onLandscapeLayoutChange_(mode); },
           })
         }.width('100%').height('100%')
       }
@@ -2508,8 +2495,10 @@ struct ReadPage {
             isLocalTxt: this.isLocalTxt_,
             txtEncoding: this.txtEncoding_,
             flowMode: this.flowMode,
+            landscapeLayout: this.landscapeLayout_,
             onEncodingChange: (enc: string) => { this.changeTxtEncoding_(enc); },
             onFlowModeChange: (mode: string) => { this.onFlowModeChange_(mode); },
+            onLandscapeLayoutChange: (mode: string) => { this.onLandscapeLayoutChange_(mode); },
           })
         }.width('100%').height('100%')
       }
