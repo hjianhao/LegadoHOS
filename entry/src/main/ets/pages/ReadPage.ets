@@ -119,7 +119,7 @@ struct ReadPage {
   /** 横屏排版模式：'auto' | 'single' | 'dual' */
   @State landscapeLayout_: string = 'auto';
   /** 双页模式中间页缝宽度（vp） */
-  @State dualPageGutter_: number = 8;
+  @State dualPageGutter_: number = 24;
   /** 当前是否实际使用双页渲染（由 landscapeLayout_ + 窗口尺寸+ 流模式综合判断） */
   @State isDualPage_: boolean = false;
   /** 重排版前保存的字符偏移，用于旋转/尺寸变化后恢复阅读位置 */

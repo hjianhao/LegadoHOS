@@ -333,8 +333,8 @@ export class SettingsStore {
   async getReadLandscapeLayout(): Promise<string> { return await this.get('read_landscape_layout', 'auto'); }
   async setReadLandscapeLayout(v: string): Promise<void> { await this.put('read_landscape_layout', v); }
 
-  /** 双页模式中间页缝宽度（vp），默认 8 */
-  async getReadDualPageGutter(): Promise<number> { return await this.get('read_dual_page_gutter', 8); }
+  /** 双页模式中间页缝宽度（vp），默认 24 */
+  async getReadDualPageGutter(): Promise<number> { return await this.get('read_dual_page_gutter', 24); }
   async setReadDualPageGutter(v: number): Promise<void> { await this.put('read_dual_page_gutter', v); }
 
   /** 是否记住每本书的横屏排版设置（默认关） */

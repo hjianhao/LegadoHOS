@@ -224,39 +224,6 @@ export struct PageView {
     return FontWeight.Normal;
   }
 
-  /** 渲染指定页码的正文 Text（供单页/双页/居中单页复用） */
-  @Builder
-  private renderPageText_(pageIdx: number) {
-    if (pageIdx >= 0 && pageIdx < this.pages.length) {
-      Text(this.buildPageContentForPage_(pageIdx))
-        .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-        .fontFamily(this.config.fontFamily)
-        .fontWeight(this.getFontWeight())
-        .lineHeight(this.config.fontSize * this.config.lineHeight)
-        .letterSpacing(this.config.letterSpacing)
-        .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-        .width('100%')
-        .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-        .copyOption(CopyOptions.LocalDevice)
-        .editMenuOptions({
-          onCreateMenu: (menuItems: Array<TextMenuItem>) => {
-            return menuItems;
-          },
-          onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-            if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-              const pageText = this.buildPageContentForPage_(pageIdx);
-              this.onAskKimi?.(pageText.substring(range.start, range.end));
-              return true;
-            }
-            return false;
-          },
-        } as EditMenuOptions)
-        .onClick((event: ClickEvent) => {
-          this.handleClick_(event.x, event.y);
-        })
-    }
-  }
-
   /** 构建指定页码的页面文本内容（与 buildPageContent 逻辑一致，支持 formattedText） */
   private buildPageContentForPage_(pageIdx: number): string {
     if (pageIdx < 0 || pageIdx >= this.pages.length) return '';
@@ -298,44 +265,107 @@ export struct PageView {
       }
 	      Column() {
 	        if (this.pages.length > 0) {
-	          if (this.dualPage && this.safePageIndex() < this.pages.length - 1) {
+	          if (this.dualPage) {
 	            // 双页模式：左右两页并排，中间页缝，内容铺满
 	            Row() {
+	              // 左页
 	              Column() {
-	                this.renderPageText_(this.safePageIndex())
+	                Text(this.buildPageContentForPage_(this.safePageIndex()))
+	                  .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+	                  .fontFamily(this.config.fontFamily)
+	                  .fontWeight(this.getFontWeight())
+	                  .lineHeight(this.config.fontSize * this.config.lineHeight)
+	                  .letterSpacing(this.config.letterSpacing)
+	                  .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+	                  .width('100%')
+	                  .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+	                  .copyOption(CopyOptions.LocalDevice)
+	                  .editMenuOptions({
+	                    onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+	                    onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+	                      if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+	                        this.onAskKimi?.(this.buildPageContentForPage_(this.safePageIndex()).substring(range.start, range.end));
+	                        return true;
+	                      }
+	                      return false;
+	                    },
+	                  } as EditMenuOptions)
+	                  .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	              }
 	              .layoutWeight(1).height('100%').clip(true)
 
-	              // 页缝分隔
-	              Divider().vertical(true).strokeWidth(1)
-	                .color(this.config.bgColor)
+	              // 页缝分隔（中间视觉间隔）
+	              Column()
 	                .width(this.dualPageGutter)
-	                .opacity(0.5)
+	                .height('100%')
+	                .backgroundColor(this.config.bgColor)
 
-	              Column() {
-	                this.renderPageText_(this.safePageIndex() + 1)
+	              // 右页（如果存在下一页）
+	              if (this.safePageIndex() + 1 < this.pages.length) {
+	                Column() {
+	                  Text(this.buildPageContentForPage_(this.safePageIndex() + 1))
+	                    .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+	                    .fontFamily(this.config.fontFamily)
+	                    .fontWeight(this.getFontWeight())
+	                    .lineHeight(this.config.fontSize * this.config.lineHeight)
+	                    .letterSpacing(this.config.letterSpacing)
+	                    .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+	                    .width('100%')
+	                    .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+	                    .copyOption(CopyOptions.LocalDevice)
+	                    .editMenuOptions({
+	                      onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+	                      onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+	                        if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+	                          this.onAskKimi?.(this.buildPageContentForPage_(this.safePageIndex() + 1).substring(range.start, range.end));
+	                          return true;
+	                        }
+	                        return false;
+	                      },
+	                    } as EditMenuOptions)
+	                    .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
+	                }
+	                .layoutWeight(1).height('100%').clip(true)
+	              } else {
+	                // 没有右页时占位
+	                Column().layoutWeight(1).height('100%')
 	              }
-	              .layoutWeight(1).height('100%').clip(true)
 	            }
 	            .width('100%').layoutWeight(1)
 	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	          } else {
 	            // 标准单页：内容铺满整个屏幕，留白由用户设置的边距控制
 	            Column() {
-	              this.renderPageText_(this.safePageIndex())
+	              Text(this.buildPageContent())
+	                .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+	                .fontFamily(this.config.fontFamily)
+	                .fontWeight(this.getFontWeight())
+	                .lineHeight(this.config.fontSize * this.config.lineHeight)
+	                .letterSpacing(this.config.letterSpacing)
+	                .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+	                .width('100%')
+	                .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+	                .copyOption(CopyOptions.LocalDevice)
+	                .editMenuOptions({
+	                  onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+	                  onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+	                    if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+	                      const pageText = this.buildPageContent();
+	                      this.onAskKimi?.(pageText.substring(range.start, range.end));
+	                      return true;
+	                    }
+	                    return false;
+	                  },
+	                } as EditMenuOptions)
+	                .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	            }
 	            .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
 	            .clip(true)
-	            .onClick((event: ClickEvent) => {
-	              this.handleClick_(event.x, event.y);
-	            })
+	            .onClick((event: ClickEvent) => { this.handleClick_(event.x, event.y); })
 	          }
 	        }
 	      }
 	      .layoutWeight(1).width('100%').justifyContent(FlexAlign.Start)
-	      .onClick((event: ClickEvent) => {
-	        this.handleClick_(event.x, event.y);
-	      })
       if (this.config.showFooter) {
         Row() {
           Text(this.chapterTitle)
