@@ -1101,13 +1101,17 @@ export struct BookshelfPage {
       }.width('100%').height(Math.round(this.coverWidth * 1.5 * 1.4))
       if (this.gridStyle !== 2) {
         Text(book.name).fontSize(13).fontWeight(FontWeight.Medium).fontColor(ThemeColors.onBackground(this.isDark))
-          .maxLines(this.gridStyle === 1 ? 1 : this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-          .margin({ top: 4 }).fontColor(ThemeColors.onBackground(this.isDark))
+          .maxLines(this.gridStyle === 1 ? 1 : this.titleMaxLines).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width(this.coverWidth * 1.5)
+          .margin({ top: 4 })
+          .textAlign(TextAlign.Center)
         if (this.gridStyle === 0) {
           Text(book.author || '未知作者').fontSize(11).fontColor(ThemeColors.onBackground(this.isDark))
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width(this.coverWidth * 1.5)
+            .textAlign(TextAlign.Center)
         }
       }
-    }.width('100%')
+    }.width('100%').alignItems(HorizontalAlign.Center)
   }
 }

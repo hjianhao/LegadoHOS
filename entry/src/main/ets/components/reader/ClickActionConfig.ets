@@ -107,10 +107,13 @@ export struct ClickActionConfig {
         .padding({ left: 12, right: 12, top: 6 })
       Row() {
         this.landscapeChip('单页', 'single')
-        if (this.flowMode !== 'scrolled') {
-          this.landscapeChip('双页', 'dual')
-        }
+        this.landscapeChip('双页', 'dual')
       }.width('100%').padding({ left: 12, right: 12, bottom: 6 })
+      if (this.flowMode === 'scrolled') {
+        Text('滚动模式下不支持双页，已自动使用单页').fontSize(11)
+          .fontColor(ThemeColors.secondaryText(this.isDark))
+          .padding({ left: 12, right: 12, bottom: 4 })
+      }
 
       // 分隔线
       Row().width('100%').height(1)
