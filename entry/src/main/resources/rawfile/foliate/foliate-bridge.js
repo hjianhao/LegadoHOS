@@ -34,6 +34,8 @@ let lastLivePageKey = ''
 let currentFormat = ''
 let lastLocationCfi = ''
 let openSequence = 0
+/** 目录 goTo 后短时禁止翻页，避免关闭目录时的残留触摸触发 prev */
+let navGuardUntil = 0
 
 const ACTION_NONE = -1
 const ACTION_MENU = 0
@@ -541,13 +543,20 @@ const openBook = async (bookUrl, target, format) => {
     view.addEventListener('relocate', event => {
       const loc = event.detail || {}
       lastLocationCfi = loc.cfi || ''
+      const sectionIndex = Number(loc.section?.current ?? loc.index ?? 0)
+      // 优先 TOC 项 href；若无 TOC 映射则回落 spine section 路径，避免标题定位串章
+      const section = view?.book?.sections?.[sectionIndex]
+      const sectionHref = section?.id || section?.linearHref || section?.href || ''
+      const href = loc.tocItem?.href || sectionHref || ''
       const sectionPages = currentFormat === 'pdf' ? {
         page: Number(loc.section?.current ?? 0) + 1,
         total: Number(loc.section?.total ?? view?.book?.sections?.length ?? 0)
       } : currentSectionPages()
       emit('location', {
-        cfi: loc.cfi || '', href: loc.tocItem?.href || '',
-        chapterIndex: Number(loc.section?.current ?? loc.index ?? loc.location?.current ?? 0),
+        cfi: loc.cfi || '',
+        href,
+        sectionHref,
+        chapterIndex: sectionIndex,
         page: sectionPages.page,
         totalPages: sectionPages.total,
         percentage: Number(loc.fraction ?? 0)
@@ -648,10 +657,36 @@ const playTurnAnimation = async (direction, navigate) => {
 
 // 翻页 API 表达语义方向，不再按出版物 RTL/LTR 二次映射物理方向。
 // 物理手势已在 finishSwipe 中统一：右滑 prev，左滑 next。
-window.nextPage = () => playTurnAnimation(1, () => view?.next?.())
-window.prevPage = () => playTurnAnimation(-1, () => view?.prev?.())
-window.goTo = target => target ? view?.goTo?.(target) : null
-window.goToHref = target => target ? view?.goTo?.(target) : null
+const isNavGuarded = () => Date.now() < navGuardUntil
+window.nextPage = () => {
+  if (isNavGuarded()) return
+  return playTurnAnimation(1, () => view?.next?.())
+}
+window.prevPage = () => {
+  if (isNavGuarded()) return
+  return playTurnAnimation(-1, () => view?.prev?.())
+}
+const normalizeNavTarget = target => {
+  if (target == null || target === '') return ''
+  // 多文件章节用 || 连接时，只取首段供 resolveHref
+  if (typeof target === 'string') {
+    const first = target.split('||')[0].trim()
+    return first
+  }
+  return target
+}
+window.goTo = target => {
+  const t = normalizeNavTarget(target)
+  return t ? view?.goTo?.(t) : null
+}
+window.goToHref = target => {
+  const t = normalizeNavTarget(target)
+  if (!t) return null
+  // 目录跳转后短时吞掉同一次 touch 穿透触发的 prev/next
+  lastHandledTapAt = Date.now()
+  navGuardUntil = Date.now() + 500
+  return view?.goTo?.(t)
+}
 window.setPdfMode = mode => {
   if (currentFormat !== 'pdf' || !bookUrl) return
   currentStyle.pdfMode = mode === 'reflow' ? 'reflow' : 'original'

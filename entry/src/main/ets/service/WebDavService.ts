@@ -23,6 +23,7 @@ import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import rcp from '@hms.collaboration.rcp';
 import { common } from '@kit.AbilityKit';
+import { WebDavHttp, WebDavParseOptions, WebDavPropEntry } from './cloud/WebDavHttp';
 
 export interface WebDavConfig {
   serverUrl: string;
@@ -42,10 +43,15 @@ export interface WebDavFileInfo {
 }
 
 /**
- * 获取 getBackupFileName 返回的名称
+ * 默认备份文件名（无设备名时）
+ * 正式命名由 BackupConfig.getNowZipFileName() 负责。
  */
-function getBackupFileName(): string {
-  return `backup_${new Date().toISOString().slice(0, 10)}.zip`;
+function getDefaultBackupFileName(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `backup${y}-${m}-${day}.zip`;
 }
 
 export class WebDavService {
@@ -67,27 +73,54 @@ export class WebDavService {
   }
 
   /**
-   * 从持久化存储恢复 WebDav 配置（App 启动时调用，幂等）。
-   * - url/user/path 存于 PersistentStorage
-   * - 密码存于 SettingsStore（HUKS 加密）
-   * 修复：此前 configure 仅备份设置页调用，重启后同步静默空转。
+   * 确保 WebDAV 相关 PersistentStorage 键在启动阶段已注册。
+   * 备份设置页是懒加载模块，若不在启动时注册，AppStorage 读到的
+   * webdav_sync_progress 会是 undefined，进度上传会被静默跳过。
    */
+  static ensurePersistentProps(): void {
+    PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
+    PersistentStorage.persistProp('webdav_user', '');
+    PersistentStorage.persistProp('webdav_password', '');
+    PersistentStorage.persistProp('webdav_path', 'legado');
+    PersistentStorage.persistProp('webdav_auto_sync', false);
+    PersistentStorage.persistProp('webdav_sync_progress', true);
+    PersistentStorage.persistProp('webdav_sync_progress_plus', false);
+  }
+
+  /** 进度同步开关：未配置时默认开启（对齐安卓 AppConfig.syncBookProgress 默认 true） */
+  static isProgressSyncEnabled(): boolean {
+    WebDavService.ensurePersistentProps();
+    const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
+    return syncOn !== false;
+  }
+
   async initFromStorage(context: common.Context): Promise<void> {
     try {
-      // 确保 persistProp 已注册（备份页未打开过时，其模块顶层声明可能未执行）
-      PersistentStorage.persistProp('webdav_url', 'https://dav.jianguoyun.com/dav/');
-      PersistentStorage.persistProp('webdav_user', '');
-      PersistentStorage.persistProp('webdav_path', 'legadohos');
+      WebDavService.ensurePersistentProps();
       const url = AppStorage.get<string>('webdav_url') || '';
       const user = AppStorage.get<string>('webdav_user') || '';
-      const path = AppStorage.get<string>('webdav_path') || 'legadohos';
-      if (!url || !user) return; // 从未配置过
+      const path = AppStorage.get<string>('webdav_path') || 'legado';
+      if (!url || !user) {
+        console.info('[WebDav] initFromStorage skip: url/user empty');
+        return; // 从未配置过
+      }
       let pwd = '';
       try {
         const s = SettingsStore.getInstance();
         await s.init(context);
         pwd = await s.getWebDavPassword();
       } catch (_e) { /* 密码读取失败按空处理 */ }
+      // 兼容旧版本：密码只写在 PersistentStorage.webdav_password 时也能恢复
+      if (!pwd) {
+        pwd = AppStorage.get<string>('webdav_password') || '';
+        if (pwd) {
+          try {
+            const s = SettingsStore.getInstance();
+            await s.setWebDavPassword(pwd);
+            console.info('[WebDav] migrated plaintext password into SettingsStore');
+          } catch (_e) { /* ignore migrate fail */ }
+        }
+      }
       const autoSync = AppStorage.get<boolean>('webdav_auto_sync') ?? false;
       this.configure({
         serverUrl: url,
@@ -97,7 +130,9 @@ export class WebDavService {
         autoSync: autoSync,
         syncInterval: 60,
       });
-      console.info('[WebDav] config restored from storage, user=' + user);
+      console.info('[WebDav] config restored from storage, user=' + user
+        + ', hasPwd=' + (pwd.length > 0)
+        + ', syncProgress=' + WebDavService.isProgressSyncEnabled());
     } catch (e) {
       console.warn('[WebDav] initFromStorage fail:', (e as Error).message);
     }
@@ -163,12 +198,65 @@ export class WebDavService {
   }
 
   async listBackups(): Promise<WebDavFileInfo[]> {
-    return this.listFiles('');
+    const files = await this.listFiles('');
+    // 对齐安卓：仅展示 backup* 文件，并按修改时间倒序
+    const backups = files.filter((f) => {
+      const n = (f.name || '').toLowerCase();
+      return n.startsWith('backup') && (n.endsWith('.zip') || n === 'backup.zip' || n.startsWith('backup'));
+    });
+    backups.sort((a, b) => {
+      const ta = Date.parse(a.lastModified) || 0;
+      const tb = Date.parse(b.lastModified) || 0;
+      if (tb !== ta) return tb - ta;
+      return b.name.localeCompare(a.name);
+    });
+    return backups;
   }
 
-  async uploadBackupFile(zipPath: string): Promise<string> {
+  /** 是否存在指定备份文件名 */
+  async hasBackup(name: string): Promise<boolean> {
+    if (!this.config || !name) return false;
+    try {
+      const files = await this.listBackups();
+      return files.some((f) => f.name === name);
+    } catch {
+      return false;
+    }
+  }
+
+  /** 最近一份备份（按 lastModified） */
+  async lastBackup(): Promise<WebDavFileInfo | null> {
+    const files = await this.listBackups();
+    return files.length > 0 ? files[0] : null;
+  }
+
+  /**
+   * 列出 bookProgress 目录。与 listFiles 不同：PROPFIND 失败会抛错，
+   * 让 downloadAll 能退化为逐本 GET，而不是把空列表当成“云端无进度”。
+   */
+  private async listProgressFiles_(): Promise<WebDavFileInfo[]> {
     if (!this.config) throw new Error('WebDAV not configured');
-    const fileName = getBackupFileName();
+    const url = this.normalizeUrl(WebDavService.PROGRESS_DIR);
+    const auth = this.getAuthHeader();
+    const requestBody =
+      '<?xml version="1.0" encoding="utf-8"?>\n' +
+      '<D:propfind xmlns:D="DAV:">\n' +
+      '  <D:allprop/>\n' +
+      '</D:propfind>';
+    console.info('[WebDav] PROPFIND progress dir:', url);
+    const respBody = await NetUtil.httpCustomMethod('PROPFIND', url, requestBody, {
+      ...auth,
+      'Depth': '1',
+    }, 30000);
+    if (!respBody) {
+      throw new Error('empty PROPFIND response');
+    }
+    return this.parsePropfindResponse(respBody);
+  }
+
+  async uploadBackupFile(zipPath: string, preferredName?: string): Promise<string> {
+    if (!this.config) throw new Error('WebDAV not configured');
+    const fileName = (preferredName && preferredName.trim()) ? preferredName.trim() : getDefaultBackupFileName();
     await this.ensureDirectory('');
     const zipBytes = this.readFileBytes(zipPath);
 
@@ -242,13 +330,30 @@ export class WebDavService {
    */
   async ensureDirectory(path: string): Promise<void> {
     if (!this.config) return;
-    const url = this.normalizeUrl(path);
     const auth = this.getAuthHeader();
-    // 直接 MKCOL 创建目录（如果已存在，服务器会返回 405 或 409，不影响后续 PUT）
-    try {
-      await NetUtil.httpCustomMethod('MKCOL', url, undefined, auth, 10000);
-    } catch {
-      // MKCOL 失败（目录已存在、方法不支持等情况），忽略
+    // 逐级创建目录：先根路径，再 bookProgress 等子目录。
+    // 坚果云等服务对不存在的父目录直接 MKCOL 子路径会失败。
+    const segments: string[] = [];
+    const rootPath = (this.config.path || '').replace(/^\/+|\/+$/g, '');
+    if (rootPath) {
+      for (const seg of rootPath.split('/')) {
+        if (seg) segments.push(seg);
+      }
+    }
+    const rel = (path || '').replace(/^\/+|\/+$/g, '');
+    if (rel) {
+      for (const seg of rel.split('/')) {
+        if (seg) segments.push(seg);
+      }
+    }
+    let built = this.config.serverUrl.replace(/\/+$/, '');
+    for (const seg of segments) {
+      built += '/' + seg;
+      try {
+        await NetUtil.httpCustomMethod('MKCOL', built, undefined, auth, 10000);
+      } catch {
+        // 已存在 / 不支持 MKCOL：忽略
+      }
     }
   }
 
@@ -352,7 +457,18 @@ export class WebDavService {
    */
   async uploadBookProgress(book: { name: string; author: string; durChapterIndex: number;
     durChapterPos: number; durChapterTitle: string }): Promise<void> {
-    if (!this.config) return;
+    if (!this.config) {
+      console.warn('[WebDav] uploadBookProgress skipped: not configured');
+      return;
+    }
+    if (!WebDavService.isProgressSyncEnabled()) {
+      console.info('[WebDav] uploadBookProgress skipped: sync disabled');
+      return;
+    }
+    if (!this.config.password) {
+      console.warn('[WebDav] uploadBookProgress skipped: empty password');
+      return;
+    }
     await this.ensureDirectory(WebDavService.PROGRESS_DIR);
 
     const progress = {
@@ -366,12 +482,13 @@ export class WebDavService {
 
     const url = this.progressUrl(book.name, book.author);
     const json = JSON.stringify(progress);
+    console.info('[WebDav] Uploading progress:', book.name, '→', url);
     await NetUtil.httpPut(url, json, {
       ...this.getAuthHeader(),
       'Content-Type': 'application/json',
       'Overwrite': 'T',
     });
-    console.info('[WebDav] Progress uploaded:', book.name);
+    console.info('[WebDav] Progress uploaded:', book.name, 'ch=', book.durChapterIndex, 'pos=', book.durChapterPos);
   }
 
   /**
@@ -379,82 +496,165 @@ export class WebDavService {
    */
   async downloadBookProgress(name: string, author: string): Promise<BookProgress | null> {
     if (!this.config) return null;
+    if (!this.config.password) {
+      console.warn('[WebDav] downloadBookProgress skipped: empty password');
+      return null;
+    }
     try {
       const url = this.progressUrl(name, author);
+      console.info('[WebDav] GET progress:', name, '→', url);
       const json = await NetUtil.httpGet(url, this.getAuthHeader());
       if (json) {
         const p = JSON.parse(json) as BookProgress;
-        if (typeof p.durChapterIndex === 'number') return p;
+        if (typeof p.durChapterIndex === 'number') {
+          console.info('[WebDav] Progress downloaded:', name, 'ch=', p.durChapterIndex, 'pos=', p.durChapterPos);
+          return p;
+        }
+        console.warn('[WebDav] Progress JSON invalid for', name);
       }
-    } catch { /* not found or parse error */ }
+    } catch (e) {
+      // 404/无文件是常态，只记 info；认证/网络错误要 warn
+      const msg = (e as Error).message || String(e);
+      if (msg.indexOf('404') >= 0 || msg.indexOf('Not Found') >= 0) {
+        console.info('[WebDav] No cloud progress for', name);
+      } else {
+        console.warn('[WebDav] downloadBookProgress failed:', name, msg);
+      }
+    }
     return null;
   }
 
   /**
-   * 启动时批量下载所有在架书籍的云端进度
-   * 对齐 Android downloadAllBookProgress 逻辑
+   * 解析 WebDAV lastModified（RFC1123 / ISO / 数字毫秒）为时间戳。
+   * 解析失败返回 0，调用方应退化为“总是下载并按章节比较”。
    */
-  async downloadAllBookProgress(): Promise<void> {
-    if (!this.config) return;
+  private parseLastModifiedMs_(value: string): number {
+    if (!value) return 0;
+    const trimmed = value.trim();
+    if (!trimmed) return 0;
+    // 纯数字（秒或毫秒）
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      // 10 位按秒，13 位按毫秒
+      return n < 1e12 ? n * 1000 : n;
+    }
+    const ms = Date.parse(trimmed);
+    return Number.isFinite(ms) ? ms : 0;
+  }
 
+  /**
+   * 启动/刷新时批量下载所有在架书籍的云端进度。
+   * 对齐 Android downloadAllBookProgress：
+   * - 优先 PROPFIND 列目录 + 时间戳过滤
+   * - 列目录失败时退化为逐本 GET（坚果云等对 PROPFIND 不稳）
+   * - 仅当云端章节更远时覆盖本地（章内精确位置由开书 syncFromCloud 处理）
+   * @returns 实际更新了本地进度的书本数量
+   */
+  async downloadAllBookProgress(): Promise<number> {
+    if (!this.config) {
+      console.info('[WebDav] downloadAllBookProgress skipped: not configured');
+      return 0;
+    }
+    if (!WebDavService.isProgressSyncEnabled()) {
+      console.info('[WebDav] downloadAllBookProgress skipped: sync disabled');
+      return 0;
+    }
+    if (!this.config.password) {
+      console.warn('[WebDav] downloadAllBookProgress skipped: empty password');
+      return 0;
+    }
+
+    let updated = 0;
     try {
-      // 列出 bookProgress/ 目录中的文件
-      const files = await this.listFiles(WebDavService.PROGRESS_DIR);
-      if (files.length === 0) return;
-
-      // 构建文件名 → 上次修改时间的映射
-      const fileMap = new Map<string, string>();
-      for (const f of files) {
-        if (!f.isDirectory && f.name.endsWith('.json')) {
-          fileMap.set(f.name, f.lastModified);
-        }
-      }
-
-      if (fileMap.size === 0) return;
-
-      // 获取所有在架书籍
       const db = AppDatabase.getInstance();
-      if (!db.rdbStore) return;
+      if (!db.rdbStore) {
+        console.warn('[WebDav] downloadAllBookProgress: db not ready');
+        return 0;
+      }
       const bookTable = new BookTable(db.rdbStore);
       const allBooks = await bookTable.getAllShelfBooksSimple();
+      if (allBooks.length === 0) {
+        console.info('[WebDav] downloadAllBookProgress: empty shelf');
+        return 0;
+      }
 
+      // 列目录（失败不致命）。
+      // 注意：listFiles 在 PROPFIND 失败时也会返回 []，不能把“空数组”当成“云端无文件”。
+      let fileMap = new Map<string, number>();
+      let listed = false;
+      try {
+        const files = await this.listProgressFiles_();
+        for (const f of files) {
+          if (!f.isDirectory && f.name.endsWith('.json')) {
+            fileMap.set(f.name, this.parseLastModifiedMs_(f.lastModified));
+          }
+        }
+        listed = true;
+        console.info('[WebDav] progress dir listed:', fileMap.size, 'files for', allBooks.length, 'books');
+        // 目录存在但解析结果为空：可能是 PROPFIND 内容不完整/中文文件名解析失败。
+        // 对书架规模做有限逐本 GET 兜底（最多 30 本），避免“永远同步不到”。
+        if (fileMap.size === 0 && allBooks.length > 0) {
+          console.warn('[WebDav] progress dir empty after list, fallback to per-book GET');
+          listed = false;
+        }
+      } catch (e) {
+        console.warn('[WebDav] list progress dir failed, fallback to per-book GET:', (e as Error).message);
+        fileMap = new Map<string, number>();
+        listed = false;
+      }
+
+      let probed = 0;
+      const maxProbe = listed ? allBooks.length : Math.min(allBooks.length, 30);
       for (const book of allBooks) {
+        if (!listed && probed >= maxProbe) {
+          console.info('[WebDav] per-book GET probe limit reached:', maxProbe);
+          break;
+        }
         const fileName = this.progressFileName(book.name, book.author);
-        const fileLastMod = fileMap.get(fileName);
-        if (!fileLastMod) continue;
 
-        // 检查时间戳 — 云端文件不比本地 syncTime 新就跳过
-        // （简单起见：首次 syncTime=0 时总是下载）
-        if (book.syncTime > 0) {
-          // lastModified 字段是字符串，简单比较
-          if (fileLastMod <= String(book.syncTime)) continue;
+        if (listed) {
+          // 列目录成功：没有对应文件就跳过；有文件且时间戳不新也跳过
+          if (!fileMap.has(fileName)) {
+            continue;
+          }
+          const cloudMod = fileMap.get(fileName) || 0;
+          if (cloudMod > 0 && book.syncTime > 0 && cloudMod <= book.syncTime) {
+            continue;
+          }
+        } else {
+          probed++;
         }
 
         const cloud = await this.downloadBookProgress(book.name, book.author);
         if (!cloud) continue;
 
-        // 冲突解决：仅按章节比较，云端章节更远才覆盖。
-        // 注意云端 durChapterPos 是字符偏移（对齐安卓），本地 durChapterPos 是分页索引，
-        // 语义不同不能直接比较/写入；章节内精确位置在开书时由 syncFromCloud 按字符偏移定位。
+        // 冲突解决：云端章节更远才覆盖本地。
+        // 云端 durChapterPos 是字符偏移，本地是分页索引，不能直接写入本地 pos。
         if (cloud.durChapterIndex > book.durChapterIndex) {
-          // 更新本地进度（章节级，页位置归零）
           await bookTable.updateReadingProgress(
             book.bookUrl,
             cloud.durChapterIndex,
             cloud.durChapterTitle || '',
-            0, // totalChapters unknown
+            0,
             0
           );
+          updated++;
           console.info('[WebDav] Progress restored from cloud:', book.name,
-            '→ chapter', cloud.durChapterIndex);
+            '→ chapter', cloud.durChapterIndex, '(was', book.durChapterIndex + ')');
+        } else {
+          console.info('[WebDav] Cloud not ahead for', book.name,
+            'local=', book.durChapterIndex, 'cloud=', cloud.durChapterIndex);
         }
 
-        // 更新 syncTime
+        // 只有成功拿到云端进度后才 bump syncTime，避免“空列表/失败”把后续同步永久挡掉
         await bookTable.updateSyncTime(book.bookUrl, Date.now());
       }
+      console.info('[WebDav] downloadAllBookProgress done, updated=', updated);
     } catch (e) {
       console.warn('[WebDav] downloadAllBookProgress error:', (e as Error).message);
     }
+    return updated;
   }
 
   private normalizeUrl(path: string): string {
@@ -471,42 +671,34 @@ export class WebDavService {
 
   private getAuthHeader(): Record<string, string> {
     if (!this.config) return {};
-    const credentials = `${this.config.username}:${this.config.password}`;
-    const encoded = this.base64Encode(credentials);
-    return { 'Authorization': `Basic ${encoded}` };
+    return WebDavHttp.basicAuthHeader(this.config.username, this.config.password);
   }
 
+  /**
+   * 备份/进度列举：过滤目录，仅保留文件。
+   * 解析逻辑下沉到 WebDavHttp，避免与云端书库分叉；过滤策略保持备份兼容。
+   */
   private parsePropfindResponse(xml: string): WebDavFileInfo[] {
+    const opts: WebDavParseOptions = {
+      includeDirectories: false,
+      requestUrl: '',
+    };
+    const entries: WebDavPropEntry[] = WebDavHttp.parsePropfindResponse(xml, opts);
     const files: WebDavFileInfo[] = [];
-    if (!xml) return files;
-    // 支持有/无命名空间前缀的 XML（如 <d:response> 或 <response>）
-    const responseRegex = /<(?:[a-zA-Z]+:)?response[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?response>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = responseRegex.exec(xml)) !== null) {
-      const block = match[1];
-      const hrefMatch = block.match(/<(?:[a-zA-Z]+:)?href[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?href>/i);
-      if (!hrefMatch) continue;
-      let href = hrefMatch[1].trim();
-      // 某些服务器返回的 href 包含完整 URL，只取路径部分
-      if (href.startsWith('http://') || href.startsWith('https://')) {
-        // 去掉协议和主机部分：https://host:port/path → /path
-        const m = href.match(/^https?:\/\/[^\/]+(\/.*)/);
-        if (m) href = m[1];
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (!e.name || e.isDirectory) {
+        continue;
       }
-      const isDir = /<(?:[a-zA-Z]+:)?collection\s*\/>/i.test(block) ||
-                    /<(?:[a-zA-Z]+:)?resourcetype[^>]*>[\s\S]*?<(?:[a-zA-Z]+:)?collection[\s\S]*?<\/(?:[a-zA-Z]+:)?resourcetype>/i.test(block);
-      const modMatch = block.match(/<(?:[a-zA-Z]+:)?getlastmodified[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?getlastmodified>/i);
-      const sizeMatch = block.match(/<(?:[a-zA-Z]+:)?getcontentlength[^>]*>([\s\S]*?)<\/(?:[a-zA-Z]+:)?getcontentlength>/i);
-      const name = href.split('/').filter(s => s).pop() || href;
       files.push({
-        name, path: href,
-        lastModified: modMatch ? modMatch[1].trim() : '',
-        contentLength: sizeMatch ? parseInt(sizeMatch[1].trim()) || 0 : 0,
-        isDirectory: isDir,
+        name: e.name,
+        path: e.href,
+        lastModified: e.lastModified,
+        contentLength: e.contentLength,
+        isDirectory: false,
       });
     }
-    // 过滤掉目录、空名、以及目录自身的条目
-    return files.filter(f => f.name !== '' && !f.isDirectory);
+    return files;
   }
 
   /**
@@ -537,9 +729,6 @@ export class WebDavService {
   }
 
   private base64Encode(str: string): string {
-    // Use proper byte-level encoding (like OkHttp's Credentials.basic)
-    const bytes = this.encoder.encodeInto(str);
-    const b64 = new util.Base64Helper();
-    return b64.encodeToStringSync(bytes);
+    return WebDavHttp.base64Encode(str);
   }
 }

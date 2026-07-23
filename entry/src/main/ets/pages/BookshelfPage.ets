@@ -188,15 +188,33 @@ export struct BookshelfPage {
   }
 
   private syncProgressFromCloud(): void {
+    // fire-and-forget；更新成功后刷新书架展示
+    this.syncProgressFromCloudAsync_().catch((e: Error) => {
+      console.warn('[Bookshelf] Cloud progress sync error:', e.message);
+    });
+  }
+
+  private async syncProgressFromCloudAsync_(): Promise<void> {
+    WebDavService.ensurePersistentProps();
+    if (!WebDavService.isProgressSyncEnabled()) {
+      console.info('[Bookshelf] Cloud progress sync disabled');
+      return;
+    }
+    if (!WebDavService.getInstance().isConfigured()) {
+      console.info('[Bookshelf] Cloud progress sync skipped: WebDAV not configured');
+      return;
+    }
+    // 确保启动时的 initFromStorage 已完成（冷启动竞态）
     try {
-      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
-      if (syncOn !== true) return;
-      if (!WebDavService.getInstance().isConfigured()) return;
-      WebDavService.getInstance().downloadAllBookProgress()
-        .then(() => console.info('[Bookshelf] Cloud progress sync done'))
-        .catch((e: Error) => console.warn('[Bookshelf] Cloud progress sync failed:', e.message));
-    } catch (e) {
-      console.warn('[Bookshelf] Cloud progress sync error:', (e as Error).message);
+      const ctx = UiUtil.getHostContext(this.getUIContext());
+      if (ctx) {
+        await WebDavService.getInstance().initFromStorage(ctx);
+      }
+    } catch (_e) { /* ignore */ }
+    const updated = await WebDavService.getInstance().downloadAllBookProgress();
+    console.info('[Bookshelf] Cloud progress sync done, updated=', updated);
+    if (updated > 0) {
+      await this.loadShelfData();
     }
   }
 
@@ -301,13 +319,18 @@ export struct BookshelfPage {
     }
   }
 
+  /**
+   * 下拉刷新对齐安卓：对当前可见网络书重新拉取目录（获取最新章节）。
+   * 本地书 / canUpdate=false（如完本关闭更新）会跳过。
+   */
   async onRefresh(): Promise<void> {
-    if (this.isLoadingShelf) {
+    if (this.isLoadingShelf || this.isRefreshing) {
       this.isRefreshing = false;
       return;
     }
-    this.isRefreshing = true;
+    // 先刷新本地展示，再联网更新目录
     await this.loadShelfData();
+    await this.updateTocForVisible();
   }
 
   /**
@@ -523,9 +546,17 @@ export struct BookshelfPage {
   }
 
   private async updateTocForVisible(): Promise<void> {
-    const targets = this.currentTargetBooks().filter((book: Book): boolean => !!book.bookUrl && !!book.originUrl);
+    // 对齐安卓：!isLocal && canUpdate
+    const targets = this.currentTargetBooks().filter((book: Book): boolean => {
+      if (!book.bookUrl) return false;
+      if (book.origin === LOCAL_BOOK_ORIGIN) return false;
+      if (!book.canUpdate) return false;
+      // 网络书至少要有书源标识
+      return !!(book.originUrl || book.origin);
+    });
     if (targets.length === 0) {
-      UiUtil.showToast(this.getUIContext(), { message: '没有可更新目录的书籍', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '没有可更新目录的书籍（本地书/已关闭更新已跳过）', duration: 1800 });
+      this.isRefreshing = false;
       return;
     }
     this.isRefreshing = true;
@@ -738,16 +769,47 @@ export struct BookshelfPage {
   }
 
   showContextMenu(book: Book): void {
+    const isLocal = book.origin === LOCAL_BOOK_ORIGIN;
+    const updateLabel = book.canUpdate ? '关闭更新（完本）' : '开启更新';
+    const statusText = isLocal ? '' : ('\n目录更新: ' + (book.canUpdate ? '开启' : '已关闭'));
+    if (isLocal) {
+      UiUtil.showDialog(this.getUIContext(), {
+        title: book.name,
+        message: '作者: ' + (book.author || '未知'),
+        buttons: [
+          { text: '详情', color: ThemeColors.primary(this.isDark) },
+          { text: '清除缓存', color: ThemeColors.warning(this.isDark) },
+          { text: '删除', color: ThemeColors.error(this.isDark) },
+          { text: '取消', color: ThemeColors.secondaryText(this.isDark) }
+        ]
+      }).then((res: Object) => {
+        const idx = (res as Record<string, Object>)['index'] as number;
+        if (idx === 0) {
+          UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookInfoPage', params: {
+            name: book.name, author: book.author, coverUrl: book.coverUrl,
+            noteUrl: book.bookUrl, origin: book.origin, originUrl: book.originUrl,
+            introduce: book.introduce || '', kind: book.kind || ''
+          }});
+        } else if (idx === 1) {
+          this.confirmClearBookCache(book);
+        } else if (idx === 2) {
+          this.confirmRemove(book);
+        }
+      });
+      return;
+    }
+
     UiUtil.showDialog(this.getUIContext(), {
       title: book.name,
-      message: '作者: ' + (book.author || '未知'),
+      message: '作者: ' + (book.author || '未知') + statusText,
       buttons: [
         { text: '详情', color: ThemeColors.primary(this.isDark) },
+        { text: updateLabel, color: ThemeColors.primary(this.isDark) },
         { text: '清除缓存', color: ThemeColors.warning(this.isDark) },
         { text: '删除', color: ThemeColors.error(this.isDark) },
         { text: '取消', color: ThemeColors.secondaryText(this.isDark) }
       ]
-    }).then((res: Object) => {
+    }).then(async (res: Object) => {
       const idx = (res as Record<string, Object>)['index'] as number;
       if (idx === 0) {
         UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookInfoPage', params: {
@@ -756,11 +818,37 @@ export struct BookshelfPage {
           introduce: book.introduce || '', kind: book.kind || ''
         }});
       } else if (idx === 1) {
-        this.confirmClearBookCache(book);
+        await this.toggleBookCanUpdate_(book);
       } else if (idx === 2) {
+        this.confirmClearBookCache(book);
+      } else if (idx === 3) {
         this.confirmRemove(book);
       }
     });
+  }
+
+  /** 切换是否允许更新目录（对齐安卓 allow_update / canUpdate） */
+  private async toggleBookCanUpdate_(book: Book): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookTable(AppDatabase.getInstance().rdbStore);
+      const latest = await dao.getBookById(book.id);
+      const target = latest ? latest : await dao.getBookByUrl(book.bookUrl);
+      if (!target) {
+        UiUtil.showToast(this.getUIContext(), { message: '书籍不存在', duration: 1200 });
+        return;
+      }
+      target.canUpdate = !target.canUpdate;
+      await dao.updateBook(target);
+      UiUtil.showToast(this.getUIContext(), {
+        message: target.canUpdate ? '已开启更新' : '已关闭更新（下拉刷新将跳过）',
+        duration: 1500
+      });
+      await this.loadBooks();
+    } catch (e) {
+      console.error('[Bookshelf] toggle canUpdate failed:', e);
+      UiUtil.showToast(this.getUIContext(), { message: '设置失败', duration: 1200 });
+    }
   }
 
   confirmRemove(book: Book): void {
@@ -801,6 +889,17 @@ export struct BookshelfPage {
         if (this.filteredBooks.length > 0) {
           Text(this.filteredBooks.length + '本').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
         }
+        // 云端书库入口
+        Button() {
+          Text('☁').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
+        }
+        .width(40).height(40)
+        .backgroundColor(ThemeColors.transparent())
+        .accessibilityText('云端书库')
+        .margin({ right: 2 })
+        .onClick(() => {
+          UiUtil.pushUrl(this.getUIContext(), { url: 'pages/CloudBookPage' });
+        })
         Button($r('app.string.ui_32ffb8c287')).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
           .height(40).padding({ left: 10, right: 10 })
         .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(16).margin({ right: 6 })

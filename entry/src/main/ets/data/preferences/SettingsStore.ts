@@ -408,6 +408,44 @@ export class SettingsStore {
     }
   }
 
+  /**
+   * 写入加密字符串（云端书库等多凭证场景）。
+   * 密钥不可用时降级为明文（与 setWebDavPassword 一致）。
+   */
+  async putSecret(key: string, plain: string): Promise<void> {
+    if (!key) {
+      throw new Error('putSecret key 不能为空');
+    }
+    const encoded = await this.encrypt_(plain || '');
+    await this.put(key, encoded);
+  }
+
+  /** 读取 putSecret 写入的字符串；失败返回空串。 */
+  async getSecret(key: string): Promise<string> {
+    if (!key) {
+      return '';
+    }
+    const encoded = await this.get(key, '') as string;
+    if (!encoded) {
+      return '';
+    }
+    return await this.decrypt_(encoded);
+  }
+
+  /** 删除偏好键（含内存缓存）。 */
+  async remove(key: string): Promise<void> {
+    if (!key) {
+      return;
+    }
+    try {
+      this.memoryCache_.delete(key);
+      await this.store.delete(key);
+      await this.store.flush();
+    } catch (err) {
+      console.warn('[SettingsStore] remove failed:', key, (err as Error).message);
+    }
+  }
+
   // ---- AI 配置（API Key 使用 HUKS 加密存储） ----
   async getAiEndpoint(): Promise<string> { return await this.get('ai_endpoint', 'https://api.openai.com/v1/chat/completions'); }
   async setAiEndpoint(v: string): Promise<void> { await this.put('ai_endpoint', v); }

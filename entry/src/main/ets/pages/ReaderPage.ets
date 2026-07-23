@@ -861,17 +861,106 @@ struct ReaderPage {
     return value.toLowerCase();
   }
 
+  /**
+   * 目录/章节 URL 可能含多文件路径（DirEpubParser 用 || 连接）。
+   * 跳转与定位时拆成候选列表，避免整串匹配失败。
+   */
+  private hrefPathCandidates_(raw: string): string[] {
+    const out: string[] = [];
+    const seen: Record<string, boolean> = {};
+    const parts = (raw || '').split('||');
+    for (let i = 0; i < parts.length; i++) {
+      const n = this.normalizeEpubHref_(parts[i]);
+      if (!n || seen[n]) {
+        continue;
+      }
+      seen[n] = true;
+      out.push(n);
+    }
+    return out;
+  }
+
+  /** 路径等价：全路径 / 尾缀 / 同名文件（禁止 part002 误匹配 part0021）。 */
+  private hrefPathEquals_(a: string, b: string): boolean {
+    if (!a || !b) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    if (a.endsWith('/' + b) || b.endsWith('/' + a)) {
+      return true;
+    }
+    const baseA = a.substring(a.lastIndexOf('/') + 1);
+    const baseB = b.substring(b.lastIndexOf('/') + 1);
+    return !!baseA && baseA === baseB;
+  }
+
+  private matchScore_(candidate: string, target: string): number {
+    if (!candidate || !target || !this.hrefPathEquals_(candidate, target)) {
+      return -1;
+    }
+    // 完全相等 > 更长路径 > 仅文件名
+    if (candidate === target) {
+      return 10000 + candidate.length;
+    }
+    if (candidate.endsWith('/' + target) || target.endsWith('/' + candidate)) {
+      return 5000 + Math.min(candidate.length, target.length);
+    }
+    return 1000 + candidate.length;
+  }
+
   private findChapterIndexByHref_(href: string): number {
-    const target = this.normalizeEpubHref_(href);
-    if (!target) return -1;
+    const targets = this.hrefPathCandidates_(href);
+    if (targets.length === 0) {
+      return -1;
+    }
+    let bestIdx = -1;
+    let bestScore = -1;
     for (let i = 0; i < this.chapters_.length; i++) {
-      const chapterHref = this.normalizeEpubHref_(this.chapters_[i].url);
-      if (!chapterHref) continue;
-      if (chapterHref === target || chapterHref.endsWith('/' + target) || target.endsWith('/' + chapterHref)) {
-        return i;
+      const candidates = this.hrefPathCandidates_(this.chapters_[i].url || '');
+      for (let c = 0; c < candidates.length; c++) {
+        for (let t = 0; t < targets.length; t++) {
+          const score = this.matchScore_(candidates[c], targets[t]);
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
       }
     }
-    return -1;
+    return bestIdx;
+  }
+
+  private findTocItemIndexByHref_(href: string): number {
+    const targets = this.hrefPathCandidates_(href);
+    if (targets.length === 0 || this.tocItems.length === 0) {
+      return -1;
+    }
+    let bestIdx = -1;
+    let bestScore = -1;
+    for (let i = 0; i < this.tocItems.length; i++) {
+      const candidates = this.hrefPathCandidates_(this.tocItems[i].href || '');
+      for (let c = 0; c < candidates.length; c++) {
+        for (let t = 0; t < targets.length; t++) {
+          const score = this.matchScore_(candidates[c], targets[t]);
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
+      }
+    }
+    return bestIdx;
+  }
+
+  /** 导航/跳转用的单一 href（多路径时取首段）。 */
+  private primaryNavigationHref_(raw: string): string {
+    if (!raw) {
+      return '';
+    }
+    const first = raw.split('||')[0].trim();
+    return first;
   }
 
   private armReadyTimeout_(): void {
@@ -1096,12 +1185,34 @@ struct ReaderPage {
     this.currentCfi_ = loc.cfi || this.currentCfi_;
     this.currentHref_ = loc.href || this.currentHref_;
     this.currentPercent_ = typeof loc.percentage === 'number' ? loc.percentage : this.currentPercent_;
-    const hrefIndex = this.findChapterIndexByHref_(this.currentHref_);
-    const idx = hrefIndex >= 0 ? hrefIndex : (typeof loc.chapterIndex === 'number' ? loc.chapterIndex : this.currentIndex);
     if (this.isPdf_) {
+      const hrefIndex = this.findChapterIndexByHref_(this.currentHref_);
+      const idx = hrefIndex >= 0 ? hrefIndex :
+        (typeof loc.chapterIndex === 'number' ? loc.chapterIndex : this.currentIndex);
       this.currentIndex = Math.max(0, idx);
       this.currentTitle = `第 ${this.currentIndex + 1} 页`;
+    } else if (this.tocItems.length > 0 && this.isFoliate_) {
+      // 图文混排2 / MOBI：以引擎 TOC 为准，避免 DB chapters_ 路径与 spine 不一致导致标题/高亮错位
+      const tocIdx = this.findTocItemIndexByHref_(this.currentHref_);
+      if (tocIdx >= 0) {
+        this.currentIndex = tocIdx;
+        this.currentTitle = this.tocItems[tocIdx].label || '';
+      } else {
+        const hrefIndex = this.findChapterIndexByHref_(this.currentHref_);
+        if (hrefIndex >= 0) {
+          this.currentIndex = Math.min(hrefIndex, Math.max(0, this.chapters_.length - 1));
+          this.currentTitle = this.chapters_[this.currentIndex]?.title || '';
+        } else if (typeof loc.chapterIndex === 'number' && loc.chapterIndex >= 0) {
+          // section 序号不等于目录序号，仅作兜底且钳制到 toc 范围
+          this.currentIndex = Math.min(loc.chapterIndex, Math.max(0, this.tocItems.length - 1));
+          this.currentTitle = this.tocItems[this.currentIndex]?.label ||
+            this.chapters_[this.currentIndex]?.title || '';
+        }
+      }
     } else {
+      const hrefIndex = this.findChapterIndexByHref_(this.currentHref_);
+      const idx = hrefIndex >= 0 ? hrefIndex :
+        (typeof loc.chapterIndex === 'number' ? loc.chapterIndex : this.currentIndex);
       this.currentIndex = Math.min(Math.max(0, idx), Math.max(0, this.chapters_.length - 1));
       this.currentTitle = this.chapters_[this.currentIndex]?.title || '';
     }
@@ -1140,11 +1251,16 @@ struct ReaderPage {
       await s.put(this.progressKey_(), this.currentCfi_ || this.currentHref_);
       const db = AppDatabase.getInstance().rdbStore;
       const bookDao = new BookTable(db);
+      const totalChapters = this.isPdf_
+        ? Math.max(1, this.book_.totalChapterNum)
+        : (this.tocItems.length > 0 && this.isFoliate_
+          ? this.tocItems.length
+          : this.chapters_.length);
       await bookDao.updateReadingProgress(
         this.bookUrl_,
         this.currentIndex,
         this.currentTitle,
-        this.isPdf_ ? Math.max(1, this.book_.totalChapterNum) : this.chapters_.length,
+        totalChapters,
         Math.round(this.currentPercent_ * 100000)
       );
     } catch (_e) {}
@@ -1420,26 +1536,54 @@ struct ReaderPage {
   private goToChapter_(chapter: BookChapter): void {
     this.showToc = false;
     this.showMenu = false;
-    const target = this.isFoliate_ ? chapter.url : this.toEpubTarget_(chapter.url);
-    this.runJs_('window.goToHref && window.goToHref(' + JSON.stringify(target) + ')');
+    const raw = this.primaryNavigationHref_(chapter.url || '');
+    const target = this.isFoliate_ ? raw : this.toEpubTarget_(raw);
+    this.navigateToHref_(target, chapter.title || '');
   }
 
   private goToTocItem_(item: EpubTocItem): void {
     if (!item.href) return;
     this.showToc = false;
     this.showMenu = false;
-    this.runJs_('window.goToHref && window.goToHref(' + JSON.stringify(item.href) + ')');
+    const href = this.primaryNavigationHref_(item.href);
+    this.navigateToHref_(href, item.label || '');
+  }
+
+  /**
+   * 关闭目录后延迟跳转，避免同一触点落到九宫格/WebView 触发上一页/上一章。
+   * 日志中曾见：先落到目标 chapter 再约 300ms 回退到上一 section。
+   */
+  private navigateToHref_(href: string, label: string): void {
+    if (!href) {
+      return;
+    }
+    console.info('[ReaderPage] navigate href=' + href + ' label=' + label);
+    setTimeout(() => {
+      if (!this.pageActive_) {
+        return;
+      }
+      this.runJs_('window.goToHref && window.goToHref(' + JSON.stringify(href) + ')');
+    }, 80);
   }
 
   private isTocItemCurrent_(item: EpubTocItem): boolean {
     if (!item.href || !this.currentHref_) return false;
-    return this.normalizeEpubHref_(item.href) === this.normalizeEpubHref_(this.currentHref_);
+    const targets = this.hrefPathCandidates_(this.currentHref_);
+    const candidates = this.hrefPathCandidates_(item.href);
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = 0; j < targets.length; j++) {
+        if (this.hrefPathEquals_(candidates[i], targets[j])) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private chapterToTocItem_(chapter: BookChapter): EpubTocItem {
     return {
       label: chapter.title || `第 ${chapter.index + 1} 章`,
-      href: chapter.url,
+      href: this.primaryNavigationHref_(chapter.url || ''),
       level: 0,
     };
   }
@@ -1452,7 +1596,8 @@ struct ReaderPage {
   }
 
   private goToChapterIndex_(index: number): void {
-    if ((this.isMobi_ || this.isPdf_) && this.tocItems.length > 0) {
+    // 图文混排2(foliate EPUB) / MOBI / PDF：引擎 TOC 与 DB chapters 可能不一致，统一按 tocItems 跳转
+    if (this.tocItems.length > 0 && (this.isMobi_ || this.isPdf_ || this.isEpubFoliate_ || this.isFoliate_)) {
       if (index < 0 || index >= this.tocItems.length) return;
       this.currentIndex = index;
       this.currentTitle = this.tocItems[index].label;
@@ -1577,7 +1722,9 @@ struct ReaderPage {
       // 触摸层：只绑短按（九宫格 + 链接命中），不要用 Block。
       // Block 会吞掉全部触摸，导致长按选字/系统文本菜单无法触发。
       // Transparent：本层可响应 Tap，下层 WebView 仍可收到长按做原生选择。
-      if (!this.showMenu && !this.isLoading) {
+      // 目录/菜单等浮层打开时必须禁用，否则 ListItem 点击会穿透触发上一页/上一章。
+      if (!this.showMenu && !this.showToc && !this.showStyle && !this.showAloud &&
+        !this.showZoneConfig && !this.isLoading) {
         Column()
           .width('100%').height('100%')
           .hitTestBehavior(HitTestMode.Transparent)

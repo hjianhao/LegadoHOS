@@ -30,6 +30,9 @@
     "pages/BookCachePage",
     "pages/CacheManagePage",
     "pages/BackupSettingsPage",
+    "pages/CloudBookPage",
+    "pages/CloudSourceManagePage",
+    "pages/CloudSourceEditPage",
     "pages/FontManagerPage",
     "pages/ReaderPage"
   ]

@@ -2,7 +2,8 @@
  * 目录页 — 参照 legado-with-MD3 TocScreen 实现
  *
  * 功能：
- * - 独立页面展示完整章节列表
+ * - 顶部 Tab：目录 / 书签（仅当前书）
+ * - 目录刷新按钮（强制重新拉网）
  * - 正序/倒序切换（默认正序）
  * - 当前阅读章节高亮
  * - 点击章节跳转到对应阅读页
@@ -104,7 +105,12 @@ export struct ChapterListPage {
   @State selectMode: boolean = false;       // 多选缓存模式
   @State selectedIndices: number[] = [];    // 已选章节索引（原 index 语义）
   @State cacheStarting: boolean = false;    // 缓存任务启动中（防重复点击）
+  @State activeTab: number = 0;             // 0=目录 1=书签
+  @State bookBookmarks: Bookmark[] = [];    // 当前书的书签
+  @State bookmarksLoading: boolean = false;
+  @State isRefreshingToc: boolean = false;  // 目录刷新中
   private listScroller_: Scroller = new Scroller();
+  private bookId_: number = 0;
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -123,66 +129,194 @@ export struct ChapterListPage {
     this.loadChapters();
   }
 
-  async loadChapters(): Promise<void> {
-    // 1) 优先从缓存读取
-    if (ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
-      this.chapters_ = ChapterCache.chapters;
-      console.info('[ChapterList] Loaded', this.chapters_.length, 'chapters from cache');
-    } else {
-      // 2) 内存缓存缺失时优先读取已落库目录（AI 导入只保存目录）。
-      console.info('[ChapterList] Memory cache miss, loading DB/source');
-      try {
-        await AppDatabase.getInstance().waitForInit();
-        const db = AppDatabase.getInstance().rdbStore;
-        const bookId = await this.resolveBookId_();
-        if (bookId > 0) {
-          const stored = await new ChapterTable(db).getChaptersByBookId(bookId);
+  async loadChapters(forceNetwork: boolean = false): Promise<void> {
+    this.isLoading = true;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const db = AppDatabase.getInstance().rdbStore;
+      this.bookId_ = await this.resolveBookId_();
+
+      // 1) 非强制刷新时优先内存缓存
+      if (!forceNetwork && ChapterCache.chapters.length > 0 && ChapterCache.bookUrl === this.bookUrl) {
+        this.chapters_ = ChapterCache.chapters;
+        console.info('[ChapterList] Loaded', this.chapters_.length, 'chapters from cache');
+      } else if (!forceNetwork) {
+        // 2) 内存缺失时读 DB
+        console.info('[ChapterList] Memory cache miss, loading DB/source');
+        if (this.bookId_ > 0) {
+          const stored = await new ChapterTable(db).getChaptersByBookId(this.bookId_);
           if (stored.length > 0) {
             this.chapters_ = stored.map((chapter): BookSourceChapter => ({
-              index: chapter.index, title: chapter.title, url: chapter.url,
+              index: chapter.index, title: chapter.title, url: chapter.url, isVolume: false,
             }));
             ChapterCache.chapters = this.chapters_;
             ChapterCache.bookUrl = this.bookUrl;
           }
         }
-        const matched = this.chapters_.length === 0
-          ? await BookSourceResolver.resolveByIdentity(bookId, this.bookUrl, this.originUrl, this.origin) : null;
-        if (matched && this.bookUrl && this.chapters_.length === 0) {
-          const tocChapters = await globalSourceExecutor.getToc(matched, this.tocUrl || this.bookUrl);
-          if (tocChapters.length > 0) {
-            this.chapters_ = tocChapters;
-            // 更新缓存
-            ChapterCache.chapters = tocChapters;
-            ChapterCache.bookUrl = this.bookUrl;
-            console.info('[ChapterList] Fetched', tocChapters.length, 'chapters from source');
-          }
-        }
-      } catch (err) {
-        console.warn('[ChapterList] Fetch failed:', (err as Error).message);
       }
+
+      // 3) 强制刷新，或本地仍无目录：拉网
+      if (forceNetwork || this.chapters_.length === 0) {
+        const matched = await BookSourceResolver.resolveByIdentity(
+          this.bookId_, this.bookUrl, this.originUrl, this.origin);
+        if (matched && this.bookUrl) {
+          try {
+            const primary = this.tocUrl || this.bookUrl;
+            let tocChapters = await globalSourceExecutor.getToc(matched, primary);
+            if (tocChapters.length === 0 && primary !== this.bookUrl) {
+              tocChapters = await globalSourceExecutor.getToc(matched, this.bookUrl);
+            }
+            if (tocChapters.length > 0) {
+              this.chapters_ = tocChapters;
+              ChapterCache.chapters = tocChapters;
+              ChapterCache.bookUrl = this.bookUrl;
+              // 落库，供阅读页/缓存页复用
+              if (this.bookId_ > 0) {
+                try {
+                  await new ChapterTable(db).replaceTocPreserveContent(this.bookId_, tocChapters);
+                  const book = await new BookTable(db).getBookById(this.bookId_);
+                  if (book) {
+                    book.totalChapterNum = tocChapters.length;
+                    book.chapterCount = tocChapters.length;
+                    book.latestChapterTitle = tocChapters[tocChapters.length - 1]?.title || '';
+                    await new BookTable(db).updateBook(book);
+                  }
+                } catch (_e) { /* ignore persist fail */ }
+              }
+              console.info('[ChapterList] Fetched', tocChapters.length, 'chapters from source',
+                forceNetwork ? '(refresh)' : '');
+            } else if (forceNetwork) {
+              UiUtil.showToast(this.getUIContext(), { message: '未获取到新目录', duration: 1500 });
+            }
+          } catch (err) {
+            console.warn('[ChapterList] Fetch failed:', (err as Error).message);
+            if (forceNetwork) {
+              UiUtil.showToast(this.getUIContext(), {
+                message: '刷新失败: ' + (err as Error).message, duration: 1800
+              });
+            }
+          }
+        } else if (forceNetwork) {
+          UiUtil.showToast(this.getUIContext(), { message: '未匹配到书源，无法刷新', duration: 1500 });
+        }
+      }
+
+      if (this.chapters_.length >= 2) {
+        console.info('[ChapterList] first:', this.chapters_[0].title.substring(0, 30));
+        console.info('[ChapterList] last:', this.chapters_[this.chapters_.length - 1].title.substring(0, 30));
+      }
+      this.ensureAscendingOrder();
+      this.detectVolumes();
+      this.applySort(this.isAscending);
+    } finally {
+      this.isLoading = false;
+      this.isRefreshingToc = false;
+      setTimeout(() => {
+        if (this.activeTab === 0 && this.durChapterIndex >= 0) {
+          try { this.listScroller_.scrollToIndex(this.durChapterIndex); } catch (_e) { /* ignore */ }
+        }
+      }, 0);
     }
-    // 调试：确认章节顺序
-    if (this.chapters_.length >= 2) {
-      const f = this.chapters_[0].title;
-      const l = this.chapters_[this.chapters_.length - 1].title;
-      console.info('[ChapterList] first:', f.substring(0, 30));
-      console.info('[ChapterList] last:', l.substring(0, 30));
+  }
+
+  /** 强制刷新目录 */
+  private async refreshToc_(): Promise<void> {
+    if (this.isRefreshingToc || this.isLoading) return;
+    if (this.selectMode) this.exitSelectMode();
+    this.isRefreshingToc = true;
+    this.activeTab = 0;
+    await this.loadChapters(true);
+    if (this.chapters_.length > 0) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '目录已刷新，共 ' + this.chapters_.length + ' 章', duration: 1500
+      });
     }
-    // 兜底检测：如果 getToc 的倒序检测未生效，在此修正
-    if (this.chapters_.length >= 6) {
-      console.info('[ChL] order check:',
-        'ch0=' + this.chapters_[0].title.substring(0, 20),
-        'ch1=' + this.chapters_[1].title.substring(0, 20),
-        'ch2=' + this.chapters_[2].title.substring(0, 20),
-        '... ch' + (this.chapters_.length - 3) + '=' + this.chapters_[this.chapters_.length - 3].title.substring(0, 20),
-        'ch' + (this.chapters_.length - 2) + '=' + this.chapters_[this.chapters_.length - 2].title.substring(0, 20),
-        'ch' + (this.chapters_.length - 1) + '=' + this.chapters_[this.chapters_.length - 1].title.substring(0, 20));
+  }
+
+  private async loadBookmarks_(): Promise<void> {
+    this.bookmarksLoading = true;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      if (this.bookId_ <= 0) {
+        this.bookId_ = await this.resolveBookId_();
+      }
+      if (this.bookId_ <= 0) {
+        this.bookBookmarks = [];
+        return;
+      }
+      const list = await new BookmarkTable(AppDatabase.getInstance().rdbStore).getByBookId(this.bookId_);
+      // 按章节/位置排序
+      list.sort((a: Bookmark, b: Bookmark): number => {
+        if (a.chapterIndex !== b.chapterIndex) return a.chapterIndex - b.chapterIndex;
+        return a.chapterPos - b.chapterPos;
+      });
+      this.bookBookmarks = list;
+    } catch (e) {
+      console.warn('[ChapterList] load bookmarks fail:', (e as Error).message);
+      this.bookBookmarks = [];
+    } finally {
+      this.bookmarksLoading = false;
     }
-    this.ensureAscendingOrder();
-    this.detectVolumes();
-    this.applySort(this.isAscending);
-    this.isLoading = false;
-    setTimeout(() => { this.listScroller_.scrollToIndex(this.durChapterIndex); }, 0);
+  }
+
+  private onTabChange_(tab: number): void {
+    if (this.activeTab === tab) return;
+    this.activeTab = tab;
+    if (tab === 1) {
+      if (this.selectMode) this.exitSelectMode();
+      this.loadBookmarks_();
+    }
+  }
+
+  private async openBookmark_(b: Bookmark): Promise<void> {
+    ChapterCache.chapters = this.chapters_;
+    ChapterCache.bookUrl = this.bookUrl;
+    ChapterCache.targetIndex = b.chapterIndex;
+    const targetPage = this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
+    if (this.from === 'ReadPage' || this.from === 'ComicReadPage') {
+      UiUtil.back(this.getUIContext(), {
+        url: targetPage,
+        params: {
+          durChapterIndex: b.chapterIndex,
+          durCharPos: b.chapterPos,
+          durChapterTitle: b.chapterName,
+        }
+      });
+    } else {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: targetPage,
+        params: {
+          bookName: this.bookName,
+          bookAuthor: this.bookAuthor,
+          bookUrl: this.bookUrl,
+          tocUrl: this.tocUrl,
+          originUrl: this.originUrl,
+          origin: this.origin,
+          header: this.header,
+          durChapterIndex: b.chapterIndex,
+          durCharPos: b.chapterPos,
+          durChapterTitle: b.chapterName,
+        }
+      });
+    }
+  }
+
+  private async deleteBookmark_(b: Bookmark): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      await new BookmarkTable(AppDatabase.getInstance().rdbStore).delete(b.id);
+      this.bookBookmarks = this.bookBookmarks.filter((x: Bookmark): boolean => x.id !== b.id);
+      UiUtil.showToast(this.getUIContext(), { message: '已删除书签', duration: 1200 });
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '删除失败', duration: 1200 });
+    }
+  }
+
+  private formatBookmarkTime_(ts: number): string {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
   /** 检测卷标题：仅包含明确卷关键词的视为卷标题（不再基于长度/数字推断） */
@@ -494,146 +628,276 @@ export struct ChapterListPage {
         Button() { Text($r('app.string.ui_8179643cdc')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18) }
           .width(40).height(40).backgroundColor(ThemeColors.transparent())
           .accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text($r('app.string.ui_41e5243e2d')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(16).fontWeight(FontWeight.Bold)
-          .margin({ left: 8 })
-        Text('- ' + this.bookName).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark))
+        Text(this.bookName || '目录').fontSize(16).fontWeight(FontWeight.Bold)
+          .fontColor(ThemeColors.onSurface(this.isDark))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1).margin({ left: 4 })
-        // 缓存/多选入口
-        Button(this.selectMode ? '退出' : '缓存')
-          .fontSize(13)
-          .fontColor(ThemeColors.onBackground(this.isDark))
-          .height(40).borderRadius(20)
-          .backgroundColor(this.selectMode
-            ? ThemeColors.outlineVariant(this.isDark) : ThemeColors.primary(this.isDark))
-          .padding({ left: 12, right: 12 })
-          .margin({ right: 8 })
-          .onClick(() => {
-            if (this.selectMode) this.exitSelectMode();
-            else this.enterSelectMode();
-          })
-        // 排序切换按钮
+
+        // 刷新目录
         Button() {
-          Row() {
-            Text(this.isAscending ? '↑' : '↓').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
-            Text(this.isAscending ? '正序' : '倒序').fontSize(12)
-              .fontColor(ThemeColors.onBackground(this.isDark))
-          }.alignItems(VerticalAlign.Center)
+          Text(this.isRefreshingToc ? '…' : '↻').fontSize(18)
+            .fontColor(ThemeColors.onSurface(this.isDark))
         }
-        .height(40).borderRadius(18)
-        .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-        .padding({ left: 12, right: 12 })
-        .margin({ right: 8 })
-        .onClick(() => { this.toggleSort(); })
-      }
-      .padding({ left: 8, right: 4 }).width('100%').height(48)
+        .width(40).height(40).backgroundColor(ThemeColors.transparent())
+        .enabled(!this.isRefreshingToc && !this.isLoading)
+        .accessibilityText('刷新目录')
+        .onClick(() => { this.refreshToc_(); })
 
-      // ===== 加载中 =====
-      if (this.isLoading) {
-        LoadingProgress().color(ThemeColors.primary(this.isDark)).margin({ top: 100 })
-      } else if (this.chapters_.length === 0) {
-        // ===== 空状态 =====
-        Column() {
-          Text($r('app.string.ui_d926370389')).fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
-          Text($r('app.string.ui_7bf45985d7')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
-        }.width('100%').alignItems(HorizontalAlign.Center)
-      } else {
-        // ===== 章节列表 — PERF-001 使用 LazyForEach 替代 ForEach =====
-        List({ space: 0, scroller: this.listScroller_ }) {
-          LazyForEach(this.dataSource_, (ch: BookSourceChapter, idx: number) => {
-            ListItem() {
-              if (ch.isVolume) {
-                // 卷标题
-                Row() {
-                  Text(ch.title).fontSize(15).fontWeight(FontWeight.Bold)
-                    .fontColor(ThemeColors.primary(this.isDark))
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                }
-                .width('100%').padding({ top: 12, bottom: 12, left: 16, right: 16 })
-                .backgroundColor(ThemeColors.primaryContainer(this.isDark))
-              } else {
-                Row() {
-                  if (this.selectMode) {
-                    Text(this.selectedIndices.includes(ch.index) ? '●' : '○')
-                      .fontSize(16)
-                      .fontColor(this.selectedIndices.includes(ch.index)
-                        ? ThemeColors.primary(this.isDark)
-                        : ThemeColors.secondaryText(this.isDark))
-                      .width(24).margin({ right: 4 })
-                  }
-                  Text(String(ch.index + 1)).fontSize(12)
-                    .fontColor(ThemeColors.secondaryText(this.isDark))
-                    .width(36).textAlign(TextAlign.End)
-                    .margin({ right: 8 })
-                  Text(ch.title).fontSize(14)
-                    .fontColor(ch.index === this.durChapterIndex
-                      ? ThemeColors.primary(this.isDark)
-                      : ThemeColors.onBackground(this.isDark))
-                    .fontWeight(ch.index === this.durChapterIndex
-                      ? FontWeight.Bold
-                      : FontWeight.Normal)
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .wordBreak(WordBreak.BREAK_ALL)
-                    .layoutWeight(1)
-                }
-                .width('100%').padding({ top: 10, bottom: 10, left: 16, right: 16 })
-                .backgroundColor(ch.index === this.durChapterIndex
-                  ? ThemeColors.primaryContainer(this.isDark)
-                  : ThemeColors.transparent())
-              }
-            }
+        // 缓存/多选入口（仅目录 Tab）
+        if (this.activeTab === 0) {
+          Button(this.selectMode ? '退出' : '缓存')
+            .fontSize(13)
+            .fontColor(ThemeColors.onBackground(this.isDark))
+            .height(36).borderRadius(18)
+            .backgroundColor(this.selectMode
+              ? ThemeColors.outlineVariant(this.isDark) : ThemeColors.primary(this.isDark))
+            .padding({ left: 10, right: 10 })
+            .margin({ left: 2 })
             .onClick(() => {
-              if (ch.isVolume) return;
-              if (this.selectMode) this.toggleSelect(ch, idx);
-              else this.onChapterClick(ch);
+              if (this.selectMode) this.exitSelectMode();
+              else this.enterSelectMode();
             })
-          }, (ch: BookSourceChapter) => ch.index.toString())
         }
-        .layoutWeight(1).width('100%')
-        .cachedCount(5)
 
-        // ===== 底部：多选操作条 / 信息栏 =====
-        if (this.selectMode) {
-          Row() {
-            Button($r('app.string.common_select_all')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
-              .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
-              .onClick(() => { this.selectAll(); })
-            Button($r('app.string.common_invert_selection')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
-              .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
-              .onClick(() => { this.invertSelect(); })
-            Button($r('app.string.ui_literal_bcc0b869ef')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
-              .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
-              .onClick(() => { this.addBookmarksForSelected(); })
-            Button('缓存所选(' + this.selectedIndices.length + ')').fontSize(13)
-              .fontColor(this.selectedIndices.length > 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.secondaryText(this.isDark))
-              .backgroundColor(this.selectedIndices.length > 0
-                ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark))
-              .height(40).layoutWeight(1.4).borderRadius(20)
-              .onClick(() => { this.startCache(true); })
-            Button($r('app.string.common_cache_all')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
-              .backgroundColor(ThemeColors.primary(this.isDark))
-              .height(40).layoutWeight(1).borderRadius(20)
-              .onClick(() => { this.startCache(false); })
+        // 排序切换（仅目录 Tab）
+        if (this.activeTab === 0) {
+          Button() {
+            Row() {
+              Text(this.isAscending ? '↑' : '↓').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
+              Text(this.isAscending ? '正序' : '倒序').fontSize(12)
+                .fontColor(ThemeColors.onBackground(this.isDark))
+            }.alignItems(VerticalAlign.Center)
           }
-          .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-          .width('100%')
-          .backgroundColor(ThemeColors.surface(this.isDark))
-        } else {
-          Row() {
-            Text('共 ' + this.chapters_.length + ' 章')
-              .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-            Blank()
-            Text(this.isAscending ? '正序 ▲' : '倒序 ▼')
-              .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-              .onClick(() => { this.toggleSort(); })
-          }
-          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-          .width('100%').height(40)
-          .backgroundColor(ThemeColors.surface(this.isDark))
+          .height(36).borderRadius(18)
+          .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+          .padding({ left: 10, right: 10 })
+          .margin({ left: 6, right: 6 })
+          .onClick(() => { this.toggleSort(); })
         }
+      }
+      .padding({ left: 4, right: 4 }).width('100%').height(48)
+
+      // ===== Tab：目录 / 书签 =====
+      Row() {
+        this.buildTabItem_('目录', 0)
+        this.buildTabItem_('书签', 1)
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+
+      // ===== 内容区 =====
+      if (this.activeTab === 0) {
+        this.buildTocPane_()
+      } else {
+        this.buildBookmarkPane_()
       }
     }
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.background(this.isDark))
+  }
+
+  @Builder
+  buildTabItem_(title: string, tab: number) {
+    Column() {
+      Text(title)
+        .fontSize(15)
+        .fontWeight(this.activeTab === tab ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor(this.activeTab === tab
+          ? ThemeColors.primary(this.isDark)
+          : ThemeColors.secondaryText(this.isDark))
+      Row()
+        .width(28).height(3).borderRadius(2).margin({ top: 6 })
+        .backgroundColor(this.activeTab === tab
+          ? ThemeColors.primary(this.isDark)
+          : ThemeColors.transparent())
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: 6, bottom: 2 })
+    .onClick(() => { this.onTabChange_(tab); })
+  }
+
+  @Builder
+  buildTocPane_() {
+    if (this.isLoading) {
+      Column() {
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).width(40).height(40)
+        if (this.isRefreshingToc) {
+          Text('正在刷新目录…').fontSize(13)
+            .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 10 })
+        }
+      }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+    } else if (this.chapters_.length === 0) {
+      Column() {
+        Text('暂无目录').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
+        Text('可点击右上角 ↻ 刷新').fontSize(13)
+          .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+        Button('刷新目录')
+          .fontSize(14).height(40).margin({ top: 16 })
+          .backgroundColor(ThemeColors.primary(this.isDark))
+          .fontColor(ThemeColors.onPrimary(this.isDark))
+          .borderRadius(20)
+          .onClick(() => { this.refreshToc_(); })
+      }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
+    } else {
+      List({ space: 0, scroller: this.listScroller_ }) {
+        LazyForEach(this.dataSource_, (ch: BookSourceChapter, idx: number) => {
+          ListItem() {
+            if (ch.isVolume) {
+              Row() {
+                Text(ch.title).fontSize(15).fontWeight(FontWeight.Bold)
+                  .fontColor(ThemeColors.primary(this.isDark))
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%').padding({ top: 12, bottom: 12, left: 16, right: 16 })
+              .backgroundColor(ThemeColors.primaryContainer(this.isDark))
+            } else {
+              Row() {
+                if (this.selectMode) {
+                  Text(this.selectedIndices.includes(ch.index) ? '●' : '○')
+                    .fontSize(16)
+                    .fontColor(this.selectedIndices.includes(ch.index)
+                      ? ThemeColors.primary(this.isDark)
+                      : ThemeColors.secondaryText(this.isDark))
+                    .width(24).margin({ right: 4 })
+                }
+                Text(String(ch.index + 1)).fontSize(12)
+                  .fontColor(ThemeColors.secondaryText(this.isDark))
+                  .width(36).textAlign(TextAlign.End)
+                  .margin({ right: 8 })
+                Text(ch.title).fontSize(14)
+                  .fontColor(ch.index === this.durChapterIndex
+                    ? ThemeColors.primary(this.isDark)
+                    : ThemeColors.onBackground(this.isDark))
+                  .fontWeight(ch.index === this.durChapterIndex
+                    ? FontWeight.Bold
+                    : FontWeight.Normal)
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .wordBreak(WordBreak.BREAK_ALL)
+                  .layoutWeight(1)
+              }
+              .width('100%').padding({ top: 10, bottom: 10, left: 16, right: 16 })
+              .backgroundColor(ch.index === this.durChapterIndex
+                ? ThemeColors.primaryContainer(this.isDark)
+                : ThemeColors.transparent())
+            }
+          }
+          .onClick(() => {
+            if (ch.isVolume) return;
+            if (this.selectMode) this.toggleSelect(ch, idx);
+            else this.onChapterClick(ch);
+          })
+        }, (ch: BookSourceChapter) => ch.index.toString())
+      }
+      .layoutWeight(1).width('100%')
+      .cachedCount(5)
+
+      if (this.selectMode) {
+        Row() {
+          Button($r('app.string.common_select_all')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
+            .onClick(() => { this.selectAll(); })
+          Button($r('app.string.common_invert_selection')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
+            .onClick(() => { this.invertSelect(); })
+          Button($r('app.string.ui_literal_bcc0b869ef')).fontSize(13).fontColor(ThemeColors.primary(this.isDark))
+            .backgroundColor(Color.Transparent).height(40).layoutWeight(1)
+            .onClick(() => { this.addBookmarksForSelected(); })
+          Button('缓存所选(' + this.selectedIndices.length + ')').fontSize(13)
+            .fontColor(this.selectedIndices.length > 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+            .backgroundColor(this.selectedIndices.length > 0
+              ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark))
+            .height(40).layoutWeight(1.4).borderRadius(20)
+            .onClick(() => { this.startCache(true); })
+          Button($r('app.string.common_cache_all')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
+            .backgroundColor(ThemeColors.primary(this.isDark))
+            .height(40).layoutWeight(1).borderRadius(20)
+            .onClick(() => { this.startCache(false); })
+        }
+        .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+        .width('100%')
+        .backgroundColor(ThemeColors.surface(this.isDark))
+      } else {
+        Row() {
+          Text('共 ' + this.chapters_.length + ' 章')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+          Blank()
+          Text(this.isAscending ? '正序 ▲' : '倒序 ▼')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+            .onClick(() => { this.toggleSort(); })
+        }
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .width('100%').height(40)
+        .backgroundColor(ThemeColors.surface(this.isDark))
+      }
+    }
+  }
+
+  @Builder
+  buildBookmarkPane_() {
+    if (this.bookmarksLoading) {
+      Column() {
+        LoadingProgress().color(ThemeColors.primary(this.isDark)).width(40).height(40)
+      }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+    } else if (this.bookBookmarks.length === 0) {
+      Column() {
+        Text('暂无书签').fontSize(16).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 80 })
+        Text('在阅读页可添加本书书签').fontSize(13)
+          .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+      }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
+    } else {
+      List({ space: 0 }) {
+        ForEach(this.bookBookmarks, (b: Bookmark) => {
+          ListItem() {
+            Row() {
+              Column() {
+                Text((b.chapterName || ('第' + (b.chapterIndex + 1) + '章')))
+                  .fontSize(14).fontWeight(FontWeight.Medium)
+                  .fontColor(ThemeColors.onBackground(this.isDark))
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                if (b.text) {
+                  Text(b.text)
+                    .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+                    .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .margin({ top: 4 }).width('100%')
+                }
+                if (b.note) {
+                  Text('笔记: ' + b.note)
+                    .fontSize(12).fontColor(ThemeColors.primary(this.isDark))
+                    .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .margin({ top: 2 }).width('100%')
+                }
+                Text(this.formatBookmarkTime_(b.createTime))
+                  .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
+                  .margin({ top: 4 })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Button('删')
+                .fontSize(12).height(32)
+                .fontColor(ThemeColors.error(this.isDark))
+                .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+                .borderRadius(16)
+                .padding({ left: 12, right: 12 })
+                .onClick(() => { this.deleteBookmark_(b); })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 12, top: 12, bottom: 12 })
+          }
+          .onClick(() => { this.openBookmark_(b); })
+        }, (b: Bookmark) => String(b.id))
+      }
+      .layoutWeight(1).width('100%')
+
+      Row() {
+        Text('共 ' + this.bookBookmarks.length + ' 条书签')
+          .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+      }
+      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+      .width('100%').height(40)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+    }
   }
 }

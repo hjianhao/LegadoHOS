@@ -23,6 +23,7 @@ import { AboutPage } from './AboutPage';
 import { AiConfigPage } from './AiConfigPage';
 import { CacheManagePage } from './CacheManagePage';
 import { BackupSettingsPage } from './BackupSettingsPage';
+import { CloudSourceManagePage } from './CloudSourceManagePage';
 
 interface MenuEntry {
   icon: string;
@@ -49,6 +50,7 @@ export struct MyPage {
 
   private readonly menuItems: MenuEntry[] = [
     { icon: '设', title: '设置', desc: '阅读、搜索、主题等全局设置', page: 'pages/SettingsPage' },
+    { icon: '云', title: '云端书库管理', desc: '配置 WebDAV 等云端书库来源', page: 'pages/CloudSourceManagePage' },
     { icon: '源', title: '书源管理', desc: '管理书源、在线导入', page: 'pages/BookSourcePage' },
     { icon: '净', title: '替换净化', desc: '正文/标题替换规则管理', page: 'pages/ReplaceRulePage' },
     { icon: '字', title: '字体管理', desc: '导入、删除自定义字体', page: 'pages/FontManagerPage' },
@@ -287,6 +289,8 @@ export struct MyPage {
         CacheManagePage()
       } else if (this.selectedPage === 'pages/BackupSettingsPage') {
         BackupSettingsPage()
+      } else if (this.selectedPage === 'pages/CloudSourceManagePage') {
+        CloudSourceManagePage()
       } else if (this.selectedPage === 'pages/BookSourcePage') {
         BookSourcePage()
       } else if (this.selectedPage === 'pages/ReplaceRulePage') {

@@ -41,6 +41,7 @@ import * as ChapterMatcher from '../util/ChapterMatcher';
 import { ReadAloudPanel } from '../components/reader/ReadAloudPanel';
 import { ReadAloudEngine, AloudState, setAloudChapterProvider, releaseGlobalAloudEngine, AloudChapterText } from '../service/ReadAloudEngine';
 import window from '@ohos.window';
+import { BackupService } from '../service/BackupService';
 import { WebDavService } from '../service/WebDavService';
 import { UiUtil } from '../util/UiUtil';
 import { Want, common } from '@kit.AbilityKit';
@@ -65,6 +66,12 @@ interface ReadStyleSaveSnapshot {
   readFollowTheme: boolean;
 }
 
+interface ScrollChapterSection {
+  content: string;
+  chapterIdx: number;
+  key: string;
+}
+
 @Entry
 @Component
 struct ReadPage {
@@ -82,9 +89,11 @@ struct ReadPage {
   @State text: string = '';
   @State isLoading: boolean = true;
   @State pages: LayoutPage[] = [];
-  // 预加载下一章，实现无缝翻页
+  // 预加载相邻章节，实现无缝翻页（上下章都缓存到内存）
   private nextChapterContent_: string = '';
   private nextChapterIdx_: number = -1;
+  private prevChapterContent_: string = '';
+  private prevChapterIdx_: number = -1;
   private isPreloading_: boolean = false;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
   private bookId_: number = -1;
@@ -128,6 +137,10 @@ struct ReadPage {
   private textScroller_: Scroller = new Scroller();
   /** 滚动模式：切章后待恢复的滚动位置（'start' 章首 / 'end' 章末，'' 无） */
   private pendingScrollPos_: string = '';
+  /** 滚动模式：待定位对应的正文世代，避免旧章高度回调误定位 */
+  private pendingScrollGen_: number = 0;
+  /** 滚动模式：正文内容世代（每次 applyChapterContent 递增） */
+  private scrollContentGen_: number = 0;
   /** 滚动模式：切章时置 false 销毁旧 Scroll（清除残留惯性滚动/回弹），内容就绪后重建 */
   @State scrollAlive_: boolean = true;
   /** 滚动模式：重建 Scroll 后短暂屏蔽 reach 事件（创建事件与定位着陆事件都在窗口内） */
@@ -138,8 +151,28 @@ struct ReadPage {
   private jumpEpoch_: number = 0;
   /** 滚动模式：Scroll 视口高度（onAreaChange 实测，vp） */
   private scrollViewH_: number = 0;
-  /** 滚动模式：正文 Text 内容高度（onAreaChange 实测，vp） */
+  /** 滚动模式：当前窗口总内容高度（prev+curr+next） */
   private scrollTextH_: number = 0;
+  /** 连续滚动窗口：上一章/当前章/下一章展示文本（同一 Scroll 内无缝拼接） */
+  @State scrollPrevText_: string = '';
+  @State scrollCurrText_: string = '';
+  @State scrollNextText_: string = '';
+  private scrollPrevIdx_: number = -1;
+  private scrollNextIdx_: number = -1;
+  private scrollPrevH_: number = 0;
+  private scrollCurrH_: number = 0;
+  private scrollNextH_: number = 0;
+  private scrollPrevRaw_: string = '';
+  private scrollCurrRaw_: string = '';
+  private scrollNextRaw_: string = '';
+  /** 连续滚动窗口版本；异步预加载回调只能写回创建它的那一个窗口 */
+  private scrollWindowVersion_: number = 0;
+  /** 最近一次真实/程序化滚动位置，用于区分用户滚动方向，避免偏移补偿触发反向切章 */
+  private lastObservedScrollY_: number = -1;
+  /** 连续滚动窗口滑动提交锁，防止一次滑动连跳多章 */
+  private scrollWindowLock_: boolean = false;
+  /** 顶部预挂载上一章后，待补偿的滚动偏移（等 prev 高度量到再加回） */
+  private pendingPrependAdjust_: number = 0;
   @State readBgColor: string = ThemeColors.readingBackgroundDefault();
   @State readTextColor: string = ThemeColors.readingTextDefault();
   @State readNightMode: boolean = false;
@@ -216,9 +249,8 @@ struct ReadPage {
 	    this.setSystemBarVisible_(true, false);
 	    // 初始化测量工具
 	    try { this.measureUtil_ = this.getUIContext().getMeasureUtils(); } catch (_) { /* ignore */ }
-	    // 云端同步（异步，不阻塞主流程）
-	    this.syncFromCloud();
 	    // 设置加载完成后立即加载内容（此时 cfg 已为用户配置）
+	    // 云端同步在 loadContent 拿到本地进度基准后再跑，避免 targetIdx_ 仍是 -1 时误判
 	    this.loadContent();
 	    // 阅读中每 5 分钟静默上传一次进度（对齐安卓 startBackupJob）
 	    this.progressUploadTimer_ = setInterval((): void => {
@@ -246,20 +278,39 @@ struct ReadPage {
    */
   private async syncFromCloud(): Promise<void> {
     try {
-      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
-      if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
-      if (!this.bookName || !this.bookAuthor) return;
+      // 冷启动竞态：确保 WebDAV 配置已从存储恢复
+      try {
+        const ctx = UiUtil.getHostContext(this.getUIContext());
+        if (ctx) {
+          await WebDavService.getInstance().initFromStorage(ctx);
+        }
+      } catch (_e) { /* ignore */ }
 
-      const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor);
+      if (!WebDavService.isProgressSyncEnabled() || !WebDavService.getInstance().isConfigured()) {
+        console.info('[ReadPage] syncFromCloud skip: enabled='
+          + WebDavService.isProgressSyncEnabled()
+          + ' configured=' + WebDavService.getInstance().isConfigured());
+        return;
+      }
+      if (!this.bookName) {
+        console.warn('[ReadPage] syncFromCloud skip: empty bookName');
+        return;
+      }
+
+      // 本地章节基准：优先 targetIdx_，否则 currentIndex
+      const localIdx = this.targetIdx_ >= 0 ? this.targetIdx_ : this.currentIndex;
+      console.info('[ReadPage] syncFromCloud localIdx=', localIdx, 'name=', this.bookName, 'author=', this.bookAuthor);
+
+      const cloud = await WebDavService.getInstance().downloadBookProgress(this.bookName, this.bookAuthor || '');
       if (!cloud) {
         // 云端无进度：本地已读过则反向上传
-        if (this.targetIdx_ > 0 || this.pageIndex > 0) {
+        if (localIdx > 0 || this.pageIndex > 0) {
           this.reverseUploadPending_ = true;
         }
         return;
       }
 
-      if (cloud.durChapterIndex > this.targetIdx_) {
+      if (cloud.durChapterIndex > localIdx) {
         // 云端章节更远
         const plus = AppStorage.get<boolean>('webdav_sync_progress_plus') === true;
         if (plus) {
@@ -268,7 +319,7 @@ struct ReadPage {
         } else {
           this.applyCloudProgress_(cloud);
         }
-      } else if (cloud.durChapterIndex < this.targetIdx_) {
+      } else if (cloud.durChapterIndex < localIdx) {
         // 本地章节更远 → 反向上传（等排版完成后拿到字符偏移再传）
         this.reverseUploadPending_ = true;
       } else {
@@ -276,6 +327,10 @@ struct ReadPage {
         if (cloud.durChapterPos > 0) {
           this.pendingCharPos_ = cloud.durChapterPos;
           this.pendingCharPosFromCloud_ = true;
+          // 若内容已加载且仍在同章，立刻定位
+          if (this.pages.length > 0 && this.currentIndex === cloud.durChapterIndex) {
+            this.goToReadingPosition_(cloud.durChapterPos);
+          }
         }
       }
     } catch (e) {
@@ -330,7 +385,8 @@ struct ReadPage {
         }
         if (idx < this.allChapters_.length && idx !== this.currentIndex) {
           console.info('[ReadPage] Jump to chapter from toc:', idx);
-          this.loadChapter(idx);
+          // 用户从目录明确选择：禁止“空章自动跳邻章”，避免跳到错误章节
+          this.loadChapter(idx, false, true);
         }
       }
 	      return;
@@ -526,28 +582,65 @@ struct ReadPage {
 	              }
 	            } catch (_e) { /* fall through to network */ }
 	          }
-	          // 如果 DB 目录不完整，从网络刷新完整目录
+	          // 安卓备份恢复后通常没有章节缓存：DB 为空时必须拉网。
+	          // 旧条件要求 dbChapterCount>0 才刷新，导致恢复书永远 "无目录"。
 	          const expectedCount = await this.getExpectedChapterCount_(db);
-	          if (expectedCount > 0 && dbChapterCount > 0 && dbChapterCount < expectedCount * 0.8) {
-          console.info('[ReadPage] DB chapters incomplete (' + dbChapterCount + '/' + expectedCount + '), fetching from network');
-          const primaryTocUrl = this.tocUrl || this.bookUrl;
-          const netChapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
-          if (netChapters.length === 0 && primaryTocUrl !== this.bookUrl) {
-            const fallback = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
-            if (fallback.length > 0) {
-              chapters = fallback;
-            }
-          } else if (netChapters.length > 0) {
-            chapters = netChapters;
-          }
-          // 将完整目录保存到 DB（仅标题和URL，不含内容）
-          if (chapters.length > 0 && this.bookId_ > 0) {
-            await this.saveFullTocToDb_(this.bookId_, chapters);
-          }
-        }
-      }
-      }
-      if (chapters.length === 0) { this.text = '无目录'; this.isLoading = false; console.info('[ReadPage] no chapters'); return; }
+	          const needNetwork = !!this.source_ && (
+	            dbChapterCount === 0 ||
+	            (expectedCount > 0 && dbChapterCount < expectedCount * 0.8)
+	          );
+	          if (needNetwork) {
+	            console.info('[ReadPage] fetching TOC from network, db=' + dbChapterCount +
+	              ' expected=' + expectedCount + ' source=' + (this.source_?.sourceName || ''));
+	            const primaryTocUrl = this.tocUrl || this.bookUrl;
+	            try {
+	              let netChapters = await globalSourceExecutor.getToc(this.source_!, primaryTocUrl);
+	              if (netChapters.length === 0 && primaryTocUrl !== this.bookUrl) {
+	                netChapters = await globalSourceExecutor.getToc(this.source_!, this.bookUrl);
+	              }
+	              // 有些源 tocUrl 为空/错误时，再尝试详情页解析
+	              if (netChapters.length === 0 && this.bookUrl) {
+	                try {
+	                  const info = await globalSourceExecutor.getBookInfo(this.source_!, this.bookUrl);
+	                  const infoToc = (info && info.tocUrl) ? info.tocUrl : '';
+	                  if (infoToc && infoToc !== primaryTocUrl && infoToc !== this.bookUrl) {
+	                    netChapters = await globalSourceExecutor.getToc(this.source_!, infoToc);
+	                    if (netChapters.length > 0 && !this.tocUrl) {
+	                      this.tocUrl = infoToc;
+	                      try {
+	                        const bookTable = new BookTable(db);
+	                        const book = await bookTable.getBookByUrl(this.bookUrl);
+	                        if (book) {
+	                          book.tocUrl = infoToc;
+	                          await bookTable.updateBook(book);
+	                        }
+	                      } catch (_e) { /* ignore */ }
+	                    }
+	                  }
+	                } catch (_e) { /* ignore bookInfo fallback */ }
+	              }
+	              if (netChapters.length > 0) {
+	                chapters = netChapters;
+	              }
+	            } catch (e) {
+	              console.warn('[ReadPage] getToc failed:', (e as Error).message);
+	            }
+	            // 将完整目录保存到 DB（仅标题和URL，不含内容）
+	            if (chapters.length > 0 && this.bookId_ > 0) {
+	              await this.saveFullTocToDb_(this.bookId_, chapters);
+	            }
+	          } else if (!this.source_) {
+	            console.warn('[ReadPage] no source resolved, originUrl=', this.originUrl, 'origin=', this.origin);
+	          }
+	        }
+	      }
+	      if (chapters.length === 0) {
+	        this.text = this.source_ ? '无目录（可点击调出菜单换源/刷新）' : '未匹配到书源（可点击调出菜单）';
+	        this.pages = [];
+	        this.isLoading = false;
+	        console.info('[ReadPage] no chapters');
+	        return;
+	      }
       this.allChapters_ = chapters;
       this.totalChapters_ = chapters.length;
       this.currentIndex = this.targetIdx_ >= 0 && this.targetIdx_ < chapters.length ? this.targetIdx_ : 0;
@@ -574,6 +667,11 @@ struct ReadPage {
       console.info('[ReadPage] pos: targetIdx_=' + this.targetIdx_ + ' pageIdx=' + this.pageIndex + ' chapters=' + this.allChapters_.length);
       // 打开书时加载一次替换净化规则（书不换则规则集合不变；换源时会重新加载）
       await this.reloadReplaceRules_();
+      // 本地进度基准已就绪，再与云端同步（可能改写 targetIdx_/pendingCharPos_）
+      await this.syncFromCloud();
+      if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
+        this.currentIndex = this.targetIdx_;
+      }
       await this.loadChapter(this.currentIndex);
     } catch (e) {
       this.text = '加载失败';
@@ -603,40 +701,65 @@ struct ReadPage {
     this.applyReadColors();
   }
 
-  private async loadChapter(idx: number, forceFetch: boolean = false): Promise<void> {
+  /**
+   * @param forceFetch 强制走网络/文件，不用预读缓存
+   * @param fromToc 用户从目录明确点选：不自动跳过空章，避免跳到错误章节
+   */
+  private async loadChapter(idx: number, forceFetch: boolean = false, fromToc: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
-    // 滚动模式切章：先销毁旧 Scroll 清除残留惯性滚动/回弹，内容就绪后重建并定位
     const rebuildScroll = this.flowMode === 'scrolled';
+    if (rebuildScroll && !this.pendingScrollPos_) {
+      this.pendingScrollPos_ = 'start';
+    }
+    const previousIndex = this.currentIndex;
+    const ch = this.allChapters_[idx];
+    // 先试缓存/内存：命中则原地换文，不卸 Scroll、不进全屏 loading
+    // 目录跳转时，短缓存可能是旧的空内容，仍强制从文件重读
+    if (!forceFetch && !fromToc) {
+      let fastContent = '';
+      if (this.nextChapterIdx_ === idx && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
+        fastContent = this.nextChapterContent_;
+      } else if (this.prevChapterIdx_ === idx && this.prevChapterContent_ && this.prevChapterContent_.length > 50) {
+        fastContent = this.prevChapterContent_;
+      } else {
+        const pending = this.preloadingChapterPromises_.get(idx);
+        if (pending) {
+          try { fastContent = await pending; } catch (_e) { fastContent = ''; }
+        }
+        if (!fastContent || fastContent.length <= 50) {
+          fastContent = this.isLocalTxt_
+            ? await this.readLocalTxtChapter_(idx)
+            : await this.readChapterCache_(idx);
+        }
+      }
+      if (fastContent && fastContent.length > 50) {
+        console.info('[ReadPage] Loaded from cache:', ch?.title?.substring(0, 20));
+        this.applyChapterContent_(idx, fastContent);
+        this.clearAdjacentCacheIfUsed_(idx);
+        this.isLoading = false;
+        // 缓存命中：保留旧页直到新文布局好，仅短暂屏蔽边界切章
+        this.finishScrollRebuild_(rebuildScroll, false);
+        this.saveProgress();
+        this.preloadAdjacentChapters_(idx);
+        this.cacheSurrounding_(idx);
+        return;
+      }
+    }
+
+    // 缓存未命中：才卸掉旧 Scroll / 显示 loading（避免网络慢时旧文惯性连跳）
     if (rebuildScroll) {
       this.scrollAlive_ = false;
-      if (!this.pendingScrollPos_) this.pendingScrollPos_ = 'start';
-      await this.delayMs_(50);
+      await this.delayMs_(16);
     }
     this.isLoading = true;
-    const previousIndex = this.currentIndex;
     this.currentIndex = idx;
-    const ch = this.allChapters_[idx];
     this.displayTitle_ = this.purifyTitle_(ch?.title || '');
-
-    // 非强制刷新的情况下，尝试从数据库缓存加载
-	    if (!forceFetch) {
-	      const cachedContent = await this.readChapterCache_(idx);
-	      if (cachedContent && cachedContent.length > 50) {
-	        console.info('[ReadPage] Loaded from cache:', ch.title?.substring(0, 20));
-	        this.applyChapterContent_(idx, cachedContent);
-	        this.isLoading = false;
-	        this.finishScrollRebuild_(rebuildScroll);
-	        this.saveProgress();
-	        this.preloadNextChapter_(idx);
-	        this.cacheSurrounding_(idx);
-	        return;
-	      }
-	    }
 
     try {
       let loadedIdx = idx;
       let content = await this.fetchChapterContent_(idx);
-      if ((!content || content.length <= 50) && this.isLocalEpub_) {
+      // 仅自动翻页时跳过“纯图/空文本”章节；目录点选必须停在用户选择的章节
+      if ((!content || content.length <= 50) && this.isLocalEpub_ && !fromToc) {
         const direction = idx < previousIndex ? -1 : 1;
         const readable = await this.findReadableLocalEpubChapter_(idx + direction, direction);
         if (readable) {
@@ -649,12 +772,12 @@ struct ReadPage {
         this.applyChapterContent_(loadedIdx, content);
         // 持久化缓存到数据库（content 为净化前原文，净化结果不落缓存）
         this.saveToDbCache_(loadedIdx, content);
-      } else if (this.isLocalEpub_ && previousIndex !== idx && this.text.length > 50) {
+      } else if (this.isLocalEpub_ && previousIndex !== idx && this.text.length > 50 && !fromToc) {
         // 向前/向后已经没有可读文本章节时，保留当前页，避免用错误提示覆盖正文。
         this.currentIndex = previousIndex;
         this.displayTitle_ = this.purifyTitle_(this.allChapters_[previousIndex]?.title || '');
         this.isLoading = false;
-        this.finishScrollRebuild_(rebuildScroll);
+        this.finishScrollRebuild_(rebuildScroll, true);
         return;
       } else {
         this.rawChapterContent_ = '';
@@ -667,11 +790,11 @@ struct ReadPage {
       this.text = '加载失败';
     }
     this.isLoading = false;
-    this.finishScrollRebuild_(rebuildScroll);
+    this.finishScrollRebuild_(rebuildScroll, true);
     // 保存阅读进度
     this.saveProgress();
-    // 无缝翻页：预加载下一章
-    this.preloadNextChapter_(this.currentIndex);
+    // 无缝翻页：预加载上下章
+    this.preloadAdjacentChapters_(this.currentIndex);
     // 自动缓存前后 ±n 章
     this.cacheSurrounding_(this.currentIndex);
   }
@@ -755,32 +878,24 @@ struct ReadPage {
 			        throw new Error('EPUB 缺少解压目录');
 			      }
 			      if (ch.url) {
-			        const filePath = `${this.tocUrl}/${ch.url}`;
-		        console.info('[ReadPage] Loading from extracted file:', filePath);
-		        let fd: fileFs.File | null = null;
-		        try {
-		          if (fileFs.accessSync(filePath)) {
-		            const stat = fileFs.statSync(filePath);
-		            const buf = new ArrayBuffer(stat.size);
-		            fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
-		            fileFs.readSync(fd.fd, buf);
-		            const decoder = new util.TextDecoder('utf-8', { fatal: false });
-		            const html = decoder.decodeToString(new Uint8Array(buf));
-		            content = HtmlUtil.toPlainText(html);
-		            console.info('[ReadPage] Extracted file loaded:', content.length, 'chars');
-		          }
-		        } catch (e) {
-		          console.warn('[ReadPage] Failed to load extracted file:', e);
-		        } finally {
-		          if (fd) {
-		            try {
-		              fileFs.closeSync(fd);
-		            } catch (err) {
-		              console.warn('[ReadPage] close extracted file failed:', (err as Error).message);
-		            }
-		          }
-		        }
-		      }
+			        // 一章可能对应多个 spine 文件（|| 分隔）；旧数据仅一个 path 时再按相邻章推断补全
+			        const relPaths = this.resolveEpubChapterPaths_(idx);
+			        const parts: string[] = [];
+			        for (let pi = 0; pi < relPaths.length; pi++) {
+			          const rel = relPaths[pi];
+			          if (!rel) continue;
+			          const filePath = `${this.tocUrl}/${rel}`;
+			          console.info('[ReadPage] Loading from extracted file:', filePath);
+			          const piece = this.readEpubHtmlFile_(filePath);
+			          if (piece) {
+			            parts.push(piece);
+			            console.info('[ReadPage] Extracted file loaded:', piece.length, 'chars');
+			          } else {
+			            console.info('[ReadPage] Extracted file loaded: 0 chars');
+			          }
+			        }
+			        content = parts.join('\n\n').trim();
+			      }
 			      if (!content) {
 			        console.info('[ReadPage] EPUB chapter contains no extractable text:', ch.url || ch.title || idx.toString());
 			      }
@@ -801,6 +916,106 @@ struct ReadPage {
     // 返回原文（仅含书源级清洗）。简繁转换 + 用户规则替换统一在展示前 processForDisplay_ 处理，
     // 保证写入 DB 缓存的始终是原文（对齐安卓：用户规则净化结果不落缓存）
     return content;
+  }
+
+  /**
+   * 解析章节对应的相对路径列表。
+   * - 新数据：url 可能为 a.html||b.html||c.html（spine 多文件）
+   * - 旧数据：仅最后一个 spine 文件；若为空，按 partNNNN 序号补全到下一章之前
+   */
+  private resolveEpubChapterPaths_(idx: number): string[] {
+    const ch = this.allChapters_[idx];
+    if (!ch || !ch.url) {
+      return [];
+    }
+    const raw = ch.url;
+    if (raw.indexOf('||') >= 0) {
+      const parts = raw.split('||');
+      const out: string[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        const p = parts[i].trim();
+        if (p) {
+          out.push(p);
+        }
+      }
+      return out;
+    }
+
+    // 单文件：先放自身；若存在 partNNNN 规律，补全到下一章 url 之前
+    const paths: string[] = [raw];
+    const nextRaw = (idx + 1 < this.allChapters_.length) ? (this.allChapters_[idx + 1].url || '') : '';
+    const nextFirst = nextRaw.indexOf('||') >= 0 ? nextRaw.split('||')[0] : nextRaw;
+    const m = raw.match(/^(.*?)(\d+)(\.[A-Za-z0-9]+)$/);
+    if (!m || !this.tocUrl) {
+      return paths;
+    }
+    const prefix = m[1];
+    const width = m[2].length;
+    let num = parseInt(m[2], 10);
+    const ext = m[3];
+    let endNum = num + 12; // 最多向前试 12 个连续文件
+    const nm = nextFirst.match(/(\d+)(\.[A-Za-z0-9]+)$/);
+    if (nm) {
+      const nextNum = parseInt(nm[1], 10);
+      if (nextNum > num) {
+        endNum = nextNum;
+      }
+    }
+    for (let n = num + 1; n < endNum; n++) {
+      let digits = n.toString();
+      while (digits.length < width) {
+        digits = '0' + digits;
+      }
+      const candidate = prefix + digits + ext;
+      // 不要越过下一章起点
+      if (nextFirst && candidate === nextFirst) {
+        break;
+      }
+      const abs = `${this.tocUrl}/${candidate}`;
+      try {
+        if (fileFs.accessSync(abs)) {
+          paths.push(candidate);
+        } else {
+          break;
+        }
+      } catch (_e) {
+        break;
+      }
+    }
+    if (paths.length > 1) {
+      console.info('[ReadPage] Expanded EPUB chapter paths:', paths.length, 'from', raw);
+    }
+    return paths;
+  }
+
+  private readEpubHtmlFile_(filePath: string): string {
+    let fd: fileFs.File | null = null;
+    try {
+      if (!fileFs.accessSync(filePath)) {
+        return '';
+      }
+      const stat = fileFs.statSync(filePath);
+      if (stat.size <= 0) {
+        return '';
+      }
+      const buf = new ArrayBuffer(stat.size);
+      fd = fileFs.openSync(filePath, fileFs.OpenMode.READ_ONLY);
+      fileFs.readSync(fd.fd, buf);
+      const decoder = new util.TextDecoder('utf-8', { fatal: false });
+      const html = decoder.decodeToString(new Uint8Array(buf));
+      return HtmlUtil.toPlainText(html);
+    } catch (e) {
+      console.warn('[ReadPage] Failed to load extracted file:', filePath, (e as Error).message);
+      return '';
+    } finally {
+      if (fd) {
+        try {
+          fileFs.closeSync(fd);
+        } catch (err) {
+          console.warn('[ReadPage] close extracted file failed:', (err as Error).message);
+        }
+      }
+    }
   }
 
   /** 加载替换净化规则（正文 + 标题两个 scope）并刷新全局开关 */
@@ -868,6 +1083,35 @@ struct ReadPage {
     this.displayTitle_ = this.purifyTitle_(this.allChapters_[idx]?.title || '');
     const content = this.processForDisplay_(rawContent);
     this.text = content;
+    // 新正文世代：无缝换文后必须等新高度回调，才能准确定位章末
+    this.scrollContentGen_ += 1;
+    // 开书/菜单切章时可能已经请求定位到章首或章末。把待定位绑定到新世代，
+    // 这样上一章异步插入滚动窗口后会跳回当前章，而不会停在上一章开头。
+    if (this.pendingScrollPos_) {
+      this.pendingScrollGen_ = this.scrollContentGen_;
+    }
+    // 换文瞬间旧高度失效
+    this.scrollTextH_ = 0;
+    this.scrollPrevH_ = 0;
+    this.scrollCurrH_ = 0;
+    this.scrollNextH_ = 0;
+    this.pendingPrependAdjust_ = 0;
+    // 滚动模式：当前章进连续窗口，并挂载上下章实现真无缝滚动
+    if (this.flowMode === 'scrolled') {
+      // 新章节/菜单跳转使此前窗口的所有异步预加载结果失效。
+      this.scrollWindowVersion_ += 1;
+      this.lastObservedScrollY_ = -1;
+      this.scrollCurrText_ = content;
+      this.scrollCurrRaw_ = rawContent;
+      this.scrollPrevText_ = '';
+      this.scrollNextText_ = '';
+      this.scrollPrevRaw_ = '';
+      this.scrollNextRaw_ = '';
+      this.scrollPrevIdx_ = -1;
+      this.scrollNextIdx_ = -1;
+      // 异步挂载邻居（内存/缓存优先）
+      this.mountScrollNeighbors_(idx);
+    }
     this.layoutText(content);
     // 书签/云同步跳转：按字符偏移定位分页（一次性生效）
     if (this.pendingCharPos_ >= 0 && idx === this.targetIdx_) {
@@ -895,43 +1139,322 @@ struct ReadPage {
     this.initAloudEngine_();
   }
 
-  /** 预加载下一章文本，用于无缝翻页 */
-  private preloadNextChapter_(currentIdx: number): void {
-    const nextIdx = currentIdx + 1;
-    if (nextIdx >= this.allChapters_.length || this.preloadingChapterPromises_.has(nextIdx)) return;
-    this.isPreloading_ = true;
+  /** 预加载相邻章节（上一章 + 下一章），用于无缝翻页 */
+  private preloadAdjacentChapters_(currentIdx: number): void {
+    this.preloadChapterAt_(currentIdx + 1, false);
+    this.preloadChapterAt_(currentIdx - 1, true);
+  }
 
-    const ch = this.allChapters_[nextIdx];
+  /** 兼容旧调用点 */
+  private preloadNextChapter_(currentIdx: number): void {
+    this.preloadAdjacentChapters_(currentIdx);
+  }
+
+  private preloadChapterAt_(idx: number, isPrev: boolean): void {
+    if (idx < 0 || idx >= this.allChapters_.length) return;
+    if (this.preloadingChapterPromises_.has(idx)) return;
+    // 已在内存槽位里则跳过
+    if (!isPrev && this.nextChapterIdx_ === idx && this.nextChapterContent_.length > 50) return;
+    if (isPrev && this.prevChapterIdx_ === idx && this.prevChapterContent_.length > 50) return;
+
+    this.isPreloading_ = true;
+    const ch = this.allChapters_[idx];
     const preloadBookUrl = this.bookUrl;
-    const promise = (this.isLocalTxt_ ? this.readLocalTxtChapter_(nextIdx) : this.readChapterCache_(nextIdx))
+    const promise = (this.isLocalTxt_ ? this.readLocalTxtChapter_(idx) : this.readChapterCache_(idx))
       .then((cached: string): Promise<string> | string => {
         if (cached && cached.length > 50) return cached;
-        return this.fetchChapterContent_(nextIdx);
+        return this.fetchChapterContent_(idx);
       });
-    this.preloadingChapterPromises_.set(nextIdx, promise);
+    this.preloadingChapterPromises_.set(idx, promise);
     promise
       .then(async (content: string): Promise<void> => {
         if (preloadBookUrl !== this.bookUrl) return;
         if (content && content.length > 50) {
-          this.nextChapterContent_ = content;
-          this.nextChapterIdx_ = nextIdx;
-          await this.saveToDbCache_(nextIdx, content);
-          console.info('[ReadPage] Preloaded next chapter:', nextIdx, ch.title?.substring(0, 20));
+          if (isPrev) {
+            this.prevChapterContent_ = content;
+            this.prevChapterIdx_ = idx;
+          } else {
+            this.nextChapterContent_ = content;
+            this.nextChapterIdx_ = idx;
+          }
+          await this.saveToDbCache_(idx, content);
+          console.info('[ReadPage] Preloaded', isPrev ? 'prev' : 'next', 'chapter:', idx,
+            ch?.title?.substring(0, 20));
         }
       })
       .catch((_e: Error) => { /* ignore preload failure */ })
       .then(() => {
-        if (this.preloadingChapterPromises_.get(nextIdx) === promise) {
-          this.preloadingChapterPromises_.delete(nextIdx);
+        if (this.preloadingChapterPromises_.get(idx) === promise) {
+          this.preloadingChapterPromises_.delete(idx);
         }
         this.isPreloading_ = this.preloadingChapterPromises_.size > 0;
       });
+  }
+
+  private clearAdjacentCacheIfUsed_(idx: number): void {
+    if (this.nextChapterIdx_ === idx) {
+      this.nextChapterContent_ = '';
+      this.nextChapterIdx_ = -1;
+    }
+    if (this.prevChapterIdx_ === idx) {
+      this.prevChapterContent_ = '';
+      this.prevChapterIdx_ = -1;
+    }
+  }
+
+  /** 滚动模式：把上下章挂进同一条滚动流（真无缝，而不是到边整章回跳） */
+  private async mountScrollNeighbors_(currIdx: number): Promise<void> {
+    if (this.flowMode !== 'scrolled') return;
+    const gen = this.scrollContentGen_;
+    const windowVersion = this.scrollWindowVersion_;
+    const prevIdx = currIdx - 1;
+    const nextIdx = currIdx + 1;
+    if (prevIdx >= 0) {
+      const raw = await this.resolveChapterRawFast_(prevIdx);
+      if (gen !== this.scrollContentGen_ || windowVersion !== this.scrollWindowVersion_ ||
+        this.currentIndex !== currIdx) return;
+      if (raw && raw.length > 50) {
+        const hadPrev = this.scrollPrevText_.length > 0;
+        this.scrollPrevIdx_ = prevIdx;
+        this.scrollPrevRaw_ = raw;
+        this.scrollPrevText_ = this.processForDisplay_(raw);
+        // 首次在顶部挂上上一章：高度量到后补偏移，避免当前阅读位置被顶下去
+        if (!hadPrev && !this.pendingScrollPos_) {
+          this.pendingPrependAdjust_ = 1;
+        }
+      }
+    }
+    if (nextIdx < this.allChapters_.length) {
+      const raw = await this.resolveChapterRawFast_(nextIdx);
+      if (gen !== this.scrollContentGen_ || windowVersion !== this.scrollWindowVersion_ ||
+        this.currentIndex !== currIdx) return;
+      if (raw && raw.length > 50) {
+        this.scrollNextIdx_ = nextIdx;
+        this.scrollNextRaw_ = raw;
+        this.scrollNextText_ = this.processForDisplay_(raw);
+      }
+    }
+  }
+
+  /** 快速取章原文：内存预加载 > 进行中的 promise > 本地/DB 缓存 */
+  private async resolveChapterRawFast_(idx: number): Promise<string> {
+    if (idx < 0 || idx >= this.allChapters_.length) return '';
+    if (this.nextChapterIdx_ === idx && this.nextChapterContent_.length > 50) return this.nextChapterContent_;
+    if (this.prevChapterIdx_ === idx && this.prevChapterContent_.length > 50) return this.prevChapterContent_;
+    const pending = this.preloadingChapterPromises_.get(idx);
+    if (pending) {
+      try {
+        const v = await pending;
+        if (v && v.length > 50) return v;
+      } catch (_e) { /* ignore */ }
+    }
+    if (this.isLocalTxt_) {
+      const local = await this.readLocalTxtChapter_(idx);
+      if (local && local.length > 50) return local;
+    }
+    const cached = await this.readChapterCache_(idx);
+    if (cached && cached.length > 50) return cached;
+    return '';
+  }
+
+  private recomputeScrollWindowHeight_(): void {
+    this.scrollTextH_ = this.scrollPrevH_ + this.scrollCurrH_ + this.scrollNextH_;
+  }
+
+  /** 章节块高度回调：按稳定章节索引映射到当前窗口角色。 */
+  private onScrollSectionHeight_(chapterIdx: number, h: number): void {
+    if (h <= 0) return;
+    const role = chapterIdx === this.scrollPrevIdx_ ? 'prev' :
+      (chapterIdx === this.currentIndex ? 'curr' :
+        (chapterIdx === this.scrollNextIdx_ ? 'next' : ''));
+    if (!role) return;
+    if (role === 'prev') {
+      const old = this.scrollPrevH_;
+      this.scrollPrevH_ = h;
+      // 顶部预挂载上一章后补偿偏移，保持视觉不跳
+      if (this.pendingPrependAdjust_ > 0 && old <= 0 && h > 0) {
+        const y = this.textScroller_.currentOffset()?.yOffset || 0;
+        const targetY = y + h;
+        this.lastObservedScrollY_ = targetY;
+        this.textScroller_.scrollTo({ xOffset: 0, yOffset: targetY, animation: false });
+        this.pendingPrependAdjust_ = 0;
+      }
+    } else if (role === 'next') {
+      this.scrollNextH_ = h;
+    } else {
+      this.scrollCurrH_ = h;
+    }
+    this.recomputeScrollWindowHeight_();
+    // 仍兼容旧的 pending 定位（菜单切章等到高度）
+    if (this.pendingScrollPos_ && this.pendingScrollGen_ === this.scrollContentGen_) {
+      this.jumpToPendingScrollPos_(true);
+    }
+  }
+
+  /**
+   * 连续滚动：根据偏移提交当前章（窗口滑动，不整页回跳）。
+   * 结构始终是 [prev?][curr][next?]。
+   */
+  private onContinuousScrollOffset_(y: number, deltaY: number): void {
+    if (this.flowMode !== 'scrolled' || this.scrollWindowLock_) return;
+    if (Date.now() < this.suppressReachUntil_) return;
+    if (this.switchingChapter_) return;
+    if (this.scrollCurrH_ <= 0) return;
+
+    const prevH = this.scrollPrevText_ ? this.scrollPrevH_ : 0;
+    // 窗口替换会把旧当前章变为新的 prev。必须在边界另一侧保留一点余量，
+    // 否则“提前 1px”提交后会立刻满足反向条件，导致章节和页脚来回跳。
+    const boundaryHysteresis = 2;
+    // 进入下一章区域：视口顶越过当前章末并留出安全余量
+    if (deltaY > 0.5 && this.scrollNextText_ && this.scrollNextIdx_ >= 0 &&
+      y >= prevH + this.scrollCurrH_ + boundaryHysteresis) {
+      this.commitScrollWindowNext_(y, prevH);
+      return;
+    }
+    // 进入上一章区域：视口顶在 prev 内并留出安全余量
+    if (deltaY < -0.5 && this.scrollPrevText_ && this.scrollPrevIdx_ >= 0 && prevH > 0 &&
+      y <= prevH - boundaryHysteresis) {
+      this.commitScrollWindowPrev_(y);
+    }
+  }
+
+  private commitScrollWindowNext_(y: number, prevH: number): void {
+    if (this.scrollWindowLock_) return;
+    if (!this.scrollNextText_ || this.scrollNextIdx_ < 0) return;
+    this.scrollWindowLock_ = true;
+    this.switchingChapter_ = true;
+
+    const oldPrevH = prevH;
+    // [prev][curr][next] -> [curr][next][next2]
+    this.scrollPrevText_ = this.scrollCurrText_;
+    this.scrollPrevRaw_ = this.scrollCurrRaw_;
+    this.scrollPrevIdx_ = this.currentIndex;
+    this.scrollPrevH_ = this.scrollCurrH_;
+
+    this.scrollCurrText_ = this.scrollNextText_;
+    this.scrollCurrRaw_ = this.scrollNextRaw_;
+    this.currentIndex = this.scrollNextIdx_;
+    this.scrollWindowVersion_ += 1;
+    this.scrollCurrH_ = this.scrollNextH_;
+    this.rawChapterContent_ = this.scrollCurrRaw_;
+    this.text = this.scrollCurrText_;
+    this.displayTitle_ = this.purifyTitle_(this.allChapters_[this.currentIndex]?.title || '');
+    this.pageIndex = 0;
+    this.layoutText(this.scrollCurrText_);
+
+    this.scrollNextText_ = '';
+    this.scrollNextRaw_ = '';
+    this.scrollNextIdx_ = -1;
+    this.scrollNextH_ = 0;
+    this.recomputeScrollWindowHeight_();
+
+    // 去掉旧 prev 后补偿偏移，视觉连续
+    const y2 = Math.max(0, y - oldPrevH);
+    this.lastObservedScrollY_ = y2;
+    this.textScroller_.scrollTo({ xOffset: 0, yOffset: y2, animation: false });
+
+    this.saveProgress();
+    this.preloadAdjacentChapters_(this.currentIndex);
+    this.cacheSurrounding_(this.currentIndex);
+    // 挂载新的 next
+    const keepIdx = this.currentIndex;
+    const windowVersion = this.scrollWindowVersion_;
+    this.resolveChapterRawFast_(keepIdx + 1).then((raw: string) => {
+      if (this.currentIndex !== keepIdx || this.scrollWindowVersion_ !== windowVersion) {
+        this.switchingChapter_ = false;
+        this.scrollWindowLock_ = false;
+        return;
+      }
+      if (raw && raw.length > 50) {
+        this.scrollNextIdx_ = keepIdx + 1;
+        this.scrollNextRaw_ = raw;
+        this.scrollNextText_ = this.processForDisplay_(raw);
+        // 同步内存槽
+        this.nextChapterIdx_ = keepIdx + 1;
+        this.nextChapterContent_ = raw;
+      }
+      this.switchingChapter_ = false;
+      this.scrollWindowLock_ = false;
+      this.suppressReachUntil_ = Date.now() + 80;
+    }).catch(() => {
+      this.switchingChapter_ = false;
+      this.scrollWindowLock_ = false;
+    });
+  }
+
+  private commitScrollWindowPrev_(y: number): void {
+    if (this.scrollWindowLock_) return;
+    if (!this.scrollPrevText_ || this.scrollPrevIdx_ < 0) return;
+    this.scrollWindowLock_ = true;
+    this.switchingChapter_ = true;
+
+    // [prev][curr][next] -> [prev2][prev][curr]
+    this.scrollNextText_ = this.scrollCurrText_;
+    this.scrollNextRaw_ = this.scrollCurrRaw_;
+    this.scrollNextIdx_ = this.currentIndex;
+    this.scrollNextH_ = this.scrollCurrH_;
+
+    this.scrollCurrText_ = this.scrollPrevText_;
+    this.scrollCurrRaw_ = this.scrollPrevRaw_;
+    this.currentIndex = this.scrollPrevIdx_;
+    this.scrollWindowVersion_ += 1;
+    this.scrollCurrH_ = this.scrollPrevH_;
+    this.rawChapterContent_ = this.scrollCurrRaw_;
+    this.text = this.scrollCurrText_;
+    this.displayTitle_ = this.purifyTitle_(this.allChapters_[this.currentIndex]?.title || '');
+    this.layoutText(this.scrollCurrText_);
+    // 页码先置末页近似（滚动模式主要看 offset）
+    this.pageIndex = Math.max(0, this.pages.length - 1);
+
+    this.scrollPrevText_ = '';
+    this.scrollPrevRaw_ = '';
+    this.scrollPrevIdx_ = -1;
+    this.scrollPrevH_ = 0;
+    this.recomputeScrollWindowHeight_();
+    // 去掉 next 不影响当前 y（next 在下方）；保持 y 即可停留在原视觉位置
+    const targetY = Math.max(0, y);
+    this.lastObservedScrollY_ = targetY;
+    this.textScroller_.scrollTo({ xOffset: 0, yOffset: targetY, animation: false });
+
+    this.saveProgress();
+    this.preloadAdjacentChapters_(this.currentIndex);
+    this.cacheSurrounding_(this.currentIndex);
+
+    const keepIdx = this.currentIndex;
+    const windowVersion = this.scrollWindowVersion_;
+    this.pendingPrependAdjust_ = 1; // 标记：新 prev 高度量到后补偿
+    this.resolveChapterRawFast_(keepIdx - 1).then((raw: string) => {
+      if (this.currentIndex !== keepIdx || this.scrollWindowVersion_ !== windowVersion) {
+        this.pendingPrependAdjust_ = 0;
+        this.switchingChapter_ = false;
+        this.scrollWindowLock_ = false;
+        return;
+      }
+      if (raw && raw.length > 50 && keepIdx - 1 >= 0) {
+        this.scrollPrevIdx_ = keepIdx - 1;
+        this.scrollPrevRaw_ = raw;
+        this.scrollPrevText_ = this.processForDisplay_(raw);
+        this.prevChapterIdx_ = keepIdx - 1;
+        this.prevChapterContent_ = raw;
+      } else {
+        this.pendingPrependAdjust_ = 0;
+      }
+      this.switchingChapter_ = false;
+      this.scrollWindowLock_ = false;
+      this.suppressReachUntil_ = Date.now() + 80;
+    }).catch(() => {
+      this.pendingPrependAdjust_ = 0;
+      this.switchingChapter_ = false;
+      this.scrollWindowLock_ = false;
+    });
   }
 
   private async tryUsePreloadedChapter_(idx: number): Promise<boolean> {
     let content = '';
     if (this.nextChapterIdx_ === idx && this.nextChapterContent_ && this.nextChapterContent_.length > 50) {
       content = this.nextChapterContent_;
+    } else if (this.prevChapterIdx_ === idx && this.prevChapterContent_ && this.prevChapterContent_.length > 50) {
+      content = this.prevChapterContent_;
     } else {
       const pending = this.preloadingChapterPromises_.get(idx);
       if (pending) {
@@ -948,14 +1471,15 @@ struct ReadPage {
     if (!content || content.length <= 50) return false;
     console.info('[ReadPage] Seamless switch to chapter:', idx);
     this.applyChapterContent_(idx, content);
-    if (this.nextChapterIdx_ === idx) {
-      this.nextChapterContent_ = '';
-      this.nextChapterIdx_ = -1;
-    }
+    this.clearAdjacentCacheIfUsed_(idx);
     this.isLoading = false;
+    // 无缝切章：不销毁 Scroll，直接换文 + 定位
+    if (this.flowMode === 'scrolled') {
+      this.finishScrollRebuild_(true, false);
+    }
     this.saveProgress();
     this.saveToDbCache_(idx, content);
-    this.preloadNextChapter_(idx);
+    this.preloadAdjacentChapters_(idx);
     this.cacheSurrounding_(idx);
     return true;
   }
@@ -1097,6 +1621,8 @@ struct ReadPage {
 
 	  async aboutToDisappear(): Promise<void> {
 	    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
+    // 对齐安卓：退出阅读时尝试自动备份（24h 节流）
+    BackupService.autoBack().catch((e: Error) => console.warn('[ReadPage] autoBack failed:', e.message));
 	    if (this.progressUploadTimer_ >= 0) {
 	      clearInterval(this.progressUploadTimer_);
 	      this.progressUploadTimer_ = -1;
@@ -1151,27 +1677,39 @@ struct ReadPage {
   /** 保存进度并尝试上传到云端（silent=true 时静默，供定时/退出场景） */
   private async saveAndUploadProgress(silent: boolean = false): Promise<void> {
     this.saveProgress();
+    // 先快照，避免 aboutToDisappear 后页面字段被清空导致上传丢数据
+    const name = this.bookName;
+    const author = this.bookAuthor;
+    const bookUrl = this.bookUrl;
+    const chapterIndex = this.currentIndex;
+    const ch = this.allChapters_[chapterIndex];
+    const pos = this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0;
+    const title = ch?.title || '';
     try {
-      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
-      if (syncOn !== true || !WebDavService.getInstance().isConfigured()) return;
-      if (!this.bookName || !this.bookUrl) return;
-      const ch = this.allChapters_[this.currentIndex];
-      if (!ch) return;
-      // 云端格式对齐安卓：durChapterPos 存章节内字符偏移（页首 startOffset）
-      const pos = this.pages.length > 0 ? (this.pages[this.pageIndex]?.startOffset || 0) : 0;
+      if (!WebDavService.isProgressSyncEnabled() || !WebDavService.getInstance().isConfigured()) {
+        console.info('[ReadPage] skip upload: enabled='
+          + WebDavService.isProgressSyncEnabled()
+          + ' configured=' + WebDavService.getInstance().isConfigured());
+        return;
+      }
+      if (!name || !bookUrl || !ch) {
+        console.warn('[ReadPage] skip upload: missing name/url/chapter');
+        return;
+      }
       if (!silent) {
         UiUtil.showToast(this.getUIContext(), { message: '同步进度中…', duration: 2000 });
       }
       await WebDavService.getInstance().uploadBookProgress({
-        name: this.bookName,
-        author: this.bookAuthor,
-        durChapterIndex: this.currentIndex,
+        name: name,
+        author: author,
+        durChapterIndex: chapterIndex,
         durChapterPos: pos,
-        durChapterTitle: ch.title || '',
+        durChapterTitle: title,
       });
       // 更新本地 syncTime
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-      await bookTable.updateSyncTime(this.bookUrl, Date.now());
+      await bookTable.updateSyncTime(bookUrl, Date.now());
+      console.info('[ReadPage] Progress uploaded to WebDAV:', name, chapterIndex, pos);
       if (!silent) {
         UiUtil.showToast(this.getUIContext(), { message: '同步成功：已上传进度', duration: 2000 });
       }
@@ -1431,28 +1969,40 @@ struct ReadPage {
    * @param atEnd true：定位到上一章末尾（分页「上一页」跨章 / 滚动上滑跨章，连续阅读）
    *             false：定位到上一章开头（显式「上一章」动作 / 进度条上一章）
    */
-  private onPrevChapter(atEnd: boolean = false): void {
-    if (this.currentIndex > 0) {
-      const scrolled = this.flowMode === 'scrolled';
-      if (scrolled) {
-        // 滚动模式：切章进行中忽略新的翻章触发，防止并发切章互相 yank 滚动位置
-        if (this.switchingChapter_) return;
-        this.switchingChapter_ = true;
-        // 连续阅读回退到章末；显式上一章回到章首
-        this.pendingScrollPos_ = atEnd ? 'end' : 'start';
-      } else if (!atEnd) {
-        // 分页显式上一章：先置 0，避免 layoutText 仍按旧页码夹到末页闪一下
-        this.pageIndex = 0;
-      }
-      this.loadChapter(this.currentIndex - 1).then(() => {
-        if (scrolled) {
-          this.applyPendingScrollPos_();
-        } else {
-          // 分页：显式上一章 → 第 1 页；上一页跨章 → 末页
-          this.pageIndex = atEnd ? Math.max(0, this.pages.length - 1) : 0;
-        }
-      });
+  private async onPrevChapter(atEnd: boolean = false): Promise<void> {
+    if (this.currentIndex <= 0) return;
+    const n = this.currentIndex - 1;
+    const scrolled = this.flowMode === 'scrolled';
+    if (scrolled) {
+      // 滚动模式：切章进行中忽略新的翻章触发，防止并发切章互相 yank 滚动位置
+      if (this.switchingChapter_) return;
+      this.switchingChapter_ = true;
+      // 连续阅读回退到章末；显式上一章回到章首
+      this.pendingScrollPos_ = atEnd ? 'end' : 'start';
+    } else if (!atEnd) {
+      // 分页显式上一章：先置 0，避免 layoutText 仍按旧页码夹到末页闪一下
+      this.pageIndex = 0;
     }
+
+    // 优先无缝：内存/DB 命中时不卸页、不进 loading
+    if (await this.tryUsePreloadedChapter_(n)) {
+      if (scrolled) {
+        this.applyPendingScrollPos_();
+      } else {
+        this.pageIndex = atEnd ? Math.max(0, this.pages.length - 1) : 0;
+      }
+      return;
+    }
+
+    console.info('[ReadPage] Fallback loadChapter for prev:', n);
+    this.loadChapter(n).then(() => {
+      if (scrolled) {
+        this.applyPendingScrollPos_();
+      } else {
+        // 分页：显式上一章 → 第 1 页；上一页跨章 → 末页
+        this.pageIndex = atEnd ? Math.max(0, this.pages.length - 1) : 0;
+      }
+    });
   }
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
@@ -1462,15 +2012,12 @@ struct ReadPage {
     if (scrolled) {
       if (this.switchingChapter_) return;
       this.switchingChapter_ = true;
-      // 滚动模式：先销毁旧 Scroll 清除残留惯性滚动，再无缝切章
       this.pendingScrollPos_ = 'start';
-      this.scrollAlive_ = false;
-      await this.delayMs_(50);
+      // 不再提前销毁 Scroll：缓存命中时原地换文，避免闪 loading
     }
     // 无缝翻页：尝试使用预加载内容
     if (await this.tryUsePreloadedChapter_(n)) {
       if (scrolled) {
-        this.finishScrollRebuild_(true);
         this.applyPendingScrollPos_();
       }
       return;
@@ -1483,64 +2030,219 @@ struct ReadPage {
 
   /**
    * 滚动模式：章节内容加载后恢复滚动位置。
-   * 正常由正文 Text 的 onAreaChange 在布局完成后触发 jumpToPendingScrollPos_；
-   * 这里用短延时兜底组件复用、Text 高度未变化的场景。
+   * 关键：等 onAreaChange 给出【当前正文世代】的真实高度后再定位。
+   * 无缝切到上一章时若用旧高度算 maxY，会停在中间，反向还要滚一段才到下一章。
    */
   private applyPendingScrollPos_(): void {
     if (!this.pendingScrollPos_) return;
-    console.info('[ReadPage] applyPendingScrollPos_ pending=' + this.pendingScrollPos_);
-    setTimeout(() => { this.jumpToPendingScrollPos_(); }, 150);
+    // 绑定到当前正文世代；高度回调只处理匹配世代
+    this.pendingScrollGen_ = this.scrollContentGen_;
+    console.info('[ReadPage] applyPendingScrollPos_ pending=' + this.pendingScrollPos_ +
+      ' gen=' + this.pendingScrollGen_ + ' textH=' + this.scrollTextH_ + ' viewH=' + this.scrollViewH_);
+    // 高度已就绪则立刻定位；否则保留 pending，等 Text onAreaChange
+    if (this.canJumpScrollNow_(this.pendingScrollPos_)) {
+      this.jumpToPendingScrollPos_(true);
+    } else {
+      // 短延时兜底：某些复用场景高度不变、onAreaChange 不触发
+      const gen = this.pendingScrollGen_;
+      const pos = this.pendingScrollPos_;
+      setTimeout(() => {
+        if (this.pendingScrollPos_ !== pos || this.pendingScrollGen_ !== gen) return;
+        this.jumpToPendingScrollPos_(true);
+      }, 48);
+    }
   }
 
-  /** 滚动模式：执行待恢复的滚动定位（重建后的新 Scroll 上无惯性/回弹，定位即生效） */
-  private jumpToPendingScrollPos_(): void {
+  /** 是否已有足够尺寸信息执行定位 */
+  private canJumpScrollNow_(pos: string): boolean {
+    if (this.scrollViewH_ <= 0) return false;
+    if (pos === 'start') {
+      // 若挂了 prev，需要 prev 高度就绪，才能跳到“当前章首”
+      if (this.scrollPrevText_) return this.scrollPrevH_ > 0;
+      return true;
+    }
+    // 章末依赖当前章高度
+    return this.scrollCurrH_ > 0;
+  }
+
+  /**
+   * 执行待恢复滚动定位。
+   * @param keepPendingIfNotReady 高度未就绪时是否保留 pending 等待回调
+   */
+  private jumpToPendingScrollPos_(keepPendingIfNotReady: boolean = true): void {
     const pos = this.pendingScrollPos_;
     if (!pos) return;
-    this.pendingScrollPos_ = '';
+    if (!this.canJumpScrollNow_(pos)) {
+      console.info('[ReadPage] jump defer pos=' + pos + ' textH=' + this.scrollTextH_ +
+        ' viewH=' + this.scrollViewH_);
+      if (!keepPendingIfNotReady) this.pendingScrollPos_ = '';
+      return;
+    }
+
     const epoch = ++this.jumpEpoch_;
-    this.doJumpScroll_(pos);
-    // 首次定位可能早于布局完成，延时校验；未到位时补滚一次（仅当没有更新的定位发生时）
+    const gen = this.pendingScrollGen_;
+    const ok = this.doJumpScroll_(pos);
+    if (ok) {
+      // 已落到目标，清 pending，避免后续高度微调再次硬跳
+      this.pendingScrollPos_ = '';
+    }
+
+    // 校验：章末若仍明显不在底部（旧高度/布局未完成），保留/重试
     setTimeout(() => {
       if (epoch !== this.jumpEpoch_) return;
+      if (gen !== this.scrollContentGen_) return;
       const off = this.textScroller_.currentOffset();
       const y = off ? off.yOffset : -1;
-      console.info('[ReadPage] jumpVerify pos=' + pos + ' y=' + y);
-      if (pos === 'end' && y >= 0 && y < 1) {
-        console.info('[ReadPage] jumpVerify reapply end');
-        this.doJumpScroll_(pos);
-      } else if (pos === 'start' && y > 1) {
+      const prevH = this.scrollPrevText_ ? this.scrollPrevH_ : 0;
+      const endY = Math.max(0, prevH + this.scrollCurrH_ - this.scrollViewH_);
+      const startY = Math.max(0, prevH);
+      console.info('[ReadPage] jumpVerify pos=' + pos + ' y=' + y + ' endY=' + endY +
+        ' startY=' + startY + ' currH=' + this.scrollCurrH_);
+      if (pos === 'end') {
+        if (this.scrollCurrH_ > 1 && y >= 0 && Math.abs(y - endY) > 2) {
+          console.info('[ReadPage] jumpVerify reapply end');
+          this.pendingScrollPos_ = 'end';
+          this.pendingScrollGen_ = gen;
+          this.doJumpScroll_('end');
+          this.pendingScrollPos_ = '';
+        }
+      } else if (pos === 'start' && Math.abs(y - startY) > 2) {
         console.info('[ReadPage] jumpVerify reapply start');
-        this.doJumpScroll_(pos);
+        this.pendingScrollPos_ = 'start';
+        this.pendingScrollGen_ = gen;
+        this.doJumpScroll_('start');
+        this.pendingScrollPos_ = '';
       }
-    }, 300);
+    }, 64);
   }
 
-  private doJumpScroll_(pos: string): void {
+  /**
+   * 真正执行滚动定位。
+   * @returns 是否已按当前尺寸完成定位
+   */
+  private doJumpScroll_(pos: string): boolean {
     const before = this.textScroller_.currentOffset();
     if (pos === 'end') {
-      // scrollEdge 是动画滚动（着陆晚、reach 事件会落在屏蔽窗口外）；
-      // 用 animation:false 的 scrollTo 瞬移到章末。scrollTo 不钳制越界值，
-      // 目标偏移必须自己算准：maxY = 文本高 - 视口高（未测到时退回 scrollEdge）
-      const maxY = this.scrollTextH_ - this.scrollViewH_;
-      if (this.scrollTextH_ > 0 && this.scrollViewH_ > 0) {
-        this.textScroller_.scrollTo({ xOffset: 0, yOffset: Math.max(0, maxY), animation: false });
-      } else {
-        this.textScroller_.scrollEdge(Edge.Bottom);
+      // 连续窗口：章末 = prevH + currH - viewH（落在当前章末，而不是整窗最底）
+      if (this.scrollCurrH_ <= 0 || this.scrollViewH_ <= 0) {
+        console.info('[ReadPage] doJumpScroll_ end skipped, size not ready');
+        return false;
       }
+      const prevH = this.scrollPrevText_ ? this.scrollPrevH_ : 0;
+      const endY = Math.max(0, prevH + this.scrollCurrH_ - this.scrollViewH_);
+      this.lastObservedScrollY_ = endY;
+      this.textScroller_.scrollTo({ xOffset: 0, yOffset: endY, animation: false });
     } else {
-      this.textScroller_.scrollTo({ xOffset: 0, yOffset: 0, animation: false });
+      // 章首 = 跳过 prev，落在当前章开头
+      const prevH = this.scrollPrevText_ ? this.scrollPrevH_ : 0;
+      const startY = Math.max(0, prevH);
+      this.lastObservedScrollY_ = startY;
+      this.textScroller_.scrollTo({ xOffset: 0, yOffset: startY, animation: false });
     }
     const after = this.textScroller_.currentOffset();
     console.info('[ReadPage] doJumpScroll_ pos=' + pos + ' beforeY=' + (before ? before.yOffset : -1) +
       ' afterY=' + (after ? after.yOffset : -1) + ' textH=' + this.scrollTextH_ + ' viewH=' + this.scrollViewH_);
+    return true;
   }
 
-  /** 滚动模式：切章重建完成——恢复 Scroll 渲染，开启 reach 屏蔽窗口，并解除切章互斥 */
-  private finishScrollRebuild_(rebuild: boolean): void {
+  /** Text 高度变化：仅处理匹配当前正文世代的 pending 定位 */
+  private onScrollTextAreaChange_(h: number): void {
+    if (h <= 0) return;
+    const prevH = this.scrollTextH_;
+    this.scrollTextH_ = h;
+    if (!this.pendingScrollPos_) return;
+    if (this.pendingScrollGen_ !== this.scrollContentGen_) return;
+    // 高度从 0→有值，或显著变化时重定位（无缝换文后的真高度）
+    if (prevH <= 0 || Math.abs(prevH - h) > 1) {
+      console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h +
+        ' gen=' + this.scrollContentGen_);
+      this.jumpToPendingScrollPos_(true);
+    }
+  }
+
+  /**
+   * 滚动模式：切章收尾。
+   * @param rebuild 是否处于滚动切章流程
+   * @param destroyed 是否曾销毁过 Scroll（网络回退路径）；缓存命中为 false，不必重建
+   */
+  private finishScrollRebuild_(rebuild: boolean, destroyed: boolean = true): void {
     if (!rebuild) return;
-    this.scrollAlive_ = true;
-    this.suppressReachUntil_ = Date.now() + 700;
+    if (destroyed || !this.scrollAlive_) {
+      this.scrollAlive_ = true;
+    }
+    // 缓存命中无缝切：短屏蔽即可；销毁重建路径稍长，避开创建 reach 误触
+    this.suppressReachUntil_ = Date.now() + (destroyed ? 500 : 220);
     this.switchingChapter_ = false;
+  }
+
+  /** 滚动模式：是否允许处理边界跨章（屏蔽窗 / 切章中直接忽略） */
+  private canHandleScrollEdgeChapter_(): boolean {
+    return this.flowMode === 'scrolled' &&
+      !this.switchingChapter_ &&
+      Date.now() >= this.suppressReachUntil_;
+  }
+
+  /**
+   * 边界跨章兜底：仅当连续窗口还没有挂上邻居时，才整章切换。
+   * 正常连续滚动走 onContinuousScrollOffset_，不会整页回跳。
+   */
+  private handleScrollEdgeChapter_(toPrev: boolean): void {
+    if (!this.canHandleScrollEdgeChapter_()) return;
+    if (toPrev) {
+      if (this.currentIndex <= 0) return;
+      // 已有上一章挂在窗口里：交给连续滚动提交，不整章跳
+      if (this.scrollPrevText_ && this.scrollPrevIdx_ >= 0) return;
+      this.onPrevChapter(true);
+    } else {
+      if (this.currentIndex >= this.totalChapters_ - 1) return;
+      if (this.scrollNextText_ && this.scrollNextIdx_ >= 0) return;
+      this.onNextChapter();
+    }
+  }
+
+  /**
+   * 滚动帧开始：若已在边界仍朝边界外拖，消费剩余位移并切章。
+   * offset > 0：内容上移（手指向下翻、朝下一章）；offset < 0：内容下移（朝上一章）。
+   */
+  private onScrollFrameBeginForChapter_(offset: number, _state: ScrollState): OnScrollFrameBeginHandlerResult {
+    if (!this.canHandleScrollEdgeChapter_()) {
+      return { offsetRemain: offset };
+    }
+    // 轻触/回弹不切章，避免刚贴边的微小抖动误触发
+    const threshold = 10;
+    if (Math.abs(offset) < threshold) {
+      return { offsetRemain: offset };
+    }
+
+    const cur = this.textScroller_.currentOffset();
+    const y = cur ? cur.yOffset : 0;
+    const maxY = Math.max(0, this.scrollTextH_ - this.scrollViewH_);
+    // 连续窗口：边界指整条流的顶/底；有邻居时交给 onContinuousScrollOffset_ 无缝提交
+    const atStart = y <= 1;
+    const atEnd = maxY <= 1 ? atStart : (y >= maxY - 1);
+
+    // 短章 / 贴边外拉：仅当窗口没挂邻居时才整章切
+    if (maxY <= 1) {
+      if (offset < -threshold) {
+        this.handleScrollEdgeChapter_(true);
+        return { offsetRemain: 0 };
+      }
+      if (offset > threshold) {
+        this.handleScrollEdgeChapter_(false);
+        return { offsetRemain: 0 };
+      }
+      return { offsetRemain: offset };
+    }
+
+    if (atStart && offset < -threshold) {
+      this.handleScrollEdgeChapter_(true);
+      return { offsetRemain: 0 };
+    }
+    if (atEnd && offset > threshold) {
+      this.handleScrollEdgeChapter_(false);
+      return { offsetRemain: 0 };
+    }
+    return { offsetRemain: offset };
   }
 
   private delayMs_(ms: number): Promise<void> {
@@ -1687,6 +2389,21 @@ struct ReadPage {
     this.pages = [];
     this.nextChapterContent_ = '';
     this.nextChapterIdx_ = -1;
+    this.prevChapterContent_ = '';
+    this.prevChapterIdx_ = -1;
+    this.scrollPrevText_ = '';
+    this.scrollCurrText_ = '';
+    this.scrollNextText_ = '';
+    this.scrollPrevRaw_ = '';
+    this.scrollCurrRaw_ = '';
+    this.scrollNextRaw_ = '';
+    this.scrollPrevIdx_ = -1;
+    this.scrollNextIdx_ = -1;
+    this.scrollPrevH_ = 0;
+    this.scrollCurrH_ = 0;
+    this.scrollNextH_ = 0;
+    this.scrollWindowVersion_ += 1;
+    this.lastObservedScrollY_ = -1;
     this.isPreloading_ = false;
     this.preloadingChapterPromises_.clear();
   }
@@ -2278,41 +2995,99 @@ struct ReadPage {
     } catch (_e) { /* ignore */ }
   }
 
+  /** 当前连续滚动窗口：章节索引是稳定 key，同一章节跨角色时仅移动、不重建。 */
+  private scrollChapterSections_(): ScrollChapterSection[] {
+    const sections: ScrollChapterSection[] = [];
+    if (this.scrollPrevText_ && this.scrollPrevIdx_ >= 0) {
+      sections.push({
+        content: this.scrollPrevText_, chapterIdx: this.scrollPrevIdx_,
+        key: String(this.scrollPrevIdx_),
+      });
+    }
+    sections.push({
+      content: this.scrollCurrText_ || this.text, chapterIdx: this.currentIndex,
+      key: String(this.currentIndex),
+    });
+    if (this.scrollNextText_ && this.scrollNextIdx_ >= 0) {
+      sections.push({
+        content: this.scrollNextText_, chapterIdx: this.scrollNextIdx_,
+        key: String(this.scrollNextIdx_),
+      });
+    }
+    return sections;
+  }
+
+  @Builder
+  ScrollChapterBlock_(content: string, chapterIdx: number) {
+    Column() {
+      // 每个章节块结构完全一致，使 ForEach 可按章节索引稳定复用节点。
+      Divider()
+        .color(ThemeColors.secondaryText(this.isDark))
+        .opacity(0.25)
+        .margin({ top: 10, bottom: 10, left: this.cfg.paddingLeft, right: this.cfg.paddingRight })
+      Text(this.purifyTitle_(this.allChapters_[chapterIdx]?.title || ''))
+        .fontSize(Math.max(12, this.cfg.fontSize - 2))
+        .fontColor(ThemeColors.secondaryText(this.isDark))
+        .width('100%')
+        .padding({ left: this.cfg.paddingLeft, right: this.cfg.paddingRight, bottom: 8 })
+      Text(content)
+        .fontSize(this.cfg.fontSize)
+        .fontColor(this.cfg.textColor)
+        .fontFamily(this.cfg.fontFamily)
+        .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
+        .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
+        .letterSpacing(this.cfg.letterSpacing)
+        .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+        .width('100%')
+        .padding({
+          left: this.cfg.paddingLeft,
+          right: this.cfg.paddingRight,
+          top: 0,
+          bottom: 8,
+        })
+    }
+    .width('100%')
+    .onClick(() => { this.showMenu = true; })
+    .onAreaChange((_old: Area, n: Area) => {
+      const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
+      this.onScrollSectionHeight_(chapterIdx, h);
+    })
+  }
+
   build() {
     Stack() {
+
 	      if (this.isLoading) {
 	        Column() { LoadingProgress().width(40).height(40).color(ThemeColors.primary(this.isDark)) }
 	        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+	      } else if (this.pages.length === 0) {
+	        // 无章节/加载失败时也要可点出菜单，避免“全白点不动”
+	        Column() {
+	          Text(this.text || '暂无内容')
+	            .fontSize(16)
+	            .fontColor(ThemeColors.onBackground(this.isDark))
+	            .textAlign(TextAlign.Center)
+	            .padding(24)
+	          Text('点击屏幕调出菜单')
+	            .fontSize(13)
+	            .fontColor(ThemeColors.secondaryText(this.isDark))
+	            .margin({ top: 8 })
+	        }
+	        .width('100%').height('100%')
+	        .justifyContent(FlexAlign.Center)
+	        .backgroundColor(this.cfg.bgColor || ThemeColors.background(this.isDark))
+	        .onClick(() => { this.showMenu = true; })
 	      } else if (this.pages.length > 0) {
         if (this.flowMode === 'scrolled') {
-          // 滚动阅读模式；切章时 scrollAlive_ 短暂置 false 销毁旧 Scroll，清除残留惯性滚动
+          // 连续滚动：同一 Scroll 内拼接 [上一章][当前章][下一章]，滚过去自然切章
           if (this.scrollAlive_) {
             Scroll(this.textScroller_) {
-              Text(this.text)
-                .fontSize(this.cfg.fontSize)
-                .fontColor(this.cfg.textColor)
-                .fontFamily(this.cfg.fontFamily)
-                .fontWeight(this.cfg.fontWeight >= 2 ? FontWeight.Bold : FontWeight.Normal)
-                .lineHeight(this.cfg.fontSize * this.cfg.lineHeight)
-                .letterSpacing(this.cfg.letterSpacing)
-                .textAlign(this.cfg.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-                .width('100%')
-                .padding({
-                  left: this.cfg.paddingLeft,
-                  right: this.cfg.paddingRight,
-                  top: this.cfg.paddingTop,
-                  bottom: this.cfg.paddingBottom,
-                })
-                .onClick(() => { this.showMenu = true; })
-                .onAreaChange((_old: Area, n: Area) => {
-                  const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
-                  if (h > 0) this.scrollTextH_ = h;
-                  // 章节内容布局完成后恢复滚动位置（上一章->章末，下一章->章首）
-                  if (this.pendingScrollPos_) {
-                    console.info('[ReadPage] textArea pending=' + this.pendingScrollPos_ + ' h=' + h);
-                    if (h > 0) this.jumpToPendingScrollPos_();
-                  }
-                })
+              Column() {
+                ForEach(this.scrollChapterSections_(), (section: ScrollChapterSection) => {
+                  this.ScrollChapterBlock_(section.content, section.chapterIdx)
+                }, (section: ScrollChapterSection): string => section.key)
+              }
+              .width('100%')
             }
             .scrollable(ScrollDirection.Vertical)
             .scrollBar(BarState.Off)
@@ -2321,14 +3096,26 @@ struct ReadPage {
               const h = typeof n.height === 'number' ? n.height : Number(n.height) || 0;
               if (h > 0) this.scrollViewH_ = h;
             })
+            .onScrollFrameBegin((offset: number, state: ScrollState) => {
+              // 此回调发生在本帧位移实际落地前；这里切换窗口会让同一帧的
+              // 后续滚动事件按新窗口再次判定，可能立即反向切回上一章。
+              // 连续窗口只在 onDidScroll 的真实绝对偏移上提交。
+              return this.onScrollFrameBeginForChapter_(offset, state);
+            })
+            .onDidScroll((_xOffset: number, _yOffset: number, _state: ScrollState) => {
+              // 每帧滚动后按绝对位置提交（onScroll 的 yOffset 是帧增量，不是绝对 y）
+              const cur = this.textScroller_.currentOffset();
+              const y = cur ? cur.yOffset : 0;
+              const deltaY = this.lastObservedScrollY_ < 0 ? 0 : y - this.lastObservedScrollY_;
+              this.lastObservedScrollY_ = y;
+              this.onContinuousScrollOffset_(y, deltaY);
+            })
             .onReachEnd(() => {
-              if (Date.now() < this.suppressReachUntil_) return;
-              this.onNextChapter();
+              // 仅当下一章还没挂上窗口时兜底整章切
+              this.handleScrollEdgeChapter_(false);
             })
             .onReachStart(() => {
-              if (Date.now() < this.suppressReachUntil_) return;
-              // 滚动上滑跨章：落到上一章末尾
-              this.onPrevChapter(true);
+              this.handleScrollEdgeChapter_(true);
             })
             .width('100%').height('100%')
           }

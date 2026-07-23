@@ -13,10 +13,17 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { AppTheme } from '../theme/AppTheme';
 import { GlobalConfig } from '../data/preferences/GlobalConfig';
 import { WebDavService } from '../service/WebDavService';
+import { BackupService } from '../service/BackupService';
+import { BackupConfig } from '../service/backup/BackupConfig';
 import { CookieStore } from '../util/CookieStore';
 import { LoginInfoStore } from '../util/LoginInfoStore';
 import { ShareImportService } from '../service/ShareImportService';
 import { WindowLayout } from '../util/WindowLayout';
+import { ensureCloudProvidersRegistered } from '../service/cloud/CloudProviderBootstrap';
+import { CloudCredentialStore } from '../data/preferences/CloudCredentialStore';
+import { SettingsStore } from '../data/preferences/SettingsStore';
+import { AppContextHolder } from '../util/AppContext';
+import { CloudLocalFileStore } from '../service/cloud/CloudLocalFileStore';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -34,6 +41,8 @@ export default class MainAbility extends UIAbility {
   }
 
   private async initServices(): Promise<void> {
+    // 全局 Context，供云端下载/本地书路径使用
+    AppContextHolder.set(this.context);
     // 读取当前系统色模式，传递给 AppTheme 初始化
     let systemDark = false;
     try {
@@ -79,18 +88,72 @@ export default class MainAbility extends UIAbility {
     } catch (err) {
       console.warn('[MainAbility] WebDav config restore failed:', err);
     }
+    // 云端书库凭证存储（独立 Preferences，需 Context）
+    try {
+      await SettingsStore.getInstance().init(this.context);
+      await CloudCredentialStore.getInstance().init(this.context);
+      console.info('[MainAbility] CloudCredentialStore initialized');
+    } catch (err) {
+      console.warn('[MainAbility] CloudCredentialStore init failed:', err);
+    }
+    // 注册云端书库 Provider（WebDAV）
+    try {
+      ensureCloudProvidersRegistered();
+    } catch (err) {
+      console.warn('[MainAbility] Cloud providers register failed:', err);
+    }
+    // 清理云端下载残留临时文件
+    try {
+      CloudLocalFileStore.getInstance().ensureDirs();
+      CloudLocalFileStore.getInstance().cleanupStaleTempFiles();
+    } catch (err) {
+      console.warn('[MainAbility] CloudLocalFileStore cleanup failed:', err);
+    }
     // 启动时批量同步云端阅读进度
     this.syncProgressFromCloud();
+    // 启动检测云端是否有更新备份
+    this.checkNewCloudBackupOnLaunch();
+  }
+
+  private checkNewCloudBackupOnLaunch(): void {
+    try {
+      BackupConfig.ensurePersistentProps();
+      BackupService.checkNewCloudBackup()
+        .then((info) => {
+          if (!info) return;
+          console.info('[MainAbility] newer cloud backup found:', info.name, info.lastModified);
+          // 通过 AppStorage 广播，设置页/书架可弹确认；此处先记日志避免强打断
+          AppStorage.setOrCreate<string>('pending_cloud_backup_name', info.name);
+          AppStorage.setOrCreate<number>('pending_cloud_backup_flag', Date.now());
+        })
+        .catch((e: Error) => console.warn('[MainAbility] check new backup failed:', e.message));
+    } catch (e) {
+      console.warn('[MainAbility] check new backup error:', (e as Error).message);
+    }
   }
 
   /** 从云端批量下载所有在架书籍的阅读进度 */
   private syncProgressFromCloud(): void {
     try {
-      const syncOn = AppStorage.get<boolean>('webdav_sync_progress');
-      if (syncOn !== true) return;
-      if (!WebDavService.getInstance().isConfigured()) return;
+      // 启动时先注册 PersistentStorage 键，避免 webdav_sync_progress 为 undefined
+      WebDavService.ensurePersistentProps();
+      if (!WebDavService.isProgressSyncEnabled()) {
+        console.info('[MainAbility] Cloud progress sync disabled');
+        return;
+      }
+      if (!WebDavService.getInstance().isConfigured()) {
+        console.info('[MainAbility] Cloud progress sync skipped: WebDAV not configured');
+        return;
+      }
       WebDavService.getInstance().downloadAllBookProgress()
-        .then(() => console.info('[MainAbility] Cloud progress sync done'))
+        .then((updated: number) => {
+          console.info('[MainAbility] Cloud progress sync done, updated=' + updated);
+          if (updated > 0) {
+            // 通知书架刷新
+            const cur = AppStorage.get<number>('shelfRefreshCounter') || 0;
+            AppStorage.setOrCreate<number>('shelfRefreshCounter', cur + 1);
+          }
+        })
         .catch((e: Error) => console.warn('[MainAbility] Cloud progress sync failed:', e.message));
     } catch (e) {
       console.warn('[MainAbility] Cloud progress sync error:', (e as Error).message);
@@ -99,6 +162,9 @@ export default class MainAbility extends UIAbility {
 
   onDestroy(): void {
     console.info('[MainAbility] onDestroy');
+    try {
+      BackupService.autoBack().catch((e: Error) => console.warn('[MainAbility] autoBack onDestroy:', e.message));
+    } catch (_e) { /* ignore */ }
   }
 
   onWindowStageCreate(windowStage: Window.WindowStage): void {
@@ -205,6 +271,16 @@ export default class MainAbility extends UIAbility {
 
   onBackground(): void {
     console.info('[MainAbility] onBackground');
+    // 对齐安卓：生命周期机会点触发自动备份（24h 节流）
+    try {
+      BackupService.autoBack()
+        .then((did) => {
+          if (did) console.info('[MainAbility] autoBack uploaded');
+        })
+        .catch((e: Error) => console.warn('[MainAbility] autoBack failed:', e.message));
+    } catch (e) {
+      console.warn('[MainAbility] autoBack error:', (e as Error).message);
+    }
   }
 
   /** 系统色模式切换时自动更新 */

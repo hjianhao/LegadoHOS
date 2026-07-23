@@ -55,6 +55,7 @@ export struct BookInfoPage {
   @State isRefreshing: boolean = false;
   @State isBusy: boolean = false;
   @State isInShelf: boolean = false;
+  @State canUpdate: boolean = true;
   @State sourceHeader: string = '';
   @State sourceTocUrl: string = '';
   @State coverDecodeJs: string = '';
@@ -204,6 +205,7 @@ export struct BookInfoPage {
           const paramCustomCover = this.customCoverPath;
           this.isInShelf = true;
           this.bookId = matched.id;
+          this.canUpdate = matched.canUpdate !== false;
           if (matched.name) this.bookName = matched.name;
           if (matched.author) this.bookAuthor = matched.author;
           // DB 读取时，优先用 router 传进来的封面 URL（最新搜索结果的），DB 中的仅做兜底
@@ -1538,10 +1540,44 @@ export struct BookInfoPage {
       .margin({ right: 8, top: 10 })
   }
 
+  /** 对齐安卓 allow_update：完本可关闭更新，下拉刷新跳过 */
+  private async toggleCanUpdate_(): Promise<void> {
+    if (!this.isInShelf || this.bookId <= 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '请先加入书架', duration: 1200 });
+      return;
+    }
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookTable(AppDatabase.getInstance().rdbStore);
+      const book = await dao.getBookById(this.bookId);
+      if (!book) {
+        UiUtil.showToast(this.getUIContext(), { message: '书籍不存在', duration: 1200 });
+        return;
+      }
+      book.canUpdate = !book.canUpdate;
+      await dao.updateBook(book);
+      this.canUpdate = book.canUpdate;
+      AppStorage.set<number>('shelfRefreshCounter', (AppStorage.get<number>('shelfRefreshCounter') || 0) + 1);
+      UiUtil.showToast(this.getUIContext(), {
+        message: book.canUpdate ? '已开启更新' : '已关闭更新（下拉刷新将跳过）',
+        duration: 1500
+      });
+    } catch (e) {
+      console.error('[BookInfo] toggleCanUpdate failed:', (e as Error).message);
+      UiUtil.showToast(this.getUIContext(), { message: '设置失败', duration: 1200 });
+    }
+  }
+
   @Builder buildOverflowMenu() {
     Column() {
       this.buildMenuItem('登录', () => { this.showMoreMenu = false; this.loginDlg?.open(); })
       this.buildMenuItem('刷新', () => { this.showMoreMenu = false; this.tryFetchBookInfo(); })
+      if (this.isInShelf && this.origin !== '本地') {
+        this.buildMenuItem(this.canUpdate ? '关闭更新（完本）' : '开启更新', () => {
+          this.showMoreMenu = false;
+          this.toggleCanUpdate_();
+        })
+      }
       this.buildMenuItem('换封面', () => { this.showMoreMenu = false; this.showCoverSheet(); })
       this.buildMenuItem('书籍分组', () => { this.showMoreMenu = false; this.showGroupSheet(); })
       this.buildMenuItem('备注', () => { this.showMoreMenu = false; this.showRemarkDialog(); })

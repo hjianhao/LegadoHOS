@@ -22,10 +22,25 @@ export class BookSourceResolver {
     await AppDatabase.getInstance().waitForInit();
     const db = AppDatabase.getInstance().rdbStore;
     const sources = await new BookSourceTable(db).getAllSources();
-    const regular = sources.find((source: BookSource): boolean =>
-      source.sourceUrl === originUrl || source.sourceName === originName);
+    const cleanUrl = BookSourceResolver.stripAccount_(originUrl);
+    const cleanName = (originName || '').trim();
+    const regular = sources.find((source: BookSource): boolean => {
+      const su = (source.sourceUrl || '').replace(/\/+$/, '');
+      const cu = cleanUrl.replace(/\/+$/, '');
+      return source.sourceUrl === originUrl ||
+        source.sourceUrl === cleanUrl ||
+        su === cu ||
+        source.sourceName === originName ||
+        source.sourceName === cleanName;
+    });
     if (regular) return regular;
     return await this.resolveAiProfile_(bookId, bookUrl);
+  }
+
+  private static stripAccount_(value: string): string {
+    const s = (value || '').trim();
+    const idx = s.indexOf('##');
+    return idx >= 0 ? s.substring(0, idx).trim() : s;
   }
 
   private static async resolveAiProfile_(bookId: number, bookUrl: string): Promise<BookSource | null> {

@@ -19,6 +19,16 @@ import { CacheTable, CacheTableCreate, TxtTocRuleTable, TxtTocRuleTableCreate } 
 import { SearchResultTable, SearchResultTableCreate } from './SearchResultTable';
 import { SearchKeywordTable, SearchKeywordTableCreate } from './SearchKeywordTable';
 import { AiBookProfileTableCreate } from './AiBookProfileTable';
+import {
+  CloudSourceTable,
+  CloudSourceTableCreate,
+} from './CloudSourceTable';
+import {
+  CloudBookBindingTable,
+  CloudBookBindingTableCreate,
+  CloudBookBindingIndexBookId,
+  CloudBookBindingIndexSourceId,
+} from './CloudBookBindingTable';
 import { RdbUtil } from './RdbUtil';
 
 const DATABASE_NAME = 'legado_hos.db';
@@ -55,6 +65,14 @@ export class AppDatabase {
 
   get rssStarTable(): RssStarTable {
     return new RssStarTable(this.rdbStore);
+  }
+
+  get cloudSourceTable(): CloudSourceTable {
+    return new CloudSourceTable(this.rdbStore);
+  }
+
+  get cloudBookBindingTable(): CloudBookBindingTable {
+    return new CloudBookBindingTable(this.rdbStore);
   }
 
   /**
@@ -120,6 +138,11 @@ export class AppDatabase {
     await RdbUtil.executeSql(this.rdbStore_, SearchResultTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, SearchKeywordTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, AiBookProfileTableCreate);
+    // 云端书库：先 sources 后 bindings；对已有用户库幂等
+    await RdbUtil.executeSql(this.rdbStore_, CloudSourceTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, CloudBookBindingTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, CloudBookBindingIndexBookId);
+    await RdbUtil.executeSql(this.rdbStore_, CloudBookBindingIndexSourceId);
 
     // 数据库迁移：为已有表添加新列
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }

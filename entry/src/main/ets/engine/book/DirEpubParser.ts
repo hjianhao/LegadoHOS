@@ -143,7 +143,9 @@ export class DirEpubParser {
         }
 
 	        let combinedText = '';
-	        let lastFullPath = '';
+	        // 一章可能对应 spine 中连续多个 XHTML 文件；阅读时需全部加载合并。
+	        // 以前只存 lastFullPath，若最后一节是空白/插图页，目录跳转会读到 0 字并被 ReadPage 误跳到其他章。
+	        const chapterPaths: string[] = [];
 	        const startIdx = spineStart !== undefined ? spineStart : 0;
 	        for (let si = startIdx; si < spineEnd; si++) {
 	          const shref = manifest[spineIds[si]];
@@ -151,7 +153,7 @@ export class DirEpubParser {
 	          const fullPath = this.resolvePath_(opfDir, shref);
 	          const absPath = this.rootDir + fullPath;
 	          if (!this.exists_(absPath)) continue;
-	          lastFullPath = fullPath;
+	          chapterPaths.push(fullPath);
 	          if (!this.skipContent_) {
 	            const html = this.readTextFile_(absPath);
 	            let text = HtmlUtil.toPlainText(html);
@@ -166,24 +168,31 @@ export class DirEpubParser {
 	          }
 	        }
 
-	        if (!combinedText && !this.skipContent_) {
+	        if (chapterPaths.length === 0) {
 	          const fullPath = this.resolvePath_(opfDir, nav.href);
 	          const absPath = this.rootDir + fullPath;
 	          if (this.exists_(absPath)) {
-	            const html = this.readTextFile_(absPath);
-	            combinedText = HtmlUtil.toPlainText(html);
-	            lastFullPath = fullPath;
+	            chapterPaths.push(fullPath);
+	            if (!this.skipContent_) {
+	              const html = this.readTextFile_(absPath);
+	              combinedText = HtmlUtil.toPlainText(html);
+	            }
 	          }
 	        }
 
 	        const text = combinedText.trim();
+	        // 用 || 连接多文件路径（阅读时拆开合并）；单文件保持原样兼容旧逻辑
+	        const urlJoined = chapterPaths.length > 1
+	          ? chapterPaths.join('||')
+	          : (chapterPaths.length === 1 ? chapterPaths[0] : '');
         if (i < 3) {
-          console.info('[EPUB] chapter "' + nav.title.substring(0, 20) + '" content=' + text.length + ' chars (spine ' + startIdx + '-' + spineEnd + ')');
+          console.info('[EPUB] chapter "' + nav.title.substring(0, 20) + '" content=' + text.length +
+            ' chars paths=' + chapterPaths.length + ' (spine ' + startIdx + '-' + spineEnd + ')');
         }
 
         chapters.push({
           id: 0, bookId: 0, index: i, volumeIndex: 0,
-          title: nav.title, url: lastFullPath,
+          title: nav.title, url: urlJoined,
           content: text,
           contentLength: text.length,
           isRead: false, isDownloaded: false, isCached: true,

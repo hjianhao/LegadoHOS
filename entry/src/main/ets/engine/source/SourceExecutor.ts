@@ -2174,37 +2174,27 @@ export class SourceExecutor {
       };
       if (tocRules.toc) {
         let chapters: BookSourceChapter[] = [];
-        if (tocRules.toc.startsWith('$.')) {
+        // API 类书源经常返回 JSON，但 ruleToc 可能写成 "*" / "data" / "list"，
+        // 不只是标准 JSONPath "$.xxx"。响应像 JSON 时优先走 JSON 解析。
+        if (this.shouldTryJsonToc_(tocRules.toc, bodyText)) {
           try {
-            chapters = await this.parseJsonToc(JSON.parse(bodyText) as Record<string, unknown>, tocRules, tocUrl);
-          } catch (_je) { /* fallback */ }
+            const jsonObj = this.tryParseJsonBody_(bodyText);
+            if (jsonObj !== null) {
+              chapters = await this.parseJsonToc(jsonObj, tocRules, tocUrl);
+              if (chapters.length > 0) {
+                console.info('[SrcEx] getToc JSON OK:', chapters.length, 'chapters rule=', tocRules.toc);
+              }
+            }
+          } catch (_je) { /* fallback to CSS */ }
         }
         if (chapters.length === 0) {
           chapters = await this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
         }
-        // 去重：只按 URL 去重（与安卓 Legado 一致，BookChapter.equals 只比较 url）
-        const seen = new Set<string>();
-        const deduped: BookSourceChapter[] = [];
-        for (let ci = 0; ci < chapters.length; ci++) { const ch = chapters[ci];
-          const key = ch.url;
-          if (!seen.has(key)) {
-            seen.add(key);
-            deduped.push(ch);
-          }
-        }
-        chapters = deduped;
-        // 排序：与安卓 Legado 一致，不按章节号排序，保持源顺序
-        // 仅根据书源 ruleToc 的 - 前缀决定是否反转
-        if (reverseToc) {
-          chapters.reverse();
-        }
-        chapters.forEach((ch, idx) => { ch.index = idx; });
-        console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)');
+        chapters = this.finalizeTocList(chapters, source, tocUrl);
+        console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)',
+          reverseToc ? 'reversed' : 'source-order');
         if (chapters.length > 0) {
-          return chapters.map(ch => ({
-            ...ch,
-            url: this.resolveTocUrlTemplate(ch.url, tocUrl) || ch.url,
-          }));
+          return chapters;
         }
       }
 
@@ -2214,7 +2204,7 @@ export class SourceExecutor {
         // 如果书源有 ruleBookInfoTocUrl（CSS 选择器），说明可能存在完整的目录页
         // 仅当提取到的章节足够多时才视为完整，否则继续尝试从 CSS 选择器获取完整目录
         if (tocChapters.length >= 30 || !source.ruleBookInfoTocUrl) {
-          return tocChapters;
+          return this.finalizeTocList(tocChapters, source, tocUrl);
         }
         console.info('[SrcEx] getToc fallbackHtml got only', tocChapters.length, 'chapters, will try CSS ruleBookInfoTocUrl');
       }
@@ -2238,10 +2228,12 @@ export class SourceExecutor {
           });
           if (altResp && altResp.length > 100) {
             let altChapters: BookSourceChapter[] = [];
-            if (tocRules.toc.startsWith('$.')) {
+            if (this.shouldTryJsonToc_(tocRules.toc, altResp)) {
               try {
-                const jsonObj = JSON.parse(altResp) as Record<string, unknown>;
-                altChapters = await this.parseJsonToc(jsonObj, tocRules, tocPageUrl);
+                const jsonObj = this.tryParseJsonBody_(altResp);
+                if (jsonObj !== null) {
+                  altChapters = await this.parseJsonToc(jsonObj, tocRules, tocPageUrl);
+                }
               } catch (_je2) { /* fallback */ }
             }
             if (altChapters.length === 0) {
@@ -2249,10 +2241,7 @@ export class SourceExecutor {
             }
             if (altChapters.length > 0) {
               console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', resolvedTocUrl.substring(0, 60));
-              return altChapters.map(ch => ({
-                ...ch,
-                url: this.resolveTocUrlTemplate(ch.url, resolvedTocUrl) || ch.url,
-              }));
+              return this.finalizeTocList(altChapters, source, resolvedTocUrl);
             }
           }
           }
@@ -2290,10 +2279,21 @@ export class SourceExecutor {
               isVolume: source.ruleTocIsVolume || '',
             };
             if (retryTocRules.toc) {
-              let retryChapters = await this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
+              let retryChapters: BookSourceChapter[] = [];
+              if (this.shouldTryJsonToc_(retryTocRules.toc, retryBodyText)) {
+                try {
+                  const jsonObj = this.tryParseJsonBody_(retryBodyText);
+                  if (jsonObj !== null) {
+                    retryChapters = await this.parseJsonToc(jsonObj, retryTocRules, tocUrl);
+                  }
+                } catch (_je3) { /* fallback */ }
+              }
+              if (retryChapters.length === 0) {
+                retryChapters = await this.parseTocFromRules(retryBodyText, retryTocRules, tocUrl, source);
+              }
               if (retryChapters.length > 0) {
                 console.info('[SrcEx] getToc retry OK:', retryChapters.length, 'chapters');
-                return retryChapters;
+                return this.finalizeTocList(retryChapters, source, tocUrl);
               }
             }
           }
@@ -2316,7 +2316,7 @@ export class SourceExecutor {
             const wvChapters = await this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
               console.info('[SrcEx] getToc WebView OK:', wvChapters.length, 'chapters');
-              return wvChapters;
+              return this.finalizeTocList(wvChapters, source, tocUrl);
             }
           }
         } catch (_wv) { /* WebView also failed */ }
@@ -3523,20 +3523,70 @@ export class SourceExecutor {
   }
 
   /**
-   * 从 JSON 响应解析目录列表（$.xxx JSONPath）
+   * 响应是否应优先按 JSON 目录解析。
+   * 规则以 $. / @json: 开头，或响应体本身是 JSON 对象/数组时返回 true。
    */
-  private async parseJsonToc(json: Record<string, unknown>, rules: Record<string, string>, baseUrl: string): Promise<BookSourceChapter[]> {
-    const tocRule = rules['toc'] || '';
-    if (!tocRule) return [];
+  private shouldTryJsonToc_(tocRule: string, body: string): boolean {
+    const rule = (tocRule || '').trim();
+    if (rule.startsWith('$.') || rule.startsWith('@json:') || rule === '$' || rule === '*' ||
+      rule === '$.*' || rule === '$[*]') {
+      return true;
+    }
+    const trimmed = (body || '').replace(/^\uFEFF/, '').trim();
+    return trimmed.startsWith('{') || trimmed.startsWith('[');
+  }
 
-    let list: unknown[] = [];
-    const raw = this.getPath(json, tocRule);
-    if (Array.isArray(raw)) list = raw;
+  /** 安全解析 JSON 正文；失败返回 null。支持根数组。 */
+  private tryParseJsonBody_(body: string): Object | null {
+    try {
+      const trimmed = (body || '').replace(/^\uFEFF/, '').trim();
+      if (!trimmed) return null;
+      return JSON.parse(trimmed) as Object;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * 从 JSON 响应解析目录列表。
+   * 兼容：
+   * - 标准 JSONPath：$.data.list
+   * - 通配/根列表：*、$、$.*、$[*]
+   * - 非 $. 前缀字段：data / list / rows
+   * - 根数组
+   */
+  private async parseJsonToc(json: Object | null, rules: Record<string, string>, baseUrl: string): Promise<BookSourceChapter[]> {
+    const tocRule = rules['toc'] || '';
+    if (!tocRule || json === null || json === undefined) return [];
+
+    let list: Object[] = [];
+    const isArray = Array.isArray(json);
+    const rootObj: Record<string, Object> =
+      (!isArray && typeof json === 'object')
+        ? json as Record<string, Object>
+        : { 'data': json as Object };
+
+    const normalizedRule = tocRule.replace(/^@json:/i, '').trim();
+    if (isArray && (normalizedRule === '*' || normalizedRule === '$' ||
+      normalizedRule === '$.*' || normalizedRule === '$[*]' || normalizedRule === '')) {
+      list = json as Object[];
+    } else {
+      const raw = this.getPath(rootObj as Record<string, unknown>, normalizedRule);
+      if (Array.isArray(raw)) list = raw as Object[];
+    }
 
     if (list.length === 0) {
-      for (const p of ['data', 'list', 'rows', 'items', 'data.list', 'data.rows', 'data.items']) {
-        const v = this.getPath(json, p);
-        if (Array.isArray(v)) { list = v; break; }
+      if (isArray) {
+        list = json as Object[];
+      } else {
+        for (const p of [
+          'data', 'list', 'rows', 'items', 'chapters', 'chapterList', 'chapter_list',
+          'data.list', 'data.rows', 'data.items', 'data.chapters', 'data.chapterList',
+          'data.data', 'result', 'result.list', 'result.data'
+        ]) {
+          const v = this.getPath(rootObj as Record<string, unknown>, p);
+          if (Array.isArray(v)) { list = v as Object[]; break; }
+        }
       }
     }
 
@@ -3546,7 +3596,13 @@ export class SourceExecutor {
     const chapters: BookSourceChapter[] = [];
     for (let index = 0; index < list.length; index++) {
       const item = list[index];
-      const itemObj = item as Record<string, unknown>;
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        if (typeof item === 'string') {
+          chapters.push({ title: item as string, url: '', index });
+        }
+        continue;
+      }
+      const itemObj = item as Record<string, Object>;
 
       let title = '';
       if (titleRule) {
@@ -3557,7 +3613,7 @@ export class SourceExecutor {
           cleanTitleRule = parts[0];
           postProcs = parts.slice(1);
         }
-        const val = this.getPath(itemObj, cleanTitleRule);
+        const val = this.getPath(itemObj as Record<string, unknown>, cleanTitleRule);
         if (val !== undefined && val !== null) {
           title = String(val);
           for (const proc of postProcs) {
@@ -3574,7 +3630,11 @@ export class SourceExecutor {
         }
       }
       if (!title) {
-        title = String(itemObj['title'] || itemObj['name'] || itemObj['serialName'] || '第' + (index + 1) + '章');
+        title = String(
+          itemObj['title'] || itemObj['name'] || itemObj['serialName'] ||
+          itemObj['chapterName'] || itemObj['chapter_name'] || itemObj['chapterTitle'] ||
+          '第' + (index + 1) + '章'
+        );
       }
 
       let url = '';
@@ -3584,19 +3644,24 @@ export class SourceExecutor {
           url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
         } else {
           const cleanUrlRule = this.cleanRule(urlItemRule);
-          const val = this.getPath(itemObj, cleanUrlRule);
+          const val = this.getPath(itemObj as Record<string, unknown>, cleanUrlRule);
           if (val !== undefined && val !== null) {
             url = String(val);
             url = await this.postProcessRuleAsync(urlItemRule, url);
           }
         }
         url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
-          const v = this.getPath(itemObj, '$.' + path);
+          const v = this.getPath(itemObj as Record<string, unknown>, '$.' + path);
           return v !== undefined ? String(v) : '';
         });
       }
       if (!url) {
-        url = String(itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || '');
+        url = String(
+          itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || itemObj['chapter_url'] ||
+          itemObj['content_url'] || itemObj['path'] || itemObj['href'] ||
+          itemObj['id'] || itemObj['chapterId'] || itemObj['chapter_id'] || itemObj['cid'] ||
+          itemObj['item_id'] || ''
+        );
         if (url && !url.startsWith('http') && !url.startsWith('//')) {
           const prefix = baseUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
           url = prefix + (url.startsWith('/') ? '' : '/') + url;
@@ -3890,6 +3955,80 @@ export class SourceExecutor {
         isVolume: isVolume,
       };
     }));
+  }
+
+  /**
+   * 目录收尾：去重 + 可选反转 + 重排 index。
+   * 对齐 Android BookChapterList：
+   * - 去重键主要是章节 URL（LinkedHashSet 语义，保留首次出现顺序）
+   * - ruleToc 以 "-" 开头时反转
+   * - 不按章节号排序（保持源顺序）
+   */
+  private finalizeTocList(
+    chapters: BookSourceChapter[],
+    source: BookSource,
+    baseTocUrl: string = ''
+  ): BookSourceChapter[] {
+    if (!chapters || chapters.length === 0) return [];
+
+    let reverseToc = false;
+    const rawRule = (source.ruleToc || '').trim();
+    if (rawRule.startsWith('-')) reverseToc = true;
+
+    const seen = new Set<string>();
+    const deduped: BookSourceChapter[] = [];
+    for (let i = 0; i < chapters.length; i++) {
+      const ch = chapters[i];
+      if (!ch) continue;
+      let title = (ch.title || '').trim();
+      let url = (ch.url || '').trim();
+      if (baseTocUrl) {
+        url = this.resolveTocUrlTemplate(url, baseTocUrl) || url;
+      }
+      // 空标题且空链接跳过
+      if (!title && !url) continue;
+      // 去重：优先 URL；URL 为空时退回 title（卷名/无链接项）
+      const key = url ? ('u:' + this.normalizeTocDedupUrl_(url)) : ('t:' + title);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({
+        index: deduped.length,
+        title: title || ('章节' + (deduped.length + 1)),
+        url: url,
+        isVolume: !!ch.isVolume,
+      });
+    }
+
+    if (reverseToc) {
+      deduped.reverse();
+    }
+    for (let i = 0; i < deduped.length; i++) {
+      deduped[i].index = i;
+    }
+    return deduped;
+  }
+
+  private normalizeTocDedupUrl_(url: string): string {
+    let u = (url || '').trim();
+    if (!u) return '';
+    const hash = u.indexOf('#');
+    if (hash >= 0) u = u.substring(0, hash);
+    if (u.startsWith('//')) u = 'https:' + u;
+    // 简单归一：scheme/host 小写、去尾斜杠
+    const schemeIdx = u.indexOf('://');
+    if (schemeIdx > 0) {
+      const scheme = u.substring(0, schemeIdx).toLowerCase();
+      let rest = u.substring(schemeIdx + 3);
+      const slash = rest.indexOf('/');
+      let host = (slash >= 0 ? rest.substring(0, slash) : rest).toLowerCase();
+      let path = slash >= 0 ? rest.substring(slash) : '';
+      if (host.endsWith(':80') && scheme === 'http') host = host.substring(0, host.length - 3);
+      if (host.endsWith(':443') && scheme === 'https') host = host.substring(0, host.length - 4);
+      while (path.length > 1 && path.endsWith('/')) path = path.substring(0, path.length - 1);
+      return scheme + '://' + host + path;
+    }
+    while (u.length > 1 && u.endsWith('/')) u = u.substring(0, u.length - 1);
+    return u;
   }
 
   /**

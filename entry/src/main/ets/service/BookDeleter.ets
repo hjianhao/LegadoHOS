@@ -22,6 +22,7 @@ import { LocalBookEngine, LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngi
 import { MangaImageLoader } from '../util/MangaImageLoader';
 import { BookCoverUtil } from '../util/BookCoverUtil';
 import { FileUtil } from '../util/FileUtil';
+import { CloudBookBindingRepository } from './cloud/CloudBookBindingRepository';
 
 export class BookDeleter {
   /**
@@ -33,6 +34,13 @@ export class BookDeleter {
     await AppDatabase.getInstance().waitForInit();
     const db = AppDatabase.getInstance().rdbStore;
     const bookId: number = book.id;
+
+    // 0. 云端 Binding：默认仅解绑，不删远端文件（阶段 4）
+    try {
+      await new CloudBookBindingRepository().unlinkBook(bookId);
+    } catch (e) {
+      console.warn('[BookDeleter] unlink cloud binding failed:', bookId, (e as Error).message);
+    }
 
     // 1. DB: chapters（含缓存正文）
     try {
