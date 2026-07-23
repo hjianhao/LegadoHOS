@@ -42,7 +42,7 @@ find_hdc() {
 }
 
 HDC=$(find_hdc)
-BUNDLE="io.legado.hos"
+BUNDLE="io.hjianhao.aireader"
 
     if [ -n "$HDC" ] && [ "$OPT" != "download" ]; then
       # ---------- 查找设备 ----------

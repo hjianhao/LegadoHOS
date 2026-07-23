@@ -33,7 +33,7 @@ cd /Users/hjianhao/Code/ai/LegadoHOS && bash scripts/build.sh debug
 # 部署
 export PATH="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:$PATH"
 hdc -t 127.0.0.1:5555 install -r entry/build/default/outputs/default/entry-default-signed.hap
-hdc -t 127.0.0.1:5555 shell aa start -a MainAbility -b io.legado.hos
+hdc -t 127.0.0.1:5555 shell aa start -a MainAbility -b io.hjianhao.aireader
 ```
 
 ## 抓取 hilog 方法

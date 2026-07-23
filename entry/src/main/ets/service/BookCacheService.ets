@@ -311,7 +311,7 @@ export class BookCacheService {
     if (this.bgTaskCount_ > 1) return;
     try {
       const want = await wantAgent.getWantAgent({
-        wants: [{ bundleName: 'io.legado.hos', abilityName: 'MainAbility' }],
+        wants: [{ bundleName: 'io.hjianhao.aireader', abilityName: 'MainAbility' }],
         operationType: wantAgent.OperationType.START_ABILITY, requestCode: 0,
       });
       await backgroundTaskManager.startBackgroundRunning(context, ['dataTransfer'], want);
