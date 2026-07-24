@@ -13,10 +13,10 @@ import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../../theme/ThemeColors';
 import { CookieStore, parseCookieHeader } from '../../util/CookieStore';
 import { LoginInfoStore } from '../../util/LoginInfoStore';
-import { JsExpressionEvaluator } from '../../engine/source/JsExpressionEvaluator';
+import { JsEvalContext, JsExpressionEvaluator } from '../../engine/source/JsExpressionEvaluator';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { BookSourceTable } from '../../data/database/BookSourceTable';
-import { BookSource } from '../../model/BookSource';
+import { BookSource, parseBookSource } from '../../model/BookSource';
 import { UiUtil } from '../../util/UiUtil';
 
 interface LoginUiRow {
@@ -24,6 +24,8 @@ interface LoginUiRow {
   type: string;
   action?: string;
   default?: string;
+  viewName?: string;
+  chars?: string[];
 }
 
 @CustomDialog
@@ -36,9 +38,11 @@ export struct SourceLoginDialog {
   loginUi: string = '';
   jsLib: string = '';
   variableComment: string = '';
+  sourceJson: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
-  @State private webViewMode: boolean = true;
+  @State private initialized: boolean = false;
+  @State private webViewMode: boolean = false;
   @State private inputRows: LoginUiRow[] = [];
   @State private buttonRows: LoginUiRow[] = [];
   @State private inputValues: string[] = [];
@@ -48,17 +52,43 @@ export struct SourceLoginDialog {
   private webController: web_webview.WebviewController = new web_webview.WebviewController();
   private isActive: boolean = false;
   private actionRequestId: number = 0;
+  private source_: BookSource | null = null;
 
   aboutToAppear(): void {
     this.isActive = true;
-    // 解析 loginUi；loginUrl 是纯 URL 时走 WebView 模式
-    const rows = this.parseLoginUi_();
+    void this.initialize_();
+  }
+
+  private async initialize_(): Promise<void> {
+    const runId = ++this.actionRequestId;
+    try {
+      this.source_ = this.sourceJson ? parseBookSource(JSON.parse(this.sourceJson)) : null;
+    } catch (_e) {
+      this.source_ = null;
+    }
+    let loginUiText = this.loginUi.trim();
+    const loginUiScript = this.extractJs_(loginUiText);
+    if (loginUiScript !== null) {
+      this.statusText = '正在加载登录配置…';
+      try {
+        loginUiText = await JsExpressionEvaluator.evaluate(
+          this.buildLoginScript_(loginUiScript),
+          this.createJsContext_('')
+        );
+      } catch (e) {
+        loginUiText = '';
+        this.statusText = '登录 UI 执行失败：' + (e as Error).message;
+      }
+    }
+    if (!this.isActive || runId !== this.actionRequestId) return;
+    const rows = this.parseLoginUi_(loginUiText);
     const isPlainUrl = /^https?:\/\//i.test(this.loginUrl.trim());
     this.inputRows = rows.filter(r => r.type !== 'button');
     this.buttonRows = rows.filter(r => r.type === 'button' && !!r.action);
-    this.webViewMode = isPlainUrl || (this.inputRows.length === 0 && this.buttonRows.length === 0);
+    this.webViewMode = isPlainUrl;
 
     if (!this.webViewMode) {
+      if (rows.length === 0 && !this.statusText) this.statusText = '登录 UI 为空或格式不受支持';
       // 预填：已保存的登录信息 > loginUi 默认值
       const saved = LoginInfoStore.getInstance().get(this.sourceUrl);
       let savedMap: Record<string, string> = {};
@@ -81,6 +111,7 @@ export struct SourceLoginDialog {
         console.warn('[SourceLogin] push cookies to WebView failed:', (e as Error).message);
       }
     }
+    this.initialized = true;
   }
 
   aboutToDisappear(): void {
@@ -88,10 +119,10 @@ export struct SourceLoginDialog {
     this.actionRequestId++;
   }
 
-  private parseLoginUi_(): LoginUiRow[] {
-    if (!this.loginUi) return [];
+  private parseLoginUi_(loginUiText: string): LoginUiRow[] {
+    if (!loginUiText) return [];
     try {
-      const parsed = JSON.parse(this.loginUi) as Array<Record<string, Object>>;
+      const parsed = JSON.parse(loginUiText) as Array<Record<string, Object>>;
       if (!Array.isArray(parsed)) return [];
       const rows: LoginUiRow[] = [];
       for (const item of parsed) {
@@ -103,12 +134,48 @@ export struct SourceLoginDialog {
           type: type,
           action: item['action'] ? String(item['action']) : undefined,
           default: item['default'] !== undefined ? String(item['default']) : undefined,
+          viewName: item['viewName'] !== undefined ? String(item['viewName']) : undefined,
+          chars: Array.isArray(item['chars']) ?
+            (item['chars'] as Object[]).map((char: Object): string => String(char)) : undefined,
         });
       }
       return rows;
     } catch (_e) {
       return [];
     }
+  }
+
+  private extractJs_(value: string): string | null {
+    const text = value.trim();
+    if (text.startsWith('@js:')) return text.substring(4);
+    if (text.startsWith('@js')) return text.substring(3);
+    if (text.startsWith('<js>') && text.endsWith('</js>')) {
+      return text.substring(4, text.length - 5);
+    }
+    return null;
+  }
+
+  private normalizeJs_(value: string): string {
+    return this.extractJs_(value) ?? value;
+  }
+
+  private buildLoginScript_(action: string): string {
+    const loginScript = this.normalizeJs_(this.loginUrl);
+    return (loginScript ? loginScript + '\n' : '') + action;
+  }
+
+  private createJsContext_(loginInfoJson: string): JsEvalContext {
+    const source: BookSource | Partial<BookSource> = this.source_ || {
+      id: this.sourceId, sourceUrl: this.sourceUrl, sourceName: this.sourceName
+    };
+    const context: JsEvalContext = {
+      source: source,
+      jsLib: this.jsLib,
+      baseUrl: this.sourceUrl,
+      variableBlob: this.variableComment,
+      loginInfoJson: loginInfoJson,
+    };
+    return context;
   }
 
   build() {
@@ -131,7 +198,13 @@ export struct SourceLoginDialog {
       }
       .width('100%').height(52).padding({ left: 12, right: 8 })
 
-      if (this.webViewMode) {
+      if (!this.initialized) {
+        Column() {
+          LoadingProgress().color(ThemeColors.primary(this.isDark))
+          Text('正在加载登录配置…').fontSize(13)
+            .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 8 })
+        }.width('100%').height(160).justifyContent(FlexAlign.Center)
+      } else if (this.webViewMode) {
         // ===== WebView 登录 =====
         Stack() {
           Web({ src: this.loginUrl, controller: this.webController })
@@ -154,18 +227,49 @@ export struct SourceLoginDialog {
         Scroll() {
           Column() {
           ForEach(this.inputRows, (row: LoginUiRow, idx: number) => {
-            TextInput({ placeholder: row.name, text: this.inputValues[idx] || '' })
-              .type(row.type === 'password' ? InputType.Password : InputType.Normal)
-              .width('100%').height(44).margin({ bottom: 10 })
-              .backgroundColor(ThemeColors.surface(this.isDark))
-              .borderRadius(8).fontSize(14)
-              .fontColor(ThemeColors.onBackground(this.isDark))
-              .placeholderColor(ThemeColors.secondaryText(this.isDark))
-              .onChange((v: string) => {
-                const next = this.inputValues.slice();
-                next[idx] = v;
-                this.inputValues = next;
+            if (row.type === 'select') {
+              Row() {
+                Text(row.viewName || row.name).fontSize(14)
+                  .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+                Select((row.chars || []).map((char: string): SelectOption => ({ value: char })))
+                  .value(this.inputValues[idx] || row.default || '')
+                  .onSelect((_selected: number, value: string) => {
+                    const next = this.inputValues.slice();
+                    next[idx] = value;
+                    this.inputValues = next;
+                  })
+              }.width('100%').height(48).margin({ bottom: 10 })
+            } else if (row.type === 'toggle') {
+              Row() {
+                Text(row.viewName || row.name).fontSize(14)
+                  .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+                Toggle({
+                  type: ToggleType.Switch,
+                  isOn: this.inputValues[idx] === ((row.chars || [])[1] || 'true')
+                }).onChange((value: boolean) => {
+                  const chars = row.chars || ['false', 'true'];
+                  const next = this.inputValues.slice();
+                  next[idx] = value ? (chars[1] || 'true') : (chars[0] || 'false');
+                  this.inputValues = next;
+                })
+              }.width('100%').height(48).margin({ bottom: 10 })
+            } else {
+              TextInput({
+                placeholder: row.viewName || row.name,
+                text: this.inputValues[idx] || ''
               })
+                .type(row.type === 'password' ? InputType.Password : InputType.Normal)
+                .width('100%').height(44).margin({ bottom: 10 })
+                .backgroundColor(ThemeColors.surface(this.isDark))
+                .borderRadius(8).fontSize(14)
+                .fontColor(ThemeColors.onBackground(this.isDark))
+                .placeholderColor(ThemeColors.secondaryText(this.isDark))
+                .onChange((v: string) => {
+                  const next = this.inputValues.slice();
+                  next[idx] = v;
+                  this.inputValues = next;
+                })
+            }
           }, (row: LoginUiRow, idx: number): string => idx + row.name)
 
           if (this.statusText) {
@@ -236,19 +340,9 @@ export struct SourceLoginDialog {
       if (!this.isActive || runId !== this.actionRequestId) return;
 
       // 追加 dump：把登录后的 loginInfo / variable 带回来持久化
-      const script = this.loginUrl + '\n' + row.action +
+      const script = this.buildLoginScript_(row.action) +
         '\n;JSON.stringify({loginInfo: source.getLoginInfo(), variable: source.getVariable()});';
-      const srcObj: Partial<BookSource> = {
-        sourceUrl: this.sourceUrl,
-        sourceName: this.sourceName,
-      };
-      const result = await JsExpressionEvaluator.evaluate(script, {
-        source: srcObj,
-        jsLib: this.jsLib,
-        baseUrl: this.sourceUrl,
-        variableBlob: this.variableComment,
-        loginInfoJson: infoJson,
-      });
+      const result = await JsExpressionEvaluator.evaluate(script, this.createJsContext_(infoJson));
       if (!this.isActive || runId !== this.actionRequestId) return;
 
       // 解析 dump 结果并持久化

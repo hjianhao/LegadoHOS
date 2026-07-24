@@ -308,7 +308,7 @@ export function parseBookSource(json: any): BookSource {
     ruleBookContentImageDecode: json.ruleBookContentImageDecode || rc.imageDecode || '',
     ruleBookContentPayAction: json.ruleBookContentPayAction || rc.payAction || '',
     ruleBookContentCallBackJs: json.ruleBookContentCallBackJs || rc.callBackJs || '',
-    respondTime: json.respondTime || 0,
+    respondTime: json.respondTime ?? 180000,
     concurrentRate: json.concurrentRate || '',
     bookSourceComment: json.bookSourceComment || '',
     variableComment: json.variableComment || '',

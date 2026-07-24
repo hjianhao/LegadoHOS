@@ -304,59 +304,68 @@ export struct BookSourceEditPage {
 	    return String(v);
 	  }
 
-	  setField(key: string, value: string): void {
-	    if (!this.editSource) return;
-	    const copy: Record<string, string | number | boolean> = JSON.parse(JSON.stringify(this.editSource));
-    // 根据字段名推断类型
-    if (value === 'true' || value === 'false') {
+  setField(key: string, value: string): void {
+    if (!this.editSource) return;
+    const copy: Record<string, string | number | boolean> = JSON.parse(JSON.stringify(this.editSource));
+    const booleanFields: string[] =
+      ['enabled', 'enabledCookieJar', 'enabledExplore', 'eventListener', 'customButton'];
+    const numberFields: string[] = ['weight', 'respondTime', 'customOrder', 'sourceType', 'respond'];
+    if (booleanFields.includes(key)) {
       copy[key] = value === 'true';
-    } else if (value === '' || value === undefined || value === null) {
-      if (key === 'enabled' || key === 'enabledCookieJar' || key === 'enabledExplore') {
-        copy[key] = false;
-      } else if (key === 'weight' || key === 'respondTime' || key === 'customOrder') {
-        copy[key] = 0;
-      } else {
-        copy[key] = '';
-      }
-    } else if (!isNaN(Number(value)) && key.endsWith('ime') === false && key !== 'sourceName') {
-      // 只有数字类型的字段才转 number
-      const numFields: string[] = ['weight', 'respondTime', 'customOrder', 'concurrentRate', 'sourceType'];
-      if (numFields.indexOf(key) >= 0) {
-        copy[key] = Number(value);
-      } else {
-        copy[key] = value;
-      }
+    } else if (numberFields.includes(key)) {
+      const parsed = Number(value);
+      copy[key] = value.trim() && Number.isFinite(parsed) ? parsed : 0;
     } else {
+      // concurrentRate 是 Android 兼容格式（如 "2/1000"），必须保持字符串。
       copy[key] = value;
     }
-	    this.editSource = JSON.parse(JSON.stringify(copy));
+    this.editSource = JSON.parse(JSON.stringify(copy));
     this.isDirty = true;
   }
 
   async saveSource(): Promise<void> {
-    if (!this.editSource) return;
+    await this.persistSource_(true, true);
+  }
+
+  private async persistSource_(navigateBack: boolean, showSuccess: boolean): Promise<boolean> {
+    if (!this.editSource) return false;
+    if (this.isSaving) return false;
+    this.editSource.sourceName = this.editSource.sourceName.trim();
+    this.editSource.sourceUrl = this.editSource.sourceUrl.trim();
     if (!this.editSource.sourceName || !this.editSource.sourceUrl) {
       UiUtil.showToast(this.getUIContext(), { message: '书源名称和 URL 不能为空', duration: 1500 });
-      return;
+      return false;
     }
+    this.isSaving = true;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
       const dao = new BookSourceTable(db);
       const source = this.editSource;
+      const duplicate = await dao.getSourceByUrl(source.sourceUrl);
+      if (duplicate && duplicate.id !== source.id) {
+        UiUtil.showToast(this.getUIContext(), { message: '该书源 URL 已存在', duration: 1800 });
+        return false;
+      }
       source.updateTime = Date.now();
-      this.isSaving = true;
       if (this.isNew || source.id === 0) {
-        await dao.insertSource(source);
-        UiUtil.showToast(this.getUIContext(), { message: '已创建新书源', duration: 1500 });
+        source.id = await dao.insertSource(source);
+        source.createTime = source.createTime || Date.now();
+        this.isNew = false;
+        if (showSuccess) UiUtil.showToast(this.getUIContext(), { message: '已创建新书源', duration: 1500 });
       } else {
         await dao.updateSource(source);
-        UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
+        if (showSuccess) UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
       }
+      this.sourceUrl = source.sourceUrl;
       this.isDirty = false;
-      UiUtil.back(this.getUIContext());
-    } catch (_e) {
-      UiUtil.showToast(this.getUIContext(), { message: '保存失败', duration: 2000 });
+      if (navigateBack) UiUtil.back(this.getUIContext());
+      return true;
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '保存失败：' + ((e as Error).message || String(e)), duration: 2400
+      });
+      return false;
     } finally {
       this.isSaving = false;
     }
@@ -379,8 +388,9 @@ export struct BookSourceEditPage {
     });
   }
 
-  private openSearchTest(): void {
+  private async openSearchTest(): Promise<void> {
     if (!this.editSource || !this.editSource.sourceUrl) return;
+    if (!await this.persistSource_(false, false)) return;
     const scope = '{"type":"source","sources":[{"name":' +
       JSON.stringify(this.editSource.sourceName) + ',"url":' +
       JSON.stringify(this.editSource.sourceUrl) + '}]}';
@@ -389,8 +399,9 @@ export struct BookSourceEditPage {
     });
   }
 
-  private openDebug(): void {
+  private async openDebug(): Promise<void> {
     if (!this.editSource || !this.editSource.sourceUrl) return;
+    if (!await this.persistSource_(false, false)) return;
     UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/BookSourceDebugPage', params: { sourceUrl: this.editSource.sourceUrl }
     });
@@ -458,16 +469,16 @@ export struct BookSourceEditPage {
         Button($r('app.string.ui_0dccf90917')).fontSize(26).width(40).height(40).backgroundColor(ThemeColors.transparent())
           .fontColor(ThemeColors.onBackground(this.isDark)).onClick(() => { this.cancelEdit(); })
         Text(this.isNew ? '新建书源' : '编辑书源').fontColor(ThemeColors.onSurface(this.isDark)).fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
-        if (!this.isNew) {
+        if (this.editSource && this.editSource.sourceUrl.trim()) {
           Button($r('app.string.ui_0b5d7ed54b')).fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
-            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openSearchTest(); })
+            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { void this.openSearchTest(); })
           Button($r('app.string.ui_f4c117afe8')).fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
-            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { this.openDebug(); })
+            .fontColor(ThemeColors.primary(this.isDark)).onClick(() => { void this.openDebug(); })
         }
         Button(this.isSaving ? '保存中' : '保存').fontSize(14).height(40)
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .borderRadius(20).padding({ left: 16, right: 16 }).margin({ left: 4 })
-          .onClick(() => { this.saveSource(); })
+          .onClick(() => { void this.saveSource(); })
           .enabled(!this.isSaving)
       }.padding({ left: 8, right: 12, top: 8, bottom: 4 }).width('100%').height(56)
 

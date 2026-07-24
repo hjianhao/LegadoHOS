@@ -1,5 +1,5 @@
 /** 书源管理：对齐 Android Legado 的核心管理能力，并采用 HarmonyOS 标准列表与底部弹层。 */
-import { BookSource } from '../model/BookSource';
+import { BookSource, serializeBookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ImportSourceDialog } from './ImportSourceDialog';
@@ -341,7 +341,8 @@ export struct BookSourcePage {
       builder: SourceLoginDialog({
         controller: this.loginDlg!, sourceId: source.id, sourceUrl: source.sourceUrl,
         sourceName: source.sourceName, loginUrl: source.loginUrl, loginUi: source.loginUi,
-        jsLib: source.jsLib || '', variableComment: source.variableComment || ''
+        jsLib: source.jsLib || '', variableComment: source.variableComment || '',
+        sourceJson: serializeBookSource(source)
       }), autoCancel: true, customStyle: true, alignment: DialogAlignment.Center
     });
     this.loginDlg.open();
