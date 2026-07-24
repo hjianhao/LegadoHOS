@@ -14,6 +14,7 @@ import { JsExpressionEvaluator, JsEvalContext } from '../engine/source/JsExpress
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { UiUtil } from '../util/UiUtil';
+import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 
 interface ExploreCategory {
   name: string;
@@ -35,6 +36,7 @@ interface SourceLoginAction {
 @Component
 export struct ExplorePage {
   @StorageLink('isDark') isDark: boolean = false;
+  @StorageLink('bookSourceRevision') @Watch('onBookSourceRevisionChanged') bookSourceRevision: number = 0;
   @State exploreSources: BookSource[] = [];
   @State searchKey: string = '';
   @State expandedSourceUrl: string = '';
@@ -51,16 +53,23 @@ export struct ExplorePage {
   private categoryRequestId: number = 0;
   private isActive: boolean = false;
   private lastCategoryError: string = '';
+  private loadedSourceRevision: number = -1;
 
   aboutToAppear(): void {
     this.isActive = true;
-    if (this.exploreSources.length === 0) void this.loadExploreSources();
+    if (this.exploreSources.length === 0 || this.loadedSourceRevision !== this.bookSourceRevision) {
+      void this.loadExploreSources();
+    }
   }
 
   aboutToDisappear(): void {
     this.isActive = false;
     this.sourceRequestId++;
     this.categoryRequestId++;
+  }
+
+  private onBookSourceRevisionChanged(): void {
+    if (this.isActive) void this.loadExploreSources();
   }
 
   getFilteredSources(): BookSource[] {
@@ -107,6 +116,7 @@ export struct ExplorePage {
       });
       if (!this.isActive || runId !== this.sourceRequestId) return;
       this.exploreSources = sources;
+      this.loadedSourceRevision = this.bookSourceRevision;
       console.info('[Explore] Loaded ' + this.exploreSources.length + ' explore sources');
     } catch (_e) {
       console.error('[Explore] loadExploreSources error: ' + JSON.stringify(_e));

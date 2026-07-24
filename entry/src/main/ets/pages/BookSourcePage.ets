@@ -14,6 +14,7 @@ import { WebViewEngine } from '../components/WebViewEngine';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppBackButton } from '../components/common/AppTitleBar';
+import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 
 @Entry
 @Component
@@ -268,6 +269,7 @@ export struct BookSourcePage {
       await this.dao_!.batchSetExploreEnabled(ids, enabled);
       selected.forEach((source: BookSource) => { source.enabledExplore = enabled; });
       this.exploreStateVersion_++;
+      BookSourceChangeNotifier.notify();
       this.applyFilters();
       this.clearSelection_();
     });
@@ -313,6 +315,7 @@ export struct BookSourcePage {
       if (result.index !== 1 || !this.dao_) return;
       await this.runOperation_(async (): Promise<void> => {
         await this.dao_!.batchDelete(selected.map((source: BookSource): number => source.id));
+        BookSourceChangeNotifier.notify();
         this.clearSelection_();
         await this.load();
       });
@@ -395,6 +398,7 @@ export struct BookSourcePage {
       await this.dao_!.batchSetExploreEnabled([source.id], enabled);
       source.enabledExplore = enabled;
       this.exploreStateVersion_++;
+      BookSourceChangeNotifier.notify();
       this.applyFilters();
       this.contextMenuId = 0;
     });

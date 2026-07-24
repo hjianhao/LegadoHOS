@@ -10,6 +10,7 @@ import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 
 const MAX_IMPORT_BYTES: number = 10 * 1024 * 1024;
 const MAX_IMPORT_DEPTH: number = 3;
@@ -80,6 +81,7 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       const count = await dao.importSelected(
         sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup.trim(), this.groupMode);
+      if (count > 0) BookSourceChangeNotifier.notify();
       UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
       // 等宿主页完成数据库重读和列表状态更新后再关闭弹窗，避免关闭动画销毁
       // 自定义弹窗时打断异步刷新，导致新导入的书源要重新进入页面才显示。

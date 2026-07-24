@@ -10,6 +10,7 @@
 import { BookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
+import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 
@@ -357,6 +358,7 @@ export struct BookSourceEditPage {
         await dao.updateSource(source);
         if (showSuccess) UiUtil.showToast(this.getUIContext(), { message: '已保存', duration: 1500 });
       }
+      BookSourceChangeNotifier.notify();
       this.sourceUrl = source.sourceUrl;
       this.isDirty = false;
       if (navigateBack) UiUtil.back(this.getUIContext());
