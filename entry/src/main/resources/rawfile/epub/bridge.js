@@ -359,7 +359,7 @@
     }
   }
 
-	function injectStyle(doc) {
+  function injectStyle(doc) {
 	  if (!doc || !doc.documentElement) return;
 	  var style = doc.getElementById('legado-reader-style');
 	  if (!style) {
@@ -370,18 +370,25 @@
 
 	  var v = currentStyleValues();
 	  var isDual = currentStyle.dualPage === true;
-	  var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-	  var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
-	  var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
+    var bodyFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+    var bodyAllFontCss = v.useBookFont ? '' : 'font-family:' + v.familyCss + ' !important;';
+    var imgMaxH = isDual ? '40vh' : (v.flowMode === 'scrolled' ? 'none' : '85vh');
+    // epub.js 的 scrolled() 会默认加上视口宽度 1/12 的左右 padding，
+    // 此处只在滚动模式清除它；分页模式仍交给 columns() 维护列宽与页缝。
+    var scrollingHorizontalInsetCss = v.flowMode === 'scrolled' ?
+      'padding-left:0 !important;padding-right:0 !important;' : '';
 
 	  // 上下 padding 用 !important；左右不写，保留 epub.js 的 column gap 半宽 padding
 	  style.textContent =
 	    fontFaceCss() +
-	    'html,body{background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
+    // EPUB 内嵌文档可能保留书籍自带的 body 左右外边距；
+    // 这会绕过外层的“左右边距”设置，故强制归零。
+    'html,body{margin:0 !important;background:' + v.bg + ' !important;color:' + v.color + ' !important;}' +
 	    'body{' + bodyFontCss + 'font-size:' + v.fontSize + 'px !important;' +
 	    'font-weight:' + v.weight + ' !important;line-height:' + v.lineHeight + ' !important;' +
 	    'letter-spacing:' + v.letterSpacing + 'px !important;text-align:' + v.textAlign + ' !important;' +
-	    'box-sizing:border-box !important;padding-top:' + v.pt + 'px !important;padding-bottom:' + v.pb + 'px !important;}' +
+	    'box-sizing:border-box !important;padding-top:' + v.pt + 'px !important;padding-bottom:' + v.pb + 'px !important;' +
+      scrollingHorizontalInsetCss + '}' +
 	    'body *{' + bodyAllFontCss + 'box-sizing:border-box !important;font-weight:' + v.weight + ' !important;' +
 	    'letter-spacing:' + v.letterSpacing + 'px !important;}' +
 	    'p{margin-top:0 !important;margin-bottom:' + v.paraSpacing + 'px !important;text-indent:' + v.indent + 'em;' +
@@ -407,7 +414,26 @@
       // 不要清掉 paddingLeft/Right：epub.js columns() 依赖它们做双页列间距
       doc.body.style.paddingTop = v.pt + 'px';
       doc.body.style.paddingBottom = v.pb + 'px';
+      if (v.flowMode === 'scrolled') {
+        doc.body.style.setProperty('padding-left', '0px', 'important');
+        doc.body.style.setProperty('padding-right', '0px', 'important');
+      }
     }
+  }
+
+  /** epub.js 在 resize 后会再次写入 scrolled() 的默认左右 padding，需重新清除。 */
+  function clearScrolledHorizontalInsets() {
+    if (!rendition || cssValue(currentStyle.flowMode, 'paginated') !== 'scrolled') return;
+    try {
+      rendition.getContents().forEach(function (content) {
+        var body = content && content.document && content.document.body;
+        if (!body) return;
+        body.style.setProperty('margin-left', '0px', 'important');
+        body.style.setProperty('margin-right', '0px', 'important');
+        body.style.setProperty('padding-left', '0px', 'important');
+        body.style.setProperty('padding-right', '0px', 'important');
+      });
+    } catch (e) {}
   }
 
   function hasSelection(doc) {
@@ -790,6 +816,7 @@
         applySpreadLayout();
         rendition.resize();
         syncLayoutSettings();
+        clearScrolledHorizontalInsets();
         alignToSpreadBoundary();
       } catch (e) {}
     };
@@ -860,10 +887,10 @@
 
   /**
    * 将 scrollLeft 对齐到 delta 整数倍。
-   * 双页下若 scroll 停在半栏位置，会看到「半页 | 整页 | 半页」。
+   * 重排后若 scroll 停在半栏位置，首列会被裁切并溢到右侧。
    */
   function alignToSpreadBoundary() {
-    if (!rendition || !dualPageEnabled()) return;
+    if (!rendition || cssValue(currentStyle.flowMode, 'paginated') === 'scrolled') return;
     try {
       var manager = rendition.manager;
       var container = manager && manager.container;

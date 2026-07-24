@@ -9,7 +9,6 @@ import { http } from '@kit.NetworkKit';
 import util from '@ohos.util';
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { ITtsBackend, TtsSynthRequest, TtsSynthResult, TtsVoiceInfo } from './ITtsBackend';
-import { TtsModelType } from './TtsModelManager';
 
 const AZURE_SAMPLE_RATE = 24000;
 const AZURE_OUTPUT_FORMAT = 'riff-24khz-16bit-mono-pcm';
@@ -42,7 +41,6 @@ export class AzureTtsBackend implements ITtsBackend {
   private voiceName_: string = 'zh-CN-XiaoxiaoNeural';
   private ready_: boolean = false;
 
-  get modelType(): TtsModelType { return 'kokoro'; }
   get sampleRate(): number { return AZURE_SAMPLE_RATE; }
   get ready(): boolean { return this.ready_; }
 

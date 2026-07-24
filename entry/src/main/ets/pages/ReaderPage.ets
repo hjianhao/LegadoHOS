@@ -1447,9 +1447,10 @@ struct ReaderPage {
   private applyStyleNow_(): void {
     this.runJs_('window.applyStyle && window.applyStyle(' + JSON.stringify(this.toWebStyle_()) + ')');
     this.runJs_('window.setZoneActions && window.setZoneActions(' + JSON.stringify(this.zoneActions) + ')');
-    // 单页横屏限制正文宽度；双页模式必须保留完整视口供 epub.js 切成两栏。
+    // Foliate / PDF 单页横屏限制正文宽度。epub.js 由自身 columns() 布局，
+    // 必须保留完整视口，使“左右边距”设置可以精确控制内容宽度。
     const limitLandscapeWidth = WindowLayout.isLandscape && WindowLayout.widthVp >= 840 &&
-      (this.isFoliate_ || this.isPdf_ || this.landscapeLayout_ !== 'dual');
+      (this.isFoliate_ || this.isPdf_);
     if (limitLandscapeWidth) {
       const maxW = 720;
       const css = `#reader-content,#foliate-content,.content,body>div{max-width:${maxW}px !important;margin:0 auto !important;}`;

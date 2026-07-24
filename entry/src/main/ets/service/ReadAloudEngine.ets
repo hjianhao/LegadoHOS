@@ -186,7 +186,7 @@ export class ReadAloudEngine {
   updateCallback(callback: AloudCallback): void { this.callback_ = callback; }
   setVoice(language: string, person: number, style: string): void { this.voice_ = { language, person, style }; }
 
-  /** 设置 TTS 后端（null=系统 TTS，非 null=sherpa-onnx） */
+  /** 设置 TTS 后端（null=系统 TTS，非 null=扩展后端）。 */
   async setBackend(backend: ITtsBackend | null): Promise<void> {
     if (backend === this.backend_) return;
     if (this.backend_) {
@@ -216,7 +216,7 @@ export class ReadAloudEngine {
       pendingBackend_ = null;
       this.backend_ = backend;
     }
-    // 确保离线后端已就绪
+    // 确保扩展后端已就绪
     if (this.backend_ && !this.backend_.ready) {
       console.info('[Aloud] waiting for backend init...');
       await this.backend_.init();
@@ -283,7 +283,7 @@ export class ReadAloudEngine {
 
   async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0): Promise<void> {
     this.startChapterIdx_ = startChapter;
-    // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或离线后端）
+    // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或扩展后端）
     if (!this.audioRenderer_ || (!this.ttsEngine_ && !this.backend_)) { this.callback_.onError?.('引擎未初始化'); return; }
     
     this.startTextOffset_ = startOffset;
@@ -427,7 +427,7 @@ export class ReadAloudEngine {
     if (this.state_ !== AloudState.PLAYING) return;
     if (this.pendingQueue_.length >= ReadAloudEngine.PRELOAD_COUNT) return;
     const maxConcurrency = this.backend_ ? ReadAloudEngine.MAX_SYNTH_CONCURRENCY : 1;
-    if (this.synthCount_ >= maxConcurrency) return; // 系统 TTS 串行，离线后端允许并行预合成
+    if (this.synthCount_ >= maxConcurrency) return; // 系统 TTS 串行，扩展后端允许并行预合成
     
     if (this.currentTextIdx_ >= this.textQueue_.length) {
       const provider = this.callback_.onNeedNextChapter || globalChapterProvider_;
@@ -458,7 +458,7 @@ export class ReadAloudEngine {
     console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars, pending=' + this.pendingQueue_.length + ', synthCount=' + this.synthCount_);
 
     if (this.backend_) {
-      // 离线 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
+      // 扩展 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
       this.synthesizeWithBackend_(text, chunkOffset);
     } else {
       // 系统 TTS：speak + onData/onComplete 回调流

@@ -1,5 +1,7 @@
 # TTS 朗读模块设计
 
+> 状态：Kokoro、VITS 两个 Sherpa ONNX 离线自然语音已移除，原因是熄屏后无法持续朗读。本文其余 Sherpa ONNX 内容仅保留为历史设计记录；当前应用仅提供系统语音与 Azure 语音。
+
 > 离线神经 TTS（sherpa-onnx + Kokoro）集成方案设计文档。
 > 参考资料见 `doc/ref/tts.md`。
 > 更新日期：2026-07-18

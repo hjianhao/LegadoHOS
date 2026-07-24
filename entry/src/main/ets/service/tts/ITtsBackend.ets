@@ -1,19 +1,16 @@
 /**
- * TTS 后端接口 — 系统 TTS 和离线神经 TTS 的统一抽象
+ * TTS 后端接口 — 系统 TTS 和可选云端 TTS 的统一抽象
  *
  * 两种实现:
  *   - 当前 ReadAloudEngine 直接使用 textToSpeech（保留兼容，backend_=null 时走旧逻辑）
- *   - SherpaOnnxTtsBackend 实现此接口，通过 backend_ 注入
+ *   - AzureTtsBackend 实现此接口，通过 backend_ 注入
  */
 
 // ---- 数据模型 ----
 
-import { TtsModelType } from './TtsModelManager';
-
 export interface TtsSynthRequest {
   text: string;
   speed: number;
-  speakerId?: number;  // sherpa-onnx sid，系统 TTS 忽略
 }
 
 export interface TtsSynthResult {
@@ -28,20 +25,17 @@ export interface TtsVoiceInfo {
   language: string;
   description: string;
   downloaded: boolean;
-  engine: 'system' | 'sherpa-onnx' | 'azure';
-  /** sherpa-onnx 专用：speaker id */
-  sid?: number;
+  engine: 'system' | 'azure';
 }
 
 // ---- 后端接口 ----
 
 export interface ITtsBackend {
-  readonly name: string;           // 'sherpa-onnx'
-  readonly modelType: TtsModelType; // 'kokoro' | 'vits'
+  readonly name: string;
   readonly sampleRate: number;
   readonly ready: boolean;
 
-  /** 初始化后端（系统 TTS：创建引擎；sherpa-onnx：加载模型） */
+  /** 初始化后端。 */
   init(): Promise<void>;
 
   /** 合成一段文本为 Int16 PCM */
@@ -62,8 +56,7 @@ export interface ITtsBackend {
 
 // ---- 引擎标识 ----
 
-export type TtsEngineType = 'system' | 'sherpa-onnx' | 'azure';
+export type TtsEngineType = 'system' | 'azure';
 
 export const TTS_ENGINE_SYSTEM: TtsEngineType = 'system';
-export const TTS_ENGINE_SHERPA_ONNX: TtsEngineType = 'sherpa-onnx';
 export const TTS_ENGINE_AZURE: TtsEngineType = 'azure';
