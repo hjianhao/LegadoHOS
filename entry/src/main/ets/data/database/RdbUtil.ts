@@ -1,6 +1,29 @@
 import relationalStore from '@ohos.data.relationalStore';
 
 export class RdbUtil {
+  /**
+   * 在同一个 RdbStore 事务中执行一组异步操作。
+   *
+   * HarmonyOS 的经典事务 API 绑定到当前 store，begin/commit/rollback 本身为同步调用，
+   * 事务中的 CRUD 仍可正常 await。调用方应避免在 action 内启动未等待的异步任务。
+   */
+  static async transaction<T>(
+    store: relationalStore.RdbStore,
+    action: () => Promise<T>
+  ): Promise<T> {
+    store.beginTransaction();
+    try {
+      const result = await action();
+      store.commit();
+      return result;
+    } catch (err) {
+      try {
+        store.rollBack();
+      } catch (_rollbackError) { /* 保留原始异常 */ }
+      throw err;
+    }
+  }
+
   static async getRdbStore(
     context: Context,
     config: relationalStore.StoreConfig

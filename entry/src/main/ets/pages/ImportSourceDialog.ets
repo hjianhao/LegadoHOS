@@ -11,6 +11,13 @@ import util from '@ohos.util';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 
+const MAX_IMPORT_BYTES: number = 10 * 1024 * 1024;
+const MAX_IMPORT_DEPTH: number = 3;
+PersistentStorage.persistProp('source_import_keep_name', true);
+PersistentStorage.persistProp('source_import_keep_group', true);
+PersistentStorage.persistProp('source_import_keep_enabled', true);
+PersistentStorage.persistProp('source_import_group_mode', 0);
+
 @CustomDialog
 export struct ImportSourceDialog {
   controller: CustomDialogController;
@@ -18,11 +25,11 @@ export struct ImportSourceDialog {
   @State items: PreviewItem[] = [];
   @State isLoading: boolean = false;
   @State statusText: string = '';
-  @State keepName: boolean = true;
-  @State keepGroup: boolean = true;
-  @State keepEnabled: boolean = true;
+  @StorageLink('source_import_keep_name') keepName: boolean = true;
+  @StorageLink('source_import_keep_group') keepGroup: boolean = true;
+  @StorageLink('source_import_keep_enabled') keepEnabled: boolean = true;
   @State customGroup: string = '';
-  @State groupMode: number = 0; // 0=append, 1=overwrite
+  @StorageLink('source_import_group_mode') groupMode: number = 0; // 0=append, 1=overwrite
   @State importMode: string = 'menu'; // 'menu' | 'url' | 'json'
   @State importUrl: string = '';
   @State jsonText: string = '';
@@ -49,19 +56,12 @@ export struct ImportSourceDialog {
     // DocumentViewPicker / 剪贴板导入的 UTF-8 文本可能保留 BOM，JSON.parse 不接受它。
     const normalizedJson = json.replace(/^\uFEFF/, '').trim();
     try {
-      JSON.parse(normalizedJson);
-    } catch (e) {
-      const message = (e as Error).message || String(e);
-      console.error('[ImportSource] invalid JSON: ' + message + ', first100=' + normalizedJson.substring(0, 100));
-      UiUtil.showToast(this.getUIContext(), {message:'JSON格式错误: '+message.substring(0,80),duration:2500});
-      this.statusText = 'JSON格式错误';
-      this.isLoading = false;
-      return;
-    }
-    try {
+      this.ensurePayloadSize_(normalizedJson);
+      const normalizedSources = await this.resolvePayload_(normalizedJson, 0);
+      if (normalizedSources.length === 0) throw new Error('没有找到可导入的书源');
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      this.items = await dao.importSourcesPreview(normalizedJson);
+      this.items = await dao.importSourcesPreview(JSON.stringify(normalizedSources));
       this.statusText = `${this.items.length} 条书源`;
       console.info('[ImportSource] preview done: ' + this.items.length + ' items');
     } catch (e) {
@@ -78,7 +78,8 @@ export struct ImportSourceDialog {
     this.isLoading = true; this.statusText = '导入中...';
     try {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      const count = await dao.importSelected(sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup);
+      const count = await dao.importSelected(
+        sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup.trim(), this.groupMode);
       UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
       // 等宿主页完成数据库重读和列表状态更新后再关闭弹窗，避免关闭动画销毁
       // 自定义弹窗时打断异步刷新，导致新导入的书源要重新进入页面才显示。
@@ -110,50 +111,46 @@ export struct ImportSourceDialog {
       return;
     }
     this.statusText = '读取文件...';
+    let openedFile: fileIo.File | null = null;
     try {
-      const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
-      const s = fileIo.statSync(f.fd);
+      openedFile = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
+      const s = fileIo.statSync(openedFile.fd);
+      if (s.size > MAX_IMPORT_BYTES) throw new Error('文件不能超过 10 MB');
       const b = new ArrayBuffer(s.size);
-      fileIo.readSync(f.fd, b);
-      fileIo.closeSync(f);
+      fileIo.readSync(openedFile.fd, b);
       const td = util.TextDecoder.create('utf-8');
       const json = td.decodeToString(new Uint8Array(b), {stream:false});
       console.info('[ImportSource] file loaded, len=' + json.length);
       await this.loadPreview(json);
-    } catch (e) { console.error('[ImportSource] fileImport error: ' + e); UiUtil.showToast(this.getUIContext(), {message:'读取失败',duration:1500}); }
+    } catch (e) {
+      console.error('[ImportSource] fileImport error: ' + e);
+      UiUtil.showToast(this.getUIContext(), {message:'读取失败：' + String(e).substring(0, 60),duration:1800});
+    } finally {
+      if (openedFile) {
+        try { fileIo.closeSync(openedFile); } catch (_closeError) { /* ignore */ }
+      }
+    }
   }
 
   private async doUrlImport(url: string): Promise<void> {
     if (!url) { UiUtil.showToast(this.getUIContext(), {message:'请输入URL',duration:1500}); return; }
+    if (this.isLoading) return;
+    this.isLoading = true;
     this.statusText = '下载中...';
     try {
-      const json = await NetUtil.httpGet(url);
+      const json = await this.fetchImportUrl_(url);
       await this.loadPreview(json);
       this.resetMode();
     } catch (e) {
       const msg = (e as Error).message || String(e);
       console.error('[ImportSource] URL import failed:', url, msg);
-      // HTTPS 失败时自动回退到 HTTP
-      if ((msg.includes('SSL') || msg.includes('ssl') || msg.includes('TLS') || msg.includes('certificate'))
-          && url.startsWith('https://')) {
-        const httpUrl = 'http://' + url.substring(8);
-        console.info('[ImportSource] retrying with HTTP:', httpUrl);
-        this.statusText = 'HTTPS失败，尝试HTTP...';
-        try {
-          const json = await NetUtil.httpGet(httpUrl);
-          await this.loadPreview(json);
-          this.resetMode();
-          return;
-        } catch (e2) {
-          const msg2 = (e2 as Error).message || String(e2);
-          console.error('[ImportSource] HTTP fallback also failed:', httpUrl, msg2);
-          UiUtil.showToast(this.getUIContext(), {message:'链接不可用（HTTPS和HTTP均失败）',duration:2000});
-        }
-      } else if (msg.includes('timeout') || msg.includes('Timeout')) {
+      if (msg.includes('timeout') || msg.includes('Timeout')) {
         UiUtil.showToast(this.getUIContext(), {message:'连接超时，请检查网络或重试',duration:2000});
       } else {
         UiUtil.showToast(this.getUIContext(), {message:'下载失败: '+msg.substring(0,50),duration:2000});
       }
+    } finally {
+      this.isLoading = false;
     }
   }
 
@@ -161,6 +158,48 @@ export struct ImportSourceDialog {
     if (!json || json.trim().length === 0) { UiUtil.showToast(this.getUIContext(), {message:'请粘贴 JSON 内容',duration:1500}); return; }
     await this.loadPreview(json);
     this.resetMode();
+  }
+
+  private ensurePayloadSize_(text: string): void {
+    if (text.length > MAX_IMPORT_BYTES) throw new Error('导入内容不能超过 10 MB');
+  }
+
+  private async fetchImportUrl_(rawUrl: string): Promise<string> {
+    const trimmed = rawUrl.trim();
+    const withoutUa = trimmed.endsWith('#requestWithoutUA');
+    const url = withoutUa ? trimmed.substring(0, trimmed.length - '#requestWithoutUA'.length) : trimmed;
+    if (!/^https?:\/\//i.test(url)) throw new Error('仅支持 HTTP 或 HTTPS URL');
+    const headers: Record<string, string> | undefined = withoutUa ? { 'User-Agent': '' } : undefined;
+    const text = await NetUtil.httpGet(url, headers);
+    this.ensurePayloadSize_(text);
+    return text;
+  }
+
+  private async resolvePayload_(text: string, depth: number): Promise<Record<string, Object>[]> {
+    if (depth > MAX_IMPORT_DEPTH) throw new Error('书源链接嵌套层级过深');
+    let parsed: Object;
+    try {
+      parsed = JSON.parse(text) as Object;
+    } catch (e) {
+      throw new Error('JSON格式错误: ' + ((e as Error).message || String(e)).substring(0, 80));
+    }
+    if (Array.isArray(parsed)) {
+      return parsed as Record<string, Object>[];
+    }
+    const object = parsed as Record<string, Object>;
+    const sourceUrls = object['sourceUrls'];
+    if (!Array.isArray(sourceUrls)) return [object];
+    if (sourceUrls.length > 100) throw new Error('单次最多解析 100 个远程书源链接');
+    const result: Record<string, Object>[] = [];
+    for (let i = 0; i < sourceUrls.length; i++) {
+      const url = String(sourceUrls[i] || '').trim();
+      if (!url) continue;
+      const remote = await this.fetchImportUrl_(url);
+      const sources = await this.resolvePayload_(remote, depth + 1);
+      result.push(...sources);
+      if (result.length > 5000) throw new Error('单次最多导入 5000 个书源');
+    }
+    return result;
   }
 
   private selectAll(select: boolean): void { for (const i of this.items) i.checked = select; this.items = [...this.items]; }
@@ -208,6 +247,18 @@ export struct ImportSourceDialog {
           Row(){Text($r('app.string.ui_d2570e2bf1')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepGroup}).onChange((v)=>{this.keepGroup=v})}.width('100%').margin({bottom:4})
           Row(){Text($r('app.string.ui_75598fec28')).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1);Toggle({type:ToggleType.Switch,isOn:this.keepEnabled}).onChange((v)=>{this.keepEnabled=v})}.width('100%').margin({bottom:8})
           TextInput({placeholder: $r('app.string.ui_bd736410f9'),text:this.customGroup}).height(40).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark)).borderRadius(8).padding({left:12}).fontSize(13).width('100%').margin({bottom:4}).onChange((v:string)=>{this.customGroup=v})
+          if (this.customGroup.trim()) {
+            Row() {
+              Button('追加分组').height(36).layoutWeight(1).borderRadius(18)
+                .backgroundColor(this.groupMode === 0 ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+                .fontColor(this.groupMode === 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+                .onClick(() => { this.groupMode = 0; })
+              Button('覆盖分组').height(36).layoutWeight(1).borderRadius(18).margin({ left: 8 })
+                .backgroundColor(this.groupMode === 1 ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+                .fontColor(this.groupMode === 1 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+                .onClick(() => { this.groupMode = 1; })
+            }.width('100%').margin({ top: 4, bottom: 4 })
+          }
         }.padding({left:16,right:16,top:8}).width('100%')
 
         // 导入按钮

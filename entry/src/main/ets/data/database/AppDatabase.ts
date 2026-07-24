@@ -196,6 +196,24 @@ export class AppDatabase {
     // 从 raw_json 重新解析规则字段（适用于已有 raw_json 但缺少规则列的旧数据）
     try { await this.reparseSourceRules(); } catch (_e) { /* 忽略 */ }
 
+    // Android 以书源 URL 作为主键。旧版 HOS 允许空 URL/重复 URL，会导致列表键、
+    // 选择状态、开关和校验结果相互覆盖；迁移时保留每个 URL 更新时间最新的记录。
+    await RdbUtil.executeSql(this.rdbStore_,
+      "DELETE FROM book_sources WHERE source_url IS NULL OR trim(source_url) = ''");
+    await RdbUtil.executeSql(this.rdbStore_,
+      `DELETE FROM book_sources
+       WHERE id NOT IN (
+         SELECT candidate.id FROM book_sources candidate
+         WHERE candidate.id = (
+           SELECT chosen.id FROM book_sources chosen
+           WHERE chosen.source_url = candidate.source_url
+           ORDER BY chosen.update_time DESC, chosen.id ASC
+           LIMIT 1
+         )
+       )`);
+    await RdbUtil.executeSql(this.rdbStore_,
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_book_sources_source_url ON book_sources(source_url)');
+
     console.info('[AppDatabase] Database initialized successfully');
   }
 

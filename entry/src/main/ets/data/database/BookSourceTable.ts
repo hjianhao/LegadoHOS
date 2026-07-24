@@ -9,7 +9,7 @@ export const BookSourceTableCreate = `
   CREATE TABLE IF NOT EXISTS book_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_name TEXT NOT NULL,
-    source_url TEXT DEFAULT '',
+    source_url TEXT NOT NULL UNIQUE,
     source_type INTEGER DEFAULT 0,
     source_group TEXT DEFAULT '',
     enabled INTEGER DEFAULT 1,
@@ -97,11 +97,13 @@ export class BookSourceTable {
   }
 
   async insertSource(source: BookSource): Promise<number> {
+    this.validateIdentity(source);
     const row = this.toRow(source);
     return await RdbUtil.insert(this.rdbStore, BookSourceTable.TABLE_NAME, row);
   }
 
   async updateSource(source: BookSource): Promise<void> {
+    this.validateIdentity(source);
     const row = this.toRow(source);
     const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
     predicates.equalTo('id', source.id);
@@ -144,25 +146,28 @@ export class BookSourceTable {
     } else {
       sources = [parsed];  // 单个对象自动包成数组
     }
-    let count = 0;
-    for (let i = 0; i < sources.length; i++) {
-      const s = sources[i];
-      const rawJson = JSON.stringify(s); // 保存原始 JSON 用于后续重新解析
-      const source = parseBookSource(s);
-      setSourceRawJson(source, rawJson);
-      const existing = await this.getSourcesByUrl(source.sourceUrl);
-      if (existing.length > 0) {
-        const canonical = existing[0];
-        source.id = canonical.id;
-        source.variableComment = source.variableComment || this.pickVariable(existing);
-        await this.updateSource(source);
-        await this.deleteDuplicateSources(existing, canonical.id, source.sourceUrl);
-      } else {
-        await this.insertSource(source);
+    return await RdbUtil.transaction<number>(this.rdbStore, async (): Promise<number> => {
+      let count = 0;
+      for (let i = 0; i < sources.length; i++) {
+        const s = sources[i];
+        const rawJson = JSON.stringify(s); // 保存原始 JSON 用于后续重新解析
+        const source = parseBookSource(s);
+        this.validateIdentity(source);
+        setSourceRawJson(source, rawJson);
+        const existing = await this.getSourcesByUrl(source.sourceUrl);
+        if (existing.length > 0) {
+          const canonical = existing[0];
+          source.id = canonical.id;
+          source.variableComment = source.variableComment || this.pickVariable(existing);
+          await this.updateSource(source);
+          await this.deleteDuplicateSources(existing, canonical.id, source.sourceUrl);
+        } else {
+          await this.insertSource(source);
+        }
+        count++;
       }
-      count++;
-    }
-    return count;
+      return count;
+    });
   }
 
   async exportSources(sources?: BookSource[]): Promise<string> {
@@ -176,9 +181,11 @@ export class BookSourceTable {
   async importSourcesPreview(jsonText: string): Promise<PreviewItem[]> {
     const parsed = JSON.parse(jsonText);
     const arr = Array.isArray(parsed) ? parsed : [parsed];
+    if (arr.length > 5000) throw new Error('单次最多导入 5000 个书源');
     const result: PreviewItem[] = [];
     for (let i = 0; i < arr.length; i++) {
       const src = parseBookSource(arr[i]);
+      this.validateIdentity(src, i);
       const raw = JSON.stringify(arr[i]);
       const existing = await this.getSourcesByUrl(src.sourceUrl);
       const canonical = existing.length > 0 ? existing[0] : null;
@@ -196,44 +203,63 @@ export class BookSourceTable {
     return result;
   }
 
-  async importSelected(items: PreviewItem[], keepName: boolean, keepGroup: boolean, keepEnabled: boolean, customGroup: string): Promise<number> {
-    let count = 0;
-    for (const item of items) {
-      if (!item.checked) continue;
-      const src = item.source;
-      const existing = await this.getSourcesByUrl(src.sourceUrl);
-      const canonical = existing.length > 0 ? existing[0] : null;
-      if (canonical && keepName) src.sourceName = canonical.sourceName;
-      if (canonical && keepGroup) src.group = canonical.group;
-      if (customGroup) src.group = customGroup;
-      if (canonical && keepEnabled) {
-        src.enabled = canonical.enabled;
-        src.enabledExplore = canonical.enabledExplore;
+  async importSelected(
+    items: PreviewItem[],
+    keepName: boolean,
+    keepGroup: boolean,
+    keepEnabled: boolean,
+    customGroup: string,
+    groupMode: number = 0
+  ): Promise<number> {
+    return await RdbUtil.transaction<number>(this.rdbStore, async (): Promise<number> => {
+      let count = 0;
+      for (const item of items) {
+        if (!item.checked) continue;
+        const src = item.source;
+        this.validateIdentity(src);
+        const existing = await this.getSourcesByUrl(src.sourceUrl);
+        const canonical = existing.length > 0 ? existing[0] : null;
+        if (canonical && keepName) src.sourceName = canonical.sourceName;
+        if (canonical && keepGroup) src.group = canonical.group;
+        if (customGroup) {
+          if (groupMode === 0) {
+            const groups = this.splitGroups(src.group);
+            if (!groups.includes(customGroup)) groups.push(customGroup);
+            src.group = groups.join(',');
+          } else {
+            src.group = customGroup;
+          }
+        }
+        if (canonical && keepEnabled) {
+          src.enabled = canonical.enabled;
+          src.enabledExplore = canonical.enabledExplore;
+        }
+        if (canonical) src.customOrder = canonical.customOrder;
+        setSourceRawJson(src, this.patchImportedRawJson(item.rawJson, src, canonical !== null && keepEnabled));
+        if (canonical) {
+          src.id = canonical.id;
+          src.variableComment = src.variableComment || this.pickVariable(existing);
+          await this.updateSource(src);
+          await this.deleteDuplicateSources(existing, canonical.id, src.sourceUrl);
+        }
+        else { await this.insertSource(src); }
+        count++;
       }
-      if (canonical) src.customOrder = canonical.customOrder;
-      setSourceRawJson(src, this.patchImportedRawJson(item.rawJson, src, canonical !== null && keepEnabled));
-      if (canonical) {
-        src.id = canonical.id;
-        src.variableComment = src.variableComment || this.pickVariable(existing);
-        await this.updateSource(src);
-        await this.deleteDuplicateSources(existing, canonical.id, src.sourceUrl);
-      }
-      else { await this.insertSource(src); }
-      count++;
-    }
-    return count;
+      return count;
+    });
   }
 
   // ---- 搜索与过滤 ----
 
   async searchSources(keyword: string): Promise<BookSource[]> {
-    const predicates = new relationalStore.RdbPredicates(BookSourceTable.TABLE_NAME);
-    predicates.contains('source_name', keyword);
-    predicates.or();
-    predicates.contains('source_url', keyword);
-    predicates.orderByDesc('weight');
-    const rs = await RdbUtil.query(this.rdbStore, predicates, []);
-    return this.toSources(rs);
+    const normalized = keyword.trim().toLowerCase();
+    const sources = await this.getAllSources();
+    if (!normalized) return sources;
+    return sources.filter((source: BookSource): boolean =>
+      source.sourceName.toLowerCase().includes(normalized) ||
+      source.sourceUrl.toLowerCase().includes(normalized) ||
+      source.group.toLowerCase().includes(normalized) ||
+      source.bookSourceComment.toLowerCase().includes(normalized));
   }
 
   async getSourcesByGroup(group: string): Promise<BookSource[]> {
@@ -270,8 +296,7 @@ export class BookSourceTable {
     while (RdbUtil.next(rs)) {
       const g = RdbUtil.stringAt(rs, 0);
       if (g) {
-        // 单个书源可能有多个逗号分隔的分组
-        const parts = g.split(',').map((s: string) => s.trim()).filter((s: string) => s);
+        const parts = this.splitGroups(g);
         for (const p of parts) {
           if (!groups.includes(p)) groups.push(p);
         }
@@ -310,12 +335,14 @@ export class BookSourceTable {
 
   /** enabledExplore 位于标准 JSON 中，必须连同 raw_json 一起更新。 */
   async batchSetExploreEnabled(ids: number[], enabled: boolean): Promise<void> {
-    for (const id of ids) {
-      const source = await this.getSourceById(id);
-      if (!source) continue;
-      source.enabledExplore = enabled;
-      await this.updateSource(source);
-    }
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      for (const id of ids) {
+        const source = await this.getSourceById(id);
+        if (!source) continue;
+        source.enabledExplore = enabled;
+        await this.updateSource(source);
+      }
+    });
   }
 
   async updateRespondTime(id: number, respondTime: number): Promise<void> {
@@ -329,55 +356,57 @@ export class BookSourceTable {
   async addGroupToSources(ids: number[], group: string): Promise<void> {
     const value = group.trim();
     if (!value) return;
-    for (const id of ids) {
-      const source = await this.getSourceById(id);
-      if (!source) continue;
-      const groups = this.splitGroups(source.group);
-      if (!groups.includes(value)) groups.push(value);
-      source.group = groups.join(',');
-      await this.updateSource(source);
-    }
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      await this.addGroupToSourcesInternal(ids, value);
+    });
   }
 
   /** Android 的分组并无独立表；创建分组时把它分配给当前未分组书源。 */
   async addGroupToNoGroupSources(group: string): Promise<void> {
-    const sources = await this.getNoGroupSources();
-    await this.addGroupToSources(sources.map((source: BookSource): number => source.id), group);
+    const value = group.trim();
+    if (!value) return;
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      const sources = await this.getNoGroupSources();
+      await this.addGroupToSourcesInternal(sources.map((source: BookSource): number => source.id), value);
+    });
   }
 
   async removeGroupFromSources(ids: number[], group: string): Promise<void> {
     const value = group.trim();
     if (!value) return;
-    for (const id of ids) {
-      const source = await this.getSourceById(id);
-      if (!source) continue;
-      source.group = this.splitGroups(source.group)
-        .filter((item: string): boolean => item !== value).join(',');
-      await this.updateSource(source);
-    }
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      await this.removeGroupFromSourcesInternal(ids, value);
+    });
   }
 
   async renameGroup(oldName: string, newName: string): Promise<void> {
     const oldValue = oldName.trim();
     const newValue = newName.trim();
     if (!oldValue || !newValue || oldValue === newValue) return;
-    const sources = await this.getAllSources();
-    for (const source of sources) {
-      const groups = this.splitGroups(source.group);
-      if (!groups.includes(oldValue)) continue;
-      const renamed: string[] = [];
-      groups.forEach((item: string) => {
-        const value = item === oldValue ? newValue : item;
-        if (!renamed.includes(value)) renamed.push(value);
-      });
-      source.group = renamed.join(',');
-      await this.updateSource(source);
-    }
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      const sources = await this.getAllSources();
+      for (const source of sources) {
+        const groups = this.splitGroups(source.group);
+        if (!groups.includes(oldValue)) continue;
+        const renamed: string[] = [];
+        groups.forEach((item: string) => {
+          const value = item === oldValue ? newValue : item;
+          if (!renamed.includes(value)) renamed.push(value);
+        });
+        source.group = renamed.join(',');
+        await this.updateSource(source);
+      }
+    });
   }
 
   async deleteGroup(group: string): Promise<void> {
-    const sources = await this.getAllSources();
-    await this.removeGroupFromSources(sources.map((source: BookSource): number => source.id), group);
+    const value = group.trim();
+    if (!value) return;
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      const sources = await this.getAllSources();
+      await this.removeGroupFromSourcesInternal(
+        sources.map((source: BookSource): number => source.id), value);
+    });
   }
 
   async moveSourceToEdge(id: number, toTop: boolean): Promise<void> {
@@ -394,6 +423,35 @@ export class BookSourceTable {
     return (group || '').split(/[,，;；|｜\n\r\t]+/)
       .map((item: string): string => item.trim())
       .filter((item: string): boolean => item.length > 0);
+  }
+
+  private async addGroupToSourcesInternal(ids: number[], value: string): Promise<void> {
+    for (const id of ids) {
+      const source = await this.getSourceById(id);
+      if (!source) continue;
+      const groups = this.splitGroups(source.group);
+      if (!groups.includes(value)) groups.push(value);
+      source.group = groups.join(',');
+      await this.updateSource(source);
+    }
+  }
+
+  private async removeGroupFromSourcesInternal(ids: number[], value: string): Promise<void> {
+    for (const id of ids) {
+      const source = await this.getSourceById(id);
+      if (!source) continue;
+      source.group = this.splitGroups(source.group)
+        .filter((item: string): boolean => item !== value).join(',');
+      await this.updateSource(source);
+    }
+  }
+
+  private validateIdentity(source: BookSource, index: number = -1): void {
+    source.sourceName = (source.sourceName || '').trim();
+    source.sourceUrl = (source.sourceUrl || '').trim();
+    const prefix = index >= 0 ? '第 ' + (index + 1) + ' 个书源' : '书源';
+    if (!source.sourceName) throw new Error(prefix + '名称不能为空');
+    if (!source.sourceUrl) throw new Error(prefix + ' URL 不能为空');
   }
 
   async getSourceByUrl(url: string): Promise<BookSource | null> {
