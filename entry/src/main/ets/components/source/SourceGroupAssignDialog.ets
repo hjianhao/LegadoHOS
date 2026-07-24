@@ -11,7 +11,7 @@ export struct SourceGroupAssignDialog {
   @State groups: string[] = [];
   @State groupName: string = '';
   @State removeMode: boolean = false;
-  onChanged?: () => void;
+  onChanged?: () => Promise<void>;
 
   aboutToAppear(): void { this.loadGroups(); }
 
@@ -30,7 +30,7 @@ export struct SourceGroupAssignDialog {
     UiUtil.showToast(this.getUIContext(), {
       message: this.removeMode ? '已移除分组' : '已加入分组', duration: 1500
     });
-    if (this.onChanged) this.onChanged();
+    if (this.onChanged) await this.onChanged();
     this.controller.close();
   }
 

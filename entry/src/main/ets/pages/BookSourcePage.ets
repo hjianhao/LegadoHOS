@@ -32,6 +32,7 @@ export struct BookSourcePage {
   @State selectedSet_: Set<string> = new Set();
   @State enabledStateVersion_: number = 0;
   @State exploreStateVersion_: number = 0;
+  @State listRevision_: number = 0;
   private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
   @State contextMenuUrl: string = '';
@@ -54,12 +55,14 @@ export struct BookSourcePage {
   aboutToAppear(): void {
     this.importDlg = new CustomDialogController({
       builder: ImportSourceDialog({
-        controller: this.importDlg!, onImportSuccess: () => { this.load(); }
+        controller: this.importDlg!,
+        onImportSuccess: async (): Promise<void> => { await this.load(); }
       }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.groupManageDlg = new CustomDialogController({
       builder: GroupManageDialog({
-        controller: this.groupManageDlg!, onGroupChanged: () => { this.load(); }
+        controller: this.groupManageDlg!,
+        onGroupChanged: async (): Promise<void> => { await this.load(); }
       }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.load();
@@ -76,6 +79,9 @@ export struct BookSourcePage {
       await AppDatabase.getInstance().waitForInit();
       this.dao_ = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.sources = await this.dao_.getAllSources();
+      // ForEach 会复用键相同的列表项；完整重载后递增版本，确保编辑、导入和分组变更
+      // 得到的新对象能够替换旧列表项，而不是继续显示旧字段。
+      this.listRevision_++;
       this.buildGroups();
       this.applyFilters();
       this.selectedUrls = this.selectedUrls.filter((url: string): boolean =>
@@ -243,7 +249,12 @@ export struct BookSourcePage {
     this.groupAssignDlg = new CustomDialogController({
       builder: SourceGroupAssignDialog({
         controller: this.groupAssignDlg!, sourceIds: ids,
-        onChanged: () => { this.selectedUrls = []; this.syncSelectedSet_(); this.isSelectMode_ = false; this.load(); }
+        onChanged: async (): Promise<void> => {
+          this.selectedUrls = [];
+          this.syncSelectedSet_();
+          this.isSelectMode_ = false;
+          await this.load();
+        }
       }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
     });
     this.groupAssignDlg.open();
@@ -367,7 +378,14 @@ export struct BookSourcePage {
       this.checkResByUrl = map;
       const search = result.details.find((item: CheckDetail): boolean => item.name === '搜索' && item.passed);
       const source = targets.find((item: BookSource): boolean => item.sourceUrl === result.sourceUrl);
-      if (search && source && this.dao_) this.dao_.updateRespondTime(source.id, search.duration);
+      if (search && source && this.dao_) {
+        this.dao_.updateRespondTime(source.id, search.duration).then(() => {
+          source.respondTime = search.duration;
+          this.applyFilters();
+        }).catch((e: Error) => {
+          console.warn('[BookSourcePage] update respond time failed:', e.message);
+        });
+      }
     }).then(() => {
       this.isChecking = false;
       this.showCheckSummary = true;
@@ -475,7 +493,10 @@ export struct BookSourcePage {
         List({ space: 4 }) {
           ForEach(this.getDisplayList(), (source: BookSource) => {
             ListItem() { this.sourceItem(source) }
-          }, (source: BookSource): string => source.sourceUrl)
+          }, (source: BookSource): string =>
+            this.listRevision_.toString() + ':' + source.sourceUrl + ':' +
+              (source.enabled ? '1' : '0') + ':' + (source.enabledExplore ? '1' : '0') + ':' +
+              (source.respondTime || 0).toString())
         }.layoutWeight(1).padding({ left: 12, right: 12, bottom: this.isSelectMode_ ? 4 : 12 })
       }
 

@@ -25,7 +25,7 @@ export struct GroupManageDialog {
   @State editingGroup: string = '';
   @State addGroupName: string = '';
 
-  onGroupChanged?: () => void;
+  onGroupChanged?: () => Promise<void>;
 
   aboutToAppear(): void {
     this.loadGroups();
@@ -59,7 +59,7 @@ export struct GroupManageDialog {
       this.addGroupName = '';
       this.showAddInput = false;
       await this.loadGroups();
-      if (this.onGroupChanged) this.onGroupChanged();
+      if (this.onGroupChanged) await this.onGroupChanged();
       UiUtil.showToast(this.getUIContext(), { message: '已添加分组 ' + name, duration: 1500 });
     } catch (_e) { /* ignore */ }
   }
@@ -90,7 +90,7 @@ export struct GroupManageDialog {
       await dao.renameGroup(this.editingGroup, newName);
       this.showEditInput = false;
       await this.loadGroups();
-      if (this.onGroupChanged) this.onGroupChanged();
+      if (this.onGroupChanged) await this.onGroupChanged();
       UiUtil.showToast(this.getUIContext(), { message: '已重命名', duration: 1500 });
     } catch (_e) { /* ignore */ }
   }
@@ -110,7 +110,7 @@ export struct GroupManageDialog {
             const dao = new BookSourceTable(db);
             await dao.deleteGroup(group);
             await this.loadGroups();
-            if (this.onGroupChanged) this.onGroupChanged();
+            if (this.onGroupChanged) await this.onGroupChanged();
             UiUtil.showToast(this.getUIContext(), { message: '已删除分组', duration: 1500 });
           } catch (_e) { /* ignore */ }
         }

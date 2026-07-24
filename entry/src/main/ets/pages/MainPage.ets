@@ -127,7 +127,7 @@ struct MainPage {
         builder: ImportSourceDialog({
           controller: this.shareImportDlg!,
           initialJson: json,
-          onImportSuccess: () => {
+          onImportSuccess: async (): Promise<void> => {
             UiUtil.showToast(this.getUIContext(), { message: '书源已导入', duration: 1500 });
           }
         }),

@@ -27,7 +27,7 @@ export struct ImportSourceDialog {
   @State importUrl: string = '';
   @State jsonText: string = '';
 
-  onImportSuccess?: () => void;
+  onImportSuccess?: () => Promise<void>;
 
   /** 通过「打开方式/分享」进入时预置的书源 JSON，非空则跳过菜单直接预览 */
   initialJson?: string;
@@ -80,8 +80,9 @@ export struct ImportSourceDialog {
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       const count = await dao.importSelected(sel, this.keepName, this.keepGroup, this.keepEnabled, this.customGroup);
       UiUtil.showToast(this.getUIContext(), {message:'成功导入 '+count+' 个书源',duration:2000});
-      // 先通知宿主页刷新，再销毁弹窗，避免关闭后回调随组件一起失效。
-      if (this.onImportSuccess) this.onImportSuccess();
+      // 等宿主页完成数据库重读和列表状态更新后再关闭弹窗，避免关闭动画销毁
+      // 自定义弹窗时打断异步刷新，导致新导入的书源要重新进入页面才显示。
+      if (this.onImportSuccess) await this.onImportSuccess();
       this.controller.close();
     } catch (e) { console.error('[ImportSource] doImport error: ' + e); UiUtil.showToast(this.getUIContext(), {message:'导入失败',duration:1500}); }
     this.isLoading = false;
