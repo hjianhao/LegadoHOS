@@ -3,8 +3,9 @@
  *
  * - 独立 store：legado_cloud_credentials
  * - v1 basic：{ username, secret, v: 1 }
- * - v2 oauth2：{ kind: 'oauth2', clientSecret, accessToken, refreshToken, ... , v: 2 }
- * - Token / clientSecret 永不进入备份与日志
+ * - v2 旧 OAuth payload：含 clientSecret，仅兼容读取
+ * - v3 OAuth payload：{ kind: 'oauth2', accessToken, refreshToken, ... , v: 3 }
+ * - Token 永不进入备份与日志；AppSecret 永不进入 App
  */
 import preferences from '@ohos.data.preferences';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
@@ -27,7 +28,6 @@ interface BasicCredentialPayload {
 
 interface OAuth2CredentialPayload {
   kind: string;
-  clientSecret: string;
   accessToken: string;
   refreshToken: string;
   accessTokenExpiresAt: number;
@@ -142,12 +142,11 @@ export class CloudCredentialStore {
     this.ensureReady_();
     const payload: OAuth2CredentialPayload = {
       kind: 'oauth2',
-      clientSecret: oauth.clientSecret || '',
       accessToken: oauth.accessToken || '',
       refreshToken: oauth.refreshToken || '',
       accessTokenExpiresAt: oauth.accessTokenExpiresAt || 0,
       tokenScope: oauth.tokenScope || '',
-      v: 2,
+      v: 3,
     };
     await this.writePayload_(key, ref, payload);
     console.info('[CloudCredentialStore] saved oauth2 ref=', this.safeRef_(ref),
@@ -178,8 +177,22 @@ export class CloudCredentialStore {
       return null;
     }
     const o = payload as OAuth2CredentialPayload;
+    // 读取旧 v2 数据后立即覆写为 v3，彻底清除曾保存的 clientSecret。
+    if (o.v < 3) {
+      const key = this.prefKey_(ref);
+      if (key) {
+        const migrated: OAuth2CredentialPayload = {
+          kind: 'oauth2',
+          accessToken: o.accessToken || '',
+          refreshToken: o.refreshToken || '',
+          accessTokenExpiresAt: o.accessTokenExpiresAt || 0,
+          tokenScope: o.tokenScope || '',
+          v: 3,
+        };
+        await this.writePayload_(key, ref, migrated);
+      }
+    }
     const cred = createEmptyOAuth2Credential();
-    cred.clientSecret = o.clientSecret || '';
     cred.accessToken = o.accessToken || '';
     cred.refreshToken = o.refreshToken || '';
     cred.accessTokenExpiresAt = o.accessTokenExpiresAt || 0;
@@ -262,7 +275,7 @@ export class CloudCredentialStore {
 
   private isOAuth2Payload_(payload: AnyPayload): boolean {
     const p = payload as OAuth2CredentialPayload;
-    return p.kind === 'oauth2' || p.v === 2;
+    return p.kind === 'oauth2' || p.v === 2 || p.v === 3;
   }
 
   private toBasicCredential_(payload: BasicCredentialPayload): CloudCredential {
@@ -283,13 +296,12 @@ export class CloudCredentialStore {
       if (kind === 'oauth2' || v === 2) {
         const payload: OAuth2CredentialPayload = {
           kind: 'oauth2',
-          clientSecret: typeof parsed['clientSecret'] === 'string' ? parsed['clientSecret'] as string : '',
           accessToken: typeof parsed['accessToken'] === 'string' ? parsed['accessToken'] as string : '',
           refreshToken: typeof parsed['refreshToken'] === 'string' ? parsed['refreshToken'] as string : '',
           accessTokenExpiresAt: typeof parsed['accessTokenExpiresAt'] === 'number'
             ? parsed['accessTokenExpiresAt'] as number : 0,
           tokenScope: typeof parsed['tokenScope'] === 'string' ? parsed['tokenScope'] as string : '',
-          v: 2,
+          v: v >= 3 ? 3 : 2,
         };
         return payload;
       }

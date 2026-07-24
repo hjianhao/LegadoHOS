@@ -2,7 +2,7 @@
  * 百度网盘 OAuth2 授权页
  *
  * Web 打开授权页 → 拦截 aireader://auth?code=...&state=...
- * → 换 Token → 写入 CloudCredentialStore → 保存来源 → 返回
+ * → 交由 CFC 换 Token → 写入 CloudCredentialStore → 保存来源 → 返回
  */
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
@@ -10,15 +10,13 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { CloudCredentialStore } from '../data/preferences/CloudCredentialStore';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import {
-  BAIDU_DEFAULT_APP_KEY,
-  BAIDU_DEFAULT_APP_SECRET,
   BAIDU_DEFAULT_REDIRECT_URI,
   BAIDU_NETDISK_ENDPOINT,
   CLOUD_PROVIDER_BAIDU_NETDISK,
   createDefaultBaiduNetdiskConfig,
   stringifyBaiduNetdiskConfig,
 } from '../model/CloudSource';
-import { BaiduNetdiskOAuthClient } from '../service/cloud/BaiduNetdiskOAuthClient';
+import { BaiduAuthorizationSession, BaiduNetdiskOAuthClient } from '../service/cloud/BaiduNetdiskOAuthClient';
 import { CloudSourceRepository, CloudSourceSaveInput } from '../service/cloud/CloudSourceRepository';
 import { ensureCloudProvidersRegistered } from '../service/cloud/CloudProviderBootstrap';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -38,12 +36,10 @@ struct BaiduNetdiskAuthPage {
   private controller: webview.WebviewController = new webview.WebviewController();
   private sourceId: number = 0;
   private name: string = '';
-  private appKey: string = BAIDU_DEFAULT_APP_KEY;
-  private appSecret: string = '';
-  private redirectUri: string = BAIDU_DEFAULT_REDIRECT_URI;
   private rootPath: string = '';
   private sourceEnabled: boolean = true;
   private oauthState: string = '';
+  private authorizationSession: BaiduAuthorizationSession | null = null;
   private handledCode_: boolean = false;
 
   aboutToAppear(): void {
@@ -62,61 +58,29 @@ struct BaiduNetdiskAuthPage {
         throw new Error('Context 不可用，凭证存储未就绪');
       }
 
+      // 每次授权都使用干净的无痕 Cookie 分区，不能复用上一次百度登录态。
+      // 只清理 incognito=true 的分区，不影响书源等普通 WebView 的登录 Cookie。
+      try {
+        webview.WebCookieManager.clearAllCookiesSync(true);
+      } catch (e) {
+        console.warn('[BaiduAuth] clear incognito cookies failed:', (e as Error).message);
+      }
+
       const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
       if (params) {
         this.sourceId = this.readNum_(params['sourceId']);
         this.name = this.readStr_(params['name']) || '百度网盘';
-        this.appKey = this.readStr_(params['appKey']) || BAIDU_DEFAULT_APP_KEY;
-        this.appSecret = this.readStr_(params['appSecret']);
-        this.redirectUri = this.readStr_(params['redirectUri']) || BAIDU_DEFAULT_REDIRECT_URI;
         this.rootPath = this.readStr_(params['rootPath']);
         if (params['enabled'] !== undefined) {
           this.sourceEnabled = !!params['enabled'];
         }
       }
-      // 优先 AppStorage 传递的密钥（避免 router 编码问题）
-      try {
-        const pendingSecret = AppStorage.get<string>('baidu_oauth_pending_secret') || '';
-        if (pendingSecret) {
-          this.appSecret = pendingSecret;
-        }
-        const pendingKey = AppStorage.get<string>('baidu_oauth_pending_appkey') || '';
-        if (pendingKey) {
-          this.appKey = pendingKey;
-        }
-        const pendingRedirect = AppStorage.get<string>('baidu_oauth_pending_redirect') || '';
-        if (pendingRedirect) {
-          this.redirectUri = pendingRedirect;
-        }
-      } catch (_e) { /* ignore */ }
-      if (!this.appKey) {
-        this.appKey = BAIDU_DEFAULT_APP_KEY;
-      }
-      if (!this.appSecret && this.appKey === BAIDU_DEFAULT_APP_KEY) {
-        this.appSecret = BAIDU_DEFAULT_APP_SECRET;
-      }
-      this.appKey = this.appKey.trim();
-      this.appSecret = this.appSecret.trim();
-      this.redirectUri = this.redirectUri.trim();
-      if (!this.appKey) {
-        throw new Error('AppKey 不能为空');
-      }
-      if (!this.appSecret) {
-        throw new Error('AppSecret 不能为空');
-      }
-      if (!this.redirectUri) {
-        throw new Error('回调 URI 不能为空');
-      }
-
-      this.oauthState = this.randomState_();
-      const cfg = createDefaultBaiduNetdiskConfig();
-      cfg.appKey = this.appKey;
-      cfg.redirectUri = this.redirectUri;
-      this.authUrl = BaiduNetdiskOAuthClient.buildAuthorizeUrl(cfg, this.oauthState);
+      this.authorizationSession = await BaiduNetdiskOAuthClient.startAuthorization();
+      this.oauthState = this.authorizationSession.state;
+      this.authUrl = this.authorizationSession.authUrl;
       this.statusText = '请在下方完成百度账号登录与授权';
       this.statusOk = true;
-      console.info('[BaiduAuth] open authorize appKeyLen=', this.appKey.length,
-        ' secretLen=', this.appSecret.length, ' redirect=', this.redirectUri);
+      console.info('[BaiduAuth] open authorize via broker');
     } catch (e) {
       this.statusOk = false;
       this.statusText = (e as Error).message || '初始化失败';
@@ -144,18 +108,12 @@ struct BaiduNetdiskAuthPage {
     return 0;
   }
 
-  private randomState_(): string {
-    const t = Date.now().toString(36);
-    const r = Math.floor(Math.random() * 1e9).toString(36);
-    return t + r;
-  }
-
   private isCallbackUrl_(url: string): boolean {
     const u = (url || '').trim();
     if (!u) {
       return false;
     }
-    const redirect = (this.redirectUri || '').trim();
+    const redirect = BAIDU_DEFAULT_REDIRECT_URI;
     if (!redirect) {
       return false;
     }
@@ -210,7 +168,7 @@ struct BaiduNetdiskAuthPage {
         throw new Error(q['error_description'] || q['error'] || '用户拒绝授权');
       }
       const state = q['state'] || '';
-      if (this.oauthState && state && state !== this.oauthState) {
+      if (!this.oauthState || state !== this.oauthState) {
         throw new Error('授权 state 不匹配，请重试');
       }
       const code = q['code'] || '';
@@ -218,19 +176,12 @@ struct BaiduNetdiskAuthPage {
         throw new Error('回调缺少授权码');
       }
 
-      const cfg = createDefaultBaiduNetdiskConfig();
-      cfg.appKey = this.appKey;
-      cfg.redirectUri = this.redirectUri;
-      console.info('[BaiduAuth] exchange start codeLen=', code.length,
-        ' appKeyLen=', this.appKey.length, ' secretLen=', this.appSecret.length);
-      const tokenResp = await BaiduNetdiskOAuthClient.exchangeCode(cfg, this.appSecret, code);
-      const oauth = BaiduNetdiskOAuthClient.toOAuth2Credential(this.appSecret, tokenResp);
-      // 清理暂存密钥
-      try {
-        AppStorage.setOrCreate<string>('baidu_oauth_pending_secret', '');
-        AppStorage.setOrCreate<string>('baidu_oauth_pending_appkey', '');
-        AppStorage.setOrCreate<string>('baidu_oauth_pending_redirect', '');
-      } catch (_c) { /* ignore */ }
+      if (!this.authorizationSession) {
+        throw new Error('授权会话已失效，请重新登录授权');
+      }
+      console.info('[BaiduAuth] exchange start codeLen=', code.length);
+      const tokenResp = await BaiduNetdiskOAuthClient.exchangeCode(this.authorizationSession, code);
+      const oauth = BaiduNetdiskOAuthClient.toOAuth2Credential(tokenResp);
 
       const store = CloudCredentialStore.getInstance();
       let credentialRef = '';
@@ -253,7 +204,7 @@ struct BaiduNetdiskAuthPage {
         providerType: CLOUD_PROVIDER_BAIDU_NETDISK,
         endpoint: BAIDU_NETDISK_ENDPOINT,
         rootPath: this.rootPath,
-        configJson: stringifyBaiduNetdiskConfig(cfg),
+        configJson: stringifyBaiduNetdiskConfig(createDefaultBaiduNetdiskConfig()),
         enabled: this.sourceEnabled,
         username: 'oauth2',
         secret: 'oauth2',
@@ -313,7 +264,7 @@ struct BaiduNetdiskAuthPage {
       }
 
       if (this.authUrl && !this.done) {
-        Web({ src: this.authUrl, controller: this.controller })
+        Web({ src: this.authUrl, controller: this.controller, incognitoMode: true })
           .width('100%')
           .layoutWeight(1)
           .javaScriptAccess(true)

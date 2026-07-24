@@ -16,15 +16,8 @@ export const CLOUD_PROVIDER_BAIDU_NETDISK: CloudProviderType = 'baidu-netdisk';
 
 /** 百度网盘 xpan API 根。 */
 export const BAIDU_NETDISK_ENDPOINT = 'https://pan.baidu.com/rest/2.0/xpan';
-/** 默认回调（须在开放平台与 module.json5 同步登记）。 */
+/** 固定回调（须在开放平台与 module.json5 同步登记）。 */
 export const BAIDU_DEFAULT_REDIRECT_URI = 'aireader://auth';
-/** 项目登记的默认 AppKey（公开 client_id，非密钥）。 */
-export const BAIDU_DEFAULT_APP_KEY = 'QgvMzblpDjr1g31yeRj2qhoeq7MguJ6h';
-/**
- * 与默认 AppKey 配对的 Secret（仅本机开发配置；用户可在编辑页覆盖）。
- * 若开放平台重置过 Secret，须改此处或编辑页填写新值。
- */
-export const BAIDU_DEFAULT_APP_SECRET = 'FeLNtCtep7BC2tUgQ1ZX8gNW6dpo0i5j';
 
 export interface CloudSource {
   id: number;
@@ -62,10 +55,8 @@ export interface LocalFolderCloudConfig {
   requireToken: boolean;
 }
 
-/** 百度网盘非敏感配置（AppSecret / Token 不在此）。 */
+/** 百度网盘来源的非敏感配置。OAuth 应用配置由令牌中转服务统一管理。 */
 export interface BaiduNetdiskConfig {
-  appKey: string;
-  redirectUri: string;
   scope: string;
   pageSize: number;
 }
@@ -76,12 +67,11 @@ export interface CloudCredential {
 }
 
 /**
- * OAuth2 凭证（v2）。
- * clientSecret / accessToken / refreshToken 仅允许进入 CloudCredentialStore。
+ * OAuth2 凭证（v3）。
+ * Access/Refresh Token 仅允许进入 CloudCredentialStore；AppSecret 永不进入 App。
  */
 export interface OAuth2Credential {
   kind: 'oauth2';
-  clientSecret: string;
   accessToken: string;
   refreshToken: string;
   accessTokenExpiresAt: number;
@@ -122,8 +112,6 @@ export function createDefaultLocalFolderCloudConfig(): LocalFolderCloudConfig {
 
 export function createDefaultBaiduNetdiskConfig(): BaiduNetdiskConfig {
   return {
-    appKey: BAIDU_DEFAULT_APP_KEY,
-    redirectUri: BAIDU_DEFAULT_REDIRECT_URI,
     // 百度文档与开放平台多为空格分隔；逗号在部分应用类型下也会通过
     scope: 'basic netdisk',
     pageSize: 100,
@@ -140,7 +128,6 @@ export function createEmptyCloudCredential(): CloudCredential {
 export function createEmptyOAuth2Credential(): OAuth2Credential {
   return {
     kind: 'oauth2',
-    clientSecret: '',
     accessToken: '',
     refreshToken: '',
     accessTokenExpiresAt: 0,
@@ -189,12 +176,6 @@ export function parseBaiduNetdiskConfig(configJson: string): BaiduNetdiskConfig 
   }
   try {
     const obj = JSON.parse(configJson) as Record<string, string | number>;
-    if (typeof obj['appKey'] === 'string' && (obj['appKey'] as string).length > 0) {
-      defaults.appKey = obj['appKey'] as string;
-    }
-    if (typeof obj['redirectUri'] === 'string' && (obj['redirectUri'] as string).length > 0) {
-      defaults.redirectUri = obj['redirectUri'] as string;
-    }
     if (typeof obj['scope'] === 'string' && (obj['scope'] as string).length > 0) {
       defaults.scope = obj['scope'] as string;
     }
@@ -209,8 +190,6 @@ export function parseBaiduNetdiskConfig(configJson: string): BaiduNetdiskConfig 
 
 export function stringifyBaiduNetdiskConfig(cfg: BaiduNetdiskConfig): string {
   const row: Record<string, string | number> = {
-    'appKey': cfg.appKey || '',
-    'redirectUri': cfg.redirectUri || BAIDU_DEFAULT_REDIRECT_URI,
     'scope': cfg.scope || 'basic,netdisk',
     'pageSize': cfg.pageSize > 0 ? cfg.pageSize : 100,
   };

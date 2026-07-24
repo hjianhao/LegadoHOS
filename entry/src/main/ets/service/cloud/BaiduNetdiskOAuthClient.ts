@@ -1,24 +1,25 @@
 /**
- * 百度网盘 OAuth2 客户端
+ * 百度网盘 OAuth 客户端。
  *
- * - 授权码换 Token / Refresh Token
- * - 调用前自动刷新（距过期 < 5 分钟）
- * - Token 请求禁用 Cookie / 浏览器 UA，避免 WebView 登录态干扰
- * - 日志脱敏，不输出 token 明文
+ * App 不持有 AppSecret：授权码换取和 Refresh Token 刷新均经由 CFC
+ * 令牌中转服务完成；网盘文件 API 仍由 BaiduNetdiskProvider 直连。
  */
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import util from '@ohos.util';
+import { SettingsStore } from '../../data/preferences/SettingsStore';
+import { CloudCredentialStore } from '../../data/preferences/CloudCredentialStore';
 import {
-  BaiduNetdiskConfig,
   CloudSource,
   createEmptyOAuth2Credential,
   OAuth2Credential,
-  parseBaiduNetdiskConfig,
 } from '../../model/CloudSource';
-import { CloudCredentialStore } from '../../data/preferences/CloudCredentialStore';
 import { NetUtil } from '../../util/NetUtil';
-import util from '@ohos.util';
 
-const AUTH_BASE = 'https://openapi.baidu.com/oauth/2.0';
+/** CFC HTTP 触发器模板。{action} 会替换为 start / exchange / refresh。 */
+const BROKER_ACTION_URL =
+  'https://c6ew80ey2rz1m.cfc-execute.bj.baidubce.com/v1/baidu/oauth/{action}';
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
+const BROKER_TIMEOUT_MS = 30000;
 
 export interface BaiduTokenResponse {
   accessToken: string;
@@ -27,177 +28,64 @@ export interface BaiduTokenResponse {
   scope: string;
 }
 
+export interface BaiduAuthorizationSession {
+  authUrl: string;
+  state: string;
+  proof: string;
+  installationHash: string;
+}
+
+interface BrokerStartResponse {
+  state: string;
+  authorizeUrl: string;
+}
+
 export class BaiduNetdiskOAuthClient {
-  static buildAuthorizeUrl(cfg: BaiduNetdiskConfig, state: string): string {
-    const appKey = (cfg.appKey || '').trim();
-    const redirect = (cfg.redirectUri || '').trim();
-    // 授权页 scope：空格转逗号亦可；统一用空格编码
-    let scope = (cfg.scope || 'basic netdisk').trim();
-    if (scope.indexOf(',') >= 0 && scope.indexOf(' ') < 0) {
-      scope = scope.replace(new RegExp(',', 'g'), ' ');
-    }
-    if (!appKey) {
-      throw new Error('AppKey 不能为空');
-    }
-    if (!redirect) {
-      throw new Error('回调 URI 不能为空');
-    }
-    return AUTH_BASE + '/authorize'
-      + '?response_type=code'
-      + '&client_id=' + encodeURIComponent(appKey)
-      + '&redirect_uri=' + encodeURIComponent(redirect)
-      + '&scope=' + encodeURIComponent(scope)
-      + '&display=mobile'
-      + '&state=' + encodeURIComponent(state || '');
+  private static refreshTasks_: Map<string, Promise<string>> = new Map();
+
+  /** 创建与当前设备绑定的一次性授权会话。 */
+  static async startAuthorization(): Promise<BaiduAuthorizationSession> {
+    const proof = BaiduNetdiskOAuthClient.randomHex_(32);
+    const installationHash = await BaiduNetdiskOAuthClient.installationHash_();
+    const raw = await BaiduNetdiskOAuthClient.postBroker_('start', {
+      installationHash: installationHash,
+      proofHash: await BaiduNetdiskOAuthClient.sha256Hex_(proof),
+    });
+    const response = BaiduNetdiskOAuthClient.parseBrokerStart_(raw);
+    return {
+      authUrl: response.authorizeUrl,
+      state: response.state,
+      proof: proof,
+      installationHash: installationHash,
+    };
   }
 
+  /** 将回调授权码交给 CFC 换取 Token。 */
   static async exchangeCode(
-    cfg: BaiduNetdiskConfig,
-    clientSecret: string,
+    session: BaiduAuthorizationSession,
     code: string
   ): Promise<BaiduTokenResponse> {
-    const appKey = (cfg.appKey || '').trim();
-    const secret = BaiduNetdiskOAuthClient.normalizeSecret_(clientSecret);
-    const redirect = (cfg.redirectUri || '').trim();
-    const authCode = (code || '').trim();
-    if (!appKey) {
-      throw new Error('AppKey 不能为空');
-    }
-    if (!secret) {
-      throw new Error('AppSecret 不能为空');
-    }
-    if (!authCode) {
-      throw new Error('授权码为空');
-    }
-    if (!redirect) {
-      throw new Error('回调 URI 不能为空');
-    }
-    console.info('[BaiduOAuth] exchange codeLen=', authCode.length,
-      ' appKeyLen=', appKey.length, ' secretLen=', secret.length,
-      ' redirect=', redirect);
-
-    const body = 'grant_type=authorization_code'
-      + '&code=' + encodeURIComponent(authCode)
-      + '&client_id=' + encodeURIComponent(appKey)
-      + '&client_secret=' + encodeURIComponent(secret)
-      + '&redirect_uri=' + encodeURIComponent(redirect);
-
-    // 1) 表单 body 认证（官方常用）
-    try {
-      const raw = await BaiduNetdiskOAuthClient.postToken_(body);
-      return BaiduNetdiskOAuthClient.parseTokenResponse_(raw);
-    } catch (e1) {
-      const msg1 = (e1 as Error).message || '';
-      // invalid_client 时再试 Basic 认证（部分应用类型要求）
-      if (msg1.indexOf('invalid_client') >= 0 || msg1.indexOf('401') >= 0) {
-        console.warn('[BaiduOAuth] form auth failed, try Basic:',
-          BaiduNetdiskOAuthClient.sanitize_(msg1));
-        try {
-          const body2 = 'grant_type=authorization_code'
-            + '&code=' + encodeURIComponent(authCode)
-            + '&redirect_uri=' + encodeURIComponent(redirect);
-          const raw2 = await BaiduNetdiskOAuthClient.postToken_(body2, appKey, secret);
-          return BaiduNetdiskOAuthClient.parseTokenResponse_(raw2);
-        } catch (e2) {
-          throw BaiduNetdiskOAuthClient.wrapClientError_(e2 as Error, appKey, secret);
-        }
-      }
-      throw BaiduNetdiskOAuthClient.wrapClientError_(e1 as Error, appKey, secret);
-    }
+    const raw = await BaiduNetdiskOAuthClient.postBroker_('exchange', {
+      code: (code || '').trim(),
+      state: session.state,
+      proof: session.proof,
+      installationHash: session.installationHash,
+    });
+    return BaiduNetdiskOAuthClient.parseTokenResponse_(raw);
   }
 
-  static async refresh(
-    cfg: BaiduNetdiskConfig,
-    clientSecret: string,
-    refreshToken: string
-  ): Promise<BaiduTokenResponse> {
-    const appKey = (cfg.appKey || '').trim();
-    const secret = BaiduNetdiskOAuthClient.normalizeSecret_(clientSecret);
-    const body = 'grant_type=refresh_token'
-      + '&refresh_token=' + encodeURIComponent(refreshToken)
-      + '&client_id=' + encodeURIComponent(appKey)
-      + '&client_secret=' + encodeURIComponent(secret);
-    const raw = await BaiduNetdiskOAuthClient.postToken_(body);
+  /** Refresh Token 同样只能经由 CFC 使用 AppSecret 完成刷新。 */
+  static async refresh(refreshToken: string): Promise<BaiduTokenResponse> {
+    const raw = await BaiduNetdiskOAuthClient.postBroker_('refresh', {
+      refreshToken: (refreshToken || '').trim(),
+    });
     return BaiduNetdiskOAuthClient.parseTokenResponse_(raw);
   }
 
   /**
-   * Token 专用 POST：禁用 Cookie、使用非浏览器 UA，走系统 HTTP 栈（更贴近官方 curl）。
+   * 确保证件有效；同一来源并发访问时只刷新一次，避免 Refresh Token 竞争覆盖。
    */
-  private static async postToken_(
-    body: string,
-    basicUser?: string,
-    basicPass?: string
-  ): Promise<string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-      'User-Agent': 'LegadoHOS-BaiduOAuth/1.0',
-      // 显式空 Cookie，阻止 NetUtil 注入 WebView 登录 Cookie
-      'Cookie': '',
-    };
-    if (basicUser && basicPass) {
-      const raw = basicUser + ':' + basicPass;
-      const b64 = BaiduNetdiskOAuthClient.base64_(raw);
-      headers['Authorization'] = 'Basic ' + b64;
-    }
-    // 优先系统 HTTP，避免 RCP 附加行为
-    try {
-      return await NetUtil.httpPostSystem(AUTH_BASE + '/token', body, headers, 30000);
-    } catch (e) {
-      console.warn('[BaiduOAuth] system POST failed, fallback RCP:',
-        BaiduNetdiskOAuthClient.sanitize_((e as Error).message || ''));
-      return await NetUtil.httpPost(AUTH_BASE + '/token', body, headers, 30000);
-    }
-  }
-
-  private static base64_(text: string): string {
-    const encoder = new util.TextEncoder();
-    const bytes = encoder.encodeInto(text);
-    // 简易 base64
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let out = '';
-    const len = bytes.length;
-    for (let i = 0; i < len; i += 3) {
-      const a = bytes[i];
-      const b = i + 1 < len ? bytes[i + 1] : 0;
-      const c = i + 2 < len ? bytes[i + 2] : 0;
-      const triple = (a << 16) | (b << 8) | c;
-      out += chars[(triple >> 18) & 63];
-      out += chars[(triple >> 12) & 63];
-      out += i + 1 < len ? chars[(triple >> 6) & 63] : '=';
-      out += i + 2 < len ? chars[triple & 63] : '=';
-    }
-    return out;
-  }
-
-  private static normalizeSecret_(secret: string): string {
-    let s = (secret || '').trim();
-    // 去除全角空格与零宽字符
-    s = s.replace(new RegExp('[\u3000\u200b\u200c\u200d\ufeff]', 'g'), '');
-    return s;
-  }
-
-  private static wrapClientError_(err: Error, appKey: string, secret: string): Error {
-    const msg = err.message || String(err);
-    if (msg.indexOf('invalid_client') >= 0 || msg.indexOf('Client authentication failed') >= 0) {
-      return new Error(
-        '百度应用凭证校验失败（invalid_client）。请到开放平台核对 AppKey/AppSecret 是否匹配、Secret 是否被重置；'
-        + '当前 AppKey 长度=' + appKey.length + '，Secret 长度=' + secret.length
-        + '。回调 URI 须与登记完全一致（默认 aireader://auth）。'
-      );
-    }
-    return new Error(BaiduNetdiskOAuthClient.sanitize_(msg));
-  }
-
-  /**
-   * 确保证件有效；必要时刷新并写回 store。
-   * @returns 可用的 accessToken
-   */
-  static async ensureAccessToken(
-    source: CloudSource,
-    credentialRef: string
-  ): Promise<string> {
+  static async ensureAccessToken(source: CloudSource, credentialRef: string): Promise<string> {
     const store = CloudCredentialStore.getInstance();
     if (!store.isReady()) {
       throw new Error('凭证存储未就绪');
@@ -206,7 +94,7 @@ export class BaiduNetdiskOAuthClient {
     if (!ref) {
       throw new Error('缺少凭证引用，请先完成授权');
     }
-    let oauth = await store.getOAuth2Credential(ref);
+    const oauth = await store.getOAuth2Credential(ref);
     if (!oauth || !oauth.accessToken) {
       throw new Error('未授权百度网盘，请先登录授权');
     }
@@ -217,31 +105,22 @@ export class BaiduNetdiskOAuthClient {
     if (!oauth.refreshToken) {
       throw new Error('Access Token 已过期且无 Refresh Token，请重新授权');
     }
-    const cfg = parseBaiduNetdiskConfig(source.configJson || '{}');
+
+    const running = BaiduNetdiskOAuthClient.refreshTasks_.get(ref);
+    if (running) {
+      return await running;
+    }
+    const task = BaiduNetdiskOAuthClient.refreshAndSave_(ref, oauth);
+    BaiduNetdiskOAuthClient.refreshTasks_.set(ref, task);
     try {
-      console.info('[BaiduOAuth] refreshing token for', source.name || source.id);
-      const resp = await BaiduNetdiskOAuthClient.refresh(cfg, oauth.clientSecret, oauth.refreshToken);
-      const next = createEmptyOAuth2Credential();
-      next.clientSecret = oauth.clientSecret;
-      next.accessToken = resp.accessToken;
-      next.refreshToken = resp.refreshToken || oauth.refreshToken;
-      next.accessTokenExpiresAt = Date.now() + Math.max(60, resp.expiresIn) * 1000;
-      next.tokenScope = resp.scope || oauth.tokenScope;
-      await store.setOAuth2Credential(ref, next);
-      return next.accessToken;
-    } catch (e) {
-      const msg = (e as Error).message || String(e);
-      console.warn('[BaiduOAuth] refresh failed:', BaiduNetdiskOAuthClient.sanitize_(msg));
-      throw new Error('Token 刷新失败，请重新授权: ' + BaiduNetdiskOAuthClient.sanitize_(msg));
+      return await task;
+    } finally {
+      BaiduNetdiskOAuthClient.refreshTasks_.delete(ref);
     }
   }
 
-  static toOAuth2Credential(
-    clientSecret: string,
-    resp: BaiduTokenResponse
-  ): OAuth2Credential {
+  static toOAuth2Credential(resp: BaiduTokenResponse): OAuth2Credential {
     const o = createEmptyOAuth2Credential();
-    o.clientSecret = BaiduNetdiskOAuthClient.normalizeSecret_(clientSecret);
     o.accessToken = resp.accessToken;
     o.refreshToken = resp.refreshToken;
     o.accessTokenExpiresAt = Date.now() + Math.max(60, resp.expiresIn) * 1000;
@@ -249,38 +128,125 @@ export class BaiduNetdiskOAuthClient {
     return o;
   }
 
+  static sanitize_(text: string): string {
+    let s = text || '';
+    s = s.replace(new RegExp("access_token[=:\\s\"']+[^&\\s\"']+", 'gi'), 'access_token=***');
+    s = s.replace(new RegExp("refresh_token[=:\\s\"']+[^&\\s\"']+", 'gi'), 'refresh_token=***');
+    s = s.replace(new RegExp('"accessToken"\\s*:\\s*"[^"]+"', 'gi'), '"accessToken":"***"');
+    s = s.replace(new RegExp('"refreshToken"\\s*:\\s*"[^"]+"', 'gi'), '"refreshToken":"***"');
+    return s;
+  }
+
+  private static async refreshAndSave_(ref: string, oauth: OAuth2Credential): Promise<string> {
+    try {
+      console.info('[BaiduOAuth] refreshing token for ref=', ref.substring(0, 16));
+      const response = await BaiduNetdiskOAuthClient.refresh(oauth.refreshToken);
+      const next = BaiduNetdiskOAuthClient.toOAuth2Credential(response);
+      // 少数服务端响应不返回新的 refresh_token 时保留旧值。
+      next.refreshToken = response.refreshToken || oauth.refreshToken;
+      next.tokenScope = response.scope || oauth.tokenScope;
+      await CloudCredentialStore.getInstance().setOAuth2Credential(ref, next);
+      return next.accessToken;
+    } catch (e) {
+      const message = BaiduNetdiskOAuthClient.sanitize_((e as Error).message || String(e));
+      console.warn('[BaiduOAuth] refresh failed:', message);
+      throw new Error('Token 刷新失败，请重新授权: ' + message);
+    }
+  }
+
+  private static async postBroker_(action: string, body: Record<string, string>): Promise<string> {
+    const url = BROKER_ACTION_URL.replace('{action}', encodeURIComponent(action));
+    try {
+      return await NetUtil.httpPostSystem(url, JSON.stringify(body), {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Accept': 'application/json',
+        'Cookie': '',
+        'User-Agent': 'AIReader-BaiduOAuth/1.0',
+      }, BROKER_TIMEOUT_MS);
+    } catch (e) {
+      throw new Error(BaiduNetdiskOAuthClient.sanitize_((e as Error).message || '令牌服务不可用'));
+    }
+  }
+
+  private static parseBrokerStart_(raw: string): BrokerStartResponse {
+    let obj: Record<string, Object> = {};
+    try {
+      obj = JSON.parse(raw) as Record<string, Object>;
+    } catch (_e) {
+      throw new Error('令牌服务响应非 JSON，请确认云函数已部署 OAuth Broker 代码');
+    }
+    BaiduNetdiskOAuthClient.throwBrokerError_(obj);
+    const state = String(obj['state'] || '');
+    const authorizeUrl = String(obj['authorizeUrl'] || '');
+    if (!state || !authorizeUrl || !authorizeUrl.startsWith('https://')) {
+      throw new Error('令牌服务返回的授权地址无效');
+    }
+    return { state: state, authorizeUrl: authorizeUrl };
+  }
+
   private static parseTokenResponse_(raw: string): BaiduTokenResponse {
     let obj: Record<string, Object> = {};
     try {
       obj = JSON.parse(raw) as Record<string, Object>;
     } catch (_e) {
-      throw new Error('Token 响应非 JSON: ' + BaiduNetdiskOAuthClient.sanitize_(raw.substring(0, 120)));
+      throw new Error('令牌服务响应非 JSON，请确认云函数已部署 OAuth Broker 代码');
     }
-    if (obj['error'] || obj['error_description']) {
-      const desc = String(obj['error_description'] || obj['error'] || '授权失败');
-      throw new Error(BaiduNetdiskOAuthClient.sanitize_(desc) + ' (' + String(obj['error'] || '') + ')');
-    }
-    const access = String(obj['access_token'] || '');
+    BaiduNetdiskOAuthClient.throwBrokerError_(obj);
+    const access = String(obj['accessToken'] || '');
     if (!access) {
-      throw new Error('Token 响应缺少 access_token');
+      throw new Error('令牌服务响应缺少 accessToken');
     }
-    const expiresIn = typeof obj['expires_in'] === 'number'
-      ? obj['expires_in'] as number
-      : parseInt(String(obj['expires_in'] || '2592000'), 10) || 2592000;
-    const result: BaiduTokenResponse = {
+    const expires = Number(obj['expiresIn'] || 2592000);
+    return {
       accessToken: access,
-      refreshToken: String(obj['refresh_token'] || ''),
-      expiresIn: expiresIn,
+      refreshToken: String(obj['refreshToken'] || ''),
+      expiresIn: isNaN(expires) ? 2592000 : expires,
       scope: String(obj['scope'] || ''),
     };
-    return result;
   }
 
-  static sanitize_(text: string): string {
-    let s = text || '';
-    s = s.replace(new RegExp('access_token=[^&\\s"\']+', 'gi'), 'access_token=***');
-    s = s.replace(new RegExp('refresh_token=[^&\\s"\']+', 'gi'), 'refresh_token=***');
-    s = s.replace(new RegExp('client_secret=[^&\\s"\']+', 'gi'), 'client_secret=***');
-    return s;
+  private static throwBrokerError_(obj: Record<string, Object>): void {
+    const error = obj['error'];
+    if (!error) {
+      return;
+    }
+    const row = error as Record<string, Object>;
+    const code = typeof row['code'] === 'string' ? row['code'] as string : 'BROKER_ERROR';
+    if (code === 'REAUTHORIZE_REQUIRED') {
+      throw new Error('百度授权已失效，请重新授权');
+    }
+    throw new Error('令牌服务错误: ' + code);
+  }
+
+  private static async installationHash_(): Promise<string> {
+    const settings = SettingsStore.getInstance();
+    let id = await settings.getSecret('baidu_oauth_install_id');
+    if (!id) {
+      id = BaiduNetdiskOAuthClient.randomHex_(32);
+      await settings.putSecret('baidu_oauth_install_id', id);
+    }
+    return await BaiduNetdiskOAuthClient.sha256Hex_(id);
+  }
+
+  private static randomHex_(byteLength: number): string {
+    const bytes = cryptoFramework.createRandom().generateRandomSync(byteLength).data;
+    return BaiduNetdiskOAuthClient.bytesToHex_(bytes);
+  }
+
+  private static async sha256Hex_(text: string): Promise<string> {
+    const encoder = new util.TextEncoder();
+    const md = cryptoFramework.createMd('SHA256');
+    await md.update({ data: encoder.encodeInto(text) });
+    const result = await md.digest();
+    return BaiduNetdiskOAuthClient.bytesToHex_(result.data);
+  }
+
+  private static bytesToHex_(bytes: Uint8Array): string {
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+      const text = bytes[i].toString(16);
+      hex += text.length === 1 ? '0' + text : text;
+    }
+    return hex;
   }
 }

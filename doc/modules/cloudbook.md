@@ -1412,13 +1412,9 @@ localfolder:
 
 ## 20. 百度网盘 Provider 设计
 
-> 状态：已实施（2026-07-23）。见 `doc/modules/cloudbook-baidu-notes.md`。  
+> 状态：已实施（2026-07-24）。OAuth Token 已改为经百度 CFC 令牌中转服务换取与刷新。
 > 参考：用户提供的百度网盘开放平台接入说明（OAuth2 授权码模式、`xpan` 文件 API）。  
-> 前置条件：项目维护者须在百度网盘开放平台创建应用，并提供已登记的 `AppKey`、`AppSecret` 和回调 URI；没有这三项无法完成真实账号授权与真机验收。
-
-AppKey:QgvMzblpDjr1g31yeRj2qhoeq7MguJ6h  
-SecretKey:（仅本机凭证库，勿写入备份）  
-回调uri：aireader://auth
+> 前置条件：项目维护者在百度网盘开放平台登记 `aireader://auth`，并将 `AppKey`、`AppSecret` 配置在 CFC 环境变量。它们绝不进入 HAP、Git 或来源编辑页。
 
 ### 20.1 接入范围
 
@@ -1441,7 +1437,7 @@ SecretKey:（仅本机凭证库，勿写入备份）
 provider_type  = baidu-netdisk
 endpoint       = https://pan.baidu.com/rest/2.0/xpan
 root_path      = 用户选择的网盘目录（相对于 /）
-config_json    = AppKey、回调 URI、scope、列表分页等非敏感配置
+config_json    = scope、列表分页等来源非敏感配置
 credential_ref = 指向安全凭证存储
 ```
 
@@ -1449,15 +1445,12 @@ credential_ref = 指向安全凭证存储
 
 ```ts
 interface BaiduNetdiskConfig {
-  appKey: string;       // OAuth client_id
-  redirectUri: string;  // 已在开放平台登记
   scope: string;        // 默认 "basic netdisk"
   pageSize: number;
 }
 
 interface OAuth2Credential {
   kind: 'oauth2';
-  clientSecret: string;
   accessToken: string;
   refreshToken: string;
   accessTokenExpiresAt: number;
@@ -1465,34 +1458,31 @@ interface OAuth2Credential {
 }
 ```
 
-现有 `CloudCredential { username, secret }` 仅适合 Basic Auth 和本地演示 Provider。实施前，`CloudCredentialStore` 应升级为带版本的联合类型：既有 `{ username, secret, v: 1 }` 读为 `basic`，百度网盘使用 `{ kind: 'oauth2', ..., v: 2 }`。Token、Refresh Token 和 `clientSecret` 一律只保存在 `CloudCredentialStore`，不得进入 `config_json`、RDB、备份文件、页面状态或日志。
+现有 `CloudCredential { username, secret }` 仅适合 Basic Auth 和本地演示 Provider。`CloudCredentialStore` 使用带版本的联合类型：既有 `{ username, secret, v: 1 }` 读为 `basic`；历史 OAuth v2 可读后自动迁移为 v3，迁移时清除旧 `clientSecret`。Access/Refresh Token 仅保存在 `CloudCredentialStore`，不得进入 `config_json`、RDB、备份文件、页面状态或日志。
 
 ### 20.3 OAuth2 授权流程
 
 新增 `BaiduNetdiskAuthPage.ets`，使用 ArkUI `Web` 组件授权，不要求用户手动复制 Access Token：
 
 ```text
-填写来源名、AppKey、AppSecret、回调 URI、根目录
-  → 生成随机 state，暂存待授权来源配置
-  → Web 打开 /oauth/2.0/authorize
-       response_type=code
-       client_id=<AppKey>
-       redirect_uri=<登记回调 URI>
-       scope=basic netdisk
-       display=mobile
+填写来源名、根目录
+  → App 生成一次性 proof，并调用 CFC /oauth/start
+  → CFC 返回带 HMAC 签名的 state 与百度授权 URL
+  → Web 打开该授权 URL
        state=<随机 state>
   → 拦截完全匹配的回调 URI
   → 校验 state，读取 code 或 error
-  → POST /oauth/2.0/token（authorization_code）换取 token
+  → POST CFC /oauth/exchange（code + state + proof）
+  → CFC 使用环境变量中的 AppSecret 调百度 /token
   → 保存 OAuth2Credential
   → list(source, '') 验证根目录后保存来源
 ```
 
-推荐回调 URI 为 `legadohos://oauth/baidupan`。它必须同时登记到百度开放平台，并在 `entry/src/main/module.json5` 的 `MainAbility.skills.uris` 注册。若使用 HTTPS 回调，WebView 也必须按完整 URI 拦截，不能只匹配域名。授权在成功、失败、取消或超时后都必须清除暂存上下文。
+回调 URI 固定为 `aireader://auth`。它必须同时登记到百度开放平台，并在 `entry/src/main/module.json5` 的 `MainAbility.skills.uris` 注册。授权页使用 ArkWeb 无痕模式，并在每次进入前清空无痕 Cookie 分区，确保新增来源与“重新授权”均需重新验证百度账号；不会影响其他普通 WebView 的登录态。授权在成功、失败、取消或超时后都必须清除内存中的 proof 和会话上下文。
 
 ### 20.4 Token 刷新与 API 映射
 
-新增 `BaiduNetdiskOAuthClient.ts`，在每个 API 调用前检查有效期；距离过期不足 5 分钟先刷新。响应表明 Token 失效时，仅刷新一次并重试原请求一次；刷新失败时将来源标记“需要重新授权”，但绝不删除来源、Binding 或本地书。
+`BaiduNetdiskOAuthClient.ts` 在每个 API 调用前检查有效期；距离过期不足 5 分钟时调用 CFC `/oauth/refresh`。同一来源的并发请求共享一次刷新任务，避免 Refresh Token 竞争覆盖；刷新失败时将来源标记“需要重新授权”，但绝不删除来源、Binding 或本地书。
 
 | `CloudStorageProvider` 方法 | 百度网盘接口与映射 |
 |---|---|
@@ -1507,7 +1497,7 @@ interface OAuth2Credential {
 
 上传只能读取 `Book.originUrl` 指向的原始本地文件。流程为“固定块大小读取并计算每块 MD5 → precreate → 上传服务端要求的 partseq → create → filemetas 确认 → upsert Binding”。分片大小、覆盖策略、参数和错误码以实施时的百度开放平台正式文档与真实开发者应用验证结果为准，不以参考示例中的小文件阈值作为固定契约。
 
-来源编辑页按类型显示字段：WebDAV 显示 endpoint/账号/密码；本地演示目录显示 namespace；百度网盘显示 AppKey、AppSecret、回调 URI、根目录以及“登录并授权”。未获得 OAuth2 凭证时不显示“测试连接”；授权后才允许测试、保存和重新授权。来源管理页说明改为“每个来源独立根目录与认证方式”。
+来源编辑页按类型显示字段：WebDAV 显示 endpoint/账号/密码；本地演示目录显示 namespace；百度网盘只显示根目录与“登录并授权”。未获得 OAuth2 凭证时不显示“测试连接”；授权后才允许测试、保存和重新授权。来源管理页说明改为“每个来源独立根目录与认证方式”。
 
 Access Token 若必须作为查询参数传递，所有日志必须移除 `access_token`、`refresh_token` 和 `dlink`。HTTPS 为必需；跨主机重定向不得携带敏感认证信息。
 
@@ -1547,13 +1537,13 @@ Access Token 若必须作为查询参数传递，所有日志必须移除 `acces
 
 **凭证与安全**
 - `config_json`：仅 appKey / redirectUri / scope / pageSize
-- OAuth payload（access/refresh/clientSecret）只在 `CloudCredentialStore`
+- OAuth payload（access/refresh）只在 `CloudCredentialStore`；AppSecret 只在 CFC 环境变量
 - 备份仍不导出 secret/token
 - 日志剥离 access_token / refresh_token / client_secret
 
 **使用步骤**
 1. 我的 → 云端书库管理 → 新增来源
 2. 类型选「百度网盘」
-3. 填写名称、AppKey、AppSecret、回调 URI（默认 `aireader://auth`）、可选根目录
+3. 填写名称、可选根目录
 4. 点「登录并授权」→ 百度登录 → 自动换 token 并保存
 5. 书架 ☁ 进入该来源浏览 / 下载

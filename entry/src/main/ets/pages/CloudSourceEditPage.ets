@@ -4,16 +4,13 @@
  * 字段随 providerType 适配：
  * - webdav: 服务器地址 / 用户名 / 密码 / 根目录
  * - localfolder: 目录命名空间 / 访问身份 / 可选口令 / 根目录
- * - baidu-netdisk: AppKey / AppSecret / 回调 URI / 根目录 + 登录授权
+ * - baidu-netdisk: 根目录 + 登录授权（OAuth 应用凭证由 CFC 统一托管）
  * 保存前 testConnection + list(root)；失败不覆盖旧配置。
  */
 import { AppDatabase } from '../data/database/AppDatabase';
 import { CloudCredentialStore } from '../data/preferences/CloudCredentialStore';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import {
-  BAIDU_DEFAULT_APP_KEY,
-  BAIDU_DEFAULT_APP_SECRET,
-  BAIDU_DEFAULT_REDIRECT_URI,
   BAIDU_NETDISK_ENDPOINT,
   CLOUD_PROVIDER_WEBDAV,
   cloudProviderDisplayName,
@@ -22,7 +19,6 @@ import {
   isLocalFolderProvider,
   isWebDavProvider,
   listSupportedCloudProviderTypes,
-  parseBaiduNetdiskConfig,
   stringifyBaiduNetdiskConfig,
 } from '../model/CloudSource';
 import {
@@ -57,16 +53,10 @@ struct CloudSourceEditPage {
   @State passwordHint: string = '密码 / 应用专用密码';
   @State hasSavedPassword: boolean = false;
   @State providerOptions: string[] = listSupportedCloudProviderTypes();
-  /** 百度网盘 */
-  @State baiduAppKey: string = BAIDU_DEFAULT_APP_KEY;
-  @State baiduAppSecret: string = '';
-  @State baiduRedirectUri: string = BAIDU_DEFAULT_REDIRECT_URI;
   @State baiduAuthorized: boolean = false;
-  @State baiduSecretHint: string = 'AppSecret（仅保存在本机凭证库）';
 
   private sourceId: number = 0;
   private passwordDirty: boolean = false;
-  private baiduSecretDirty: boolean = false;
 
   aboutToAppear(): void {
     this.bootstrap_();
@@ -135,21 +125,14 @@ struct CloudSourceEditPage {
         this.rootPath = source.rootPath;
         this.sourceEnabled = source.enabled;
         if (isBaiduNetdiskProvider(this.providerType)) {
-          const bcfg = parseBaiduNetdiskConfig(source.configJson || '{}');
-          this.baiduAppKey = bcfg.appKey || BAIDU_DEFAULT_APP_KEY;
-          this.baiduRedirectUri = bcfg.redirectUri || BAIDU_DEFAULT_REDIRECT_URI;
-          this.baiduAppSecret = '';
-          this.baiduSecretDirty = false;
           this.baiduAuthorized = await repo.hasOAuth2(id);
           if (this.baiduAuthorized) {
-            this.baiduSecretHint = '已保存 AppSecret（留空表示不修改）';
             this.hasSavedPassword = true;
             this.statusText = '已授权百度网盘，可测试连接或重新授权';
             this.statusOk = true;
           } else {
-            this.baiduSecretHint = 'AppSecret（仅保存在本机凭证库）';
             this.hasSavedPassword = false;
-            this.statusText = '尚未授权，请填写 AppSecret 后点击「登录并授权」';
+            this.statusText = '尚未授权，请点击「登录并授权」';
             this.statusOk = false;
           }
         } else {
@@ -215,13 +198,7 @@ struct CloudSourceEditPage {
       this.username = 'oauth2';
       this.password = '';
       this.rootPath = '';
-      this.baiduAppKey = BAIDU_DEFAULT_APP_KEY;
-      // 默认 AppKey 预填配对 Secret，减少手输错误（可改）
-      this.baiduAppSecret = BAIDU_DEFAULT_APP_SECRET;
-      this.baiduRedirectUri = BAIDU_DEFAULT_REDIRECT_URI;
       this.baiduAuthorized = false;
-      this.baiduSecretDirty = true;
-      this.baiduSecretHint = 'AppSecret（仅保存在本机凭证库）';
     } else {
       this.endpoint = 'https://dav.jianguoyun.com/dav/';
       this.username = '';
@@ -237,8 +214,6 @@ struct CloudSourceEditPage {
       } else {
         this.passwordHint = '可选访问口令（留空=开放访问）';
       }
-    } else if (isBaiduNetdiskProvider(this.providerType)) {
-      this.passwordHint = this.baiduSecretHint;
     } else {
       if (this.hasSavedPassword) {
         this.passwordHint = '已保存密码（留空表示不修改）';
@@ -282,10 +257,7 @@ struct CloudSourceEditPage {
   }
 
   private buildBaiduConfigJson_(): string {
-    const cfg = createDefaultBaiduNetdiskConfig();
-    cfg.appKey = this.baiduAppKey.trim() || BAIDU_DEFAULT_APP_KEY;
-    cfg.redirectUri = this.baiduRedirectUri.trim() || BAIDU_DEFAULT_REDIRECT_URI;
-    return stringifyBaiduNetdiskConfig(cfg);
+    return stringifyBaiduNetdiskConfig(createDefaultBaiduNetdiskConfig());
   }
 
   private buildInput_(): CloudSourceSaveInput {
@@ -316,49 +288,11 @@ struct CloudSourceEditPage {
       UiUtil.showToast(this.getUIContext(), { message: '请先填写名称', duration: 1500 });
       return;
     }
-    if (!this.baiduAppKey.trim()) {
-      UiUtil.showToast(this.getUIContext(), { message: '请填写 AppKey', duration: 1500 });
-      return;
-    }
-    if (!this.baiduRedirectUri.trim()) {
-      UiUtil.showToast(this.getUIContext(), { message: '请填写回调 URI', duration: 1500 });
-      return;
-    }
-    let secret = this.baiduAppSecret.trim();
-    // 重新授权：若未改 Secret，从 OAuth 凭证中取已存 clientSecret
-    if (!secret && this.isEdit && this.sourceId > 0) {
-      try {
-        await this.ensureStores_();
-        const repo = new CloudSourceRepository();
-        const src = await repo.getById(this.sourceId);
-        if (src && src.credentialRef) {
-          const oauth = await CloudCredentialStore.getInstance().getOAuth2Credential(src.credentialRef);
-          if (oauth && oauth.clientSecret) {
-            secret = oauth.clientSecret;
-          }
-        }
-      } catch (_e) { /* ignore */ }
-    }
-    // 默认 AppKey 且仍无 Secret 时用项目登记值
-    if (!secret && this.baiduAppKey.trim() === BAIDU_DEFAULT_APP_KEY) {
-      secret = BAIDU_DEFAULT_APP_SECRET;
-    }
-    if (!secret) {
-      UiUtil.showToast(this.getUIContext(), { message: '请填写 AppSecret', duration: 1500 });
-      return;
-    }
-    // 经 AppStorage 传递 Secret，避免 router params 对特殊字符的截断/编码问题
-    AppStorage.setOrCreate<string>('baidu_oauth_pending_secret', secret);
-    AppStorage.setOrCreate<string>('baidu_oauth_pending_appkey', this.baiduAppKey.trim());
-    AppStorage.setOrCreate<string>('baidu_oauth_pending_redirect', this.baiduRedirectUri.trim());
     UiUtil.pushUrl(this.getUIContext(), {
       url: 'pages/BaiduNetdiskAuthPage',
       params: {
         'sourceId': this.isEdit ? this.sourceId : 0,
         'name': this.name.trim(),
-        'appKey': this.baiduAppKey.trim(),
-        'appSecret': secret,
-        'redirectUri': this.baiduRedirectUri.trim(),
         'rootPath': this.rootPath.trim(),
         'enabled': this.sourceEnabled,
       } as Record<string, Object>,
@@ -619,38 +553,6 @@ struct CloudSourceEditPage {
               .backgroundColor(ThemeColors.outlineVariant(this.isDark))
               .margin({ bottom: 12 })
           } else if (isBaiduNetdiskProvider(this.providerType)) {
-            this.fieldLabel_('AppKey', '百度开放平台应用 client_id')
-            TextInput({ text: this.baiduAppKey, placeholder: BAIDU_DEFAULT_APP_KEY })
-              .onChange((v: string) => {
-                this.baiduAppKey = v;
-              })
-              .fontColor(ThemeColors.onSurface(this.isDark))
-              .placeholderColor(ThemeColors.secondaryText(this.isDark))
-              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-              .margin({ bottom: 12 })
-
-            this.fieldLabel_('AppSecret', this.baiduSecretHint)
-            TextInput({ text: this.baiduAppSecret, placeholder: this.baiduSecretHint })
-              .type(InputType.Password)
-              .onChange((v: string) => {
-                this.baiduAppSecret = v;
-                this.baiduSecretDirty = true;
-              })
-              .fontColor(ThemeColors.onSurface(this.isDark))
-              .placeholderColor(ThemeColors.secondaryText(this.isDark))
-              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-              .margin({ bottom: 12 })
-
-            this.fieldLabel_('回调 URI', '须与开放平台登记一致，默认 aireader://auth')
-            TextInput({ text: this.baiduRedirectUri, placeholder: BAIDU_DEFAULT_REDIRECT_URI })
-              .onChange((v: string) => {
-                this.baiduRedirectUri = v;
-              })
-              .fontColor(ThemeColors.onSurface(this.isDark))
-              .placeholderColor(ThemeColors.secondaryText(this.isDark))
-              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-              .margin({ bottom: 12 })
-
             Text(this.baiduAuthorized ? '授权状态：已授权' : '授权状态：未授权')
               .fontSize(13)
               .fontColor(this.baiduAuthorized
@@ -670,7 +572,7 @@ struct CloudSourceEditPage {
               })
               .margin({ bottom: 12 })
 
-            Text('授权成功后自动保存来源；Token 仅存本机，不进入备份。')
+            Text('授权成功后自动保存来源；Token 仅存本机，不进入备份。AppKey、AppSecret 和回调配置由应用的令牌服务统一管理。')
               .fontSize(11)
               .fontColor(ThemeColors.secondaryText(this.isDark))
               .width('100%')
