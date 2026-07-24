@@ -81,12 +81,20 @@ export struct BookshelfManagePage {
     return this.selectedBookIds.includes(id);
   }
 
+  /**
+   * 按目标状态更新选择集。Checkbox 在 .select() 的重绘期间也可能派发
+   * onChange；相同状态直接返回，避免 render 阶段再次修改 @State。
+   */
+  private setBookSelected_(id: number, selected: boolean): void {
+    const alreadySelected = this.isSelected(id);
+    if (alreadySelected === selected) return;
+    this.selectedBookIds = selected
+      ? [...this.selectedBookIds, id]
+      : this.selectedBookIds.filter((item: number): boolean => item !== id);
+  }
+
   toggleBook(id: number): void {
-    if (this.isSelected(id)) {
-      this.selectedBookIds = this.selectedBookIds.filter((item: number): boolean => item !== id);
-    } else {
-      this.selectedBookIds = [...this.selectedBookIds, id];
-    }
+    this.setBookSelected_(id, !this.isSelected(id));
   }
 
   selectAll(): void {
@@ -381,7 +389,7 @@ export struct BookshelfManagePage {
               ListItem() {
                 Row() {
                   Checkbox().select(this.isSelected(book.id))
-                    .onChange((_checked: boolean): void => { this.toggleBook(book.id); })
+                    .onChange((checked: boolean): void => { this.setBookSelected_(book.id, checked); })
                     .margin({ right: 8 })
                   BookCover({ name: book.name, coverUrl: book.coverUrl, coverWidth: 42, coverHeight: 58 })
                     .margin({ right: 10 })
