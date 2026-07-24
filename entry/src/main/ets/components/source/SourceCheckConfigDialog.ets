@@ -50,11 +50,31 @@ export struct SourceCheckConfigDialog {
         .type(InputType.Number).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
         .fontColor(ThemeColors.onSurface(this.isDark)).onChange((value: string) => { this.timeoutText = value; })
         .margin({ top: 4, bottom: 12 })
-      this.toggleRow('搜索', this.checkSearch, (value: boolean) => { this.checkSearch = value; })
-      this.toggleRow('发现配置', this.checkDiscovery, (value: boolean) => { this.checkDiscovery = value; })
-      this.toggleRow('书籍详情', this.checkInfo, (value: boolean) => { this.checkInfo = value; })
-      this.toggleRow('目录', this.checkCategory, (value: boolean) => { this.checkCategory = value; })
-      this.toggleRow('首章正文', this.checkContent, (value: boolean) => { this.checkContent = value; })
+      this.toggleRow('搜索', this.checkSearch, (value: boolean) => {
+        this.checkSearch = value;
+        if (!value) {
+          this.checkInfo = false;
+          this.checkCategory = false;
+          this.checkContent = false;
+        }
+      })
+      this.toggleRow('发现页（实际请求）', this.checkDiscovery, (value: boolean) => { this.checkDiscovery = value; })
+      this.toggleRow('书籍详情', this.checkInfo, (value: boolean) => {
+        this.checkInfo = value;
+        if (value) this.checkSearch = true;
+      })
+      this.toggleRow('目录', this.checkCategory, (value: boolean) => {
+        this.checkCategory = value;
+        if (value) this.checkSearch = true;
+        if (!value) this.checkContent = false;
+      })
+      this.toggleRow('首章正文', this.checkContent, (value: boolean) => {
+        this.checkContent = value;
+        if (value) {
+          this.checkSearch = true;
+          this.checkCategory = true;
+        }
+      })
       Button($r('app.string.ui_b324a672c3')).height(48).width('100%').borderRadius(24).margin({ top: 16 })
         .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
         .onClick(() => { this.submit(); })

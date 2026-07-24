@@ -44,13 +44,32 @@ function getErrorMessage(e: unknown): string {
   return String(e);
 }
 
+export function normalizeCheckConfig(config: CheckConfig): CheckConfig {
+  const normalized: CheckConfig = {
+    keyword: config.keyword.trim() || '我',
+    timeout: Math.max(1000, config.timeout),
+    checkSearch: config.checkSearch,
+    checkDiscovery: config.checkDiscovery,
+    checkInfo: config.checkInfo,
+    checkCategory: config.checkCategory,
+    checkContent: config.checkContent,
+  };
+  if (normalized.checkInfo || normalized.checkCategory || normalized.checkContent) {
+    normalized.checkSearch = true;
+  }
+  if (normalized.checkContent) {
+    normalized.checkCategory = true;
+  }
+  return normalized;
+}
+
 export class SourceChecker {
   private config: CheckConfig;
   private cancelFlag: boolean = false;
   private resultsMap: Map<string, CheckResult> = new Map();
 
   constructor(config?: Partial<CheckConfig>) {
-    this.config = {
+    this.config = normalizeCheckConfig({
       keyword: (config && config.keyword !== undefined) ? config.keyword : '我',
       timeout: (config && config.timeout !== undefined) ? config.timeout : 30000,
       checkSearch: (config && config.checkSearch !== undefined) ? config.checkSearch : true,
@@ -58,7 +77,7 @@ export class SourceChecker {
       checkInfo: (config && config.checkInfo !== undefined) ? config.checkInfo : false,
       checkCategory: (config && config.checkCategory !== undefined) ? config.checkCategory : false,
       checkContent: (config && config.checkContent !== undefined) ? config.checkContent : false,
-    };
+    });
   }
 
   getConfig(): CheckConfig {
@@ -73,6 +92,7 @@ export class SourceChecker {
     if (partial.checkInfo !== undefined) this.config.checkInfo = partial.checkInfo;
     if (partial.checkCategory !== undefined) this.config.checkCategory = partial.checkCategory;
     if (partial.checkContent !== undefined) this.config.checkContent = partial.checkContent;
+    this.config = normalizeCheckConfig(this.config);
   }
 
   getResult(sourceUrl: string): CheckResult | undefined {
@@ -98,6 +118,7 @@ export class SourceChecker {
     concurrency: number = 5
   ): Promise<Map<string, CheckResult>> {
     this.cancelFlag = false;
+    this.resultsMap.clear();
     const total = sources.length;
     let completed = 0;
     let cursor = 0;
@@ -107,6 +128,7 @@ export class SourceChecker {
         const idx = cursor;
         cursor++;
         const result = await this.checkSingleSource(sources[idx]);
+        if (this.cancelFlag) break;
         this.resultsMap.set(sources[idx].sourceUrl, result);
         completed++;
         if (onProgress) {
@@ -116,7 +138,7 @@ export class SourceChecker {
     };
 
     const workers: Promise<void>[] = [];
-    const limit = Math.min(concurrency, sources.length);
+    const limit = Math.min(Math.max(1, concurrency), sources.length);
     for (let w = 0; w < limit; w++) {
       workers.push(worker());
     }
@@ -126,8 +148,9 @@ export class SourceChecker {
 
   async checkSource(source: BookSource): Promise<CheckResult> {
     this.cancelFlag = false;
+    this.resultsMap.clear();
     const result = await this.checkSingleSource(source);
-    this.resultsMap.set(source.sourceUrl, result);
+    if (!this.cancelFlag) this.resultsMap.set(source.sourceUrl, result);
     return result;
   }
 
@@ -168,15 +191,38 @@ export class SourceChecker {
       }
     }
 
-    // 2. 发现检查（简化：只检查是否有 discover URL）
+    // 2. 发现检查：使用发现 URL 和发现规则真实执行一次请求与解析
     if (this.config.checkDiscovery && !this.cancelFlag) {
       totalChecks++;
-      const hasExplore = (source.exploreUrl && source.exploreUrl.trim()) || (source.ruleExplores && source.ruleExplores.trim());
-      if (hasExplore) {
-        passedChecks++;
-        details.push({ name: '发现', passed: true, message: '已配置发现规则', duration: 0 });
+      const exploreUrl = this.getFirstExploreUrl_(source);
+      if (!exploreUrl) {
+        details.push({ name: '发现', passed: false, message: '未配置可执行的发现 URL', duration: 0 });
+      } else if (!source.ruleExploreList || !source.ruleExploreList.trim()) {
+        details.push({ name: '发现', passed: false, message: '未配置发现列表规则', duration: 0 });
       } else {
-        details.push({ name: '发现', passed: false, message: '未配置发现', duration: 0 });
+        const startTime = Date.now();
+        try {
+          const exploreSource = this.createExploreSource_(source, exploreUrl);
+          const results: SearchResult[] = await this.runWithTimeout(
+            globalSourceExecutor.searchForCheck('', exploreSource),
+            this.config.timeout
+          );
+          const elapsed = Date.now() - startTime;
+          if (results.length > 0) {
+            passedChecks++;
+            details.push({
+              name: '发现', passed: true,
+              message: '成功返回 ' + results.length + ' 条结果', duration: elapsed
+            });
+          } else {
+            details.push({ name: '发现', passed: false, message: '发现页无解析结果', duration: elapsed });
+          }
+        } catch (e) {
+          details.push({
+            name: '发现', passed: false,
+            message: '失败: ' + getErrorMessage(e), duration: Date.now() - startTime
+          });
+        }
       }
     }
 
@@ -286,17 +332,69 @@ export class SourceChecker {
     };
   }
 
+  private getFirstExploreUrl_(source: BookSource): string {
+    let raw = (source.exploreUrl || source.ruleExplores || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      const first = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (first && typeof first === 'object') {
+        const value = String(first['url'] || first['exploreUrl'] || '');
+        if (value) raw = value;
+      }
+    } catch (_e) {
+      const firstLine = raw.split(/\r?\n|&&/)[0].trim();
+      const separator = firstLine.indexOf('::');
+      raw = separator >= 0 ? firstLine.substring(separator + 2).trim() : firstLine;
+    }
+    raw = raw.replace(/\{\{page\}\}/g, '1').split('##')[0].trim();
+    if (!raw || raw.startsWith('@js') || raw.indexOf('<js>') >= 0) return '';
+    if (/^https?:\/\//.test(raw)) return raw;
+    const base = source.sourceUrl.match(/^(https?:\/\/[^/]+)/);
+    if (!base) return '';
+    if (raw.startsWith('/')) return base[1] + raw;
+    return source.sourceUrl.replace(/\/[^/]*$/, '/') + raw;
+  }
+
+  private createExploreSource_(source: BookSource, exploreUrl: string): BookSource {
+    const cloned = JSON.parse(JSON.stringify(source)) as BookSource;
+    cloned.enabled = true;
+    cloned.isExploreRequest = true;
+    cloned.ruleSearchUrl = exploreUrl;
+    cloned.ruleSearchList = source.ruleExploreList;
+    cloned.ruleSearchName = source.ruleExploreName;
+    cloned.ruleSearchAuthor = source.ruleExploreAuthor;
+    cloned.ruleSearchCover = source.ruleExploreCover;
+    cloned.ruleSearchKind = source.ruleExploreKind;
+    cloned.ruleSearchWordCount = source.ruleExploreWordCount;
+    cloned.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime;
+    cloned.ruleSearchIntroduce = source.ruleExploreIntroduce;
+    cloned.ruleSearchNoteUrl = source.ruleExploreNoteUrl;
+    return cloned;
+  }
+
   private runWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
     return new Promise<T>((resolve: (value: T) => void, reject: (reason: Error) => void) => {
+      let settled = false;
+      const finish = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(cancelTimer);
+        action();
+      };
       const timer = setTimeout(() => {
-        reject(new Error('操作超时 (' + timeoutMs + 'ms)'));
+        finish(() => { reject(new Error('操作超时 (' + timeoutMs + 'ms)')); });
       }, timeoutMs);
+      const cancelTimer = setInterval(() => {
+        if (this.cancelFlag) {
+          finish(() => { reject(new Error('校验已取消')); });
+        }
+      }, 100);
       promise.then((result: T) => {
-        clearTimeout(timer);
-        resolve(result);
+        finish(() => { resolve(result); });
       }).catch((err: Error) => {
-        clearTimeout(timer);
-        reject(err);
+        finish(() => { reject(err); });
       });
     });
   }
