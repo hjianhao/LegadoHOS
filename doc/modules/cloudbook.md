@@ -1,14 +1,9 @@
 # 云端书籍模块设计
 
 > 状态：设计完成；阶段 0–4、**6** 已落地（阶段 5 暂缓）。  
-> 更新日期：2026-07-23  
+> 更新日期：2026-07-24  
 > 目标：提供可管理多个 WebDAV 网盘、并可扩展到其他云存储协议的云端书库；云端文件下载并导入后，始终作为普通本地书籍进入书架。  
-> 阶段 0 交付：`doc/modules/cloudbook-phase0-baseline.md`  
-> 阶段 1 交付：`cloud_sources` / `cloud_book_bindings`、凭证命名空间、Provider 接口与 Repository CRUD  
-> 阶段 2 交付：`doc/modules/cloudbook-phase2-notes.md`  
-> 阶段 3 交付：`doc/modules/cloudbook-phase3-notes.md`  
-> 阶段 4 交付：`doc/modules/cloudbook-phase4-notes.md`  
-> 阶段 6 交付：`doc/modules/cloudbook-phase6-notes.md`
+> 各阶段实现说明已整合至 §18 实现计划对应小节。
 
 ---
 
@@ -967,7 +962,113 @@ interface CloudBookUiState {
 
 **依赖**：无。  
 **完成后可见功能**：无，仅完成技术基线。  
-**完成状态（2026-07-23）**：已完成。交付见 `doc/modules/cloudbook-phase0-baseline.md`；构建日志 `tmp/cloudbook-phase0-build-baseline.log`。
+**完成状态（2026-07-23）**：已完成。基线分析见下方「阶段 0 实现说明」；构建日志 `tmp/cloudbook-phase0-build-baseline.log`。
+
+#### 阶段 0 实现说明
+
+**基线总结**
+
+| 领域 | 结论 |
+|---|---|
+| WebDAV | 备份与进度同步能力可用；**不能直接当云端书库 Provider**。需下沉共享网络/认证工具，并另写保留目录的 PROPFIND 解析与大文件流式传输。 |
+| 本地书导入 | 公开入口清晰；云端下载落地后应走 `copy/import` + EPUB 预解压；清理必须走 `BookDeleter`，不在 `BookTable.deleteBook` 里发网。 |
+| 数据库 | 幂等 `CREATE TABLE IF NOT EXISTS` + 可重试 `ALTER TABLE`；新表按同样方式注册，不依赖 `DATABASE_VERSION` 作为唯一迁移手段。 |
+| 凭证 | 备份 WebDAV 密码走 `SettingsStore` 加密键 `webdav_pwd`（另有 PersistentStorage 明文兼容）；云端书库需**多来源命名空间**，不可复用单例配置。 |
+| 构建 | debug 构建通过（见基线日志）。 |
+
+**WebDAV 协议复用清单**
+
+源文件：`entry/src/main/ets/service/WebDavService.ts`（约 750 行）。以下能力与「备份业务语义」无关，适合抽取为共享工具（`WebDavHttp.ts`），供备份 `WebDavService` 与 `WebDavCloudProvider` 共用：
+
+| 共享项 | 现状位置 | 下沉时注意 |
+|---|---|---|
+| Basic Auth 头生成 | `getAuthHeader` / `base64Encode` | 凭证由调用方传入，不要绑单例 config |
+| 自定义方法请求 | `NetUtil.httpCustomMethod`（OPTIONS/PROPFIND/MKCOL/DELETE） | 已可用；Provider 应直接依赖 NetUtil 或薄封装 |
+| 文本 PUT/GET | `NetUtil.httpPut` / `httpGet` | 进度 JSON 继续用；书籍文件不用文本 API |
+| 独立 RCP 二进制 Session | `uploadBackupFile` / `downloadBackup` 内联 | 提取 `putBinary` / `getBinaryToFile`，统一超时与 session close |
+| 路径段拼接与去斜杠 | `normalizeUrl` 片段逻辑 | 云端书库需 `endpoint + rootPath + remotePath`，语义与备份 `path` 不同 |
+| lastModified 解析 | `parseLastModifiedMs_` | 可复用为 `CloudFile.modifiedAt` |
+| PROPFIND XML 块解析（底层） | `parsePropfindResponse` 中正则提取字段 | **必须改造过滤策略**后再复用（下方详述） |
+| 中文 URL 编码 | `NetUtil.normalizeUrl` 对非 ASCII 编码 | Provider 路径编码应与此一致 |
+
+**必须保持备份兼容、不可原样复用的部分**：
+
+| 项 | 原因 | 云端书库应如何做 |
+|---|---|---|
+| 全局单例 `WebDavConfig` + `webdav_*` PersistentStorage | 备份/进度只有一套账户；云端书库要多来源 | 独立 `cloud_sources` + `credential_ref` |
+| `path` 固定根（默认 `legado`） | 备份文件落在该目录 | 每来源独立 `rootPath`，进入来源时 `list('')` |
+| `parsePropfindResponse` **过滤全部目录**（末尾 `!f.isDirectory`） | 备份只需 zip 文件列表 | **必须保留目录**；自条目（Depth 0 自身）单独剔除 |
+| `listFiles` 失败返回 `[]` | 备份 UI 可接受空列表 | 浏览层需要可区分「认证失败 / 网络错误 / 空目录」 |
+| `testConnection` 只返回 boolean | 设置页简单提示 | 需可理解错误（401/403/超时/根目录不存在） |
+| 整文件 `ArrayBuffer` 上传/下载 | 备份 zip 通常可接受 | 书籍大文件须流式/`downloadToFile`，禁止整本常驻内存（设计 §16.2） |
+| 硬编码临时路径 `/data/storage/el2/base/haps/entry/files/restore_*` | 备份恢复专用 | 使用 `files/cloudbook/.tmp/<taskId>.part` |
+| 业务方法（`listBackups`、`uploadBookProgress`…） | 备份/进度领域 | **禁止**写入 CloudProvider；`WebDavService` 继续只服务备份与进度 |
+
+**本地导入契约（LocalBookEngine）**
+
+云端模块只允许依赖以下公开 API：
+
+| API | 用途 |
+|---|---|
+| `localBookEngine.importBook(filePath, context?, epubDirArg?) → ImportResult` | 单文件已在沙箱路径上的解析入库 |
+| `localBookEngine.importBooks(ImportFileItem[], context?, onProgress?) → BatchImportResult` | 批量导入 |
+| `localBookEngine.copyToSandbox(uri, fileName, context?) → string` | picker URI → `files/books/<safeName>` |
+| `LocalBookEngine.getEpubDir(context?) → string` | 生成 `files/books/epub/<id>` |
+| `LocalBookEngine.isLocalBook(book) → boolean` | `origin === '本地'` |
+| `BookDeleter.deleteBook` / `deleteBooks` | 彻底清理 DB + 本地文件 |
+
+**禁止**：云端模块复制 Parser 逻辑、直接操作 `DirEpubParser`/`TxtParser` 入库、在 `BookTable.deleteBook` 内发起网络删除。
+
+支持格式：`.txt`（TxtParser，章节 content 不入库）、`.epub`（DirEpubParser，调用方必须先解压）、`.mobi`/`.azw`/`.azw3`（MobiProbeParser 轻量探测）、`.pdf`（header 探测 + 单章）。不支持扩展名 → `ImportResult.success=false`。
+
+云端下载导入流程应对齐为：
+```text
+Provider.downloadToFile → 临时 .part
+  → 校验 → 原子移动到 files/books/cloud_<sourceId>_<hash>_<safeName>
+  → 若 EPUB：解压到 getEpubDir()
+  → importBook(finalPath, context, epubDir?)
+  → Binding 事务绑定 bookId
+失败 → 删临时/最终文件；若已入库则 BookDeleter.deleteBook；Binding=ERROR
+```
+
+**测试 WebDAV 来源与场景清单**
+
+最低要求（设计验收）：至少两个不同 rootPath 的来源（例如坚果云 + Nextcloud，或同一 endpoint 两个不同根目录）。
+
+```text
+{rootPath}/
+  三体.epub
+  样例.txt
+  手册.pdf
+  嵌套/
+    同名.epub          ← 与其它目录同名文件
+    中文 空格/
+      测试书.epub
+  不支持/
+    notes.md           ← 可列出但不可加入书架
+```
+
+**阶段 1 实现时优先注意**：
+1. **不要**改 `WebDavService.parsePropfindResponse` 的过滤行为来「顺便」支持目录——会破坏备份列表语义；应在共享解析层用参数或新函数保留目录。
+2. **不要**给 `books` 表加 webdav 字段。
+3. EPUB 云端导入必须在 Repository 编排解压，再调 `importBook`。
+4. 大文件传输不要复制 `readFileBytes` 整读模式。
+5. 删除本地书扩展点挂在 `BookDeleter` 之前的 Repository 协调，而非 `BookTable`。
+
+**关键符号速查**
+
+| 符号 | 文件 |
+|---|---|
+| `WebDavService` | `entry/src/main/ets/service/WebDavService.ts` |
+| `NetUtil.httpCustomMethod` / `httpGetBinary` | `entry/src/main/ets/util/NetUtil.ts` |
+| `LocalBookEngine` / `localBookEngine` | `entry/src/main/ets/engine/book/LocalBookEngine.ts` |
+| `BookDeleter` | `entry/src/main/ets/service/BookDeleter.ets` |
+| `extractZipConcurrent` | `entry/src/main/ets/engine/book/ZipExtractTask.ets` |
+| `AppDatabase.doInit` | `entry/src/main/ets/data/database/AppDatabase.ts` |
+| `SettingsStore.getWebDavPassword` | `entry/src/main/ets/data/preferences/SettingsStore.ts` |
+| `BackupService` | `entry/src/main/ets/service/BackupService.ts` |
+| `BackupCodec` | `entry/src/main/ets/service/backup/BackupCodec.ts` |
+
 
 ### 阶段 1：领域模型、数据库与凭证基础
 
@@ -993,6 +1094,33 @@ interface CloudBookUiState {
 **完成后可见功能**：可管理来源数据，但暂不浏览云端文件。  
 **完成状态（2026-07-23）**：已完成。模型/DAO/凭证/Repository/Registry 已合入，`./scripts/build.sh debug` 通过。尚无 UI 与 Provider 协议实现（阶段 2）。
 
+#### 阶段 1 实现说明
+
+**交付文件**
+
+| 文件 | 职责 |
+|---|---|
+| `model/CloudSource.ts` | 来源 / 凭证 / WebDAV 配置模型 |
+| `model/CloudBookBinding.ts` | Binding 与同步状态常量 |
+| `service/cloud/CloudStorageProvider.ts` | Provider 接口与 CloudFile 模型 |
+| `service/cloud/CloudPath.ts` | rootPath/remotePath 规范化与安全校验 |
+| `service/cloud/CloudProviderRegistry.ts` | Provider 注册路由（阶段 2 注册 WebDAV） |
+| `service/cloud/CloudSourceRepository.ts` | 来源 CRUD、凭证编排、删除编排 |
+| `service/cloud/CloudBookBindingRepository.ts` | Binding upsert/解绑/查询 |
+| `data/database/CloudSourceTable.ts` | `cloud_sources` DAO + DDL |
+| `data/database/CloudBookBindingTable.ts` | `cloud_book_bindings` DAO + 索引 |
+| `data/preferences/CloudCredentialStore.ts` | 多来源加密凭证 |
+| `data/preferences/SettingsStore.ts` | 新增 `putSecret` / `getSecret` / `remove` |
+| `data/database/AppDatabase.ts` | 幂等建表 + DAO getter |
+
+**设计对齐说明**
+
+1. **`bookId` 用 `0` 表示未绑定**（设计文档写 `null`）。RDB 与 ArkTS 更简单；语义与「book_id 为空」一致。
+2. **可选字段**（etag 等）在模型中用空字符串而非 optional `?`，避免 ArkTS 可选链扩散。
+3. **阶段 1 不测连接、不浏览远端**；`CloudSourceRepository.save` 只做本地持久化。连接测试在阶段 2 接入 Provider 后补上。
+4. **删除来源**顺序：`deleteBySource` bindings → 删 source 行 → 删 credential。不碰 Book。
+5. **凭证**键：`cloud_cred:` + ref，经 SettingsStore AES-GCM（不可用时明文降级，与现有 WebDAV 密码一致）。
+
 ### 阶段 2：WebDAV Provider 与来源管理页面
 
 **目标**：实现独立根目录下的安全连接和目录列举。
@@ -1013,7 +1141,31 @@ interface CloudBookUiState {
 
 **依赖**：阶段 1。  
 **完成后可见功能**：用户可以新增、编辑、测试多个 WebDAV 来源，但尚不能下载书籍。  
-**完成状态（2026-07-23）**：已完成。见 `doc/modules/cloudbook-phase2-notes.md`。入口在「我的」一级菜单「云端书库」。
+**完成状态（2026-07-23）**：已完成。实现说明见下方。入口在「我的」一级菜单「云端书库」。
+
+#### 阶段 2 实现说明
+
+**交付文件**
+
+| 文件 | 职责 |
+|---|---|
+| `service/cloud/WebDavHttp.ts` | Basic Auth、URL 拼接/编码、PROPFIND 解析（可保留目录 + etag）、错误文案 |
+| `service/cloud/WebDavCloudProvider.ts` | `testConnection` / `list` / `stat` / 上下传 / MKCOL / DELETE |
+| `service/WebDavService.ts` | 备份列表改用共享解析，`includeDirectories=false` 保持兼容 |
+| `service/cloud/CloudSourceRepository.ts` | `testConnection` / `saveWithValidation` |
+| `pages/CloudSourceManagePage.ets` | 来源列表、启用开关、删除确认 |
+| `pages/CloudSourceEditPage.ets` | 编辑/新增、测试连接、根目录预览、保存前校验 |
+| `MyPage` + `main_pages.json` | 「我的」一级菜单入口「云端书库」 |
+| `MainAbility` | 启动时 `ensureCloudProvidersRegistered()` |
+
+**行为要点**
+
+1. **多来源独立 rootPath**：保存与测试均以 `endpoint + rootPath` 为根，`list('')` 直接列该目录。
+2. **目录保留**：`WebDavCloudProvider.list` 使用 `includeDirectories: true`；备份 `WebDavService` 仍过滤目录。
+3. **保存失败不覆盖**：`saveWithValidation` 先 `testConnection`+`list`，失败不写库、不改凭证。
+4. **编辑密码**：留空表示不修改；勾选改密逻辑由 `passwordDirty` / `updateSecret` 控制。
+5. **HTTP 风险提示**：非 HTTPS 地址在编辑页黄色提示。
+6. **删除来源**：只删配置 + Binding + 凭证，不动本地书（对话框文案已说明）。
 
 ### 阶段 3：云端书籍浏览与状态展示
 
@@ -1037,6 +1189,31 @@ interface CloudBookUiState {
 **完成后可见功能**：可浏览多个网盘的根目录和子目录，准确识别云端文件状态。  
 **完成状态（2026-07-23）**：已完成。入口「我的 → 云端书库」；下载入库见阶段 4。
 
+#### 阶段 3 实现说明
+
+**交付文件**
+
+| 文件 | 职责 |
+|---|---|
+| `model/CloudBookListItem.ts` | 展示状态、列表项、尺寸/时间格式化 |
+| `service/cloud/CloudBookRepository.ts` | `listDirectory` + Binding/本地书合并 + 过滤排序 |
+| `pages/CloudBookPage.ets` | 浏览页：来源切换、面包屑、搜索、排序、状态徽章 |
+| `MyPage` / `main_pages.json` | 入口改为浏览页；来源管理从页内进入 |
+
+**状态规则**
+
+| 条件 | 显示 |
+|---|---|
+| 目录 | 目录 |
+| 无 Binding 或本地文件缺失 | 云端 |
+| Binding + 本地书存在 | 已下载 |
+| Binding 为 OUTDATED 或列表元数据与 Binding 不一致 | 可更新 |
+| Binding ERROR 且无可用本地文件 | 错误 |
+
+- **仅** `sourceId + remotePath` 匹配 Binding；同名不同路径/来源互不影响。
+- 未下载文件**不会**写入书架。
+- 本阶段不下载；点击可导入文件提示「下一阶段」；已下载可打开 `BookInfoPage`。
+
 ### 阶段 4：下载、导入与本地书架闭环
 
 **目标**：让云端书能可靠下载、导入、离线阅读，并在云端页显示“已下载”。
@@ -1059,7 +1236,40 @@ interface CloudBookUiState {
 
 **依赖**：阶段 3、现有 `LocalBookEngine`。  
 **完成后可见功能**：云端书可下载并作为普通本地书阅读；这是首个可发布的最小闭环版本。  
-**完成状态（2026-07-23）**：已完成。见 `doc/modules/cloudbook-phase4-notes.md`。入口：书架 ☁。
+**完成状态（2026-07-23）**：已完成。实现说明见下方。入口：书架 ☁。
+
+#### 阶段 4 实现说明
+
+**交付文件**
+
+| 文件 | 职责 |
+|---|---|
+| `service/cloud/CloudLocalFileStore.ts` | 临时目录、最终路径、原子移动、启动清理 `.part` |
+| `service/cloud/CloudTransferManager.ts` | 进程内任务、并发槽、进度回调、取消标记 |
+| `service/cloud/CloudBookRepository.ets` | `downloadAndImport` / 批量 / 传输叠加 |
+| `pages/CloudBookPage.ets` | 下载按钮、进度条、多选批量下载 |
+| `service/BookDeleter.ets` | 删本地书时 `unlinkBook`（保留远端） |
+| `MainAbility` | `AppContextHolder` + 启动清理临时文件 |
+
+**下载流程**
+
+```text
+点击下载
+  → TransferManager.beginDownload (sourceId+remotePath 去重)
+  → 并发槽（默认 2）
+  → Provider.downloadToFile → files/cloudbook/.tmp/<taskId>.part
+  → 校验非空 → 原子移动到 files/books/cloud_<sourceId>_<hash>_<name>
+  → EPUB：TaskPool 解压 → LocalBookEngine.importBook
+  → Binding upsert + bindBook(DOWNLOADED)
+  → shelfRefreshCounter++
+失败：删临时/半成品；若已导入则 BookDeleter 清理；Binding markError
+```
+
+**UI 交互**：文件行「下载」按钮 / 点击云端项即下载；下载中显示进度条与百分比；多选 → 下载所选（单项失败不取消其他）；已下载点击打开 BookInfo。
+
+**删除语义**：书架删除本地书 → 仅 `unlinkBook`（Binding.bookId=0 → 云端页显示「云端」），**不删**远端文件。
+
+**限制说明**：RCP `fetch` 仍会拿到完整响应 body 再落盘；大文件内存峰值仍受限于系统 HTTP 栈。取消为协作式标记：进行中的 GET 无法中断 socket，结束后丢弃结果并清理临时文件。
 
 ### 阶段 5：上传、关联管理与手动更新
 
@@ -1100,7 +1310,30 @@ interface CloudBookUiState {
 
 **依赖**：阶段 4（本实现跳过阶段 5）。  
 **完成后可见功能**：生产可用的多 WebDAV 云端书籍能力（上传/可更新见阶段 5）。  
-**完成状态（2026-07-23）**：已完成。见 `doc/modules/cloudbook-phase6-notes.md`。
+**完成状态（2026-07-23）**：已完成。实现说明见下方。
+
+#### 阶段 6 实现说明
+
+**备份集成（BackupCodec）**
+
+导出：`backup.json` 增加 `cloudSources[]`：`name` / `providerType` / `endpoint` / `rootPath` / `configJson` / `enabled` / `sortNumber`；**不包含** password、secret、credentialRef、username。`settings` 导出时过滤敏感键（`webdav_pwd`、`cloud_cred*`、`password`、`token`、`api_key` 等）。
+
+恢复：按 `endpoint + rootPath` 匹配已有来源并更新；否则新建。新来源生成新 `credentialRef`，**密码从不恢复**。`ImportResult` 新增 `cloudSources`（恢复条数）和 `cloudSourcesNeedPassword`（需补密码条数）。恢复后 Toast 提示补密码，管理页黄色横幅引导。
+
+**安全加固**
+
+| 项 | 实现 |
+|---|---|
+| 凭证不进备份 | 导出剥离 + 恢复不写 secret |
+| 日志脱敏 | `WebDavHttp.sanitizeUrlForLog` / `redactSecrets_` / `toUserMessage` |
+| 跨主机重定向 | `shouldStripAuthOnRedirect` 工具方法 |
+| 路径逃逸 | 已有 `CloudPath` 拒绝 `..` / 协议 / 反斜杠 |
+| HTTPS 提示 | 编辑页非 HTTPS 风险提示（阶段 2） |
+
+**兼容性清单**
+- WebDAV 服务端：坚果云（PROPFIND、中文路径）、Nextcloud/ownCloud（绝对 href 归一化）、空 rootPath、中文/空格路径
+- 异常：应用重启 `.part` 24h 清理、并发下载 2、取消协作式标记
+- 回归：本地书导入/书架/阅读、WebDAV 备份与进度同步、云端书库浏览与下载、备份恢复后来源在密码需重填
 
 ### 阶段 7：新增其他网盘 Provider（后续迭代）
 
@@ -1113,8 +1346,50 @@ interface CloudBookUiState {
 
 **验收**：新增 Provider 时，不修改 `Book`、`LocalBookEngine`、云端书籍页面的核心状态模型或 WebDAV Provider 代码。
 
-**完成状态（2026-07-23）**：已完成扩展示例。见 `doc/modules/cloudbook-phase7-notes.md`。  
+**完成状态（2026-07-23）**：已完成扩展示例。实现说明见下方。  
 实现：`localfolder`（应用沙箱本地目录 Provider）+ `CloudProviderBootstrap` 集中注册；编辑页按类型适配表单/凭证；**未改** `Book` / `LocalBookEngine` / WebDAV 协议实现 / 云端页核心状态模型。
+
+#### 阶段 7 实现说明
+
+**设计选择**
+
+| 项 | 说明 |
+|---|---|
+| 新类型 | `localfolder`（常量 `CLOUD_PROVIDER_LOCAL_FOLDER`） |
+| 存储 | 应用沙箱 `files/cloud_local_folder/<namespace>/` |
+| 为何不用阿里云盘/S3 等 | 阶段 7 验收重点是抽象可扩展；本地目录即可走通 list/download/import |
+| 未改文件 | `Book` 模型、`LocalBookEngine`、`WebDavCloudProvider` 协议方法、`CloudBookPage` 核心状态机 |
+
+**新增/调整文件**
+
+| 文件 | 职责 |
+|---|---|
+| `service/cloud/LocalFolderCloudProvider.ts` | 实现 `CloudStorageProvider`：list（`nextCursor` 分页）、stat、download、upload、mkdir、delete |
+| `service/cloud/CloudProviderBootstrap.ts` | 集中 `ensureCloudProvidersRegistered()`：注册 webdav + localfolder |
+| `model/CloudSource.ts` | 类型常量、`LocalFolderCloudConfig`、`cloudProviderDisplayName`、类型判断辅助 |
+| `pages/CloudSourceEditPage.ets` | Provider 选择器；webdav / localfolder 表单字段分流 |
+| `CloudSourceRepository.ts` | 按类型规范化 endpoint、解析凭证 |
+
+**Capabilities**
+
+```text
+localfolder:
+  canCreateDirectory: true
+  canDelete: true
+  canMove: false
+  supportsEtag: false
+  supportsRangeDownload: false
+```
+
+**表单与凭证适配**
+
+| 字段 | WebDAV | localfolder |
+|---|---|---|
+| endpoint | `https://...` | 命名空间，存为 `localfolder://demo` |
+| username | 必填 | 默认 `local` |
+| secret | 必填密码 | 可选口令；空则占位 `local` |
+| rootPath | 服务器相对根 | 命名空间下子目录 |
+| 编辑切换类型 | — | 编辑态禁止切换 |
 
 ---
 
@@ -1137,9 +1412,13 @@ interface CloudBookUiState {
 
 ## 20. 百度网盘 Provider 设计
 
-> 状态：待实施。  
+> 状态：已实施（2026-07-23）。见 `doc/modules/cloudbook-baidu-notes.md`。  
 > 参考：用户提供的百度网盘开放平台接入说明（OAuth2 授权码模式、`xpan` 文件 API）。  
 > 前置条件：项目维护者须在百度网盘开放平台创建应用，并提供已登记的 `AppKey`、`AppSecret` 和回调 URI；没有这三项无法完成真实账号授权与真机验收。
+
+AppKey:QgvMzblpDjr1g31yeRj2qhoeq7MguJ6h  
+SecretKey:（仅本机凭证库，勿写入备份）  
+回调uri：aireader://auth
 
 ### 20.1 接入范围
 
@@ -1241,3 +1520,40 @@ Access Token 若必须作为查询参数传递，所有日志必须移除 `acces
 5. **B5：兼容与安全验收**：Token 过期、授权拒绝、state 不匹配、根目录无权限、dlink 过期、网络中断、大文件传输、日志脱敏和备份不含密钥。
 
 完成验收：用户可在两个百度网盘来源上配置不同根目录、独立授权并分别浏览文件；云端书下载后进入本地书架；百度网盘的上传、下载和更新不影响 WebDAV 或本地演示目录来源。
+
+#### 百度网盘实现说明
+
+**能力矩阵**
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| OAuth2 授权码 | ✅ | `BaiduNetdiskAuthPage` + Web 拦截 `aireader://auth` |
+| Token 刷新 | ✅ | 距过期 <5min 自动 refresh；失败提示重新授权 |
+| list / 分页 | ✅ | `xpan/file?method=list` + nextCursor |
+| stat | ✅ | 父目录 list 精确匹配 |
+| download | ✅ | filemetas dlink + User-Agent `pan.baidu.com` |
+| upload | ✅ | precreate → superfile2 分片(4MB) → create |
+| 建目录/删除 | ❌ 二期 | capabilities 关闭 |
+
+**新增文件**
+
+| 文件 | 职责 |
+|---|---|
+| `BaiduNetdiskOAuthClient.ts` | 授权 URL、换 token、刷新 |
+| `BaiduNetdiskProvider.ts` | CloudStorageProvider 实现 |
+| `BaiduNetdiskAuthPage.ets` | Web 授权 UI |
+| `CloudCredentialStore` | v2 OAuth2 payload |
+| `module.json5` | 注册 `aireader://auth` |
+
+**凭证与安全**
+- `config_json`：仅 appKey / redirectUri / scope / pageSize
+- OAuth payload（access/refresh/clientSecret）只在 `CloudCredentialStore`
+- 备份仍不导出 secret/token
+- 日志剥离 access_token / refresh_token / client_secret
+
+**使用步骤**
+1. 我的 → 云端书库管理 → 新增来源
+2. 类型选「百度网盘」
+3. 填写名称、AppKey、AppSecret、回调 URI（默认 `aireader://auth`）、可选根目录
+4. 点「登录并授权」→ 百度登录 → 自动换 token 并保存
+5. 书架 ☁ 进入该来源浏览 / 下载

@@ -33,6 +33,7 @@
     "pages/CloudBookPage",
     "pages/CloudSourceManagePage",
     "pages/CloudSourceEditPage",
+    "pages/BaiduNetdiskAuthPage",
     "pages/FontManagerPage",
     "pages/ReaderPage"
   ]

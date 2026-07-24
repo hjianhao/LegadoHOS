@@ -347,7 +347,6 @@ export struct PageView {
                   .letterSpacing(this.config.letterSpacing)
                   .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
                   .width('100%')
-                  .height('100%')
                   .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
                   .copyOption(CopyOptions.LocalDevice)
                   .editMenuOptions({
@@ -365,6 +364,10 @@ export struct PageView {
                   })
               }
               .layoutWeight(1).height('100%').clip(true)
+              .justifyContent(FlexAlign.Start)
+              .onClick((event: ClickEvent) => {
+                this.handleDualPaneClick_(event.x, event.y, 0);
+              })
 
               Column()
                 .width(this.dualPageGutter)
@@ -384,7 +387,6 @@ export struct PageView {
                     .letterSpacing(this.config.letterSpacing)
                     .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
                     .width('100%')
-                    .height('100%')
                     .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
                     .copyOption(CopyOptions.LocalDevice)
                     .editMenuOptions({
@@ -406,6 +408,14 @@ export struct PageView {
                     })
                 }
                 .layoutWeight(1).height('100%').clip(true)
+                .justifyContent(FlexAlign.Start)
+                .onClick((event: ClickEvent) => {
+                  this.handleDualPaneClick_(
+                    event.x,
+                    event.y,
+                    this.dualPaneWidth_() + this.dualPageGutter
+                  );
+                })
               } else {
                 Column()
                   .layoutWeight(1)
@@ -423,27 +433,34 @@ export struct PageView {
             .height('100%')
           } else {
             // 单页：同样绑定 @State leftText_
-            Text(this.leftText_)
-              .fontSize(this.config.fontSize).fontColor(this.config.textColor)
-              .fontFamily(this.config.fontFamily)
-              .fontWeight(this.getFontWeight())
-              .lineHeight(this.config.fontSize * this.config.lineHeight)
-              .letterSpacing(this.config.letterSpacing)
-              .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
-              .width('100%')
-              .height('100%')
-              .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-              .copyOption(CopyOptions.LocalDevice)
-              .editMenuOptions({
-                onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
-                onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
-                  if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
-                    this.onAskKimi?.(this.leftText_.substring(range.start, range.end));
-                    return true;
-                  }
-                  return false;
-                },
-              } as EditMenuOptions)
+            Column() {
+              Text(this.leftText_)
+                .fontSize(this.config.fontSize).fontColor(this.config.textColor)
+                .fontFamily(this.config.fontFamily)
+                .fontWeight(this.getFontWeight())
+                .lineHeight(this.config.fontSize * this.config.lineHeight)
+                .letterSpacing(this.config.letterSpacing)
+                .textAlign(this.config.textAlign === 'justify' ? TextAlign.JUSTIFY : TextAlign.Start)
+                .width('100%')
+                .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+                .copyOption(CopyOptions.LocalDevice)
+                .editMenuOptions({
+                  onCreateMenu: (menuItems: Array<TextMenuItem>) => { return menuItems; },
+                  onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+                    if (menuItem.id.equals(TextMenuItemId.of('askKimi'))) {
+                      this.onAskKimi?.(this.leftText_.substring(range.start, range.end));
+                      return true;
+                    }
+                    return false;
+                  },
+                } as EditMenuOptions)
+                .onClick((event: ClickEvent) => {
+                  this.handleClick_(event.x, event.y);
+                })
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Start)
               .onClick((event: ClickEvent) => {
                 this.handleClick_(event.x, event.y);
               })

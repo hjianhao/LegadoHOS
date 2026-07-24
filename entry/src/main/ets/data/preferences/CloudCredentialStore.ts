@@ -1,32 +1,46 @@
 /**
  * 云端书库多来源凭证存储（独立 Preferences，不经 SettingsStore）
  *
- * 历史问题：经 SettingsStore.putSecret 双层 JSON + 加密链路不稳定，
- * 导致凭证读回为空，随后 update 又用空值覆盖。
- *
- * 现方案：
  * - 独立 store：legado_cloud_credentials
- * - 键：ref 规范化后的字符串（去掉冒号，避免部分 Preferences 实现异常）
- * - 值：JSON { username, secret }，UTF-8 安全序列化
- * - 必须 init(context) 后使用
+ * - v1 basic：{ username, secret, v: 1 }
+ * - v2 oauth2：{ kind: 'oauth2', clientSecret, accessToken, refreshToken, ... , v: 2 }
+ * - Token / clientSecret 永不进入备份与日志
  */
 import preferences from '@ohos.data.preferences';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { CloudCredential, createEmptyCloudCredential } from '../../model/CloudSource';
+import {
+  CloudCredential,
+  createEmptyCloudCredential,
+  createEmptyOAuth2Credential,
+  OAuth2Credential,
+} from '../../model/CloudSource';
 
 const STORE_NAME = 'legado_cloud_credentials';
 const KEY_PREFIX = 'cc_';
 
-interface CloudCredentialPayload {
+interface BasicCredentialPayload {
   username: string;
   secret: string;
   v: number;
+  kind?: string;
 }
+
+interface OAuth2CredentialPayload {
+  kind: string;
+  clientSecret: string;
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpiresAt: number;
+  tokenScope: string;
+  v: number;
+}
+
+type AnyPayload = BasicCredentialPayload | OAuth2CredentialPayload;
 
 export class CloudCredentialStore {
   private static instance: CloudCredentialStore | null = null;
   private pref_: preferences.Preferences | null = null;
-  private memory_: Map<string, CloudCredentialPayload> = new Map();
+  private memory_: Map<string, AnyPayload> = new Map();
   private initPromise_: Promise<void> | null = null;
 
   private constructor() {}
@@ -57,7 +71,6 @@ export class CloudCredentialStore {
   private async doInit_(context: Context): Promise<void> {
     try {
       this.pref_ = await preferences.getPreferences(context, STORE_NAME);
-      // 预热到内存，避免后续同步路径丢数据
       try {
         const all = this.pref_.getAllSync() as Record<string, Object>;
         const keys = Object.keys(all);
@@ -68,7 +81,7 @@ export class CloudCredentialStore {
           }
           const raw = all[k];
           if (typeof raw === 'string' && (raw as string).length > 0) {
-            const payload = this.parsePayload_(raw as string);
+            const payload = this.parseAnyPayload_(raw as string);
             if (payload) {
               this.memory_.set(k, payload);
             }
@@ -89,10 +102,6 @@ export class CloudCredentialStore {
     return this.pref_ !== null;
   }
 
-  /**
-   * 生成新的 credentialRef（落库用）。
-   * 格式：cloud-source-<hex>，避免冒号便于 Preferences / 日志处理。
-   */
   generateCredentialRef(): string {
     try {
       const randomData = cryptoFramework.createRandom().generateRandomSync(16);
@@ -116,54 +125,71 @@ export class CloudCredentialStore {
       throw new Error('credentialRef 不能为空');
     }
     this.ensureReady_();
-    const payload: CloudCredentialPayload = {
+    const payload: BasicCredentialPayload = {
       username: credential.username || '',
       secret: credential.secret || '',
       v: 1,
+      kind: 'basic',
     };
-    const json = JSON.stringify(payload);
-    this.memory_.set(key, payload);
-    try {
-      await this.pref_!.put(key, json);
-      await this.pref_!.flush();
-      console.info('[CloudCredentialStore] saved ref=', this.safeRef_(ref),
-        ' userLen=', payload.username.length, ' secretLen=', payload.secret.length);
-    } catch (e) {
-      this.memory_.delete(key);
-      throw new Error('保存凭证失败: ' + ((e as Error).message || String(e)));
+    await this.writePayload_(key, ref, payload);
+  }
+
+  async setOAuth2Credential(ref: string, oauth: OAuth2Credential): Promise<void> {
+    const key = this.prefKey_(ref);
+    if (!key) {
+      throw new Error('credentialRef 不能为空');
     }
+    this.ensureReady_();
+    const payload: OAuth2CredentialPayload = {
+      kind: 'oauth2',
+      clientSecret: oauth.clientSecret || '',
+      accessToken: oauth.accessToken || '',
+      refreshToken: oauth.refreshToken || '',
+      accessTokenExpiresAt: oauth.accessTokenExpiresAt || 0,
+      tokenScope: oauth.tokenScope || '',
+      v: 2,
+    };
+    await this.writePayload_(key, ref, payload);
+    console.info('[CloudCredentialStore] saved oauth2 ref=', this.safeRef_(ref),
+      ' hasAccess=', payload.accessToken.length > 0,
+      ' hasRefresh=', payload.refreshToken.length > 0,
+      ' exp=', payload.accessTokenExpiresAt);
   }
 
   async getCloudCredential(ref: string): Promise<CloudCredential | null> {
-    const key = this.prefKey_(ref);
-    if (!key) {
+    const payload = await this.getPayload_(ref);
+    if (!payload) {
       return null;
     }
-    // 允许仅内存命中（极端：pref 暂未 flush 完成）
-    const mem = this.memory_.get(key);
-    if (mem) {
-      return this.toCredential_(mem);
+    if (this.isOAuth2Payload_(payload)) {
+      // 兼容路径：把 accessToken 映射到 secret，便于旧校验逻辑
+      const o = payload as OAuth2CredentialPayload;
+      const cred = createEmptyCloudCredential();
+      cred.username = 'oauth2';
+      cred.secret = o.accessToken || '';
+      return cred;
     }
-    if (!this.pref_) {
-      console.warn('[CloudCredentialStore] get before init, ref=', this.safeRef_(ref));
+    return this.toBasicCredential_(payload as BasicCredentialPayload);
+  }
+
+  async getOAuth2Credential(ref: string): Promise<OAuth2Credential | null> {
+    const payload = await this.getPayload_(ref);
+    if (!payload || !this.isOAuth2Payload_(payload)) {
       return null;
     }
-    try {
-      const raw = await this.pref_.get(key, '') as string;
-      if (!raw) {
-        // 兼容旧键：cloud_cred:cloud-source:xxx（曾用 SettingsStore 路径）
-        return null;
-      }
-      const payload = this.parsePayload_(raw);
-      if (!payload) {
-        return null;
-      }
-      this.memory_.set(key, payload);
-      return this.toCredential_(payload);
-    } catch (e) {
-      console.warn('[CloudCredentialStore] get failed:', this.safeRef_(ref), (e as Error).message);
-      return null;
-    }
+    const o = payload as OAuth2CredentialPayload;
+    const cred = createEmptyOAuth2Credential();
+    cred.clientSecret = o.clientSecret || '';
+    cred.accessToken = o.accessToken || '';
+    cred.refreshToken = o.refreshToken || '';
+    cred.accessTokenExpiresAt = o.accessTokenExpiresAt || 0;
+    cred.tokenScope = o.tokenScope || '';
+    return cred;
+  }
+
+  async hasOAuth2(ref: string): Promise<boolean> {
+    const o = await this.getOAuth2Credential(ref);
+    return !!(o && o.accessToken && o.accessToken.length > 0);
   }
 
   async deleteCloudCredential(ref: string): Promise<void> {
@@ -183,31 +209,97 @@ export class CloudCredentialStore {
     }
   }
 
-  /** 是否已有非空密码（编辑页提示用，不回显明文）。 */
   async hasSecret(ref: string): Promise<boolean> {
+    const o = await this.getOAuth2Credential(ref);
+    if (o && o.accessToken) {
+      return true;
+    }
     const cred = await this.getCloudCredential(ref);
     return !!(cred && cred.secret && cred.secret.length > 0);
   }
 
-  private toCredential_(payload: CloudCredentialPayload): CloudCredential {
+  private async writePayload_(key: string, ref: string, payload: AnyPayload): Promise<void> {
+    const json = JSON.stringify(payload);
+    this.memory_.set(key, payload);
+    try {
+      await this.pref_!.put(key, json);
+      await this.pref_!.flush();
+    } catch (e) {
+      this.memory_.delete(key);
+      throw new Error('保存凭证失败: ' + ((e as Error).message || String(e)));
+    }
+  }
+
+  private async getPayload_(ref: string): Promise<AnyPayload | null> {
+    const key = this.prefKey_(ref);
+    if (!key) {
+      return null;
+    }
+    const mem = this.memory_.get(key);
+    if (mem) {
+      return mem;
+    }
+    if (!this.pref_) {
+      console.warn('[CloudCredentialStore] get before init, ref=', this.safeRef_(ref));
+      return null;
+    }
+    try {
+      const raw = await this.pref_.get(key, '') as string;
+      if (!raw) {
+        return null;
+      }
+      const payload = this.parseAnyPayload_(raw);
+      if (!payload) {
+        return null;
+      }
+      this.memory_.set(key, payload);
+      return payload;
+    } catch (e) {
+      console.warn('[CloudCredentialStore] get failed:', this.safeRef_(ref), (e as Error).message);
+      return null;
+    }
+  }
+
+  private isOAuth2Payload_(payload: AnyPayload): boolean {
+    const p = payload as OAuth2CredentialPayload;
+    return p.kind === 'oauth2' || p.v === 2;
+  }
+
+  private toBasicCredential_(payload: BasicCredentialPayload): CloudCredential {
     const cred = createEmptyCloudCredential();
     cred.username = payload.username || '';
     cred.secret = payload.secret || '';
     return cred;
   }
 
-  private parsePayload_(raw: string): CloudCredentialPayload | null {
+  private parseAnyPayload_(raw: string): AnyPayload | null {
     try {
-      const parsed = JSON.parse(raw) as CloudCredentialPayload;
+      const parsed = JSON.parse(raw) as Record<string, Object>;
       if (!parsed || typeof parsed !== 'object') {
         return null;
       }
-      const payload: CloudCredentialPayload = {
-        username: typeof parsed.username === 'string' ? parsed.username : '',
-        secret: typeof parsed.secret === 'string' ? parsed.secret : '',
+      const kind = typeof parsed['kind'] === 'string' ? parsed['kind'] as string : '';
+      const v = typeof parsed['v'] === 'number' ? parsed['v'] as number : 1;
+      if (kind === 'oauth2' || v === 2) {
+        const payload: OAuth2CredentialPayload = {
+          kind: 'oauth2',
+          clientSecret: typeof parsed['clientSecret'] === 'string' ? parsed['clientSecret'] as string : '',
+          accessToken: typeof parsed['accessToken'] === 'string' ? parsed['accessToken'] as string : '',
+          refreshToken: typeof parsed['refreshToken'] === 'string' ? parsed['refreshToken'] as string : '',
+          accessTokenExpiresAt: typeof parsed['accessTokenExpiresAt'] === 'number'
+            ? parsed['accessTokenExpiresAt'] as number : 0,
+          tokenScope: typeof parsed['tokenScope'] === 'string' ? parsed['tokenScope'] as string : '',
+          v: 2,
+        };
+        return payload;
+      }
+      const basic: BasicCredentialPayload = {
+        username: typeof parsed['username'] === 'string' ? parsed['username'] as string : '',
+        secret: typeof parsed['secret'] === 'string' ? parsed['secret'] as string : '',
         v: 1,
+        kind: 'basic',
       };
-      return payload;
+      return basic;
     } catch (_e) {
       return null;
     }
@@ -218,11 +310,9 @@ export class CloudCredentialStore {
     if (!r) {
       return '';
     }
-    // 统一去掉前缀与冒号，生成稳定 Preferences 键
     if (r.indexOf('cloud_cred:') === 0) {
       r = r.substring('cloud_cred:'.length);
     }
-    // cloud-source:hex 或 cloud-source-hex → cloud_source_hex
     r = r.replace(new RegExp(':', 'g'), '-');
     return KEY_PREFIX + r;
   }

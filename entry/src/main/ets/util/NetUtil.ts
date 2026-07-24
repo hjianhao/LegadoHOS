@@ -15,15 +15,19 @@ interface PooledSession {
 }
 
 export class NetUtil {
-  /** 请求前注入持久化的 Cookie 头（不覆盖显式设置的 Cookie） */
+  /** 请求前注入持久化的 Cookie 头（不覆盖显式设置的 Cookie，含空字符串=禁用） */
   private static injectCookie_(url: string, headers: Record<string, string>): void {
     try {
+      // 调用方已声明 Cookie（即使为空）则完全不注入，避免干扰 OAuth 等接口
+      const keys = Object.keys(headers);
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i].toLowerCase() === 'cookie') {
+          return;
+        }
+      }
       const cookie = CookieStore.getInstance().getCookie(url);
       if (!cookie) return;
-      const hasCookie = Object.keys(headers).some(k => k.toLowerCase() === 'cookie');
-      if (!hasCookie) {
-        headers['Cookie'] = cookie;
-      }
+      headers['Cookie'] = cookie;
     } catch (_e) { /* CookieStore 未初始化时忽略 */ }
   }
 

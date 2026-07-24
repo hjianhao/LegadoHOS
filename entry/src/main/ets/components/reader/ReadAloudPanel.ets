@@ -451,7 +451,7 @@ export struct ReadAloudPanel {
       const meta: avSession.AVMetadata = {
         assetId: '0',
         title: this.chapterTitle || '朗读中',
-        artist: '开源阅读',
+        artist: 'AI阅读',
         duration: -1,
       };
       this.avSession_.setAVMetadata(meta);

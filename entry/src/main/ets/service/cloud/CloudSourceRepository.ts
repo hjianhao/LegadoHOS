@@ -10,11 +10,14 @@ import { CloudBookBindingTable } from '../../data/database/CloudBookBindingTable
 import { CloudSourceTable } from '../../data/database/CloudSourceTable';
 import { CloudCredentialStore } from '../../data/preferences/CloudCredentialStore';
 import {
+  BAIDU_NETDISK_ENDPOINT,
   CloudCredential,
   CloudSource,
+  CLOUD_PROVIDER_BAIDU_NETDISK,
   CLOUD_PROVIDER_WEBDAV,
   createDefaultCloudSource,
   createEmptyCloudCredential,
+  isBaiduNetdiskProvider,
   isLocalFolderProvider,
 } from '../../model/CloudSource';
 import { CloudPath } from './CloudPath';
@@ -81,11 +84,129 @@ export class CloudSourceRepository {
     if (!source || !source.credentialRef) {
       return null;
     }
+    // OAuth2：store 已将 accessToken 映射到 secret
+    if (isBaiduNetdiskProvider(source.providerType)) {
+      const oauth = await this.credentialStore_.getOAuth2Credential(source.credentialRef);
+      if (oauth && oauth.accessToken) {
+        const cred = createEmptyCloudCredential();
+        cred.username = 'oauth2';
+        cred.secret = oauth.accessToken;
+        return cred;
+      }
+      return null;
+    }
     return await this.credentialStore_.getCloudCredential(source.credentialRef);
   }
 
   async getCredentialByRef(credentialRef: string): Promise<CloudCredential | null> {
     return await this.credentialStore_.getCloudCredential(credentialRef);
+  }
+
+  async hasOAuth2(sourceId: number): Promise<boolean> {
+    const source = await this.sourceTable_.getById(sourceId);
+    if (!source || !source.credentialRef) {
+      return false;
+    }
+    return await this.credentialStore_.hasOAuth2(source.credentialRef);
+  }
+
+  /**
+   * 百度网盘授权完成后保存/更新来源（OAuth 已写入 credentialRef）。
+   * 不再要求 username/password；会先 list 根目录校验。
+   */
+  async saveBaiduAuthorized(input: CloudSourceSaveInput, credentialRef: string): Promise<CloudSource> {
+    if (!credentialRef) {
+      throw new Error('缺少 OAuth 凭证引用');
+    }
+    const name = (input.name || '').trim();
+    if (!name) {
+      throw new Error('来源名称不能为空');
+    }
+    const providerType = CLOUD_PROVIDER_BAIDU_NETDISK;
+    const endpoint = BAIDU_NETDISK_ENDPOINT;
+    let rootPath = '';
+    try {
+      rootPath = CloudPath.normalizeRootPath(input.rootPath || '');
+    } catch (e) {
+      throw new Error('根目录非法: ' + ((e as Error).message || String(e)));
+    }
+    // 校验 OAuth 可用
+    const has = await this.credentialStore_.hasOAuth2(credentialRef);
+    if (!has) {
+      throw new Error('OAuth 凭证无效，请重新授权');
+    }
+    // 测试 list
+    const testInput: CloudSourceSaveInput = {
+      id: input.id,
+      name: name,
+      providerType: providerType,
+      endpoint: endpoint,
+      rootPath: rootPath,
+      configJson: input.configJson || '{}',
+      enabled: input.enabled !== undefined ? input.enabled : true,
+      username: 'oauth2',
+      secret: 'oauth2',
+      updateSecret: true,
+    };
+    // 临时把 credential 指到已保存的 oauth 做测试
+    ensureCloudProvidersRegistered();
+    const sourceTmp = createDefaultCloudSource();
+    sourceTmp.id = input.id && input.id > 0 ? input.id : 0;
+    sourceTmp.name = name;
+    sourceTmp.providerType = providerType;
+    sourceTmp.endpoint = endpoint;
+    sourceTmp.rootPath = rootPath;
+    sourceTmp.configJson = input.configJson || '{}';
+    sourceTmp.credentialRef = credentialRef;
+    sourceTmp.enabled = true;
+    const oauthCred = createEmptyCloudCredential();
+    oauthCred.username = 'oauth2';
+    oauthCred.secret = 'oauth2';
+    const provider = CloudProviderRegistry.getInstance().get(providerType);
+    await provider.testConnection(sourceTmp, oauthCred);
+
+    const now = Date.now();
+    const editId = input.id && input.id > 0 ? input.id : 0;
+    if (editId > 0) {
+      const existing = await this.sourceTable_.getById(editId);
+      if (!existing) {
+        throw new Error('来源不存在: ' + editId);
+      }
+      // 若旧 ref 不同，删除旧凭证
+      if (existing.credentialRef && existing.credentialRef !== credentialRef) {
+        try {
+          await this.credentialStore_.deleteCloudCredential(existing.credentialRef);
+        } catch (_e) { /* ignore */ }
+      }
+      existing.name = name;
+      existing.providerType = providerType;
+      existing.endpoint = endpoint;
+      existing.rootPath = rootPath;
+      existing.configJson = input.configJson || existing.configJson || '{}';
+      existing.credentialRef = credentialRef;
+      if (input.enabled !== undefined) {
+        existing.enabled = !!input.enabled;
+      }
+      existing.updatedAt = now;
+      await this.sourceTable_.update(existing);
+      return existing;
+    }
+
+    const source = createDefaultCloudSource();
+    source.name = name;
+    source.providerType = providerType;
+    source.endpoint = endpoint;
+    source.rootPath = rootPath;
+    source.configJson = input.configJson || '{}';
+    source.credentialRef = credentialRef;
+    source.enabled = input.enabled !== undefined ? !!input.enabled : true;
+    source.sortNumber = input.sortNumber !== undefined ? input.sortNumber : await this.nextSortNumber_();
+    source.createdAt = now;
+    source.updatedAt = now;
+    const id = await this.sourceTable_.insert(source);
+    source.id = id;
+    console.info('[CloudSourceRepository] saved baidu source id=', id);
+    return source;
   }
 
   /**
@@ -355,6 +476,8 @@ export class CloudSourceRepository {
       }
     }
     const credPair = CloudSourceRepository.resolveCredentialForSave_(providerType, input, oldCred);
+    let userName = credPair.username;
+    let secretVal = credPair.secret;
 
     const source = createDefaultCloudSource();
     source.id = input.id && input.id > 0 ? input.id : 0;
@@ -364,10 +487,22 @@ export class CloudSourceRepository {
     source.rootPath = rootPath;
     source.configJson = input.configJson || '{}';
     source.enabled = input.enabled !== undefined ? !!input.enabled : true;
+    // 百度 OAuth 依赖 credentialRef 取 Token
+    if (isBaiduNetdiskProvider(providerType) && input.id && input.id > 0) {
+      const existing = await this.sourceTable_.getById(input.id);
+      if (existing && existing.credentialRef) {
+        source.credentialRef = existing.credentialRef;
+        const oauth = await this.credentialStore_.getOAuth2Credential(existing.credentialRef);
+        if (oauth && oauth.accessToken) {
+          userName = 'oauth2';
+          secretVal = oauth.accessToken;
+        }
+      }
+    }
 
     const credential = createEmptyCloudCredential();
-    credential.username = credPair.username;
-    credential.secret = credPair.secret;
+    credential.username = userName;
+    credential.secret = secretVal;
 
     const prepared: CloudSourcePrepareResult = {
       source: source,
@@ -386,6 +521,16 @@ export class CloudSourceRepository {
     input: CloudSourceSaveInput,
     oldCred: CloudCredential | null
   ): CloudCredentialPair {
+    if (isBaiduNetdiskProvider(providerType)) {
+      // 百度 OAuth：basic 槽位仅作占位；真正 token 在 OAuth2 payload
+      const pair: CloudCredentialPair = {
+        username: 'oauth2',
+        secret: (input.secret && input.secret.length > 0)
+          ? input.secret
+          : (oldCred && oldCred.secret ? oldCred.secret : 'pending'),
+      };
+      return pair;
+    }
     if (isLocalFolderProvider(providerType)) {
       let username = (input.username || '').trim();
       if (!username && oldCred) {
@@ -441,6 +586,15 @@ export class CloudSourceRepository {
     input: CloudSourceSaveInput,
     oldCred: CloudCredential | null
   ): CloudCredentialUpdatePair {
+    if (isBaiduNetdiskProvider(providerType)) {
+      // 不覆盖 OAuth2 payload：除非明确 updateSecret
+      const pair: CloudCredentialUpdatePair = {
+        username: 'oauth2',
+        secret: oldCred && oldCred.secret ? oldCred.secret : 'pending',
+        shouldWrite: false,
+      };
+      return pair;
+    }
     if (isLocalFolderProvider(providerType)) {
       let finalUser = (input.username || '').trim();
       if (!finalUser && oldCred) {
@@ -507,6 +661,9 @@ export class CloudSourceRepository {
 
   private static normalizeEndpoint_(raw: string, providerType?: string): string {
     let s = (raw || '').trim();
+    if (isBaiduNetdiskProvider(providerType || '')) {
+      return BAIDU_NETDISK_ENDPOINT;
+    }
     if (!s) {
       return '';
     }

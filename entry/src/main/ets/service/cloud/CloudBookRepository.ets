@@ -108,10 +108,10 @@ export class CloudBookRepository {
     const path = CloudPath.normalizeRemotePath(remotePath || '');
     const credential = await this.sourceRepo_.getCredential(sourceId);
     if (!credential || !credential.username) {
-      throw new Error('未配置凭证，请先编辑来源并填写账号密码');
+      throw new Error('未配置凭证，请先编辑来源并完成授权');
     }
     if (!credential.secret) {
-      throw new Error('未配置密码，请先编辑来源');
+      throw new Error('未配置凭证或授权已失效，请重新授权');
     }
 
     const provider = CloudProviderRegistry.getInstance().get(source.providerType);
@@ -294,7 +294,7 @@ export class CloudBookRepository {
     }
     const credential = await this.sourceRepo_.getCredential(sourceId);
     if (!credential || !credential.username || !credential.secret) {
-      throw new Error('未配置凭证');
+      throw new Error('未配置凭证或授权已失效，请重新授权');
     }
     const provider = CloudProviderRegistry.getInstance().get(source.providerType);
 

@@ -29,9 +29,9 @@
         "name": "MainAbility",
         "srcEntry": "./ets/MainAbility/MainAbility.ets",
         "description": "鸿蒙版 Legado 阅读器 - 主界面",
-        "icon": "$media:layered_image",
+        "icon": "$media:ai_reader_icon_full",
         "label": "$string:app_name",
-        "startWindowIcon": "$media:startIcon",
+        "startWindowIcon": "$media:ai_reader_icon_full",
         "startWindowBackground": "$color:start_window_background",
         "visible": true,
         "exported": true,
@@ -40,6 +40,15 @@
           {
             "entities": ["entity.system.home"],
             "actions": ["action.system.home"]
+          },
+          {
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              {
+                "scheme": "aireader",
+                "host": "auth"
+              }
+            ]
           },
           {
             "entities": ["entity.system.default"],
