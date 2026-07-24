@@ -7,6 +7,7 @@ import http from '@ohos.net.http';
 import util from '@ohos.util';
 import zlib from '@ohos.zlib';
 import { CookieStore } from './CookieStore';
+import { DISABLE_COOKIE_HEADER } from '../engine/source/SourceNetworkPolicy';
 
 interface PooledSession {
   session: rcp.Session;
@@ -104,7 +105,8 @@ export class NetUtil {
     try {
       const requestUrl = NetUtil.normalizeUrl(url);
       const h = NetUtil.buildHeaders(headers);
-      NetUtil.injectCookie_(requestUrl, h);
+      const cookieEnabled = NetUtil.prepareCookiePolicy_(h);
+      if (cookieEnabled) NetUtil.injectCookie_(requestUrl, h);
       const reqHeaders = h as rcp.RequestHeaders;
       const request = new rcp.Request(requestUrl, 'GET', reqHeaders, '');
 
@@ -118,7 +120,9 @@ export class NetUtil {
 
       const response = await session.fetch(request);
       const binHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
-      CookieStore.getInstance().setCookiesFromResponse(requestUrl, binHeaders['set-cookie']);
+      if (cookieEnabled) {
+        CookieStore.getInstance().setCookiesFromResponse(requestUrl, binHeaders['set-cookie']);
+      }
       console.info('[NetUtil] GET(binary)', requestUrl.substring(0, 80), '->', response.statusCode,
         '(' + (Date.now() - startMs) + 'ms)');
       if (response.statusCode < 200 || response.statusCode >= 400) {
@@ -294,7 +298,8 @@ export class NetUtil {
   ): Promise<string> {
     const request = http.createHttp();
     try {
-      NetUtil.injectCookie_(requestUrl, headers);
+      const cookieEnabled = NetUtil.prepareCookiePolicy_(headers);
+      if (cookieEnabled) NetUtil.injectCookie_(requestUrl, headers);
       const response = await request.request(requestUrl, {
         method: method.toUpperCase() as http.RequestMethod,
         header: headers,
@@ -304,7 +309,9 @@ export class NetUtil {
         readTimeout: timeout,
       });
       const respHeaders = (response.header || {}) as Record<string, string | string[] | undefined>;
-      CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+      if (cookieEnabled) {
+        CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+      }
       console.info('[NetUtil] System HTTP', method, requestUrl, '→', response.responseCode);
       if (response.responseCode < 200 || response.responseCode >= 400) {
         const errorText = await NetUtil.httpResultToText(response.result, requestUrl);
@@ -332,13 +339,16 @@ export class NetUtil {
       let sessionEntry: PooledSession | null = null;
       try {
         const h = NetUtil.buildHeaders(headers);
-        NetUtil.injectCookie_(requestUrl, h);
+        const cookieEnabled = NetUtil.prepareCookiePolicy_(h);
+        if (cookieEnabled) NetUtil.injectCookie_(requestUrl, h);
         const reqHeaders = h as rcp.RequestHeaders;
         const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
         sessionEntry = NetUtil.acquireSession(timeout);
         const response = await sessionEntry.session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
-        CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+        if (cookieEnabled) {
+          CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+        }
         console.info('[NetUtil]', method, requestUrl, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
         if (response.statusCode < 200 || response.statusCode >= 400) {
           let errorText = '';
@@ -384,6 +394,12 @@ export class NetUtil {
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       ...(headers || {}),
     };
+  }
+
+  private static prepareCookiePolicy_(headers: Record<string, string>): boolean {
+    const disabled = headers[DISABLE_COOKIE_HEADER] === '1';
+    delete headers[DISABLE_COOKIE_HEADER];
+    return !disabled;
   }
 
   private static async decodeBody(bytes: Uint8Array, url: string): Promise<string> {

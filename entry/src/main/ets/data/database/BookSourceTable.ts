@@ -419,6 +419,22 @@ export class BookSourceTable {
     await this.updateSource(source);
   }
 
+  async moveSourcesToEdge(ids: number[], toTop: boolean): Promise<void> {
+    if (ids.length === 0) return;
+    await RdbUtil.transaction<void>(this.rdbStore, async (): Promise<void> => {
+      const all = await this.getAllSources();
+      const idSet = new Set<number>(ids);
+      const selected = all.filter((source: BookSource): boolean => idSet.has(source.id));
+      if (selected.length === 0) return;
+      const values = all.map((source: BookSource): number => source.customOrder || 0);
+      const edge = toTop ? Math.min(...values) - selected.length : Math.max(...values) + 1;
+      for (let index = 0; index < selected.length; index++) {
+        selected[index].customOrder = edge + index;
+        await this.updateSource(selected[index]);
+      }
+    });
+  }
+
   private splitGroups(group: string): string[] {
     return (group || '').split(/[,，;；|｜\n\r\t]+/)
       .map((item: string): string => item.trim())

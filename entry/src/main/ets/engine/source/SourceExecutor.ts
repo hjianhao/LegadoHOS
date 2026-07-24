@@ -19,6 +19,7 @@ import { CryptoUtil } from '../../util/CryptoUtil';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { BookSourceTable } from '../../data/database/BookSourceTable';
+import { SourceNetworkPolicy } from './SourceNetworkPolicy';
 
 interface JsDomNode {
   tagName: string;
@@ -811,6 +812,8 @@ export class SourceExecutor {
     if (charset) {
       headers['Accept-Charset'] = charset;
     }
+    const requestTimeout = SourceNetworkPolicy.timeout(source);
+    await SourceNetworkPolicy.wait(source);
 
     // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
     if (finalWebView && finalMethod !== 'POST') {
@@ -824,7 +827,7 @@ export class SourceExecutor {
       if (WebViewFetcher.isReady()) {
         console.info('[SrcEx] WebView request (source config) for', source.sourceName);
         try {
-          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
+          const wvResult = await WebViewFetcher.fetch(finalUrl, requestTimeout, headers);
           const bodyText = wvResult.html;
           if (bodyText && bodyText.length > 100) {
             console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
@@ -840,20 +843,21 @@ export class SourceExecutor {
       console.info('[SrcEx] Fetching:', (finalMethod || 'GET'), finalUrl.substring(0, 80));
 
       let bodyText = '';
+      const requestHeaders = SourceNetworkPolicy.headers(source, headers);
       if (finalMethod === 'POST') {
-        if (!headers['Content-Type'] && !headers['content-type']) {
+        if (!requestHeaders['Content-Type'] && !requestHeaders['content-type']) {
           // 根据 body 格式自动选择 Content-Type：
           // JSON 开头（{ 或 [）→ application/json，否则 → form-urlencoded
           const bodyStr = (finalBody || '').trim();
           if (bodyStr.startsWith('{') || bodyStr.startsWith('[')) {
-            headers['Content-Type'] = 'application/json';
+            requestHeaders['Content-Type'] = 'application/json';
           } else {
-            headers['Content-Type'] = 'application/x-www-form-urlencoded';
+            requestHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
           }
         }
-        bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', headers);
+        bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout);
       } else {
-        bodyText = await NetUtil.httpGet(finalUrl, headers);
+        bodyText = await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
       }
       if (!bodyText) {
         console.warn('[SrcEx] Empty response from', source.sourceName);
@@ -1158,7 +1162,9 @@ export class SourceExecutor {
   }
 
   /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body + headers） */
-  private async fetchWithOpts(url: string, headers: Record<string, string>, timeout: number = 30000): Promise<string> {
+  private async fetchWithOpts(
+    url: string, headers: Record<string, string>, source: BookSource, timeout?: number
+  ): Promise<string> {
     let method = 'GET', body = '';
     const jm = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
     if (jm) {
@@ -1192,13 +1198,16 @@ export class SourceExecutor {
       }
       url = jm[1];
     }
-    console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(headers).substring(0, 200));
+    await SourceNetworkPolicy.wait(source);
+    const requestHeaders = SourceNetworkPolicy.headers(source, headers);
+    const requestTimeout = timeout || SourceNetworkPolicy.timeout(source);
+    console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(requestHeaders).substring(0, 200));
     try {
       if (method === 'POST') {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        return await NetUtil.httpPost(url, body, headers, timeout);
+        requestHeaders['Content-Type'] = requestHeaders['Content-Type'] || 'application/json';
+        return await NetUtil.httpPost(url, body, requestHeaders, requestTimeout);
       }
-      return await NetUtil.httpGet(url, headers, timeout);
+      return await NetUtil.httpGet(url, requestHeaders, requestTimeout);
     } catch (err) {
       const msg = (err as Error).message || '';
       // RCP 并发取消错误，重试一次
@@ -1206,9 +1215,9 @@ export class SourceExecutor {
         console.info('[SrcEx] fetchWithOpts canceled, retrying once:', url.substring(0, 60));
         await new Promise(r => setTimeout(r, 100));
         if (method === 'POST') {
-          return await NetUtil.httpPost(url, body, headers, timeout);
+          return await NetUtil.httpPost(url, body, requestHeaders, requestTimeout);
         }
-        return await NetUtil.httpGet(url, headers, timeout);
+        return await NetUtil.httpGet(url, requestHeaders, requestTimeout);
       }
       throw err;
     }
@@ -1232,7 +1241,7 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const body = await this.fetchWithOpts(noteUrl, headers);
+      const body = await this.fetchWithOpts(noteUrl, headers, source);
       if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
 
       const jsonInfo = this.parseJsonBookInfo(body, source, noteUrl);
@@ -1528,7 +1537,7 @@ export class SourceExecutor {
           headers['Cookie'] = `qttoken=${token}`;
         }
       }
-      let raw = await this.fetchWithOpts(contentUrl, headers);
+      let raw = await this.fetchWithOpts(contentUrl, headers, source);
       console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
       if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
 
@@ -1669,7 +1678,7 @@ export class SourceExecutor {
             console.warn('[SrcEx] getContent detected placeholder/transcode failure, retrying current page:',
               pageUrl.substring(0, 100));
             for (let retry = 0; retry < 2; retry++) {
-              const retryHtml = await this.fetchWithOpts(pageUrl, headers);
+              const retryHtml = await this.fetchWithOpts(pageUrl, headers, source);
               if (!retryHtml) continue;
               const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent });
               if (!isInvalidAiContentResult(retryResult)) {
@@ -1729,7 +1738,7 @@ export class SourceExecutor {
             break;
           }
           pageUrl = nextUrl;
-          pageHtml = await this.fetchWithOpts(pageUrl, headers);
+          pageHtml = await this.fetchWithOpts(pageUrl, headers, source);
           if (!pageHtml) break;
           console.info('[SrcEx] getContent next page', page + 2, pageUrl.substring(0, 100));
         }
@@ -1996,7 +2005,7 @@ export class SourceExecutor {
         let resp = await this.fetchWithOpts(converted.url, {
           'Accept': 'text/html,application/json,*/*',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        }, 30000);
+        }, source);
         const decoded = this.tryHexDecode_(resp) || resp;
         if (decoded && decoded.length > 50) {
           return this.parseCatalogResponse_(decoded, source, tocUrl);
@@ -2011,7 +2020,7 @@ export class SourceExecutor {
         'Referer': tocUrl,
         ...parseHeader(source.header)
       };
-      let resp = await this.fetchWithOpts(tocUrl, headers);
+      let resp = await this.fetchWithOpts(tocUrl, headers, source);
       // 短响应检测：可能是 JSON 错误（如 {"code":4005,"msg":"认证失败"}）
       if (!resp || resp.length < 100) {
         const body = resp || '';
@@ -2095,7 +2104,7 @@ export class SourceExecutor {
                 while (nextIdx < pageUrls.length) {
                   const i = nextIdx++;
                   try {
-                    const b = await this.fetchWithOpts(pageUrls[i], headers);
+                    const b = await this.fetchWithOpts(pageUrls[i], headers, source);
                     if (b && b.length > 100) {
                       pageResults[i] = b;
                       // 统计本章节的链接数
@@ -2129,7 +2138,7 @@ export class SourceExecutor {
 
             const nextUrl = newUrls[0];
             visitedToc.add(nextUrl);
-            const nextBody = await this.fetchWithOpts(nextUrl, headers);
+            const nextBody = await this.fetchWithOpts(nextUrl, headers, source);
             if (!nextBody || nextBody.length < 100) {
               break;
             }
@@ -2225,7 +2234,7 @@ export class SourceExecutor {
             'Accept': 'text/html,application/json,*/*',
             'Referer': source.sourceUrl || '',
             ...parseHeader(source.header)
-          });
+          }, source);
           if (altResp && altResp.length > 100) {
             let altChapters: BookSourceChapter[] = [];
             if (this.shouldTryJsonToc_(tocRules.toc, altResp)) {
@@ -2260,7 +2269,7 @@ export class SourceExecutor {
             'Referer': tocUrl,
             ...parseHeader(source.header)
           };
-          const retryResp = await this.fetchWithOpts(tocUrl, headers);
+          const retryResp = await this.fetchWithOpts(tocUrl, headers, source);
           if (retryResp && retryResp.length > 100) {
             console.info('[SrcEx] getToc retry got', retryResp.length, 'bytes');
             // 重新走完整解析流程

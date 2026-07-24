@@ -21,6 +21,7 @@ export struct BookSourcePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State sources: BookSource[] = [];
   @State filtered: BookSource[] = [];
+  @State displayed: BookSource[] = [];
   @State searchText: string = '';
   @State sortMode: number = 0;
   @State sortAscending: boolean = true;
@@ -134,7 +135,8 @@ export struct BookSourcePage {
     const query = this.searchText.trim().toLowerCase();
     if (query) list = list.filter((source: BookSource): boolean =>
       source.sourceName.toLowerCase().includes(query) || source.sourceUrl.toLowerCase().includes(query)
-        || (source.group || '').toLowerCase().includes(query));
+        || (source.group || '').toLowerCase().includes(query)
+        || (source.bookSourceComment || '').toLowerCase().includes(query));
     if (this.groupFilter === '已启用') list = list.filter((source: BookSource): boolean => source.enabled);
     else if (this.groupFilter === '已禁用') list = list.filter((source: BookSource): boolean => !source.enabled);
     else if (this.groupFilter === '未分组') list = list.filter((source: BookSource): boolean => !source.group.trim());
@@ -154,18 +156,24 @@ export struct BookSourcePage {
       else if (this.sortMode === 4) result = (a.updateTime || 0) - (b.updateTime || 0);
       else if (this.sortMode === 5) result = (a.respondTime || 0) - (b.respondTime || 0);
       else result = Number(a.enabled) - Number(b.enabled);
+      if (result === 0) result = a.sourceName.localeCompare(b.sourceName, 'zh-CN');
+      if (result === 0) result = a.id - b.id;
       return result * direction;
     });
     this.filtered = list;
+    this.updateDisplayList_();
   }
 
   private getDomain(url: string): string {
-    return url.replace(/^https?:\/\//, '').split('/')[0];
+    return url.replace(/^https?:\/\//, '').split('/')[0] || '其他';
   }
 
-  private getDisplayList(): BookSource[] {
-    if (!this.groupByDomain) return this.filtered;
-    return this.filtered.slice().sort((a: BookSource, b: BookSource): number => {
+  private updateDisplayList_(): void {
+    if (!this.groupByDomain) {
+      this.displayed = this.filtered.slice();
+      return;
+    }
+    this.displayed = this.filtered.slice().sort((a: BookSource, b: BookSource): number => {
       const domain = this.getDomain(a.sourceUrl).localeCompare(this.getDomain(b.sourceUrl));
       return domain !== 0 ? domain : a.sourceName.localeCompare(b.sourceName);
     });
@@ -265,6 +273,18 @@ export struct BookSourcePage {
     });
   }
 
+  private async batchMoveToEdge(toTop: boolean): Promise<void> {
+    const ids = this.selectedSources().map((source: BookSource): number => source.id);
+    if (!this.dao_ || ids.length === 0) return;
+    await this.runOperation_(async (): Promise<void> => {
+      await this.dao_!.moveSourcesToEdge(ids, toTop);
+      this.sortMode = 0;
+      this.sortAscending = true;
+      this.clearSelection_();
+      await this.load();
+    });
+  }
+
   private openAssignGroup(): void {
     const ids = this.selectedSources().map((source: BookSource): number => source.id);
     if (ids.length === 0) return;
@@ -305,17 +325,26 @@ export struct BookSourcePage {
       UiUtil.showToast(this.getUIContext(), { message: '没有可导出的书源', duration: 1500 });
       return;
     }
+    if (this.operationBusy_) return;
+    this.operationBusy_ = true;
+    let openedFile: fileIo.File | null = null;
     try {
       const documentPicker = new picker.DocumentViewPicker(this.getUIContext().getHostContext()!);
-      const uris = await documentPicker.save({ newFileNames: ['bookSources.json'] });
+      const suffix = new Date().toISOString().substring(0, 10).replace(/-/g, '');
+      const uris = await documentPicker.save({ newFileNames: ['bookSources_' + suffix + '.json'] });
       if (!uris || uris.length === 0) return;
       const json = await this.dao_.exportSources(target);
-      const file = fileIo.openSync(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(file.fd, json);
-      fileIo.closeSync(file);
+      openedFile = fileIo.openSync(
+        uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(openedFile.fd, json);
       UiUtil.showToast(this.getUIContext(), { message: '已导出 ' + target.length + ' 个书源', duration: 1800 });
     } catch (e) {
       UiUtil.showToast(this.getUIContext(), { message: '导出失败：' + String(e), duration: 2000 });
+    } finally {
+      if (openedFile) {
+        try { fileIo.closeSync(openedFile); } catch (_e) { /* ignore */ }
+      }
+      this.operationBusy_ = false;
     }
   }
 
@@ -549,7 +578,10 @@ export struct BookSourcePage {
       }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
 
       Row() {
-        Toggle({ type: ToggleType.Switch, isOn: this.groupByDomain }).onChange((value: boolean) => { this.groupByDomain = value; })
+        Toggle({ type: ToggleType.Switch, isOn: this.groupByDomain }).onChange((value: boolean) => {
+          this.groupByDomain = value;
+          this.updateDisplayList_();
+        })
         Text($r('app.string.ui_4a8c9350fe')).fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ left: 8 })
         Blank()
         Text(this.filtered.length + ' 项').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
@@ -563,8 +595,19 @@ export struct BookSourcePage {
           .layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
         List({ space: 4 }) {
-          ForEach(this.getDisplayList(), (source: BookSource) => {
-            ListItem() { this.sourceItem(source) }
+          ForEach(this.displayed, (source: BookSource, index: number) => {
+            ListItem() {
+              Column() {
+                if (this.groupByDomain &&
+                  (index === 0 || this.getDomain(this.displayed[index - 1].sourceUrl) !==
+                    this.getDomain(source.sourceUrl))) {
+                  Text(this.getDomain(source.sourceUrl)).fontSize(13).fontWeight(FontWeight.Medium)
+                    .fontColor(ThemeColors.primary(this.isDark)).width('100%')
+                    .padding({ left: 8, right: 8, top: 8, bottom: 4 })
+                }
+                this.sourceItem(source)
+              }.width('100%')
+            }
           }, (source: BookSource): string =>
             this.listRevision_.toString() + ':' + source.id.toString() + ':' +
               (source.enabled ? '1' : '0') + ':' + (source.enabledExplore ? '1' : '0') + ':' +
@@ -580,6 +623,8 @@ export struct BookSourcePage {
           this.actionButton('禁用', () => { this.batchEnable(false); })
           this.actionButton('启用发现', () => { this.batchExplore(true); })
           this.actionButton('停用发现', () => { this.batchExplore(false); })
+          this.actionButton('置顶', () => { this.batchMoveToEdge(true); })
+          this.actionButton('置底', () => { this.batchMoveToEdge(false); })
           this.actionButton('分组', () => { this.openAssignGroup(); })
           this.actionButton('校验', () => { this.openCheckConfig(); })
           this.actionButton('导出', () => { this.doExport(); })
