@@ -14,11 +14,22 @@ import {
   CloudCredential,
   CloudSource,
   CLOUD_PROVIDER_BAIDU_NETDISK,
+  CLOUD_PROVIDER_OPDS,
   CLOUD_PROVIDER_WEBDAV,
+  DEFAULT_OPDS_USER_AGENT,
+  PROJECT_GUTENBERG_BUILTIN_KEY,
+  PROJECT_GUTENBERG_LEGACY_OPDS_ENDPOINT,
+  PROJECT_GUTENBERG_OPDS_ENDPOINT,
+  PROJECT_GUTENBERG_SOURCE_NAME,
   createDefaultCloudSource,
+  createDefaultOpdsCloudConfig,
   createEmptyCloudCredential,
   isBaiduNetdiskProvider,
   isLocalFolderProvider,
+  isOpdsProvider,
+  isProjectGutenbergSource,
+  parseOpdsCloudConfig,
+  stringifyOpdsCloudConfig,
 } from '../../model/CloudSource';
 import { CloudPath } from './CloudPath';
 import { CloudListPage } from './CloudStorageProvider';
@@ -73,6 +84,52 @@ export class CloudSourceRepository {
 
   async listEnabled(): Promise<CloudSource[]> {
     return await this.sourceTable_.listEnabled();
+  }
+
+  /**
+   * 确保官方 Project Gutenberg OPDS 来源存在。
+   *
+   * 内置来源使用匿名占位凭证，既满足现有凭证完整性校验，也不会发送 Authorization。
+   */
+  async ensureBuiltInSources(): Promise<void> {
+    const all = await this.sourceTable_.listAll();
+    for (let i = 0; i < all.length; i++) {
+      if (isProjectGutenbergSource(all[i])) {
+        let changed = false;
+        const endpoint = (all[i].endpoint || '').trim().replace(new RegExp('/+$'), '');
+        const legacyEndpoint = PROJECT_GUTENBERG_LEGACY_OPDS_ENDPOINT.replace(new RegExp('/+$'), '');
+        if (endpoint === legacyEndpoint) {
+          all[i].endpoint = PROJECT_GUTENBERG_OPDS_ENDPOINT;
+          changed = true;
+        }
+        // 早期版本误用了 Android Legado 的项目地址，Gutenberg 会按客户端标识执行访问控制。
+        // 只迁移旧的内置默认值，保留用户手动填写的 User-Agent。
+        const cfg = parseOpdsCloudConfig(all[i].configJson);
+        if (cfg.userAgent.indexOf('github.com/gedoor/legado') >= 0) {
+          cfg.userAgent = DEFAULT_OPDS_USER_AGENT;
+          all[i].configJson = stringifyOpdsCloudConfig(cfg);
+          changed = true;
+        }
+        if (changed) {
+          all[i].updatedAt = Date.now();
+          await this.sourceTable_.update(all[i]);
+        }
+        return;
+      }
+    }
+    const cfg = createDefaultOpdsCloudConfig();
+    cfg.builtin = PROJECT_GUTENBERG_BUILTIN_KEY;
+    await this.save({
+      name: PROJECT_GUTENBERG_SOURCE_NAME,
+      providerType: CLOUD_PROVIDER_OPDS,
+      endpoint: PROJECT_GUTENBERG_OPDS_ENDPOINT,
+      rootPath: '',
+      configJson: stringifyOpdsCloudConfig(cfg),
+      enabled: true,
+      username: 'anonymous',
+      secret: 'anonymous',
+      updateSecret: true,
+    });
   }
 
   async getById(id: number): Promise<CloudSource | null> {
@@ -298,6 +355,9 @@ export class CloudSourceRepository {
     const source = await this.sourceTable_.getById(id);
     if (!source) {
       return;
+    }
+    if (isProjectGutenbergSource(source)) {
+      throw new Error('Project Gutenberg 是内置书库，可停用但不能删除');
     }
     await this.bindingTable_.deleteBySource(id);
     await this.sourceTable_.delete(id);
@@ -555,6 +615,23 @@ export class CloudSourceRepository {
       const pair: CloudCredentialPair = { username: username, secret: secret };
       return pair;
     }
+    if (isOpdsProvider(providerType)) {
+      let username = (input.username || '').trim();
+      let secret = input.secret || '';
+      if (!username && oldCred && oldCred.username !== 'anonymous') {
+        username = oldCred.username || '';
+      }
+      if (!secret && oldCred && oldCred.secret !== 'anonymous') {
+        secret = oldCred.secret || '';
+      }
+      if (!!username !== !!secret) {
+        throw new Error('OPDS 账号和密码需同时填写，公开书库可全部留空');
+      }
+      return {
+        username: username || 'anonymous',
+        secret: secret || 'anonymous',
+      };
+    }
 
     // webdav 及其他：严格要求账号密码
     let username = (input.username || '').trim();
@@ -625,6 +702,32 @@ export class CloudSourceRepository {
         shouldWrite: shouldWrite,
       };
       return pair;
+    }
+    if (isOpdsProvider(providerType)) {
+      let finalUser = (input.username || '').trim();
+      let finalSecret = '';
+      if (input.updateSecret === true) {
+        finalSecret = input.secret || '';
+      } else if (input.secret) {
+        finalSecret = input.secret;
+      } else if (oldCred && oldCred.secret !== 'anonymous') {
+        finalSecret = oldCred.secret || '';
+      }
+      if (!finalUser && oldCred && oldCred.username !== 'anonymous') {
+        finalUser = oldCred.username || '';
+      }
+      if (!!finalUser !== !!finalSecret) {
+        throw new Error('OPDS 账号和密码需同时填写，公开书库可全部留空');
+      }
+      const anonymous = !finalUser && !finalSecret;
+      const username = anonymous ? 'anonymous' : finalUser;
+      const secret = anonymous ? 'anonymous' : finalSecret;
+      const unchanged = !!(oldCred && oldCred.username === username && oldCred.secret === secret);
+      return {
+        username: username,
+        secret: secret,
+        shouldWrite: !unchanged,
+      };
     }
 
     let finalUser = (input.username || '').trim();

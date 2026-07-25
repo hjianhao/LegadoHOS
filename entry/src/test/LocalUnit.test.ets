@@ -12,6 +12,14 @@ import { extractAiBookMetadata, isSafeAiImportUrl, parseAiRulesJson,
   isUsableAiExtractedContent } from '../main/ets/engine/ai/AiBookImporter';
 import { isInvalidAiContentResult, isLikelySameChapterPageUrl,
   sniffNextContentPageUrl } from '../main/ets/engine/source/SourceExecutor';
+import { OpdsParser } from '../main/ets/service/cloud/OpdsParser';
+import { mapGutenbergFeedToGutendex } from '../main/ets/service/cloud/OpdsCloudProvider';
+import { WebDavHttp } from '../main/ets/service/cloud/WebDavHttp';
+import { buildBaiduSearchRequestUrl } from '../main/ets/service/cloud/BaiduNetdiskProvider';
+import {
+  createDefaultOpdsCloudConfig,
+  PROJECT_GUTENBERG_OPDS_ENDPOINT,
+} from '../main/ets/model/CloudSource';
 
 export default function localUnitTest() {
   describe('localUnitTest', () => {
@@ -41,6 +49,149 @@ export default function localUnitTest() {
       // Defines a variety of assertion methods, which are used to declare expected boolean conditions.
       expect(a).assertContain(b);
       expect(a).assertEqual(a);
+    });
+    it('opds1ParsesNavigationAcquisitionAndNextPage', 0, () => {
+      const xml = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">' +
+        '<title>测试书库</title><link rel="next" href="/opds/?page=2" title="Next Page"/>' +
+        '<link rel="search" type="application/opensearchdescription+xml" href="/opds/search.xml"/>' +
+        '<entry><id>book-1</id><title>测试书</title><author><name>作者甲</name></author>' +
+        '<updated>2026-07-24T00:00:00Z</updated>' +
+        '<link rel="http://opds-spec.org/acquisition" type="application/epub+zip" ' +
+        'title="EPUB" length="1234" href="/files/book.epub"/></entry>' +
+        '<entry><title>分类</title><link rel="subsection" ' +
+        'type="application/atom+xml;profile=opds-catalog" href="categories/1"/></entry></feed>';
+      const page = OpdsParser.parse(xml, 'https://example.com/opds/index.xml');
+      expect(page.title).assertEqual('测试书库');
+      expect(page.acquisitions.length).assertEqual(1);
+      expect(page.acquisitions[0].author).assertEqual('作者甲');
+      expect(page.acquisitions[0].url).assertEqual('https://example.com/files/book.epub');
+      expect(OpdsParser.fileName(page.acquisitions[0])).assertEqual('测试书 · EPUB.epub');
+      expect(page.navigation.length).assertEqual(2);
+      expect(page.navigation[0].url).assertEqual('https://example.com/opds/categories/1');
+      expect(page.navigation[1].isNextPage).assertTrue();
+      expect(page.searchUrl).assertEqual('https://example.com/opds/search.xml');
+      expect(page.searchType).assertEqual('application/opensearchdescription+xml');
+    });
+    it('opdsOpenSearchParsesAtomTemplate', 0, () => {
+      const xml = '<?xml version="1.0"?><OpenSearchDescription ' +
+        'xmlns="http://a9.com/-/spec/opensearch/1.1/">' +
+        '<Url type="text/html" template="/search?q={searchTerms}"/>' +
+        '<Url type="application/atom+xml" template="/opds/search?query={searchTerms}&amp;page={startPage?}"/>' +
+        '</OpenSearchDescription>';
+      const template = OpdsParser.parseOpenSearchTemplate(
+        xml,
+        'https://example.com/opds/description.xml'
+      );
+      expect(template)
+        .assertEqual('https://example.com/opds/search?query={searchTerms}&page={startPage?}');
+    });
+    it('opds2ParsesPublicationAndRelativeUrl', 0, () => {
+      const json = JSON.stringify({
+        metadata: { title: 'OPDS 2' },
+        publications: [{
+          metadata: { title: 'JSON 书', author: [{ name: '作者乙' }], identifier: 'urn:book:2' },
+          links: [{
+            rel: 'http://opds-spec.org/acquisition',
+            type: 'application/pdf',
+            href: '../download/book.pdf',
+            length: 2048,
+          }],
+        }],
+        links: [{ rel: 'next', href: '?page=2' }],
+      });
+      const page = OpdsParser.parse(json, 'https://example.com/opds/v2/catalog.json');
+      expect(page.acquisitions.length).assertEqual(1);
+      expect(page.acquisitions[0].author).assertEqual('作者乙');
+      expect(page.acquisitions[0].url).assertEqual('https://example.com/opds/download/book.pdf');
+      expect(page.navigation[0].url).assertEqual('https://example.com/opds/v2/catalog.json?page=2');
+    });
+    it('opdsDefaultUserAgentIdentifiesHarmonyClientContact', 0, () => {
+      const userAgent = createDefaultOpdsCloudConfig().userAgent;
+      expect(userAgent).assertContain('LegadoHOS/');
+      expect(userAgent).assertContain('github.com/hjianhao/LegadoHOS/issues');
+      expect(userAgent.indexOf('github.com/gedoor/legado')).assertEqual(-1);
+      expect(PROJECT_GUTENBERG_OPDS_ENDPOINT).assertEqual('https://www.gutenberg.org/ebooks.opds/');
+    });
+    it('gutendexFallbackMapsMetadataAndOfficialMirrorDownload', 0, () => {
+      const json = JSON.stringify({
+        count: 1,
+        next: 'https://gutendex.com/books/?page=2',
+        previous: null,
+        results: [{
+          id: 2701,
+          title: 'Moby Dick',
+          authors: [{ name: 'Melville, Herman' }],
+          formats: {
+            'application/epub+zip': 'https://www.gutenberg.org/ebooks/2701.epub3.images',
+          },
+        }],
+      });
+      const page = OpdsParser.parse(json, 'https://gutendex.com/books/');
+      expect(page.acquisitions.length).assertEqual(1);
+      expect(page.acquisitions[0].author).assertEqual('Melville, Herman');
+      expect(page.acquisitions[0].url)
+        .assertEqual('https://gutenberg.pglaf.org/cache/epub/2701/pg2701-images.epub');
+      expect(page.navigation[0].isNextPage).assertTrue();
+    });
+    it('gutenbergCategoryFeedMapsToGutendex', 0, () => {
+      expect(mapGutenbergFeedToGutendex(
+        'https://www.gutenberg.org/ebooks/search.opds?sort_order=downloads'
+      )).assertEqual('https://gutendex.com/books/?sort=popular');
+      expect(mapGutenbergFeedToGutendex(
+        'https://www.gutenberg.org/ebooks/search.opds/?sort_order=release_date'
+      )).assertEqual('https://gutendex.com/books/?sort=descending');
+      expect(mapGutenbergFeedToGutendex(
+        'https://www.gutenberg.org/ebooks/search.opds?query=Moby+Dick'
+      )).assertEqual('https://gutendex.com/books/?search=Moby%20Dick');
+      expect(mapGutenbergFeedToGutendex('https://example.com/search.opds')).assertEqual('');
+    });
+    it('baiduNetdiskSearchUsesRecursiveCurrentDirectory', 0, () => {
+      const url = buildBaiduSearchRequestUrl(
+        'test token',
+        '/apps/阅读/科幻',
+        '三体 完整版',
+        2,
+        1000
+      );
+      expect(url).assertContain('method=search');
+      expect(url).assertContain('access_token=test%20token');
+      expect(url).assertContain('dir=%2Fapps%2F%E9%98%85%E8%AF%BB%2F%E7%A7%91%E5%B9%BB');
+      expect(url).assertContain('key=%E4%B8%89%E4%BD%93%20%E5%AE%8C%E6%95%B4%E7%89%88');
+      expect(url).assertContain('recursion=1');
+      expect(url).assertContain('page=2');
+      expect(url).assertContain('num=1000');
+    });
+    it('webDavBasicSearchEscapesScopeAndLikeWildcards', 0, () => {
+      const body = WebDavHttp.basicSearchBody(
+        'https://dav.example.com/books/?owner=a&kind=epub',
+        '三体_100%'
+      );
+      expect(body).assertContain('<D:basicsearch>');
+      expect(body).assertContain('<D:depth>infinity</D:depth>');
+      expect(body).assertContain('https://dav.example.com/books/?owner=a&amp;kind=epub');
+      expect(body).assertContain('<D:literal>%三体\\_100\\%%</D:literal>');
+      expect(body).assertContain('caseless="yes"');
+    });
+    it('webDavSearchMultiStatusParsesNestedBook', 0, () => {
+      const xml = '<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">' +
+        '<D:response><D:href>/dav/books/%E7%A7%91%E5%B9%BB/%E4%B8%89%E4%BD%93.epub</D:href>' +
+        '<D:propstat><D:prop><D:resourcetype/><D:getcontentlength>2048</D:getcontentlength>' +
+        '<D:getlastmodified>Fri, 24 Jul 2026 10:00:00 GMT</D:getlastmodified>' +
+        '<D:getetag>"book-etag"</D:getetag><D:getcontenttype>application/epub+zip</D:getcontenttype>' +
+        '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>';
+      const entries = WebDavHttp.parsePropfindResponse(xml, {
+        requestUrl: 'https://dav.example.com/dav/books/',
+        includeDirectories: true,
+      });
+      expect(entries.length).assertEqual(1);
+      expect(entries[0].name).assertEqual('三体.epub');
+      expect(entries[0].contentLength).assertEqual(2048);
+      expect(entries[0].etag).assertEqual('book-etag');
+      expect(WebDavHttp.hrefToRemotePath(
+        entries[0].href,
+        'https://dav.example.com/dav',
+        'books'
+      )).assertEqual('科幻/三体.epub');
     });
     it('htmlTextKeepsInlineChildOrder', 0, () => {
       const parser = new HtmlParser();

@@ -20,7 +20,13 @@ import {
   CLOUD_DISPLAY_ERROR,
   CLOUD_DISPLAY_OUTDATED,
 } from '../model/CloudBookListItem';
-import { CloudSource, cloudProviderDisplayName } from '../model/CloudSource';
+import {
+  CloudSource,
+  cloudProviderDisplayName,
+  isBaiduNetdiskProvider,
+  isOpdsProvider,
+  isWebDavProvider,
+} from '../model/CloudSource';
 import {
   CloudBookRepository,
   CLOUD_SORT_NAME_ASC,
@@ -60,6 +66,7 @@ export struct CloudBookPage {
   @State allItems: CloudBookListItem[] = [];
   @State viewItems: CloudBookListItem[] = [];
   @State searchKey: string = '';
+  @State isRemoteSearchResult: boolean = false;
   @State sortMode: CloudBookSortMode = CLOUD_SORT_NAME_ASC;
   @State sortLabel: string = '名称';
   @State isLoading: boolean = true;
@@ -212,6 +219,7 @@ export struct CloudBookPage {
 
   private async reloadSources_(): Promise<void> {
     const sourceRepo = new CloudSourceRepository();
+    await sourceRepo.ensureBuiltInSources();
     const all = await sourceRepo.listAll();
     this.sources = all.slice();
     if (this.currentSourceId > 0 && this.findSource_(this.currentSourceId)) {
@@ -246,6 +254,7 @@ export struct CloudBookPage {
     this.allItems = [];
     this.viewItems = [];
     this.searchKey = '';
+    this.isRemoteSearchResult = false;
     this.statusHint = '';
     this.errorText = '';
     this.currentSourceName = '';
@@ -293,6 +302,7 @@ export struct CloudBookPage {
     try {
       const path = CloudPath.normalizeRemotePath(remotePath || '');
       const result = await this.repo_.listDirectory(this.currentSourceId, path);
+      this.isRemoteSearchResult = false;
       this.currentPath = result.remotePath;
       this.applySourceMeta_(result.source.id);
 
@@ -326,7 +336,50 @@ export struct CloudBookPage {
     if (!this.repo_) {
       this.repo_ = new CloudBookRepository();
     }
-    this.viewItems = this.repo_.filterAndSort(this.allItems, this.searchKey, this.sortMode);
+    const keyword = this.isRemoteSearchResult ? '' : this.searchKey;
+    this.viewItems = this.repo_.filterAndSort(this.allItems, keyword, this.sortMode);
+  }
+
+  private async searchCloud_(keyword: string): Promise<void> {
+    const key = (keyword || '').trim();
+    this.searchKey = key;
+    if (!key) {
+      await this.loadDirectory_(this.currentPath);
+      return;
+    }
+    if (this.currentSourceId <= 0) {
+      return;
+    }
+    if (!this.repo_) {
+      this.repo_ = new CloudBookRepository();
+    }
+    this.isLoading = true;
+    this.errorText = '';
+    this.statusHint = '';
+    try {
+      const searchPath = this.isCurrentOpds_() ? '' : this.currentPath;
+      const result = await this.repo_.searchRemote(this.currentSourceId, key, searchPath);
+      this.currentPath = result.remotePath;
+      const names: string[] = [];
+      const paths: string[] = [];
+      for (let i = 0; i < result.breadcrumbs.length; i++) {
+        names.push(result.breadcrumbs[i].name);
+        paths.push(result.breadcrumbs[i].path);
+      }
+      this.breadcrumbNames = names;
+      this.breadcrumbPaths = paths;
+      this.allItems = this.repo_.applyTransferOverlay(result.items.slice());
+      this.isRemoteSearchResult = true;
+      this.applyFilterSort_();
+      this.statusHint = '搜索“' + key + '”：' + result.items.length + ' 项';
+    } catch (e) {
+      this.errorText = (e as Error).message || '搜索失败';
+      this.allItems = [];
+      this.viewItems = [];
+      console.warn('[CloudBookPage] searchCloud failed:', (e as Error).message);
+    } finally {
+      this.isLoading = false;
+    }
   }
 
   private enterDir_(item: CloudBookListItem): void {
@@ -334,6 +387,7 @@ export struct CloudBookPage {
       return;
     }
     this.searchKey = '';
+    this.isRemoteSearchResult = false;
     this.loadDirectory_(item.file.remotePath);
   }
 
@@ -652,6 +706,20 @@ export struct CloudBookPage {
     }
   }
 
+  private isCurrentOpds_(): boolean {
+    const source = this.findSource_(this.currentSourceId);
+    return !!(source && isOpdsProvider(source.providerType));
+  }
+
+  private supportsCurrentRemoteSearch_(): boolean {
+    const source = this.findSource_(this.currentSourceId);
+    if (!source) {
+      return false;
+    }
+    return isOpdsProvider(source.providerType) || isWebDavProvider(source.providerType) ||
+      isBaiduNetdiskProvider(source.providerType);
+  }
+
   build() {
     Column() {
       // 顶栏
@@ -664,7 +732,7 @@ export struct CloudBookPage {
           this.onBack_();
         })
 
-        Text(this.inBrowse ? (this.currentSourceName || '云端目录') : '云端书库')
+        Text(this.inBrowse ? (this.currentSourceName || '在线目录') : '在线书库')
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -710,7 +778,7 @@ export struct CloudBookPage {
   @Builder
   private buildLibraryList_() {
     Column() {
-      Text('选择一个云端书库进入浏览。每个书库对应独立 WebDAV 根目录。')
+      Text('选择书库进入浏览。支持 OPDS 在线目录、WebDAV 与网盘来源。')
         .fontSize(12)
         .fontColor(ThemeColors.secondaryText(this.isDark))
         .width('100%')
@@ -742,10 +810,10 @@ export struct CloudBookPage {
         .justifyContent(FlexAlign.Center)
       } else if (this.sources.length === 0) {
         Column() {
-          Text('尚未配置云端书库')
+          Text('尚未配置在线书库')
             .fontSize(15)
             .fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('添加 WebDAV 来源后即可浏览云端书籍')
+          Text('可添加 OPDS、WebDAV 或网盘来源')
             .fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 8 })
@@ -765,7 +833,7 @@ export struct CloudBookPage {
           ForEach(this.sources, (source: CloudSource) => {
             ListItem() {
               Row() {
-                Text('☁')
+                Text(isOpdsProvider(source.providerType) ? '📚' : '☁')
                   .fontSize(24)
                   .width(40)
                   .textAlign(TextAlign.Center)
@@ -795,7 +863,9 @@ export struct CloudBookPage {
                         color: ThemeColors.primary(this.isDark),
                         radius: 4,
                       })
-                    Text(source.rootPath ? ('根目录: ' + source.rootPath) : '根目录: (服务器根)')
+                    Text(isOpdsProvider(source.providerType)
+                      ? '只读在线目录'
+                      : (source.rootPath ? ('根目录: ' + source.rootPath) : '根目录: (服务器根)'))
                       .fontSize(10)
                       .fontColor(ThemeColors.secondaryText(this.isDark))
                       .margin({ left: 8 })
@@ -862,7 +932,9 @@ export struct CloudBookPage {
       // 来源摘要 + 返回列表
       Row() {
         Column() {
-          Text(this.currentRootPath ? ('根目录: ' + this.currentRootPath) : '根目录: (服务器根)')
+          Text(this.isCurrentOpds_()
+            ? 'OPDS 只读在线目录'
+            : (this.currentRootPath ? ('根目录: ' + this.currentRootPath) : '根目录: (服务器根)'))
             .fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .maxLines(1)
@@ -921,17 +993,36 @@ export struct CloudBookPage {
 
       // 搜索 + 排序 + 多选下载
       Row() {
-        Search({ placeholder: '搜索当前目录', value: this.searchKey })
+        Search({
+          placeholder: this.isCurrentOpds_() ? '输入书名或作者' : '搜索当前目录及子目录',
+          value: this.searchKey,
+        })
           .layoutWeight(1)
           .height(40)
           .onChange((v: string) => {
             this.searchKey = v;
+            this.isRemoteSearchResult = false;
             this.applyFilterSort_();
           })
           .onSubmit((v: string) => {
             this.searchKey = v;
-            this.applyFilterSort_();
+            if (this.supportsCurrentRemoteSearch_()) {
+              this.searchCloud_(v);
+            } else {
+              this.applyFilterSort_();
+            }
           })
+        if (this.supportsCurrentRemoteSearch_()) {
+          Button('搜索')
+            .fontSize(13)
+            .height(36)
+            .margin({ left: 8 })
+            .backgroundColor(ThemeColors.primary(this.isDark))
+            .fontColor(ThemeColors.onPrimary(this.isDark))
+            .onClick(() => {
+              this.searchCloud_(this.searchKey);
+            })
+        }
         Button(this.sortLabel)
           .fontSize(13)
           .height(36)
@@ -1017,7 +1108,7 @@ export struct CloudBookPage {
       if (this.isLoading) {
         Column() {
           LoadingProgress().width(36).height(36).color(ThemeColors.primary(this.isDark))
-          Text('正在读取云端目录…')
+          Text(this.isCurrentOpds_() ? '正在读取 OPDS 目录…' : '正在读取云端目录…')
             .fontSize(13)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 8 })
@@ -1050,7 +1141,7 @@ export struct CloudBookPage {
         .justifyContent(FlexAlign.Center)
       } else if (this.viewItems.length === 0) {
         Column() {
-          Text(this.searchKey ? '无匹配文件' : '当前目录为空')
+          Text(this.searchKey ? '无匹配内容' : '当前目录为空')
             .fontSize(14)
             .fontColor(ThemeColors.secondaryText(this.isDark))
         }

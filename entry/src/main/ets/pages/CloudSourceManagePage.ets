@@ -7,7 +7,12 @@
 import { AppDatabase } from '../data/database/AppDatabase';
 import { CloudCredentialStore } from '../data/preferences/CloudCredentialStore';
 import { SettingsStore } from '../data/preferences/SettingsStore';
-import { CloudSource, cloudProviderDisplayName } from '../model/CloudSource';
+import {
+  CloudSource,
+  cloudProviderDisplayName,
+  isOpdsProvider,
+  isProjectGutenbergSource,
+} from '../model/CloudSource';
 import { CloudSourceRepository } from '../service/cloud/CloudSourceRepository';
 import { CloudPath } from '../service/cloud/CloudPath';
 import { ensureCloudProvidersRegistered } from '../service/cloud/CloudProviderBootstrap';
@@ -53,12 +58,16 @@ export struct CloudSourceManagePage {
 
   private async loadData_(): Promise<void> {
     const repo = new CloudSourceRepository();
+    await repo.ensureBuiltInSources();
     const list = await repo.listAll();
     // 整体替换，触发 UI 刷新
     this.sources = list.slice();
     // 统计缺密码的来源（备份恢复后常见）
     let missing = 0;
     for (let i = 0; i < list.length; i++) {
+      if (isOpdsProvider(list[i].providerType)) {
+        continue;
+      }
       try {
         const cred = await repo.getCredential(list[i].id);
         if (!cred || !cred.secret) {
@@ -155,7 +164,7 @@ export struct CloudSourceManagePage {
           UiUtil.back(this.getUIContext());
         })
 
-        Text('云端书库管理')
+        Text('在线书库管理')
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(ThemeColors.onBackground(this.isDark))
@@ -173,7 +182,7 @@ export struct CloudSourceManagePage {
       .width('100%')
       .padding({ left: 8, right: 12, top: 8, bottom: 8 })
 
-      Text('可配置多个 WebDAV 网盘；每个来源独立根目录与账号。下载后的书作为本地书进入书架。')
+      Text('支持 OPDS 在线书库、WebDAV 与网盘来源。下载后的书作为本地书进入书架。')
         .fontSize(12)
         .fontColor(ThemeColors.secondaryText(this.isDark))
         .padding({ left: 16, right: 16, bottom: 8 })
@@ -225,7 +234,7 @@ export struct CloudSourceManagePage {
           Text('尚未配置云端来源')
             .fontSize(15)
             .fontColor(ThemeColors.secondaryText(this.isDark))
-          Text('点击右上角「新增」添加 WebDAV 服务器')
+          Text('点击右上角「新增」添加 OPDS、WebDAV 或网盘来源')
             .fontSize(12)
             .fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 8 })
@@ -265,7 +274,9 @@ export struct CloudSourceManagePage {
                         .fontColor(ThemeColors.primary(this.isDark))
                         .padding({ left: 6, right: 6, top: 2, bottom: 2 })
                         .border({ width: 0.5, color: ThemeColors.primary(this.isDark), radius: 4 })
-                      Text(source.rootPath ? ('根目录: ' + source.rootPath) : '根目录: (服务器根)')
+                      Text(isOpdsProvider(source.providerType)
+                        ? (isProjectGutenbergSource(source) ? '内置 · 公版书目录' : '只读在线目录')
+                        : (source.rootPath ? ('根目录: ' + source.rootPath) : '根目录: (服务器根)'))
                         .fontSize(10)
                         .fontColor(ThemeColors.secondaryText(this.isDark))
                         .margin({ left: 8 })
@@ -289,28 +300,30 @@ export struct CloudSourceManagePage {
                 }
                 .width('100%')
 
-                Row() {
-                  Button('编辑')
-                    .fontSize(13)
-                    .height(32)
-                    .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-                    .fontColor(ThemeColors.primary(this.isDark))
-                    .onClick(() => {
-                      this.openEdit_(source.id);
-                    })
-                  Button('删除')
-                    .fontSize(13)
-                    .height(32)
-                    .margin({ left: 8 })
-                    .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-                    .fontColor(ThemeColors.error(this.isDark))
-                    .onClick(() => {
-                      this.confirmDelete_(source);
-                    })
+                if (!isProjectGutenbergSource(source)) {
+                  Row() {
+                    Button('编辑')
+                      .fontSize(13)
+                      .height(32)
+                      .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+                      .fontColor(ThemeColors.primary(this.isDark))
+                      .onClick(() => {
+                        this.openEdit_(source.id);
+                      })
+                    Button('删除')
+                      .fontSize(13)
+                      .height(32)
+                      .margin({ left: 8 })
+                      .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+                      .fontColor(ThemeColors.error(this.isDark))
+                      .onClick(() => {
+                        this.confirmDelete_(source);
+                      })
+                  }
+                  .width('100%')
+                  .margin({ top: 10 })
+                  .justifyContent(FlexAlign.End)
                 }
-                .width('100%')
-                .margin({ top: 10 })
-                .justifyContent(FlexAlign.End)
               }
               .width('100%')
               .padding(14)

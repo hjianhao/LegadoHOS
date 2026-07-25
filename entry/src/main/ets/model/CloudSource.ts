@@ -5,7 +5,7 @@
  * 同一 endpoint 可配置多个来源；敏感凭证不落本对象。
  */
 
-/** Provider 类型；webdav 为首期，localfolder 为阶段 7 扩展示例。 */
+/** Provider 类型；通过 Registry 按协议扩展。 */
 export type CloudProviderType = string;
 
 export const CLOUD_PROVIDER_WEBDAV: CloudProviderType = 'webdav';
@@ -13,11 +13,21 @@ export const CLOUD_PROVIDER_WEBDAV: CloudProviderType = 'webdav';
 export const CLOUD_PROVIDER_LOCAL_FOLDER: CloudProviderType = 'localfolder';
 /** 百度网盘 Provider（OAuth2 + xpan API）。 */
 export const CLOUD_PROVIDER_BAIDU_NETDISK: CloudProviderType = 'baidu-netdisk';
+/** OPDS 1.x / 2.0 在线出版物目录（只读）。 */
+export const CLOUD_PROVIDER_OPDS: CloudProviderType = 'opds';
 
 /** 百度网盘 xpan API 根。 */
 export const BAIDU_NETDISK_ENDPOINT = 'https://pan.baidu.com/rest/2.0/xpan';
 /** 固定回调（须在开放平台与 module.json5 同步登记）。 */
 export const BAIDU_DEFAULT_REDIRECT_URI = 'aireader://auth';
+/** Project Gutenberg 官方 OPDS 1.x 根目录（包含热门、最新、随机等导航）。 */
+export const PROJECT_GUTENBERG_OPDS_ENDPOINT = 'https://www.gutenberg.org/ebooks.opds/';
+/** 早期内置版本使用的搜索结果页，启动时迁移到真正的根目录。 */
+export const PROJECT_GUTENBERG_LEGACY_OPDS_ENDPOINT = 'https://www.gutenberg.org/ebooks/search.opds/';
+export const PROJECT_GUTENBERG_SOURCE_NAME = 'Project Gutenberg';
+export const PROJECT_GUTENBERG_BUILTIN_KEY = 'project-gutenberg';
+export const DEFAULT_OPDS_USER_AGENT =
+  'LegadoHOS/1.0 (+https://github.com/hjianhao/LegadoHOS/issues)';
 
 export interface CloudSource {
   id: number;
@@ -59,6 +69,14 @@ export interface LocalFolderCloudConfig {
 export interface BaiduNetdiskConfig {
   scope: string;
   pageSize: number;
+}
+
+/** OPDS 非敏感配置。账号密码仍只进入 CloudCredentialStore。 */
+export interface OpdsCloudConfig {
+  connectTimeoutMs: number;
+  transferTimeoutMs: number;
+  userAgent: string;
+  builtin: string;
 }
 
 export interface CloudCredential {
@@ -118,6 +136,16 @@ export function createDefaultBaiduNetdiskConfig(): BaiduNetdiskConfig {
   };
 }
 
+export function createDefaultOpdsCloudConfig(): OpdsCloudConfig {
+  return {
+    connectTimeoutMs: 20000,
+    transferTimeoutMs: 120000,
+    // Project Gutenberg 要求 OPDS 客户端携带带联系地址的明确 User-Agent。
+    userAgent: DEFAULT_OPDS_USER_AGENT,
+    builtin: '',
+  };
+}
+
 export function createEmptyCloudCredential(): CloudCredential {
   return {
     username: '',
@@ -147,6 +175,9 @@ export function cloudProviderDisplayName(type: string): string {
   if (t === CLOUD_PROVIDER_BAIDU_NETDISK) {
     return '百度网盘';
   }
+  if (t === CLOUD_PROVIDER_OPDS) {
+    return 'OPDS';
+  }
   return t || '未知';
 }
 
@@ -163,9 +194,29 @@ export function isBaiduNetdiskProvider(type: string): boolean {
   return (type || '').trim() === CLOUD_PROVIDER_BAIDU_NETDISK;
 }
 
-/** 已支持的 Provider 类型（供编辑页选择）。 */
+export function isOpdsProvider(type: string): boolean {
+  return (type || '').trim() === CLOUD_PROVIDER_OPDS;
+}
+
+export function isProjectGutenbergSource(source: CloudSource): boolean {
+  if (!source || !isOpdsProvider(source.providerType)) {
+    return false;
+  }
+  const endpoint = (source.endpoint || '').trim().replace(new RegExp('/+$'), '');
+  if (endpoint === PROJECT_GUTENBERG_OPDS_ENDPOINT.replace(new RegExp('/+$'), '')) {
+    return true;
+  }
+  try {
+    const cfg = JSON.parse(source.configJson || '{}') as Record<string, string | number>;
+    return cfg['builtin'] === PROJECT_GUTENBERG_BUILTIN_KEY;
+  } catch (_e) {
+    return false;
+  }
+}
+
+/** 可供用户新建的 Provider 类型；localfolder 仅保留旧数据兼容与内部演示。 */
 export function listSupportedCloudProviderTypes(): string[] {
-  return [CLOUD_PROVIDER_WEBDAV, CLOUD_PROVIDER_LOCAL_FOLDER, CLOUD_PROVIDER_BAIDU_NETDISK];
+  return [CLOUD_PROVIDER_WEBDAV, CLOUD_PROVIDER_OPDS, CLOUD_PROVIDER_BAIDU_NETDISK];
 }
 
 /** 解析百度 configJson；失败返回默认值。 */
@@ -192,6 +243,41 @@ export function stringifyBaiduNetdiskConfig(cfg: BaiduNetdiskConfig): string {
   const row: Record<string, string | number> = {
     'scope': cfg.scope || 'basic,netdisk',
     'pageSize': cfg.pageSize > 0 ? cfg.pageSize : 100,
+  };
+  return JSON.stringify(row);
+}
+
+export function parseOpdsCloudConfig(configJson: string): OpdsCloudConfig {
+  const defaults = createDefaultOpdsCloudConfig();
+  if (!configJson) {
+    return defaults;
+  }
+  try {
+    const obj = JSON.parse(configJson) as Record<string, string | number>;
+    if (typeof obj['connectTimeoutMs'] === 'number' && (obj['connectTimeoutMs'] as number) > 0) {
+      defaults.connectTimeoutMs = obj['connectTimeoutMs'] as number;
+    }
+    if (typeof obj['transferTimeoutMs'] === 'number' && (obj['transferTimeoutMs'] as number) > 0) {
+      defaults.transferTimeoutMs = obj['transferTimeoutMs'] as number;
+    }
+    if (typeof obj['userAgent'] === 'string' && (obj['userAgent'] as string).trim()) {
+      defaults.userAgent = (obj['userAgent'] as string).trim();
+    }
+    if (typeof obj['builtin'] === 'string') {
+      defaults.builtin = obj['builtin'] as string;
+    }
+  } catch (_e) {
+    // 使用默认配置
+  }
+  return defaults;
+}
+
+export function stringifyOpdsCloudConfig(cfg: OpdsCloudConfig): string {
+  const row: Record<string, string | number> = {
+    'connectTimeoutMs': cfg.connectTimeoutMs > 0 ? cfg.connectTimeoutMs : 20000,
+    'transferTimeoutMs': cfg.transferTimeoutMs > 0 ? cfg.transferTimeoutMs : 120000,
+    'userAgent': cfg.userAgent || createDefaultOpdsCloudConfig().userAgent,
+    'builtin': cfg.builtin || '',
   };
   return JSON.stringify(row);
 }

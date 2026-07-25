@@ -1,7 +1,7 @@
 # 云端书籍模块设计
 
 > 状态：设计完成；阶段 0–4、**6** 已落地（阶段 5 暂缓）。  
-> 更新日期：2026-07-24  
+> 更新日期：2026-07-25
 > 目标：提供可管理多个 WebDAV 网盘、并可扩展到其他云存储协议的云端书库；云端文件下载并导入后，始终作为普通本地书籍进入书架。  
 > 各阶段实现说明已整合至 §18 实现计划对应小节。
 
@@ -83,7 +83,7 @@ Android Legado 已支持 WebDAV 远程书籍：浏览远程目录、下载文件
 
 - 来源选择、新增、编辑、删除、连接测试；
 - 文件夹进入、返回、面包屑定位到任意层级；
-- 刷新、按名称搜索、名称/修改时间排序；
+- 刷新、按名称搜索、名称/修改时间排序；WebDAV 与百度网盘提交搜索后递归当前目录及子目录；
 - 下载单本或批量下载；
 - 已下载书籍的打开、检查更新、从云端重新下载；
 - 本地书上传到指定来源及当前目录；
@@ -150,6 +150,12 @@ interface CloudStorageProvider {
 
   testConnection(source: CloudSource): Promise<void>;
   list(source: CloudSource, remotePath: string, cursor?: string): Promise<CloudListPage>;
+  search?(
+    source: CloudSource,
+    keyword: string,
+    cursor?: string,
+    remotePath?: string
+  ): Promise<CloudListPage>;
   stat(source: CloudSource, remotePath: string): Promise<CloudFile | null>;
 
   downloadToFile(
@@ -181,6 +187,7 @@ interface CloudStorageProvider {
 |---|---|
 | `testConnection` | `OPTIONS` 或 `PROPFIND Depth: 0`，明确处理 401/403 |
 | `list` | `PROPFIND Depth: 1`，保留文件、目录与必要元数据 |
+| `search` | 优先 `SEARCH` + `DAV:basicsearch`；服务端不支持时递归执行 `PROPFIND Depth: 1`，最多扫描 5000 个条目 |
 | `stat` | `PROPFIND Depth: 0` |
 | `downloadToFile` | `GET` 写入临时文件 |
 | `uploadFile` | `PUT` 上传本地文件 |
@@ -1487,6 +1494,7 @@ interface OAuth2Credential {
 | `CloudStorageProvider` 方法 | 百度网盘接口与映射 |
 |---|---|
 | `list` | `xpan/file?method=list`；传完整 `dir`、分页 `start/limit`、排序参数。将返回 `path` 去除 rootPath 前缀后作为 `remotePath`。 |
+| `search` | `xpan/file?method=search`；传当前目录 `dir`、文件名关键字 `key` 和 `recursion=1`，递归返回当前目录及子目录中的匹配项。 |
 | `stat` | 优先以缓存的 `fs_id` 调用 `xpan/multimedia?method=filemetas`；没有 ID 时列举父目录并精确匹配，禁止模糊搜索。 |
 | `downloadToFile` | `filemetas` 请求 `dlink=1`，立即使用短期下载链接下载；遵循官方 User-Agent/Token 要求。 |
 | `uploadFile` | `precreate` 获取上传会话/缺失分片 → `superfile2?method=upload` 分片上传 → `create` 提交文件。 |
@@ -1520,6 +1528,7 @@ Access Token 若必须作为查询参数传递，所有日志必须移除 `acces
 | OAuth2 授权码 | ✅ | `BaiduNetdiskAuthPage` + Web 拦截 `aireader://auth` |
 | Token 刷新 | ✅ | 距过期 <5min 自动 refresh；失败提示重新授权 |
 | list / 分页 | ✅ | `xpan/file?method=list` + nextCursor |
+| search / 递归 | ✅ | `xpan/file?method=search`，以当前目录为范围并启用 `recursion=1` |
 | stat | ✅ | 父目录 list 精确匹配 |
 | download | ✅ | filemetas dlink + User-Agent `pan.baidu.com` |
 | upload | ✅ | precreate → superfile2 分片(4MB) → create |

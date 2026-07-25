@@ -34,6 +34,25 @@ import {
 const UPLOAD_BLOCK_SIZE = 4 * 1024 * 1024;
 const UA_PAN = 'pan.baidu.com';
 
+/** 构造百度 xpan 文件搜索 URL；单独导出便于协议参数回归测试。 */
+export function buildBaiduSearchRequestUrl(
+  accessToken: string,
+  dir: string,
+  keyword: string,
+  pageNumber: number,
+  pageSize: number
+): string {
+  return BAIDU_NETDISK_ENDPOINT + '/file'
+    + '?method=search'
+    + '&access_token=' + encodeURIComponent(accessToken)
+    + '&dir=' + encodeURIComponent(dir)
+    + '&key=' + encodeURIComponent(keyword)
+    + '&recursion=1'
+    + '&page=' + pageNumber
+    + '&num=' + pageSize
+    + '&web=web';
+}
+
 export class BaiduNetdiskProvider implements CloudStorageProvider {
   readonly type: string = CLOUD_PROVIDER_BAIDU_NETDISK;
 
@@ -102,6 +121,61 @@ export class BaiduNetdiskProvider implements CloudStorageProvider {
     // 百度 list 若返回满页，推测可能有下一页
     page.nextCursor = items.length >= limit ? String(start + limit) : '';
     console.info('[BaiduNetdisk] list dir=', dir, 'count=', items.length, 'start=', start);
+    return page;
+  }
+
+  /** 百度 xpan 服务端文件名搜索，递归当前目录及子目录。 */
+  async search(
+    source: CloudSource,
+    _credential: CloudCredential,
+    keyword: string,
+    cursor?: string,
+    remotePath?: string
+  ): Promise<CloudListPage> {
+    const key = (keyword || '').trim();
+    if (!key) {
+      return await this.list(source, _credential, remotePath || '', undefined);
+    }
+    const token = await this.token_(source);
+    const dir = this.absPath_(source, remotePath || '');
+    let pageNumber = 1;
+    if (cursor) {
+      const parsed = parseInt(cursor, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        pageNumber = parsed;
+      }
+    }
+    // xpan search 单页最多取 1000 条；当前 UI 不自动翻页，优先减少漏项。
+    const pageSize = 1000;
+    const url = buildBaiduSearchRequestUrl(token, dir, key, pageNumber, pageSize);
+    const raw = await NetUtil.httpGet(url, {
+      'User-Agent': UA_PAN,
+      'Accept': 'application/json',
+    }, 30000);
+    const obj = this.parseJson_(raw);
+    this.assertApiOk_(obj);
+    const rows = obj['list'];
+    const page = createEmptyCloudListPage();
+    const items: CloudFile[] = [];
+    if (Array.isArray(rows)) {
+      const list = rows as Object[];
+      for (let i = 0; i < list.length; i++) {
+        const file = this.rowToCloudFile_(source, list[i] as Record<string, Object>);
+        if (file) {
+          items.push(file);
+        }
+      }
+    }
+    items.sort((a: CloudFile, b: CloudFile): number => {
+      if (a.isDirectory !== b.isDirectory) {
+        return a.isDirectory ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    page.items = items;
+    const hasMore = Number(obj['has_more'] ?? 0) === 1 || items.length >= pageSize;
+    page.nextCursor = hasMore ? (pageNumber + 1).toString() : '';
+    console.info('[BaiduNetdisk] search dir=', dir, 'count=', items.length, 'page=', pageNumber);
     return page;
   }
 

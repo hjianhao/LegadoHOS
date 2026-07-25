@@ -665,57 +665,57 @@
     "bookSourceGroup": "AI,18加",
     "bookSourceName": "搬山人小说网",
     "bookSourceType": 0,
-    "bookSourceUrl": "https:\/\/www.banshanren.com",
-    "bookUrlPattern": "https:\/\/www.banshanren.com\/novel\/.*",
-    "coverDecodeJs": "java.createSymmetricCrypto(\"AES\/CBC\/PKCS5Padding\", \"V4@.Tx+uXZn)AiH>\", \"\").decrypt(result)",
+    "bookSourceUrl": "https://www.banshanren.com",
+    "bookUrlPattern": "https://www.banshanren.com/novel/.*",
+    "coverDecodeJs": "java.createSymmetricCrypto(\"AES/CBC/PKCS5Padding\", \"V4@.Tx+uXZn)AiH>\", \"\").decrypt(result)",
     "customButton": false,
     "customOrder": 62,
     "enabled": true,
     "enabledCookieJar": true,
     "enabledExplore": true,
     "eventListener": false,
-    "exploreUrl": "[{\"title\": \"奇幻玄幻\", \"url\": \"\/all\/0-4-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"武侠仙侠\", \"url\": \"\/all\/0-5-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"都市言情\", \"url\": \"\/all\/0-6-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"历史军事\", \"url\": \"\/all\/0-7-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"游戏竞技\", \"url\": \"\/all\/0-8-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"科幻未来\", \"url\": \"\/all\/0-9-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"悬疑灵异\", \"url\": \"\/all\/0-10-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"同人衍生\", \"url\": \"\/all\/0-11-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"轻小说\", \"url\": \"\/all\/0-12-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"名著传记\", \"url\": \"\/all\/0-13-0-0-0-0-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"最近更新\", \"url\": \"\/all\/0-0-0-0-0-1-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}, {\"title\": \"最新上架\", \"url\": \"\/all\/0-0-0-0-0-2-1-{{page}}\/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}]",
-    "header": "{\"User-Agent\": \"Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36\"}",
+    "exploreUrl": "[{\"title\": \"奇幻玄幻\", \"url\": \"/all/0-4-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"武侠仙侠\", \"url\": \"/all/0-5-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"都市言情\", \"url\": \"/all/0-6-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"历史军事\", \"url\": \"/all/0-7-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"游戏竞技\", \"url\": \"/all/0-8-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"科幻未来\", \"url\": \"/all/0-9-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"悬疑灵异\", \"url\": \"/all/0-10-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"同人衍生\", \"url\": \"/all/0-11-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"轻小说\", \"url\": \"/all/0-12-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"名著传记\", \"url\": \"/all/0-13-0-0-0-0-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.25}}, {\"title\": \"最近更新\", \"url\": \"/all/0-0-0-0-0-1-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}, {\"title\": \"最新上架\", \"url\": \"/all/0-0-0-0-0-2-1-{{page}}/\", \"style\": {\"layout_flexGrow\": 1, \"layout_flexBasisPercent\": 0.5}}]",
+    "header": "{\"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\"}",
     "lastUpdateTime": "1784123206817",
-    "loginUrl": "https:\/\/www.banshanren.com",
+    "loginUrl": "https://www.banshanren.com",
     "respondTime": 180000,
     "ruleBookInfo": {
-        "author": "[name=\"description\"]@content<js>\nvar m = String(result).match(\/》是(.*?)创作\/);\nresult = m ? m[1] : '';\n<\/js>",
-        "coverUrl": "[property=\"og:image\"]@content",
-        "intro": "[property=\"og:description\"]@content",
-        "kind": ".novel_tag_list a@title&&.category_list a@text##\\#",
-        "lastChapter": ".catalog_top_box .hl@text",
-        "name": "h1@text"
+      "author": "[name=\"description\"]@content<js>\nvar m = String(result).match(/》是(.*?)创作/);\nresult = m ? m[1] : '';\n</js>",
+      "coverUrl": "[property=\"og:image\"]@content",
+      "intro": "[property=\"og:description\"]@content",
+      "kind": ".novel_tag_list a@title&&.category_list a@text##\\#",
+      "lastChapter": ".catalog_top_box .hl@text",
+      "name": "h1@text"
     },
     "ruleContent": {
-        "content": ".chapter_content_box p@html##\\<span.*\\>\\d+\\<\/span\\>",
-        "nextContentUrl": "text.下一章@href"
+      "content": ".chapter_content_box p@html##\\<span.*\\>\\d+\\</span\\>",
+      "nextContentUrl": "text.下一章@href"
     },
     "ruleExplore": {
-        "author": ".info_box.1@text## ·.*",
-        "bookList": ".novel_li",
-        "bookUrl": ".title@href",
-        "coverUrl": "img@data-src",
-        "kind": ".category_list a@text",
-        "name": ".title@text",
-        "wordCount": ".info_box.1@text##.*· "
+      "author": ".info_box.1@text## ·.*",
+      "bookList": ".novel_li",
+      "bookUrl": ".title@href",
+      "coverUrl": "img@data-src",
+      "kind": ".category_list a@text",
+      "name": ".title@text",
+      "wordCount": ".info_box.1@text##.*· "
     },
     "ruleSearch": {
-        "author": ".info_box.1@text## ·.*",
-        "bookList": ".novel_li",
-        "bookUrl": ".title@href",
-        "coverUrl": "img@data-src",
-        "intro": ".novel_intro_box p@text",
-        "kind": ".category_list a@text",
-        "name": ".title@text##🔞",
-        "wordCount": ".info_box.1@text##.*· "
+      "author": ".info_box.1@text## ·.*",
+      "bookList": ".novel_li",
+      "bookUrl": ".title@href",
+      "coverUrl": "img@data-src",
+      "intro": ".novel_intro_box p@text",
+      "kind": ".category_list a@text",
+      "name": ".title@text##🔞",
+      "wordCount": ".info_box.1@text##.*· "
     },
     "ruleToc": {
-        "chapterList": "li[class~=volume_chapter] a&&ul[class~=chapter_list] a",
-        "chapterName": "text",
-        "chapterUrl": "href"
+      "chapterList": "li[class~=volume_chapter] a&&ul[class~=chapter_list] a",
+      "chapterName": "text",
+      "chapterUrl": "href"
     },
-    "searchUrl": "https:\/\/www.banshanren.com\/search\/index?keyword={{key}}&page={{page}},{\"charset\": \"UTF-8\"}",
+    "searchUrl": "https://www.banshanren.com/search/index?keyword={{key}}&page={{page}},{\"charset\": \"UTF-8\"}",
     "weight": 0
   },
   {
@@ -833,16 +833,16 @@
     "bookSourceGroup": "",
     "bookSourceName": "圣墟小说网",
     "bookSourceType": 0,
-    "bookSourceUrl": "http:\/\/www.shengxuxu.net",
-    "bookUrlPattern": "http.*shengxuxu.net\/book_\\d+\/",
+    "bookSourceUrl": "http://www.shengxuxu.net",
+    "bookUrlPattern": "http.*shengxuxu.net/book_\\d+/",
     "customButton": false,
     "customOrder": 2,
     "enabled": true,
     "enabledCookieJar": true,
     "enabledExplore": true,
     "eventListener": false,
-    "exploreUrl": "[\n{\n    \"title\": \"榜单\",\n    \"url\": \"\",\n    \"style\": {\n      \"layout_flexGrow\": 1,\n      \"layout_flexBasisPercent\": 1\n    }\n  },\n  {\n    \"title\": \"总点击榜\",\n    \"url\": \"\/top\/allvisit\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"月点击榜\",\n    \"url\": \"\/top\/monthvisit\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"周点击榜\",\n    \"url\": \"\/top\/weekvisit\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"收藏榜\",\n    \"url\": \"\/top\/marknum\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"推荐榜\",\n    \"url\": \"\/top\/votenum\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"全部小说\",\n    \"url\": \"\/sort\/all\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": 1\n    }\n  },\n  {\n    \"title\": \"玄幻小说\",\n    \"url\": \"\/sort\/xuanhuan\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"奇幻小说\",\n    \"url\": \"\/sort\/qihuan\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"武侠小说\",\n    \"url\": \"\/sort\/wuxia\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"仙侠小说\",\n    \"url\": \"\/sort\/xianxia\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"都市小说\",\n    \"url\": \"\/sort\/dushi\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"历史小说\",\n    \"url\": \"\/sort\/lishi\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"军事小说\",\n    \"url\": \"\/sort\/junshi\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"游戏小说\",\n    \"url\": \"\/sort\/youxi\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"科幻小说\",\n    \"url\": \"\/sort\/kehuan\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"灵异小说\",\n    \"url\": \"\/sort\/lingyi\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"其他小说\",\n    \"url\": \"\/sort\/qita\/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  }\n]",
-    "header": "{\"User-Agent\": \"Mozilla\/5.0 (Linux; Android 9) Mobile Safari\/537.36\"}",
+    "exploreUrl": "[\n{\n    \"title\": \"榜单\",\n    \"url\": \"\",\n    \"style\": {\n      \"layout_flexGrow\": 1,\n      \"layout_flexBasisPercent\": 1\n    }\n  },\n  {\n    \"title\": \"总点击榜\",\n    \"url\": \"/top/allvisit/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"月点击榜\",\n    \"url\": \"/top/monthvisit/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"周点击榜\",\n    \"url\": \"/top/weekvisit/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"收藏榜\",\n    \"url\": \"/top/marknum/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"推荐榜\",\n    \"url\": \"/top/votenum/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.4,\n      \"layout_flexBasisPercent\": 0.4\n    }\n  },\n  {\n    \"title\": \"全部小说\",\n    \"url\": \"/sort/all/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": 1\n    }\n  },\n  {\n    \"title\": \"玄幻小说\",\n    \"url\": \"/sort/xuanhuan/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"奇幻小说\",\n    \"url\": \"/sort/qihuan/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"武侠小说\",\n    \"url\": \"/sort/wuxia/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"仙侠小说\",\n    \"url\": \"/sort/xianxia/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"都市小说\",\n    \"url\": \"/sort/dushi/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"历史小说\",\n    \"url\": \"/sort/lishi/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"军事小说\",\n    \"url\": \"/sort/junshi/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"游戏小说\",\n    \"url\": \"/sort/youxi/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"科幻小说\",\n    \"url\": \"/sort/kehuan/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"灵异小说\",\n    \"url\": \"/sort/lingyi/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  },\n  {\n    \"title\": \"其他小说\",\n    \"url\": \"/sort/qita/{{page}}.html\",\n    \"style\": {\n      \"layout_flexGrow\": 0.25,\n      \"layout_flexBasisPercent\": -1\n    }\n  }\n]",
+    "header": "{\"User-Agent\": \"Mozilla/5.0 (Linux; Android 9) Mobile Safari/537.36\"}",
     "lastUpdateTime": "1784359593955",
     "respondTime": 180000,
     "ruleBookInfo": {
@@ -855,7 +855,7 @@
       "name": "@get:{n}"
     },
     "ruleContent": {
-      "content": ".content@html##.本章完.|^一秒记住ｈｔｔｐs:\/\/ｍ\\.\\\/?$",
+      "content": ".content@html##.本章完.|^一秒记住ｈｔｔｐs://ｍ\\.\\/?$",
       "nextContentUrl": "text.下一页@href"
     },
     "ruleExplore": {
@@ -872,7 +872,7 @@
       "author": ".info span:nth-child(2)@text",
       "bookList": ".librarylist li ",
       "bookUrl": "a:nth-child(1)@href",
-      "coverUrl": "a.0@href##\\D((\\d+)\\d{3})##http:\/\/www.shengxuxu.net\/headimgs\/$2\/$1\/s$1.jpg###\na.0@href##\\\/(\\d+)$##$1###",
+      "coverUrl": "a.0@href##\\D((\\d+)\\d{3})##http://www.shengxuxu.net/headimgs/$2/$1/s$1.jpg###\na.0@href##\\/(\\d+)$##$1###",
       "intro": "@get:{i}",
       "kind": ".info span:nth-child(3) a@text",
       "lastChapter": ".last@text",
@@ -884,7 +884,66 @@
       "chapterUrl": "a@href",
       "nextTocUrl": "option@value||text.下一页@href"
     },
-    "searchUrl": "\/search.html?\/,{\n  \"body\": \"searchkey={{key}}\",\n  \"method\": \"POST\"\n}",
+    "searchUrl": "/search.html?/,{\n  \"body\": \"searchkey={{key}}\",\n  \"method\": \"POST\"\n}",
+    "weight": 0
+  },
+  {
+    "bookSourceComment": "沱书·文存 - 完整版，支持搜索、详情、目录、正文",
+    "bookSourceGroup": "小说",
+    "bookSourceName": "沱书·文存",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://tuoverse.com",
+    "bookUrlPattern": "",
+    "customOrder": 0,
+    "enabled": true,
+    "enabledExplore": true,
+    "exploreUrl": "[{\"title\": \"感情发展与关系模式\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"甜宠\", \"url\": \"/category/tian-chong/\"}, {\"title\": \"情有独钟\", \"url\": \"/category/qing-you-du-zhong/\"}, {\"title\": \"天作之合\", \"url\": \"/category/tian-zuo-zhi-he/\"}, {\"title\": \"欢喜冤家\", \"url\": \"/category/huan-xi-yuan-jia/\"}, {\"title\": \"破镜重圆\", \"url\": \"/category/po-jing-chong-yuan/\"}, {\"title\": \"先婚后爱\", \"url\": \"/category/xian-hun-hou-ai/\"}, {\"title\": \"青梅竹马\", \"url\": \"/category/qing-mei-zhu-ma/\"}, {\"title\": \"相爱相杀\", \"url\": \"/category/xiang-ai-xiang-sha/\"}, {\"title\": \"虐恋情深\", \"url\": \"/category/nve-lian-qing-shen/\"}, {\"title\": \"近水楼台\", \"url\": \"/category/jin-shui-lou-tai/\"}, {\"title\": \"追妻火葬场\", \"url\": \"/category/zhui-qi-huo-zang-chang/\"}, {\"title\": \"强取豪夺\", \"url\": \"/category/qiang-qu-hao-duo/\"}, {\"title\": \"前世今生\", \"url\": \"/category/qian-shi-jin-sheng/\"}, {\"title\": \"暗恋\", \"url\": \"/category/an-lian/\"}, {\"title\": \"因缘邂逅\", \"url\": \"/category/yin-yuan-xie-hou/\"}, {\"title\": \"阴差阳错\", \"url\": \"/category/yin-cha-yang-cuo/\"}, {\"title\": \"婚恋\", \"url\": \"/category/hun-lian/\"}, {\"title\": \"不伦之恋\", \"url\": \"/category/bu-lun-zhi-lian/\"}, {\"title\": \"恋爱合约\", \"url\": \"/category/lian-ai-he-yue/\"}, {\"title\": \"西方罗曼\", \"url\": \"/category/xi-fang-luo-man/\"}, {\"title\": \"女追男\", \"url\": \"/category/nv-zhui-nan/\"}, {\"title\": \"主角气质与关系位置\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"强强\", \"url\": \"/category/qiang-qiang/\"}, {\"title\": \"主受\", \"url\": \"/category/zhu-shou/\"}, {\"title\": \"天之骄子\", \"url\": \"/category/tian-zhi-jiao-zi/\"}, {\"title\": \"无CP\", \"url\": \"/category/wu/\"}, {\"title\": \"年下\", \"url\": \"/category/nian-xia/\"}, {\"title\": \"生子\", \"url\": \"/category/sheng-zi/\"}, {\"title\": \"ABO\", \"url\": \"/category/abo/\"}, {\"title\": \"业界精英\", \"url\": \"/category/ye-jie-jing-ying/\"}, {\"title\": \"美强惨\", \"url\": \"/category/mei-qiang-can/\"}, {\"title\": \"萌宠\", \"url\": \"/category/meng-chong/\"}, {\"title\": \"万人迷\", \"url\": \"/category/wan-ren-mi/\"}, {\"title\": \"主攻\", \"url\": \"/category/zhu-gong/\"}, {\"title\": \"女强\", \"url\": \"/category/nv-qiang/\"}, {\"title\": \"攻受不明\", \"url\": \"/category/gong-shou-bu-ming/\"}, {\"title\": \"钓系\", \"url\": \"/category/diao-xi/\"}, {\"title\": \"忠犬\", \"url\": \"/category/zhong-quan/\"}, {\"title\": \"高岭之花\", \"url\": \"/category/gao-ling-zhi-hua/\"}, {\"title\": \"互攻\", \"url\": \"/category/hu-gong/\"}, {\"title\": \"乔装改扮\", \"url\": \"/category/qiao-zhuang-gai-ban/\"}, {\"title\": \"女扮男装\", \"url\": \"/category/nv-ban-nan-zhuang/\"}, {\"title\": \"腹黑\", \"url\": \"/category/fu-hei/\"}, {\"title\": \"白月光\", \"url\": \"/category/bai-yue-guang/\"}, {\"title\": \"病娇\", \"url\": \"/category/bing-jiao/\"}, {\"title\": \"团宠\", \"url\": \"/category/tuan-chong/\"}, {\"title\": \"性别转换\", \"url\": \"/category/xing-bie-zhuan-huan/\"}, {\"title\": \"群像\", \"url\": \"/category/qun-xiang/\"}, {\"title\": \"大叔文\", \"url\": \"/category/da-shu-wen/\"}, {\"title\": \"替身\", \"url\": \"/category/ti-shen/\"}, {\"title\": \"养娃文\", \"url\": \"/category/yang-wa/\"}, {\"title\": \"糙汉文\", \"url\": \"/category/cao-han/\"}, {\"title\": \"师徒文\", \"url\": \"/category/shi-tu/\"}, {\"title\": \"重生穿越与开局设定\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"系统\", \"url\": \"/category/xi-tong/\"}, {\"title\": \"穿书\", \"url\": \"/category/chuan-shu/\"}, {\"title\": \"穿越\", \"url\": \"/category/chuan-yue/\"}, {\"title\": \"重生\", \"url\": \"/category/chong-sheng/\"}, {\"title\": \"快穿\", \"url\": \"/category/kuai-chuan/\"}, {\"title\": \"空间文\", \"url\": \"/category/kong-jian/\"}, {\"title\": \"无限流\", \"url\": \"/category/wu-xian-liu/\"}, {\"title\": \"灵魂转换\", \"url\": \"/category/ling-hun-zhuan-huan/\"}, {\"title\": \"异能\", \"url\": \"/category/yi-neng/\"}, {\"title\": \"升级流\", \"url\": \"/category/sheng-ji-liu/\"}, {\"title\": \"清穿\", \"url\": \"/category/qing-chuan/\"}, {\"title\": \"古穿今\", \"url\": \"/category/gu-chuan-jin/\"}, {\"title\": \"女配\", \"url\": \"/category/nv-pei/\"}, {\"title\": \"读心\", \"url\": \"/category/du-xin/\"}, {\"title\": \"炮灰\", \"url\": \"/category/pao-hui/\"}, {\"title\": \"失忆梗\", \"url\": \"/category/shi-yi-geng/\"}, {\"title\": \"双重生\", \"url\": \"/category/shuang-chong-sheng/\"}, {\"title\": \"大冒险\", \"url\": \"/category/da-mao-xian/\"}, {\"title\": \"世界规则与幻想类型\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"玄幻\", \"url\": \"/category/xuan-huan/\"}, {\"title\": \"灵异\", \"url\": \"/category/ling-yi/\"}, {\"title\": \"幻想空间\", \"url\": \"/category/huan-xiang-kong-jian/\"}, {\"title\": \"星际\", \"url\": \"/category/xing-ji/\"}, {\"title\": \"修真\", \"url\": \"/category/xiu-zhen/\"}, {\"title\": \"仙侠\", \"url\": \"/category/xian-xia/\"}, {\"title\": \"末世\", \"url\": \"/category/mo-shi/\"}, {\"title\": \"异世大陆\", \"url\": \"/category/yi-shi-da-lu/\"}, {\"title\": \"未来架空\", \"url\": \"/category/wei-lai-jia-kong/\"}, {\"title\": \"科幻\", \"url\": \"/category/ke-huan/\"}, {\"title\": \"奇幻\", \"url\": \"/category/qi-huan/\"}, {\"title\": \"西幻\", \"url\": \"/category/xi-huan/\"}, {\"title\": \"玄学\", \"url\": \"/category/xuan-xue/\"}, {\"title\": \"机甲\", \"url\": \"/category/ji-jia/\"}, {\"title\": \"惊悚\", \"url\": \"/category/jing-song/\"}, {\"title\": \"虫族\", \"url\": \"/category/chong-zu/\"}, {\"title\": \"恐怖\", \"url\": \"/category/kong-bu/\"}, {\"title\": \"都市异闻\", \"url\": \"/category/du-shi-yi-wen/\"}, {\"title\": \"废土\", \"url\": \"/category/fei-tu/\"}, {\"title\": \"洪荒\", \"url\": \"/category/hong-huang/\"}, {\"title\": \"血族\", \"url\": \"/category/xue-zu/\"}, {\"title\": \"古代幻想\", \"url\": \"/category/gu-dai-huan-xiang/\"}, {\"title\": \"位面\", \"url\": \"/category/wei-mian/\"}, {\"title\": \"时代背景与生活场景\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"朝堂权谋\", \"url\": \"/category/chao-tang-quan-mou/\"}, {\"title\": \"豪门\", \"url\": \"/category/hao-men/\"}, {\"title\": \"娱乐圈\", \"url\": \"/category/yu-le-quan/\"}, {\"title\": \"都市\", \"url\": \"/category/du-shi/\"}, {\"title\": \"现代\", \"url\": \"/category/xian-dai/\"}, {\"title\": \"宫廷侯爵\", \"url\": \"/category/gong-ting-hou-jue/\"}, {\"title\": \"古言\", \"url\": \"/category/gu-yan/\"}, {\"title\": \"校园\", \"url\": \"/category/xiao-yuan/\"}, {\"title\": \"架空\", \"url\": \"/category/jia-kong/\"}, {\"title\": \"年代文\", \"url\": \"/category/nian-dai/\"}, {\"title\": \"江湖恩怨\", \"url\": \"/category/jiang-hu-en-yuan/\"}, {\"title\": \"古代\", \"url\": \"/category/gu-dai/\"}, {\"title\": \"黑帮情仇\", \"url\": \"/category/hei-bang-qing-chou/\"}, {\"title\": \"历史\", \"url\": \"/category/li-shi/\"}, {\"title\": \"市井生活\", \"url\": \"/category/shi-jing-sheng-huo/\"}, {\"title\": \"宫斗\", \"url\": \"/category/gong-dou/\"}, {\"title\": \"武侠\", \"url\": \"/category/wu-xia/\"}, {\"title\": \"宅斗\", \"url\": \"/category/zhai-dou/\"}, {\"title\": \"民国\", \"url\": \"/category/min-guo/\"}, {\"title\": \"乡村爱情\", \"url\": \"/category/xiang-cun-ai-qing/\"}, {\"title\": \"港风文\", \"url\": \"/category/gang-feng-wen/\"}, {\"title\": \"公路文\", \"url\": \"/category/gong-lu/\"}, {\"title\": \"事业目标与专业题材\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"高干\", \"url\": \"/category/gao-gan/\"}, {\"title\": \"网红\", \"url\": \"/category/wang-hong/\"}, {\"title\": \"种田文\", \"url\": \"/category/zhong-tian/\"}, {\"title\": \"基建\", \"url\": \"/category/ji-jian/\"}, {\"title\": \"美食\", \"url\": \"/category/mei-shi/\"}, {\"title\": \"游戏网游\", \"url\": \"/category/you-xi-wang-you/\"}, {\"title\": \"悬疑推理\", \"url\": \"/category/xuan-yi-tui-li/\"}, {\"title\": \"竞技\", \"url\": \"/category/jing-ji/\"}, {\"title\": \"直播\", \"url\": \"/category/zhi-bo/\"}, {\"title\": \"科举\", \"url\": \"/category/ke-ju/\"}, {\"title\": \"刑侦\", \"url\": \"/category/xing-zhen/\"}, {\"title\": \"电竞\", \"url\": \"/category/dian-jing/\"}, {\"title\": \"足球\", \"url\": \"/category/zu-qiu/\"}, {\"title\": \"军旅\", \"url\": \"/category/jun-lv/\"}, {\"title\": \"职场\", \"url\": \"/category/zhi-chang/\"}, {\"title\": \"商战\", \"url\": \"/category/shang-zhan/\"}, {\"title\": \"体育竞技\", \"url\": \"/category/ti-yu-jing-ji/\"}, {\"title\": \"经营\", \"url\": \"/category/jing-ying/\"}, {\"title\": \"同人与原作世界\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"同人\", \"url\": \"/category/tong-ren/\"}, {\"title\": \"少年漫\", \"url\": \"/category/shao-nian-man/\"}, {\"title\": \"柯南\", \"url\": \"/category/ke-nan/\"}, {\"title\": \"咒回\", \"url\": \"/category/zhou-hui/\"}, {\"title\": \"文野\", \"url\": \"/category/wen-ye/\"}, {\"title\": \"综漫\", \"url\": \"/category/zong-man/\"}, {\"title\": \"综英美\", \"url\": \"/category/zong-ying-mei/\"}, {\"title\": \"HP同人\", \"url\": \"/category/tong-ren-2/\"}, {\"title\": \"火影\", \"url\": \"/category/huo-ying/\"}, {\"title\": \"综武侠\", \"url\": \"/category/zong-wu-xia/\"}, {\"title\": \"猎人\", \"url\": \"/category/lie-ren/\"}, {\"title\": \"原神同人\", \"url\": \"/category/yuan-shen-tong-ren/\"}, {\"title\": \"古典名著\", \"url\": \"/category/gu-dian-ming-zhu/\"}, {\"title\": \"通用\", \"url\": \"\", \"style\": {\"layout_flexBasisPercent\": 1, \"layout_wrapBefore\": true}}, {\"title\": \"最近更新\", \"url\": \"/latest/\"}, {\"title\": \"书荒广场\", \"url\": \"/collection/\"}]",
+    "header": "{\n  \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"\n}",
+    "lastUpdateTime": "1784476763414",
+    "loginUrl": "",
+    "ruleBookInfo": {
+      "name": "@css:.detail-title@text",
+      "author": "@css:.detail-author a@text",
+      "kind": "@css:.category-tag@text",
+      "intro": "@css:.description-content@text",
+      "coverUrl": "",
+      "wordCount": "@css:.detail-meta@text",
+      "lastChapter": "@css:.latest-link@text",
+      "tocUrl": ""
+    },
+    "ruleContent": {
+      "content": "@css:.chapter-text p@textNodes",
+      "nextContentUrl": "",
+      "webJs": ""
+    },
+    "ruleExplore": {
+      "bookList": "@css:.novel-row-main",
+      "name": "@css:.novel-row-title a@text",
+      "author": "@css:.novel-row-author@text",
+      "bookUrl": "@css:.novel-row-title a@href",
+      "coverUrl": "",
+      "intro": "",
+      "kind": ""
+    },
+    "ruleSearch": {
+      "bookList": "@css:.novel-card",
+      "name": "@css:.novel-title a@text",
+      "author": "@css:.novel-author@text",
+      "bookUrl": "@css:.novel-title a@href",
+      "coverUrl": "",
+      "kind": "@css:.category-tag@text",
+      "intro": "@css:.novel-description@text",
+      "lastChapter": "@css:.latest-link@text",
+      "wordCount": "@css:.word-count@text"
+    },
+    "ruleToc": {
+      "chapterList": "@css:.page-list__cell",
+      "chapterName": "@css:.page-list__chapter-title@text",
+      "chapterUrl": "href",
+      "nextTocUrl": "",
+      "updateTime": ""
+    },
+    "searchUrl": "/search/?q={{key}}&page={{page}}",
     "weight": 0
   }
 ]

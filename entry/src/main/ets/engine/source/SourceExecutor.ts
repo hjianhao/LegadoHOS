@@ -64,7 +64,7 @@ export function resolveContentPageUrl(url: string, currentUrl: string): string {
   return (base + nextUrl).replace(/#.*$/, '');
 }
 
-/** 嗅探明确的“下一页”链接；不会把“下一章”当成分页。 */
+/** 嗅探明确的"下一页"链接；不会把"下一章"当成分页。 */
 export function sniffNextContentPageUrl(html: string, currentUrl: string): string {
   if (!html || !currentUrl) return '';
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
@@ -117,7 +117,7 @@ export function isLikelySameChapterPageUrl(chapterUrl: string, nextUrl: string):
   if (currentStem === nextStem && (pageSuffix.test(currentPath) || pageSuffix.test(nextPath))) return true;
 
   // `.../4.html → .../3.html` 这类裸数字变化通常是相邻章节，不是同章分页。
-  // 真正分页必须有 page 查询参数、_2/-page2 等明确标记，或由页面“下一页”语义嗅探确认。
+  // 真正分页必须有 page 查询参数、_2/-page2 等明确标记，或由页面"下一页"语义嗅探确认。
   return false;
 }
 
@@ -1047,15 +1047,25 @@ export class SourceExecutor {
     }
 
     // 发现页有明确的书籍列表规则。规则未命中时不能把页面导航链接当成书籍，
-    // 否则分类页会混入“首页、榜单、帮助”等无关条目。返回空列表后，调用方
+    // 否则分类页会混入"首页、榜单、帮助"等无关条目。返回空列表后，调用方
     // 仍会按既有流程尝试 WebView；这也更接近 Android 版按 bookList 解析的语义。
     if (source.isExploreRequest) {
+      // Debug: extract HTML structure from category pages
+      const novelLinks = bodyText.match(/<a[^>]*href="\/novel\/[^"]+"[^>]*>[\s\S]{0,200}?<\/a>/gi);
+      if (novelLinks && novelLinks.length > 0) {
+        console.info('[SrcEx] Explore HTML novel link sample:', novelLinks[0].substring(0, 300));
+      }
+      // Get full card around the first novel-row-main
+      const fullCard = bodyText.match(/<div[^>]*class="novel-row-main"[^>]*>[\s\S]{0,3000}(?:<\/div>|$)/i);
+      if (fullCard) {
+        console.info('[SrcEx] Explore HTML full card:\n' + fullCard[0].substring(0, 2500));
+      }
       console.warn('[SrcEx] Explore list rule matched 0 items for', source.sourceName,
         '- skipping generic link fallback');
       return [];
     }
 
-    // 搜索源已经声明 bookList 时，规则命中 0 项就是合法的“无结果”。
+    // 搜索源已经声明 bookList 时，规则命中 0 项就是合法的"无结果"。
     // Android 版会直接返回空列表；不能再扫描整页链接，否则导航、页脚会被误报成书籍。
     // 保持空结果还能让 searchSingle 对动态页面继续执行 WebView 重试。
     if (source.ruleSearchList) {
@@ -1726,11 +1736,11 @@ export class SourceExecutor {
             ? this.resolvePageUrl(this.extractHtmlRuleValue(pageHtml, effectiveNextRule), pageUrl) : '';
           if (isAiContentSource) {
             sniffedNextUrl = sniffNextContentPageUrl(pageHtml, pageUrl);
-            // 页面明确标注“下一页”时优先于 AI 规则，避免模型误选“上一章/下一章”。
+            // 页面明确标注"下一页"时优先于 AI 规则，避免模型误选"上一章/下一章"。
             if (sniffedNextUrl) nextUrl = sniffedNextUrl;
           }
           if (!nextUrl || visited.has(nextUrl)) break;
-          // 明确嗅探到“下一页”时支持 query/path 等分页 URL；普通规则仍保留跨章保护。
+          // 明确嗅探到"下一页"时支持 query/path 等分页 URL；普通规则仍保留跨章保护。
           const confirmedBySniffing = !!sniffedNextUrl && sniffedNextUrl === nextUrl;
           if (!confirmedBySniffing && !isLikelySameChapterPageUrl(contentUrl, nextUrl)) {
             console.info('[SrcEx] getContent stopping: next page belongs to different chapter',

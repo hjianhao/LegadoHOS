@@ -97,6 +97,20 @@ export class NetUtil {
   }
 
   /**
+   * 使用 HarmonyOS 系统 HTTP 栈执行 GET。
+   * 仅供明确需要绕开 RCP 请求指纹的站点级兼容逻辑使用。
+   */
+  static async httpGetSystem(url: string, headers?: Record<string, string>, timeout?: number): Promise<string> {
+    return await NetUtil.systemHttpRequest(
+      'GET',
+      NetUtil.normalizeUrl(url),
+      '',
+      NetUtil.buildHeaders(headers),
+      timeout || NetUtil.getDefaultTimeout()
+    );
+  }
+
+  /**
    * 下载二进制数据（不进行文本解码，不做 gzip 解压）
    * 用于下载图片、加密文件等二进制内容
    */

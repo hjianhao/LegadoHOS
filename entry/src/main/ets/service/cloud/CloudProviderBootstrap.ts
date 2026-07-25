@@ -7,12 +7,14 @@
 import {
   CLOUD_PROVIDER_BAIDU_NETDISK,
   CLOUD_PROVIDER_LOCAL_FOLDER,
+  CLOUD_PROVIDER_OPDS,
   CLOUD_PROVIDER_WEBDAV,
 } from '../../model/CloudSource';
 import { BaiduNetdiskProvider } from './BaiduNetdiskProvider';
 import { CloudProviderRegistry } from './CloudProviderRegistry';
 import { CloudStorageProvider } from './CloudStorageProvider';
 import { LocalFolderCloudProvider } from './LocalFolderCloudProvider';
+import { OpdsCloudProvider } from './OpdsCloudProvider';
 import { WebDavCloudProvider } from './WebDavCloudProvider';
 
 /** 应用启动或首次使用时调用（幂等）。 */
@@ -26,5 +28,8 @@ export function ensureCloudProvidersRegistered(): void {
   }
   if (!reg.has(CLOUD_PROVIDER_BAIDU_NETDISK)) {
     reg.register(CLOUD_PROVIDER_BAIDU_NETDISK, (): CloudStorageProvider => new BaiduNetdiskProvider());
+  }
+  if (!reg.has(CLOUD_PROVIDER_OPDS)) {
+    reg.register(CLOUD_PROVIDER_OPDS, (): CloudStorageProvider => new OpdsCloudProvider());
   }
 }

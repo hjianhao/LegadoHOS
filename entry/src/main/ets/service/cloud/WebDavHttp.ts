@@ -38,6 +38,25 @@ export class WebDavHttp {
       '</D:propfind>';
   }
 
+  /** RFC 5323 DAV:basicsearch：按 displayname 做不区分大小写的子串搜索。 */
+  static basicSearchBody(scopeUrl: string, keyword: string): string {
+    const scope = WebDavHttp.escapeXml_(scopeUrl || '');
+    const pattern = WebDavHttp.escapeXml_(WebDavHttp.escapeLikePattern_(keyword || ''));
+    return '<?xml version="1.0" encoding="utf-8"?>\n' +
+      '<D:searchrequest xmlns:D="DAV:">\n' +
+      '  <D:basicsearch>\n' +
+      '    <D:select><D:prop>\n' +
+      '      <D:displayname/><D:resourcetype/><D:getcontentlength/>\n' +
+      '      <D:getlastmodified/><D:getetag/><D:getcontenttype/>\n' +
+      '    </D:prop></D:select>\n' +
+      '    <D:from><D:scope><D:href>' + scope + '</D:href>' +
+      '<D:depth>infinity</D:depth></D:scope></D:from>\n' +
+      '    <D:where><D:like caseless="yes"><D:prop><D:displayname/></D:prop>' +
+      '<D:literal>%' + pattern + '%</D:literal></D:like></D:where>\n' +
+      '  </D:basicsearch>\n' +
+      '</D:searchrequest>';
+  }
+
   static basicAuthHeader(username: string, secret: string): Record<string, string> {
     const credentials = (username || '') + ':' + (secret || '');
     const encoded = WebDavHttp.base64Encode(credentials);
@@ -377,6 +396,23 @@ export class WebDavHttp {
     return await NetUtil.httpCustomMethod('PROPFIND', url, body, headers, timeoutMs);
   }
 
+  /** 发送 WebDAV SEARCH 并返回 207 Multi-Status XML。 */
+  static async search(
+    url: string,
+    auth: Record<string, string>,
+    keyword: string,
+    timeoutMs: number
+  ): Promise<string> {
+    const headers: Record<string, string> = {};
+    const authKeys = Object.keys(auth);
+    for (let i = 0; i < authKeys.length; i++) {
+      headers[authKeys[i]] = auth[authKeys[i]];
+    }
+    headers['Content-Type'] = 'application/xml; charset=utf-8';
+    const body = WebDavHttp.basicSearchBody(url, keyword);
+    return await NetUtil.httpCustomMethod('SEARCH', url, body, headers, timeoutMs);
+  }
+
   private static encodeSegment_(seg: string): string {
     // 已百分号编码的片段不重复编码
     try {
@@ -388,6 +424,22 @@ export class WebDavHttp {
       // fall through
     }
     return encodeURIComponent(seg);
+  }
+
+  private static escapeLikePattern_(value: string): string {
+    return (value || '')
+      .replace(new RegExp('\\\\', 'g'), '\\\\')
+      .replace(new RegExp('%', 'g'), '\\%')
+      .replace(new RegExp('_', 'g'), '\\_');
+  }
+
+  private static escapeXml_(value: string): string {
+    return (value || '')
+      .replace(new RegExp('&', 'g'), '&amp;')
+      .replace(new RegExp('<', 'g'), '&lt;')
+      .replace(new RegExp('>', 'g'), '&gt;')
+      .replace(new RegExp('"', 'g'), '&quot;')
+      .replace(new RegExp("'", 'g'), '&apos;');
   }
 
   private static normalizeHrefPath_(href: string): string {

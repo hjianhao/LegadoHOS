@@ -889,13 +889,13 @@ export struct BookshelfPage {
         if (this.filteredBooks.length > 0) {
           Text(this.filteredBooks.length + '本').fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).margin({ right: 8 })
         }
-        // 云端书库入口
+        // 在线书库入口（OPDS / 云盘）
         Button() {
           Text('☁').fontSize(20).fontColor(ThemeColors.onBackground(this.isDark))
         }
         .width(40).height(40)
         .backgroundColor(ThemeColors.transparent())
-        .accessibilityText('云端书库')
+        .accessibilityText('在线书库')
         .margin({ right: 2 })
         .onClick(() => {
           UiUtil.pushUrl(this.getUIContext(), { url: 'pages/CloudBookPage' });

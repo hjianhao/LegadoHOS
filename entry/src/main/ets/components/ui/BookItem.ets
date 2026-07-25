@@ -13,7 +13,7 @@ export struct BookItem {
       // 封面
       Stack() {
         Column() {
-          Text(this.book.name?.charAt(0) || '?')
+          Text(this.book.name ? Array.from(this.book.name)[0] : '?')
             .fontSize(32)
             .fontColor(ThemeColors.onPrimary(this.isDark))
         }
@@ -62,7 +62,7 @@ export struct BookListItem {
     Row() {
       // 封面
       Column() {
-        Text(this.book.name?.charAt(0) || '?')
+        Text(this.book.name ? Array.from(this.book.name)[0] : '?')
           .fontSize(22)
           .fontColor(ThemeColors.onPrimary(this.isDark))
       }

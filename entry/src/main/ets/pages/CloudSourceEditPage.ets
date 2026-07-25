@@ -3,6 +3,7 @@
  *
  * 字段随 providerType 适配：
  * - webdav: 服务器地址 / 用户名 / 密码 / 根目录
+ * - opds: 目录地址 / 可选 HTTP Basic 账号密码（只读）
  * - localfolder: 目录命名空间 / 访问身份 / 可选口令 / 根目录
  * - baidu-netdisk: 根目录 + 登录授权（OAuth 应用凭证由 CFC 统一托管）
  * 保存前 testConnection + list(root)；失败不覆盖旧配置。
@@ -17,6 +18,7 @@ import {
   createDefaultBaiduNetdiskConfig,
   isBaiduNetdiskProvider,
   isLocalFolderProvider,
+  isOpdsProvider,
   isWebDavProvider,
   listSupportedCloudProviderTypes,
   stringifyBaiduNetdiskConfig,
@@ -121,6 +123,10 @@ struct CloudSourceEditPage {
         }
         this.name = source.name;
         this.providerType = source.providerType || CLOUD_PROVIDER_WEBDAV;
+        // 本地演示目录不再允许新建；已存在的来源仍保留在编辑页以兼容历史数据。
+        if (this.providerOptions.indexOf(this.providerType) < 0) {
+          this.providerOptions = [...this.providerOptions, this.providerType];
+        }
         this.endpoint = this.endpointForDisplay_(source.endpoint, this.providerType);
         this.rootPath = source.rootPath;
         this.sourceEnabled = source.enabled;
@@ -137,10 +143,12 @@ struct CloudSourceEditPage {
           }
         } else {
           const cred = await repo.getCredential(id);
-          this.username = cred ? cred.username : '';
+          const anonymousOpds = isOpdsProvider(this.providerType) && !!cred &&
+            cred.username === 'anonymous' && cred.secret === 'anonymous';
+          this.username = anonymousOpds ? '' : (cred ? cred.username : '');
           this.password = '';
           this.passwordDirty = false;
-          this.hasSavedPassword = !!(cred && cred.secret && cred.secret.length > 0);
+          this.hasSavedPassword = !anonymousOpds && !!(cred && cred.secret && cred.secret.length > 0);
           this.applyPasswordHint_();
           if (!this.hasSavedPassword && isWebDavProvider(this.providerType)) {
             this.statusText = '未找到已保存凭证，请重新填写用户名和密码后保存';
@@ -199,6 +207,11 @@ struct CloudSourceEditPage {
       this.password = '';
       this.rootPath = '';
       this.baiduAuthorized = false;
+    } else if (isOpdsProvider(this.providerType)) {
+      this.endpoint = '';
+      this.username = '';
+      this.password = '';
+      this.rootPath = '';
     } else {
       this.endpoint = 'https://dav.jianguoyun.com/dav/';
       this.username = '';
@@ -213,6 +226,12 @@ struct CloudSourceEditPage {
         this.passwordHint = '已保存口令（留空表示不修改；可空表示开放访问）';
       } else {
         this.passwordHint = '可选访问口令（留空=开放访问）';
+      }
+    } else if (isOpdsProvider(this.providerType)) {
+      if (this.hasSavedPassword) {
+        this.passwordHint = '已保存密码（留空表示不修改）';
+      } else {
+        this.passwordHint = '可选；公开 OPDS 书库留空';
       }
     } else {
       if (this.hasSavedPassword) {
@@ -506,7 +525,9 @@ struct CloudSourceEditPage {
             text: this.name,
             placeholder: isLocalFolderProvider(this.providerType)
               ? '例如：演示书库'
-              : (isBaiduNetdiskProvider(this.providerType) ? '例如：百度网盘-书库' : '例如：坚果云-书库')
+              : (isBaiduNetdiskProvider(this.providerType)
+                ? '例如：百度网盘-书库'
+                : (isOpdsProvider(this.providerType) ? '例如：我的 OPDS 书库' : '例如：坚果云-书库'))
           })
             .onChange((v: string) => {
               this.name = v;
@@ -577,6 +598,39 @@ struct CloudSourceEditPage {
               .fontColor(ThemeColors.secondaryText(this.isDark))
               .width('100%')
               .margin({ bottom: 12 })
+          } else if (isOpdsProvider(this.providerType)) {
+            this.fieldLabel_('OPDS 目录地址', '支持 OPDS 1.x Atom XML 与 OPDS 2.0 JSON')
+            TextInput({ text: this.endpoint, placeholder: 'https://example.com/opds/' })
+              .onChange((v: string) => {
+                this.endpoint = v;
+                this.refreshPreview_();
+              })
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+              .margin({ bottom: 12 })
+
+            this.fieldLabel_('用户名', '可选；仅用于需要 HTTP Basic 认证的私有 OPDS')
+            TextInput({ text: this.username, placeholder: '公开书库请留空' })
+              .onChange((v: string) => {
+                this.username = v;
+              })
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+              .margin({ bottom: 12 })
+
+            this.fieldLabel_('密码', this.passwordHint)
+            TextInput({ text: this.password, placeholder: this.passwordHint })
+              .type(InputType.Password)
+              .onChange((v: string) => {
+                this.password = v;
+                this.passwordDirty = true;
+              })
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+              .margin({ bottom: 12 })
           } else {
             this.fieldLabel_('服务器地址', 'WebDAV endpoint，不含根目录子路径')
             TextInput({ text: this.endpoint, placeholder: 'https://dav.jianguoyun.com/dav/' })
@@ -612,21 +666,23 @@ struct CloudSourceEditPage {
               .margin({ bottom: 12 })
           }
 
-          this.fieldLabel_(
-            '根目录',
-            isLocalFolderProvider(this.providerType)
-              ? '相对命名空间的子目录；留空表示命名空间根。不会自动创建。'
-              : '进入此来源时直接显示该目录内容；留空表示服务器根目录。不会自动创建。'
-          )
-          TextInput({ text: this.rootPath, placeholder: '例如：LegadoBooks 或 Reading' })
-            .onChange((v: string) => {
-              this.rootPath = v;
-              this.refreshPreview_();
-            })
-            .fontColor(ThemeColors.onSurface(this.isDark))
-            .placeholderColor(ThemeColors.secondaryText(this.isDark))
-            .backgroundColor(ThemeColors.outlineVariant(this.isDark))
-            .margin({ bottom: 8 })
+          if (!isOpdsProvider(this.providerType)) {
+            this.fieldLabel_(
+              '根目录',
+              isLocalFolderProvider(this.providerType)
+                ? '相对命名空间的子目录；留空表示命名空间根。不会自动创建。'
+                : '进入此来源时直接显示该目录内容；留空表示服务器根目录。不会自动创建。'
+            )
+            TextInput({ text: this.rootPath, placeholder: '例如：LegadoBooks 或 Reading' })
+              .onChange((v: string) => {
+                this.rootPath = v;
+                this.refreshPreview_();
+              })
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .backgroundColor(ThemeColors.outlineVariant(this.isDark))
+              .margin({ bottom: 8 })
+          }
 
           if (this.previewUrl) {
             Text((isLocalFolderProvider(this.providerType) ? '预览路径：' : '预览 URL：') +
@@ -651,7 +707,7 @@ struct CloudSourceEditPage {
           .width('100%')
           .margin({ bottom: 16 })
 
-          if (isWebDavProvider(this.providerType) &&
+          if ((isWebDavProvider(this.providerType) || isOpdsProvider(this.providerType)) &&
             !this.endpoint.trim().toLowerCase().startsWith('https://') &&
             this.endpoint.trim().length > 0) {
             Text('当前地址未使用 HTTPS，凭证可能被明文传输，请确认风险。')
@@ -664,6 +720,14 @@ struct CloudSourceEditPage {
           if (isLocalFolderProvider(this.providerType)) {
             Text('本地演示目录用于验证 Provider 扩展：数据仅存应用沙箱，不经过网络。' +
               '可将书籍文件放入对应目录后在云端书库浏览下载。')
+              .fontSize(12)
+              .fontColor(ThemeColors.secondaryText(this.isDark))
+              .width('100%')
+              .margin({ bottom: 12 })
+          }
+
+          if (isOpdsProvider(this.providerType)) {
+            Text('OPDS 来源为只读在线目录。目录项会按需加载；书籍下载后导入本地书架。')
               .fontSize(12)
               .fontColor(ThemeColors.secondaryText(this.isDark))
               .width('100%')

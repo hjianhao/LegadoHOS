@@ -22,6 +22,8 @@ export interface CloudListPage {
   items: CloudFile[];
   /** 分页型网盘的下一页游标；无分页时为空。 */
   nextCursor: string;
+  /** Provider 可覆盖虚拟路径的面包屑名称；未提供时使用路径段。 */
+  pathLabels?: string[];
 }
 
 export interface CloudProviderCapabilities {
@@ -78,6 +80,18 @@ export interface CloudStorageProvider {
     credential: CloudCredential,
     remotePath: string,
     cursor?: string
+  ): Promise<CloudListPage>;
+
+  /**
+   * Provider 端远程搜索。未实现表示该协议/服务在当前客户端仅支持目录内过滤。
+   */
+  search?(
+    source: CloudSource,
+    credential: CloudCredential,
+    keyword: string,
+    cursor?: string,
+    /** 搜索范围；空表示来源根目录。OPDS 等全局目录可忽略。 */
+    remotePath?: string
   ): Promise<CloudListPage>;
 
   stat(

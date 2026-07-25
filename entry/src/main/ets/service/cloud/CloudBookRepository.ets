@@ -28,7 +28,11 @@ import {
   CLOUD_DISPLAY_ERROR,
   CLOUD_DISPLAY_OUTDATED,
 } from '../../model/CloudBookListItem';
-import { CloudSource } from '../../model/CloudSource';
+import {
+  CloudSource,
+  createEmptyCloudCredential,
+  isOpdsProvider,
+} from '../../model/CloudSource';
 import { localBookEngine, LocalBookEngine } from '../../engine/book/LocalBookEngine';
 import { extractZipConcurrent } from '../../engine/book/ZipExtractTask';
 import { BookDeleter } from '../BookDeleter';
@@ -38,7 +42,7 @@ import { CloudBookBindingRepository } from './CloudBookBindingRepository';
 import { CloudLocalFileStore } from './CloudLocalFileStore';
 import { CloudPath, CloudPathCrumb } from './CloudPath';
 import { CloudProviderRegistry } from './CloudProviderRegistry';
-import { CloudFile } from './CloudStorageProvider';
+import { CloudFile, CloudListPage } from './CloudStorageProvider';
 import { CloudSourceRepository } from './CloudSourceRepository';
 import {
   CloudTransferManager,
@@ -106,16 +110,61 @@ export class CloudBookRepository {
       throw new Error('来源已禁用');
     }
     const path = CloudPath.normalizeRemotePath(remotePath || '');
-    const credential = await this.sourceRepo_.getCredential(sourceId);
-    if (!credential || !credential.username) {
+    let credential = await this.sourceRepo_.getCredential(sourceId);
+    if (!credential && isOpdsProvider(source.providerType)) {
+      credential = createEmptyCloudCredential();
+    }
+    if ((!credential || !credential.username) && !isOpdsProvider(source.providerType)) {
       throw new Error('未配置凭证，请先编辑来源并完成授权');
     }
-    if (!credential.secret) {
+    if ((!credential || !credential.secret) && !isOpdsProvider(source.providerType)) {
       throw new Error('未配置凭证或授权已失效，请重新授权');
+    }
+    if (!credential) {
+      credential = createEmptyCloudCredential();
     }
 
     const provider = CloudProviderRegistry.getInstance().get(source.providerType);
     const page = await provider.list(source, credential, path);
+    return await this.mergeListPage_(source, path, page);
+  }
+
+  /** 使用 Provider 的服务端搜索能力，范围默认为当前目录及其子目录。 */
+  async searchRemote(
+    sourceId: number,
+    keyword: string,
+    remotePath: string = ''
+  ): Promise<CloudBookListResult> {
+    ensureCloudProvidersRegistered();
+    const source = await this.sourceRepo_.getById(sourceId);
+    if (!source) {
+      throw new Error('来源不存在');
+    }
+    if (!source.enabled) {
+      throw new Error('来源已禁用');
+    }
+    let credential = await this.sourceRepo_.getCredential(sourceId);
+    if (!credential && isOpdsProvider(source.providerType)) {
+      credential = createEmptyCloudCredential();
+    }
+    if (!credential) {
+      throw new Error('未配置凭证或授权已失效，请重新授权');
+    }
+    const provider = CloudProviderRegistry.getInstance().get(source.providerType);
+    if (!provider.search) {
+      throw new Error('当前来源不支持远程搜索');
+    }
+    const path = CloudPath.normalizeRemotePath(remotePath || '');
+    const page = await provider.search(source, credential, (keyword || '').trim(), undefined, path);
+    return await this.mergeListPage_(source, path, page);
+  }
+
+  private async mergeListPage_(
+    source: CloudSource,
+    path: string,
+    page: CloudListPage
+  ): Promise<CloudBookListResult> {
+    const sourceId = source.id;
     const bindings = await this.bindingRepo_.listBySource(sourceId);
     const bindingMap = new Map<string, CloudBookBinding>();
     for (let i = 0; i < bindings.length; i++) {
@@ -145,10 +194,17 @@ export class CloudBookRepository {
       items.push(this.buildListItem_(sourceId, file, bindingMap, bookMap));
     }
 
+    let breadcrumbs = CloudPath.breadcrumbs(path);
+    if (page.pathLabels && page.pathLabels.length === breadcrumbs.length) {
+      const labels = page.pathLabels;
+      for (let i = 0; i < breadcrumbs.length; i++) {
+        breadcrumbs[i].name = labels[i] || breadcrumbs[i].name;
+      }
+    }
     const result: CloudBookListResult = {
       source: source,
       remotePath: path,
-      breadcrumbs: CloudPath.breadcrumbs(path),
+      breadcrumbs: breadcrumbs,
       items: items,
     };
     return result;
@@ -292,9 +348,16 @@ export class CloudBookRepository {
     if (!source) {
       throw new Error('来源不存在');
     }
-    const credential = await this.sourceRepo_.getCredential(sourceId);
-    if (!credential || !credential.username || !credential.secret) {
+    let credential = await this.sourceRepo_.getCredential(sourceId);
+    if (!credential && isOpdsProvider(source.providerType)) {
+      credential = createEmptyCloudCredential();
+    }
+    if ((!credential || !credential.username || !credential.secret) &&
+      !isOpdsProvider(source.providerType)) {
       throw new Error('未配置凭证或授权已失效，请重新授权');
+    }
+    if (!credential) {
+      credential = createEmptyCloudCredential();
     }
     const provider = CloudProviderRegistry.getInstance().get(source.providerType);
 

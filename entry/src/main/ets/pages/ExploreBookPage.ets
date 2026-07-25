@@ -8,6 +8,7 @@ import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
+import { WebViewEngine } from '../components/WebViewEngine';
 import { UiUtil } from '../util/UiUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
@@ -192,6 +193,8 @@ struct ExploreBookPage {
           }, (item: SearchResult): string => item.key)
         }.width('100%').layoutWeight(1)
       }
+      // 隐藏 WebView，用于 SPA 站点的 JS 渲染兜底
+      WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

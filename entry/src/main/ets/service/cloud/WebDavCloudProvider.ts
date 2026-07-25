@@ -102,6 +102,51 @@ export class WebDavCloudProvider implements CloudStorageProvider {
     return page;
   }
 
+  /**
+   * 优先使用 RFC 5323 SEARCH；服务端未实现 DASL 时递归 PROPFIND，
+   * 保证常见 WebDAV 服务也能按文件名搜索。
+   */
+  async search(
+    source: CloudSource,
+    credential: CloudCredential,
+    keyword: string,
+    _cursor?: string,
+    remotePath?: string
+  ): Promise<CloudListPage> {
+    this.assertSource_(source, credential);
+    const key = (keyword || '').trim();
+    const path = CloudPath.normalizeRemotePath(remotePath || '');
+    if (!key) {
+      return await this.list(source, credential, path);
+    }
+    const url = this.ensureDirUrl_(this.fileUrl_(source, path));
+    const auth = WebDavHttp.basicAuthHeader(credential.username, credential.secret);
+    const cfg = this.readConfig_(source);
+    try {
+      console.info('[WebDavCloud] SEARCH:', WebDavHttp.sanitizeUrlForLog(url));
+      const xml = await WebDavHttp.search(url, auth, key, cfg.transferTimeoutMs);
+      const entries = WebDavHttp.parsePropfindResponse(xml, {
+        includeDirectories: true,
+        requestUrl: '',
+      });
+      const items: CloudFile[] = [];
+      for (let i = 0; i < entries.length; i++) {
+        const file = this.entryToCloudFile_(entries[i], source, path);
+        if (file && (file.name || '').toLowerCase().indexOf(key.toLowerCase()) >= 0) {
+          items.push(file);
+        }
+      }
+      return this.searchPage_(items);
+    } catch (e) {
+      if (!this.shouldFallbackSearch_(e as Object)) {
+        throw new Error(WebDavHttp.toUserMessage(e as Object));
+      }
+      console.info('[WebDavCloud] SEARCH unsupported, fallback to recursive PROPFIND:',
+        WebDavHttp.toUserMessage(e as Object));
+      return await this.recursiveSearch_(source, credential, path, key);
+    }
+  }
+
   async stat(
     source: CloudSource,
     credential: CloudCredential,
@@ -367,6 +412,86 @@ export class WebDavCloudProvider implements CloudStorageProvider {
     return defaults;
   }
 
+  private async recursiveSearch_(
+    source: CloudSource,
+    credential: CloudCredential,
+    remotePath: string,
+    keyword: string
+  ): Promise<CloudListPage> {
+    const key = keyword.toLowerCase();
+    const queue: string[] = [remotePath];
+    const visited = new Set<string>();
+    const matches: CloudFile[] = [];
+    let scanned = 0;
+    const maxEntries = 5000;
+    while (queue.length > 0 && scanned < maxEntries) {
+      const dir = queue.shift();
+      if (dir === undefined || visited.has(dir)) {
+        continue;
+      }
+      visited.add(dir);
+      let childPage: CloudListPage;
+      try {
+        childPage = await this.list(source, credential, dir);
+      } catch (e) {
+        if (dir === remotePath) {
+          throw e;
+        }
+        console.warn('[WebDavCloud] skip unreadable search directory:', dir,
+          WebDavHttp.toUserMessage(e as Object));
+        continue;
+      }
+      for (let i = 0; i < childPage.items.length && scanned < maxEntries; i++) {
+        const file = childPage.items[i];
+        scanned++;
+        if ((file.name || '').toLowerCase().indexOf(key) >= 0) {
+          matches.push(file);
+        }
+        if (file.isDirectory && !visited.has(file.remotePath)) {
+          queue.push(file.remotePath);
+        }
+      }
+    }
+    if (queue.length > 0) {
+      console.warn('[WebDavCloud] recursive search truncated at', maxEntries, 'entries');
+    }
+    const page = this.searchPage_(matches);
+    page.nextCursor = queue.length > 0 ? 'truncated' : '';
+    return page;
+  }
+
+  private searchPage_(input: CloudFile[]): CloudListPage {
+    const unique = new Map<string, CloudFile>();
+    for (let i = 0; i < input.length; i++) {
+      const file = input[i];
+      if (file.remotePath && !unique.has(file.remotePath)) {
+        unique.set(file.remotePath, file);
+      }
+    }
+    const items = Array.from(unique.values());
+    items.sort((a: CloudFile, b: CloudFile): number => {
+      if (a.isDirectory !== b.isDirectory) {
+        return a.isDirectory ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    const page = createEmptyCloudListPage();
+    page.items = items;
+    page.nextCursor = '';
+    return page;
+  }
+
+  private shouldFallbackSearch_(error: Object): boolean {
+    const message = error instanceof Error ? (error.message || '') : String(error);
+    const lower = message.toLowerCase();
+    if (message.indexOf('401') >= 0 || lower.indexOf('unauthorized') >= 0) {
+      return false;
+    }
+    return message.indexOf('HTTP ') >= 0 || lower.indexOf('not implemented') >= 0 ||
+      lower.indexOf('unsupported') >= 0 || lower.indexOf('search') >= 0 ||
+      lower.indexOf('method') >= 0;
+  }
+
   private rootUrl_(source: CloudSource): string {
     // 集合 URL 补尾斜杠，兼容 Nextcloud / 坚果云对目录 PROPFIND 的要求
     return this.ensureDirUrl_(WebDavHttp.joinUrl(
@@ -432,4 +557,3 @@ export class WebDavCloudProvider implements CloudStorageProvider {
     return file;
   }
 }
-

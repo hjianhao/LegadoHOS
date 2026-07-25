@@ -132,7 +132,7 @@ export struct BookCover {
     Stack() {
       // 降级色块
       Column() {
-        Text(this.name ? this.name.charAt(0) : '?')
+        Text(this.name ? Array.from(this.name)[0] : '?')
           .fontSize(this.coverWidth > 50 ? 22 : 18)
           .fontColor(ThemeColors.onPrimary(this.isDark)).fontWeight(FontWeight.Bold)
       }
