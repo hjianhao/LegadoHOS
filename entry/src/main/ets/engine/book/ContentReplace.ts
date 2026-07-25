@@ -25,6 +25,8 @@ export class ContentReplaceEngine {
       ]);
       this.contentRules = results[0];
       this.titleRules = results[1];
+      console.info('[ContentReplace] loadRules book=[' + bookName + '] origin=[' + origin +
+        '] contentRules=' + this.contentRules.length + ' titleRules=' + this.titleRules.length);
     } catch (err) {
       console.error('[ContentReplace] Failed to load rules:', err);
     }
@@ -48,9 +50,16 @@ export class ContentReplaceEngine {
       if (!rule.pattern) continue;
       try {
         if (rule.isRegex) {
-          result = result.replace(new RegExp(rule.pattern, 'g'), rule.replacement);
+          const regex = new RegExp(rule.pattern, 'g');
+          const hits = (result.match(regex) || []).length;
+          result = result.replace(regex, rule.replacement);
+          console.info('[ContentReplace] apply rule=[' + rule.name + '] pattern=[' + rule.pattern +
+            '] hits=' + hits + ' len=' + text.length + '->' + result.length);
         } else {
+          const hits = result.split(rule.pattern).length - 1;
           result = result.split(rule.pattern).join(rule.replacement);
+          console.info('[ContentReplace] apply rule=[' + rule.name + '] pattern=[' + rule.pattern +
+            '] hits=' + hits + ' len=' + text.length + '->' + result.length);
         }
       } catch (err) {
         console.warn('[ContentReplace] Rule error:', rule.name, err);

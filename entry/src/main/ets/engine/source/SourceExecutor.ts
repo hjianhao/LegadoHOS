@@ -2783,14 +2783,35 @@ export class SourceExecutor {
           '  var result = ' + JSON.stringify(body) + ';\n' +
           '  var baseUrl = ' + JSON.stringify(ruleUrl) + ';\n' +
           '  ' + jsPrefixMatch[1] + '\n' +
+          '  try { globalThis.__lastSourceVars = source.getVariable(); } catch (_ve) {}\n' +
           '  return result;\n' +
           '})()';
         const evalResult = await JsExpressionEvaluator.evaluate(evalBody, {
-          baseUrl: ruleUrl, source: source, jsLib: source.jsLib || ''
+          baseUrl: ruleUrl, source: source, jsLib: source.jsLib || '',
+          variableBlob: source.variableComment || '',
         });
         if (evalResult && evalResult !== 'null' && evalResult !== 'undefined' && evalResult.length > 100) {
           console.info('[SrcEx] <js> list rule returned new body (' + evalResult.length + ' chars) for', source.sourceName);
           body = evalResult;
+        }
+        // setVariable 写回：脚本调用过 setVariable 时，取回最终变量持久化到 DB
+        // （验证码源靠它缓存验证码，一段时间内免重复输入）
+        if (/setVariable\s*\(/.test(jsPrefixMatch[1])) {
+          try {
+            const varsRaw = await JsExpressionEvaluator.evaluate(
+              'globalThis.__lastSourceVars || ""',
+              { baseUrl: ruleUrl, source: source }
+            );
+            const vars = (varsRaw || '').replace(/^['"`]|['"`]$/g, '');
+            if (vars && vars !== 'null' && vars !== '{}' && vars !== (source.variableComment || '')) {
+              source.variableComment = vars;
+              await AppDatabase.getInstance().waitForInit();
+              const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+              await dao.updateVariable(source.id, source.sourceUrl, vars);
+              console.info('[SrcEx] Persisted source variable for', source.sourceName,
+                'len=' + vars.length);
+            }
+          } catch (_pe) { /* 持久化失败不影响搜索 */ }
         }
       } catch (_jsErr) {
         console.info('[SrcEx] <js> list rule eval failed for', source.sourceName, ':', (_jsErr as Error).message);

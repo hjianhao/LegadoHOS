@@ -1025,6 +1025,9 @@ struct ReadPage {
       await AppDatabase.getInstance().waitForInit();
       const ruleTable = new ReplaceRuleTable(AppDatabase.getInstance().rdbStore);
       await this.replaceEngine_.loadRules(ruleTable, this.bookName, this.originUrl);
+      console.info('[ReadPage] replace rules loaded: enabled=' + this.replaceEnabled_ +
+        ' content=' + this.replaceEngine_.contentRules.length +
+        ' title=' + this.replaceEngine_.titleRules.length);
     } catch (e) {
       console.warn('[ReadPage] load replace rules failed:', (e as Error).message);
     }
