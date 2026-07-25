@@ -34,6 +34,7 @@ struct ScriptEngineContext {
   napi_env env = nullptr;             // 创建该引擎的线程的 napi_env
   napi_ref http_callback = nullptr;   // 该引擎的 HTTP 回调
   napi_ref cookie_callback = nullptr; // 该引擎的 Cookie 操作回调
+  napi_ref captcha_callback = nullptr; // 该引擎的验证码输入回调
 };
 
 static std::unordered_map<int64_t, ScriptEngineContext*> g_engines;
@@ -76,6 +77,79 @@ struct CookieOpRequest {
 static std::unordered_map<int64_t, CookieOpRequest*> g_pending_cookie_ops;
 static int64_t g_next_cookie_op_id = 1;
 static std::mutex g_cookie_op_mutex;
+
+// ============================================================
+// 验证码操作桥（JS __captchaOp → ArkTS 弹窗输入）
+// ============================================================
+
+struct CaptchaOpRequest {
+  int64_t requestId;
+  std::string result;
+  bool completed;
+};
+
+static std::unordered_map<int64_t, CaptchaOpRequest*> g_pending_captcha_ops;
+static int64_t g_next_captcha_op_id = 1;
+static std::mutex g_captcha_op_mutex;
+
+/**
+ * JS 全局函数: __captchaOp(imageUrl) → string
+ * 同步阻塞等待 ArkTS 侧弹窗输入（与 __cookieOp 同一模式，但超时更长，
+ * 因为要等用户看图输入，最多 120 秒）
+ */
+static JSValue js_captcha_op(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+  if (argc < 1) return JS_NewString(ctx, "");
+
+  const char *url = JS_ToCString(ctx, argv[0]);
+
+  auto req = new CaptchaOpRequest();
+  {
+    std::lock_guard<std::mutex> lock(g_captcha_op_mutex);
+    req->requestId = g_next_captcha_op_id++;
+    req->completed = false;
+    g_pending_captcha_ops[req->requestId] = req;
+  }
+  int64_t req_id = req->requestId;
+
+  ScriptEngineContext* engine = (ScriptEngineContext*)JS_GetContextOpaque(ctx);
+  bool dispatched = false;
+  if (engine && engine->captcha_callback && engine->env) {
+    napi_env env = engine->env;
+    napi_value cb;
+    napi_get_reference_value(env, engine->captcha_callback, &cb);
+
+    napi_value args[2];
+    napi_create_int64(env, req_id, &args[0]);
+    napi_create_string_utf8(env, url ? url : "", NAPI_AUTO_LENGTH, &args[1]);
+
+    napi_value global;
+    napi_get_global(env, &global);
+    napi_value result;
+    napi_call_function(env, global, cb, 2, args, &result);
+    dispatched = true;
+  }
+
+  // 等用户输入验证码，最长 120 秒；期间泵 worker 的 uv 循环让消息进来
+  int waited = 0;
+  while (dispatched && !req->completed && waited < 120000) {
+    uv_loop_t *loop = nullptr;
+    if (engine && engine->env && napi_get_uv_event_loop(engine->env, &loop) == napi_ok && loop) {
+      uv_run(loop, UV_RUN_NOWAIT);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    waited += 2;
+  }
+
+  JSValue out = JS_NewString(ctx, req->result.c_str());
+  {
+    std::lock_guard<std::mutex> lock(g_captcha_op_mutex);
+    g_pending_captcha_ops.erase(req_id);
+  }
+  delete req;
+  if (url) JS_FreeCString(ctx, url);
+  return out;
+}
 
 /**
  * JS 全局函数: __cookieOp(op, url, value) → string
@@ -508,6 +582,8 @@ static napi_value CreateEngine(napi_env env, napi_callback_info info) {
   // ---- 注入 Cookie 操作桥 ----
   JS_SetPropertyStr(ctx->ctx, global, "__cookieOp",
                     JS_NewCFunction(ctx->ctx, js_cookie_op, "__cookieOp", 3));
+  JS_SetPropertyStr(ctx->ctx, global, "__captchaOp",
+                    JS_NewCFunction(ctx->ctx, js_captcha_op, "__captchaOp", 1));
 
   // ---- 注入 Base64 ----
   JSValue base64_obj = JS_NewObject(ctx->ctx);
@@ -856,6 +932,66 @@ static napi_value RegisterCookieHandler(napi_env env, napi_callback_info info) {
 }
 
 /**
+ * 验证码输入完成回调（由 ArkTS 侧调用）
+ * 参数: requestId, value(string)
+ */
+static napi_value OnCaptchaResponse(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t request_id;
+  napi_get_value_int64(env, argv[0], &request_id);
+
+  char result_buf[1024];
+  size_t result_len;
+  napi_get_value_string_utf8(env, argv[1], result_buf, sizeof(result_buf), &result_len);
+
+  std::lock_guard<std::mutex> lock(g_captcha_op_mutex);
+  auto it = g_pending_captcha_ops.find(request_id);
+  if (it != g_pending_captcha_ops.end()) {
+    it->second->result.assign(result_buf, result_len);
+    it->second->completed = true;
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
+ * 注册 ArkTS 侧的验证码输入回调
+ * 参数: engineId, callback(requestId, imageUrl)
+ */
+static napi_value RegisterCaptchaHandler(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+  int64_t engine_id;
+  napi_get_value_int64(env, argv[0], &engine_id);
+
+  ScriptEngineContext *engine = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_global_mutex);
+    auto it = g_engines.find(engine_id);
+    if (it != g_engines.end()) engine = it->second;
+  }
+
+  if (engine) {
+    if (engine->captcha_callback) {
+      napi_delete_reference(engine->env, engine->captcha_callback);
+    }
+    napi_create_reference(env, argv[1], 1, &engine->captcha_callback);
+    engine->env = env;
+  }
+
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+/**
  * 注册 ArkTS 侧的 HTTP 请求回调
  * 参数: engineId, callback
  */
@@ -903,6 +1039,8 @@ static napi_value Init(napi_env env, napi_value exports) {
     { "registerHttpHandler", nullptr, RegisterHttpHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
     { "onCookieResponse", nullptr, OnCookieResponse, nullptr, nullptr, nullptr, napi_default, nullptr },
     { "registerCookieHandler", nullptr, RegisterCookieHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "onCaptchaResponse", nullptr, OnCaptchaResponse, nullptr, nullptr, nullptr, napi_default, nullptr },
+    { "registerCaptchaHandler", nullptr, RegisterCaptchaHandler, nullptr, nullptr, nullptr, napi_default, nullptr },
   };
 
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);

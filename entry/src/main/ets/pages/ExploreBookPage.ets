@@ -9,9 +9,14 @@ import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import { WebViewEngine } from '../components/WebViewEngine';
+import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
+import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { UiUtil } from '../util/UiUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
+import { image } from '@kit.ImageKit';
 
 @Entry
 @Component
@@ -37,6 +42,33 @@ struct ExploreBookPage {
 
   aboutToAppear(): void {
     this.isActive = true;
+    // 注册 Cloudflare 交互验证弹窗
+    WebViewFetcher.interactiveFetcher = (url: string): Promise<string> => {
+      return new Promise((resolve) => {
+        WebViewFetcher.interactiveResolve = resolve;
+        let dlg: CustomDialogController | null = null;
+        dlg = new CustomDialogController({
+          builder: CloudflareDialog({ controller: dlg!, url: url }),
+          autoCancel: false,
+          customStyle: true,
+          alignment: DialogAlignment.Center,
+        });
+        dlg.open();
+      });
+    };
+    // 注册验证码输入弹窗处理器
+    JsExpressionEvaluator.captchaHandler = (captchaUrl: string, captchaImage?: image.PixelMap | null): Promise<string> => {
+      return new Promise((resolve) => {
+        let dlg: CustomDialogController | null = null;
+        dlg = new CustomDialogController({
+          builder: CaptchaDialog({ controller: dlg!, captchaUrl: captchaUrl, captchaImage: captchaImage ?? null, captchaResolve: resolve }),
+          autoCancel: false,
+          customStyle: true,
+          alignment: DialogAlignment.Center,
+        });
+        dlg.open();
+      });
+    };
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
     if (params) {
       this.sourceId = Number(params['sourceId'] || 0);
@@ -107,7 +139,14 @@ struct ExploreBookPage {
       console.info('[ExploreBook] Full URL: ' + catUrl);
 
       const exploreSource: BookSource = this.makeExploreSource(source, catUrl);
-      const results: SearchResult[] = await globalSourceExecutor.search(this.categoryName || '', [exploreSource]);
+      // 部分站点（如雨忆文学网）服务端会随机返回空列表页，0 条时重试两次
+      let results: SearchResult[] = [];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        results = await globalSourceExecutor.search(this.categoryName || '', [exploreSource]);
+        if (!this.isActive || runId !== this.requestId) return;
+        if (results.length > 0) break;
+        console.info('[ExploreBook] 0 books, retry ' + (attempt + 1) + '/2');
+      }
       if (!this.isActive || runId !== this.requestId) return;
       console.info('[ExploreBook] Engine: ' + results.length + ' books');
       this.books = results;

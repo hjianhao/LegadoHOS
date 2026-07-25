@@ -16,6 +16,7 @@ import { NetUtil } from '../../util/NetUtil';
 import { CookieStore } from '../../util/CookieStore';
 import { LoginInfoStore } from '../../util/LoginInfoStore';
 import { isNativeLoaded } from '../../napi/quickjs_bridge';
+import { image } from '@kit.ImageKit';
 
 // Worker 的 QuickJS 引擎没有 polyfill，缓存一份在评估时注入
 let cachedPolyfill_: string | null = null;
@@ -91,6 +92,12 @@ export interface JsEvalContext {
 }
 
 export class JsExpressionEvaluator {
+  /**
+   * 验证码输入回调：Worker 请求时调用，返回 Promise<string> 等待用户输入。
+   * image 为通过应用 HTTP 栈（带 Cookie）抓取的验证码图片，
+   * 保证取图会话与后续提交会话一致；抓取失败时为 null，调用方可退回 URL 加载。
+   */
+  static captchaHandler: ((url: string, image?: image.PixelMap | null) => Promise<string>) | null = null;
   private static workerInstance: worker.ThreadWorker | null = null;
   private static workerPromise: Map<number, { resolve: (v: string) => void; reject: (e: Error) => void }> = new Map();
   private static nextId: number = 1;
@@ -121,7 +128,14 @@ export class JsExpressionEvaluator {
         const msg = event.data;
         if (!msg) return;
 
-        if (msg.type === 'result' || msg.type === 'error') {
+        if (msg.type === 'captcha_result') {
+          // Worker 验证码请求的结果 → 通过 pending 返回
+          const pending = this.workerPromise.get(msg.id);
+          if (pending) {
+            this.workerPromise.delete(msg.id);
+            pending.resolve(String(msg.value || ''));
+          }
+        } else if (msg.type === 'result' || msg.type === 'error') {
           const pending = this.workerPromise.get(msg.id);
           if (pending) {
             this.workerPromise.delete(msg.id);
@@ -147,6 +161,34 @@ export class JsExpressionEvaluator {
           }
         } else if (msg.type === 'cookie_remove') {
           void CookieStore.getInstance().removeByHost(String(msg.host || ''));
+        } else if (msg.type === 'captcha') {
+          // Worker 请求验证码输入 → 主线程显示 CaptchaDialog
+          const captchaUrl = String(msg.url || '');
+          const captchaId = msg.id;
+          const handler = JsExpressionEvaluator.captchaHandler;
+          const replyCaptcha = (code: string): void => {
+            try {
+              // 先把最新 Cookie 快照推给 Worker（取验证码图可能刷新了会话 Cookie），
+              // 保证 Worker 随后提交验证码的 POST 与取图是同一会话
+              this.workerInstance?.postMessage({ type: 'cookie_sync', cookies: CookieStore.getInstance().getSnapshot() });
+              this.workerInstance?.postMessage({ type: 'captcha_result', id: captchaId, value: code });
+            } catch (_e) { /* worker may be gone */ }
+          };
+          if (!handler) {
+            replyCaptcha('');
+            return;
+          }
+          // 验证码图片必须走应用自己的 HTTP 栈（带 CookieStore），
+          // 否则系统图片加载器会另开会话，服务器校验永远对不上
+          NetUtil.httpGetBinary(captchaUrl).then(async (buf: ArrayBuffer) => {
+            let pm: image.PixelMap | null = null;
+            try {
+              pm = await image.createImageSource(buf).createPixelMap();
+            } catch (_e) { /* 解码失败则退回 URL 加载 */ }
+            handler(captchaUrl, pm).then(replyCaptcha);
+          }).catch((_e: Error) => {
+            handler(captchaUrl, null).then(replyCaptcha);
+          });
         }
       };
 
@@ -288,7 +330,9 @@ export class JsExpressionEvaluator {
       try {
         const polyfill = getPolyfillForWorker();
         const workerScript = polyfill + '\n' + fullScript;
-        const result = await this.sendToWorker('eval', 35000, workerScript);
+        // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
+        const evalTimeout = /getVerificationCode|__captchaOp/.test(fullScript) ? 125000 : 35000;
+        const result = await this.sendToWorker('eval', evalTimeout, workerScript);
         return unwrapJsResult(result);
       } catch (e) {
         console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));

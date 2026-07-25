@@ -556,6 +556,10 @@ export class HtmlParser {
   private findElements(root: HtmlElement, selector: string): HtmlElement[] {
     if (!root || !selector) return [];
 
+    // Legado 显式 CSS 模式前缀 @css:（Android AnalyzeRule 默认即 CSS 模式）
+    // 不剥离会导致 tag 解析失败、选择器退化为"匹配一切"
+    selector = selector.replace(/^\s*@css:/i, '');
+
     // CSS 逗号分组: .s1,.s7 — 取第一个有结果的分组
     if (selector.includes(',')) {
       const groups = this.splitByCommaOutsideBrackets(selector);
@@ -824,6 +828,13 @@ export class HtmlParser {
       pseudoArg = nthMatch[1];
       s = s.replace(/:nth-of-type\(\d+\)/i, '');
     }
+    // CSS :nth-child(n) — Jsoup 语义：在父元素的元素子节点中 1 起计数（不按标签过滤）
+    const nthChildMatch = s.match(/:nth-child\((\d+|odd|even)\)/i);
+    if (nthChildMatch) {
+      pseudoType = 'nth-child';
+      pseudoArg = nthChildMatch[1].toLowerCase();
+      s = s.replace(/:nth-child\((\d+|odd|even)\)/i, '');
+    }
     const eqMatch = s.match(/:eq\((\d+)\)/i);
     if (eqMatch) {
       pseudoType = 'eq';
@@ -891,6 +902,11 @@ export class HtmlParser {
 	
 	      const n = pseudoArg ? parseInt(pseudoArg) : 0;
 	      switch (pseudoType) {
+	        case 'nth-child':
+	          // Jsoup: 1 起计数；odd=奇数位(1,3,5…)，even=偶数位(2,4,6…)
+	          if (pseudoArg === 'odd') return idx % 2 === 0;
+	          if (pseudoArg === 'even') return idx % 2 === 1;
+	          return idx === n - 1;
 	        case 'nth-of-type':
 	        case 'eq':
 	          return idx === n - 1; // CSS :nth-of-type is 1-indexed, :eq(0) is 0-indexed

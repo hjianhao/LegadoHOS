@@ -927,7 +927,7 @@
     },
     "ruleSearch": {
       "bookList": "@css:.novel-card",
-      "name": "@css:.novel-title a@text",
+      "name": "@css:.novel-title a@text@js:result.replace(/^📖\\s*/, '')",
       "author": "@css:.novel-author@text",
       "bookUrl": "@css:.novel-title a@href",
       "coverUrl": "",
@@ -944,6 +944,132 @@
       "updateTime": ""
     },
     "searchUrl": "/search/?q={{key}}&page={{page}}",
+    "weight": 0
+  },
+  {
+    "bookSourceComment": "69书吧当前启用了全站人机验证。首次访问详情、目录、正文或发现页时，可能会弹出验证页面，通过后会依赖 CookieJar 保持验证状态。\n搜索接口为 GBK POST 请求，但当前容易触发 Cloudflare 验证，稳定版默认关闭搜索；请优先通过\"发现\"找书，或在浏览器打开书籍详情页后，在阅读中添加网址。\n若验证无限循环，请确认 Android System WebView 已更新，并让请求头中的 Chrome 大版本与手机 WebView 大版本一致。本配置按 Chrome/WebView 149 编写。",
+    "bookSourceGroup": "人机验证-全站,搜索暂不可用",
+    "bookSourceName": "69书吧",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://www.69shuba.com",
+    "bookUrlPattern": "https://www\\.69shuba\\.com/book/\\d+(?:\\.htm|/?)",
+    "concurrentRate": "3000",
+    "coverDecodeJs": "",
+    "customOrder": 0,
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": true,
+    "exploreUrl": "男生推荐::/novels/male\n女生推荐::/novels/female\n热门小说::/novels/hot\n全部分类::/novels/class/0.htm\n玄幻魔法::/novels/class/1.htm\n武侠修真::/novels/class/2.htm\n言情小说::/novels/class/3.htm\n历史军事::/novels/class/4.htm\n游戏竞技::/novels/class/5.htm\n科幻空间::/novels/class/6.htm\n悬疑惊悚::/novels/class/7.htm\n同人小说::/novels/class/8.htm\n都市小说::/novels/class/9.htm\n官场职场::/novels/class/10.htm\n穿越时空::/novels/class/11.htm\n青春校园::/novels/class/12.htm\n完本-全部分类::/novels/full/0.htm\n完本-玄幻魔法::/novels/full/1.htm\n完本-武侠修真::/novels/full/2.htm\n完本-言情小说::/novels/full/3.htm\n完本-历史军事::/novels/full/4.htm\n完本-游戏竞技::/novels/full/5.htm\n完本-科幻空间::/novels/full/6.htm\n完本-悬疑惊悚::/novels/full/7.htm\n完本-同人小说::/novels/full/8.htm\n完本-都市小说::/novels/full/9.htm\n完本-官场职场::/novels/full/10.htm\n完本-穿越时空::/novels/full/11.htm\n完本-青春校园::/novels/full/12.htm\n连载人气榜::/novels/weekvisit_0_2_{{page}}.htm\n连载推荐榜::/novels/allvote_0_2_{{page}}.htm\n连载新书榜::/novels/newhot_0_2_{{page}}.htm\n完本人气榜::/novels/weekvisit_0_1_{{page}}.htm\n完本推荐榜::/novels/allvote_0_1_{{page}}.htm\n完本新书榜::/novels/newhot_0_1_{{page}}.htm",
+    "header": "{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 16; PJZ110 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/149.0.7827.160 Mobile Safari/537.36\",\"Referer\":\"https://www.69shuba.com/\"}",
+    "jsLib": "function cfCheck(html, targetUrl) {\n  var text = String(html || '');\n  if (/Just a moment|cf-turnstile|onloadTurnstileCallback|challenges\\.cloudflare\\.com/i.test(text)) {\n    java.longToast('请按网页提示完成人机验证；若无限循环，请检查 WebView 与请求头 UA 版本。');\n    return java.startBrowserAwait(targetUrl, '69书吧人机验证').body();\n  }\n  return html;\n}",
+    "lastUpdateTime": "1784388119284",
+    "loginUrl": "https://www.69shuba.com/",
+    "respondTime": 180000,
+    "ruleBookInfo": {
+      "author": "//meta[@property='og:novel:author']/@content",
+      "coverUrl": "//meta[@property='og:image']/@content",
+      "init": "<js>cfCheck(result, baseUrl);</js>",
+      "intro": "//meta[@property='og:description']/@content",
+      "kind": "//meta[@property='og:novel:category' or @property='og:novel:status' or @property='og:novel:update_time']/@content",
+      "lastChapter": "//meta[@property='og:novel:latest_chapter_name']/@content##\\d+\\.(?=第)",
+      "name": "//meta[@property='og:novel:book_name']/@content",
+      "tocUrl": "@js:baseUrl.endsWith('/') ? baseUrl : baseUrl.replace('.htm','/')",
+      "wordCount": ".booknav2 p.2@text##( \\|.+)"
+    },
+    "ruleContent": {
+      "content": "<js>cfCheck(result, baseUrl);</js>.txtnav@textNodes",
+      "nextContentUrl": "",
+      "replaceRegex": "##\\s*({{book.durChapterTitle}}|.*作者：.*|\\(本章完\\)|（本章完）|PS：.*|P\\.S\\..*|感谢.*打赏.*|感谢.*推荐票.*|感谢.*月票.*|为防止采集.*|请记住本站.*|loadAdv.*)\\s*",
+      "title": "h1@text##\\d+\\.(?=第)"
+    },
+    "ruleExplore": {
+      "author": "label.0@text",
+      "bookList": "<js>cfCheck(result, baseUrl);</js>#article_list_content li",
+      "bookUrl": "a.0@href",
+      "coverUrl": "img@data-src||img@src",
+      "intro": ".ellipsis_2@text",
+      "kind": "label.1@text&&label.2@text",
+      "lastChapter": ".zxzj p@textNodes##\\d+\\.(?=第)",
+      "name": "h3 a.1@text||img@alt",
+      "wordCount": ""
+    },
+    "ruleSearch": {
+      "author": "label.0@text",
+      "bookList": ".newbox li",
+      "bookUrl": "a.0@href",
+      "checkKeyWord": "",
+      "coverUrl": "img@data-src||img@src",
+      "intro": ".ellipsis_2@text||ol@text",
+      "kind": "label.1@text&&label.2@text",
+      "lastChapter": ".zxzj p@textNodes##\\d+\\.(?=第)",
+      "name": "h3 a.1@text||h3@text",
+      "wordCount": ""
+    },
+    "ruleToc": {
+      "chapterList": "<js>cfCheck(result, baseUrl);</js>#catalog ul a[-1:0]",
+      "chapterName": "text##\\d+\\.(?=第)",
+      "chapterUrl": "href",
+      "isVolume": "",
+      "nextTocUrl": "",
+      "preUpdateJs": ""
+    },
+    "searchUrl": "<js>/modules/article/search.php,{'charset':'gbk','body':'searchkey={{key}}&searchtype=all','method':'POST'};result='';result;</js>",
+    "variableComment": "",
+    "weight": 25
+  },
+  {
+    "bookSourceComment": "雨忆文学网书源 (https://www.ghjun.com)\n\n搜索时自动弹出验证码图片，输入后自动搜索。\n获取一次验证码后缓存，一段时间内无需再次输入。\n验证码过期会自动重新弹出。\n\n发现包含8大分类、8个排行榜和全本小说。\n分类：玄幻、仙侠、都市、历史、网游、科幻、灵异、其他\n排行：总排行、周榜、日榜、月榜、更新榜、新书上架、收藏榜、字数榜",
+    "bookSourceGroup": "验证码,AI",
+    "bookSourceName": "（验证码）雨忆文学网",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://www.ghjun.com",
+    "customButton": false,
+    "customOrder": 172,
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": true,
+    "eventListener": false,
+    "exploreUrl": "玄幻小说::https://www.ghjun.com/sort/1/{{page}}.html\n仙侠小说::https://www.ghjun.com/sort/2/{{page}}.html\n都市小说::https://www.ghjun.com/sort/3/{{page}}.html\n历史小说::https://www.ghjun.com/sort/4/{{page}}.html\n网游小说::https://www.ghjun.com/sort/5/{{page}}.html\n科幻小说::https://www.ghjun.com/sort/6/{{page}}.html\n灵异小说::https://www.ghjun.com/sort/7/{{page}}.html\n其他小说::https://www.ghjun.com/sort/8/{{page}}.html\n总排行榜::https://www.ghjun.com/top/allvisit/{{page}}.html\n周排行榜::https://www.ghjun.com/top/weekvisit/{{page}}.html\n日排行榜::https://www.ghjun.com/top/dayvisit/{{page}}.html\n月排行榜::https://www.ghjun.com/top/monthvisit/{{page}}.html\n更新榜::https://www.ghjun.com/top/lastupdate/{{page}}.html\n新书上架::https://www.ghjun.com/top/postdate/{{page}}.html\n收藏榜::https://www.ghjun.com/top/goodnum/{{page}}.html\n字数榜::https://www.ghjun.com/top/size/{{page}}.html\n全本小说::https://www.ghjun.com/full/{{page}}.html",
+    "lastUpdateTime": "1784123178428",
+    "respondTime": 180000,
+    "ruleBookInfo": {
+      "author": "meta[property~=og:novel:author]@content",
+      "coverUrl": "meta[property~=og:image]@content",
+      "intro": "meta[property~=og:description]@content",
+      "kind": "meta[property~=og:novel:category]@content",
+      "lastChapter": "meta[property~=og:novel:latest_chapter_name]@content",
+      "name": "meta[property~=og:novel:book_name]@content",
+      "tocUrl": "@js:baseUrl.replace(/\\/$/, '') + '/1/'"
+    },
+    "ruleContent": {
+      "content": "#chapter@html##\\[.*?】.*?\\]##",
+      "nextContentUrl": "text.下一章@href"
+    },
+    "ruleExplore": {
+      "author": "@css:td:nth-child(4)@text",
+      "bookList": "table.table tr!0",
+      "bookUrl": "a[title]@href",
+      "kind": "@css:td:nth-child(1)@text",
+      "lastChapter": "a.text-muted@text",
+      "name": "a[title]@title",
+      "wordCount": "@css:td:nth-child(5)@text"
+    },
+    "ruleSearch": {
+      "author": "@css:td:nth-child(4)@text",
+      "bookList": "<js>\nif(result.indexOf('searchcode')>-1){\n    var sUrl=String(source.bookSourceUrl);\n    var sk=java.get('search_key')||'';\n    var captchaUrl=sUrl+'/searchcode.php?t='+Date.now();\n    function doPost(code){\n        var u=sUrl+'/s/search/,{\"method\":\"POST\",\"body\":\"keyword='+encodeURIComponent(sk)+'&code='+code+'\"}';\n        return java.ajax(u);\n    }\n    var yzco=source.getVariable();\n    if(yzco&&yzco!=''){\n        result=doPost(yzco);\n        if(result.indexOf('searchcode')>-1){\n            java.longToast('验证码过期，请重新输入');\n            var yzm=java.getVerificationCode(captchaUrl);\n            result=doPost(yzm);\n            source.setVariable(yzm);\n        }\n    }else{\n        var yzm=java.getVerificationCode(captchaUrl);\n        result=doPost(yzm);\n        source.setVariable(yzm);\n    }\n}\nresult;\n</js>\ntable.table tr!0",
+      "bookUrl": "a[title]@href",
+      "kind": "@css:td:nth-child(1)@text",
+      "lastChapter": "a.text-muted@text",
+      "name": "a[title]@title",
+      "wordCount": "@css:td:nth-child(5)@text"
+    },
+    "ruleToc": {
+      "chapterList": "dl.panel-chapterlist dd a",
+      "chapterName": "@text",
+      "chapterUrl": "@href",
+      "nextTocUrl": "text.下一页@href"
+    },
+    "searchUrl": "@js:\njava.put('search_key',key);\nvar sUrl=String(source.bookSourceUrl);\nresult=sUrl+'/s/search/?keyword='+encodeURIComponent(key);",
     "weight": 0
   }
 ]

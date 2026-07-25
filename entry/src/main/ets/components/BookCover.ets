@@ -10,7 +10,7 @@ import { ThemeColors } from '../theme/ThemeColors';
 export struct BookCover {
   @StorageLink('isDark') isDark: boolean = false;
   @Prop name: string = '';
-  @Prop coverUrl: string = '';
+  @Prop @Watch('onCoverUrlChange') coverUrl: string = '';
   @Prop coverWidth: number = 52;
   @Prop coverHeight: number = 70;
   /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
@@ -22,17 +22,34 @@ export struct BookCover {
   @State isDecoding: boolean = false;
 
   aboutToAppear(): void {
+    this.applyCoverUrl();
+    console.info('[BookCover] init name=' + (this.name || '').substring(0, 10) + ' url=' +
+      (this.coverUrl || '').substring(0, 50) + ' decode=' + (this.coverDecodeJs ? 'yes' : 'no'));
+
+    // 有解密配置时，先下载解密再显示
+    if (this.useNetwork && this.coverUrl && this.coverDecodeJs) {
+      this.loadAndDecryptCover();
+    }
+  }
+
+  /** 根据当前 coverUrl 重算展示方式（网络/本地/占位） */
+  private applyCoverUrl(): void {
     const isNetwork = /^(https?:\/\/|\/\/|data:)/.test(this.coverUrl);
     this.isLocalFile = !!(this.coverUrl && !isNetwork && this.coverUrl.startsWith('file://'));
     if (!isNetwork && !this.isLocalFile) {
       this.coverUrl = '';
     }
     this.useNetwork = isNetwork;
-    console.info('[BookCover] init name=' + (this.name || '').substring(0, 10) + ' url=' +
-      (this.coverUrl || '').substring(0, 50) + ' decode=' + (this.coverDecodeJs ? 'yes' : 'no'));
+  }
 
-    // 有解密配置时，先下载解密再显示
-    if (isNetwork && this.coverUrl && this.coverDecodeJs) {
+  /**
+   * coverUrl 异步到达时（如详情页先以空封面渲染、随后从详情 HTML 提取到封面）
+   * 重新计算展示方式，并复位失败状态让 Image 重新加载。
+   */
+  onCoverUrlChange(): void {
+    this.applyCoverUrl();
+    this.imgFailed = false;
+    if (this.useNetwork && this.coverUrl && this.coverDecodeJs && !this.decryptedDataUrl && !this.isDecoding) {
       this.loadAndDecryptCover();
     }
   }

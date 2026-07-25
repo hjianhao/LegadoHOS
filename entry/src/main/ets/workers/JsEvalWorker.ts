@@ -230,6 +230,19 @@ async function initEngine(): Promise<boolean> {
       }
     );
 
+    quickjsBridge.registerCaptchaHandler(
+      engineId,
+      (requestId: number, imageUrl: string): void => {
+        // QuickJS 内 __captchaOp 同步阻塞等待 → 转发主线程弹窗
+        // 主线程通过 'captcha_result' 消息回传用户输入
+        try {
+          parentPort.postMessage({ type: 'captcha', url: imageUrl, id: requestId });
+        } catch (_e) {
+          quickjsBridge.onCaptchaResponse(requestId, '');
+        }
+      }
+    );
+
     return true;
   } catch (e) {
     console.error('[JsWorker] Engine init error:', e);
@@ -353,6 +366,11 @@ try {
         workerCookies = { ...cookies };
         console.info('[JsWorker] Cookie snapshot synced,', Object.keys(workerCookies).length, 'hosts');
       }
+    } else if (msg.type === 'captcha_result') {
+      // 主线程验证码弹窗的用户输入 → 唤醒 QuickJS 内阻塞的 __captchaOp
+      try {
+        quickjsBridge.onCaptchaResponse(Number(msg.id) || 0, String(msg.value || ''));
+      } catch (_e) { /* engine 可能已销毁 */ }
     }
   };
 } catch (_e) { /* ignore setup errors */ }

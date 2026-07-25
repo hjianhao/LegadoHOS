@@ -11,6 +11,8 @@ import { BookSource } from '../model/BookSource';
 import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
+import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { WebViewEngine } from '../components/WebViewEngine';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
@@ -20,6 +22,7 @@ import { ArrayDataSource } from '../util/ArrayDataSource';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AiImportPreviewDialog, AiImportPreviewResult } from '../components/AiImportPreviewDialog';
 import { AiBookImporter, ImportProgress, isSafeAiImportUrl } from '../engine/ai/AiBookImporter';
+import { image } from '@kit.ImageKit';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
@@ -134,6 +137,19 @@ export struct SearchPage {
   }
 
   aboutToAppear(): void {
+    // 注册验证码输入弹窗处理器
+    JsExpressionEvaluator.captchaHandler = (captchaUrl: string, captchaImage?: image.PixelMap | null): Promise<string> => {
+      return new Promise((resolve) => {
+        let dlg: CustomDialogController | null = null;
+        dlg = new CustomDialogController({
+          builder: CaptchaDialog({ controller: dlg!, captchaUrl: captchaUrl, captchaImage: captchaImage ?? null, captchaResolve: resolve }),
+          autoCancel: false,
+          customStyle: true,
+          alignment: DialogAlignment.Center,
+        });
+        dlg.open();
+      });
+    };
     this.pageActive_ = true;
     this.onlineImporter_ = new AiBookImporter((progress: ImportProgress): void => {
       if (!this.pageActive_) return;

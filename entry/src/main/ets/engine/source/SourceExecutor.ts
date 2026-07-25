@@ -410,6 +410,8 @@ export class SourceExecutor {
      */
     function formatBookName(raw: string): string {
       let n = raw
+        // 去掉开头装饰字符（emoji、特殊符号等非文字前缀）
+        .replace(/^[^\w\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\s]+/, '')
         .replace(/\s*[|｜]\s*作\s*者[:：\s].*$/g, '')
         .replace(/\s+作\s*者[:：\s].*$/g, '')
         .replace(/\s+\S+\s+著\s*$/g, '')
@@ -534,7 +536,9 @@ export class SourceExecutor {
     const runOneSource = async (source: BookSource): Promise<void> => {
       if (!source.enabled || !source.ruleSearchUrl) return;
       try {
-        const searchTimeout = NetUtil.getDefaultTimeout();
+        // 验证码源需要等用户输入，搜索总超时放宽到 150s
+        const needsCaptcha = (source.ruleSearchList || '').indexOf('getVerificationCode') >= 0;
+        const searchTimeout = needsCaptcha ? 150000 : NetUtil.getDefaultTimeout();
         const results = await this.searchWithTimeout(keyword, source, searchTimeout, page);
         console.info('[SrcEx] searchWithTimeout returned', results.length, 'results for', source.sourceName);
         incrementMerge(results);
@@ -768,6 +772,35 @@ export class SourceExecutor {
       }
     }
 
+    // 评估 searchUrl 中的 @js: 前缀 — 整段是 JS 表达式，返回实际 URL
+    const jsPrefixMatch = searchUrlTemplate.match(/^@js:([\s\S]*)/);
+    if (jsPrefixMatch) {
+      const jsCode = jsPrefixMatch[1].trim();
+      console.info('[SrcEx] Evaluating @js: prefix in searchUrl for', source.sourceName,
+        '(jsCode len=' + jsCode.length + ')');
+      try {
+        if (this.engineInitialized) {
+          // @js: 中可用 java.put/get 存储变量（如 search_key），这些变量被 <js> 块引用
+          const jsResult = await JsExpressionEvaluator.evaluate(jsCode, {
+            key: keyword,
+            page: page,
+            baseUrl: baseUrl,
+            source: source,
+          });
+          if (jsResult && jsResult.trim()) {
+            searchUrlTemplate = jsResult.trim();
+            console.info('[SrcEx] @js: prefix evaluated, URL:', searchUrlTemplate.substring(0, 120));
+          } else {
+            console.warn('[SrcEx] @js: prefix evaluated empty for', source.sourceName);
+          }
+        } else {
+          console.warn('[SrcEx] Engine not initialized, cannot evaluate @js: for', source.sourceName);
+        }
+      } catch (e) {
+        console.warn('[SrcEx] @js: prefix evaluation failed for', source.sourceName, ':', (e as Error).message);
+      }
+    }
+
     // 评估 {{expression}} 模式（如 {{Get('url')}}），提供 JS 表达式替换
     searchUrlTemplate = await this.evaluateTemplateExpressions(
       searchUrlTemplate, source, keyword, page, baseUrl
@@ -877,7 +910,7 @@ export class SourceExecutor {
         console.info('[SrcEx] CSS 0 results, trying WebView fallback for', source.sourceName);
         try {
           const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
-          if (wvResult.html && wvResult.html.length > 100) {
+          if (wvResult.html && wvResult.html.length > 10) {
             const wvParsed = this.tryHexDecode_(wvResult.html) || wvResult.html;
             const wvResults = await this.parseResponse(wvParsed, source, baseUrl, 0, finalUrl);
             if (wvResults.length > 0) {
@@ -901,15 +934,41 @@ export class SourceExecutor {
       if ((msg.includes('403') || msg.includes('Cloudflare') || /HTTP\s+5\d\d/.test(msg)) && WebViewFetcher.isReady()) {
         this.lastBlockedUrl = url;
         console.info('[SrcEx] HTTP block/error detected, trying WebView for', source.sourceName, ':', msg);
+        let wvHtml: string = '';
         try {
           const wvResult = await WebViewFetcher.fetch(url, 20000, headers);
-          const wvHtml = wvResult.html;
-          if (wvHtml && wvHtml.length > 100) {
+          wvHtml = wvResult.html || '';
+          if (wvHtml && wvHtml.length > 10) {
             console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);
-            return await this.parseResponse(this.tryHexDecode_(wvHtml) || wvHtml, source, baseUrl,
+            const wvParseResults = await this.parseResponse(this.tryHexDecode_(wvHtml) || wvHtml, source, baseUrl,
               Date.now() - Date.now(), finalUrl);
+            if (wvParseResults.length > 0) return wvParseResults;
+            // 0 结果且页面太小（如 Cloudflare 验证页）→ 不走 early return，继续交互式验证
+            console.info('[SrcEx] WebView parse returned 0 for', wvHtml.length, 'byte page, may be Cloudflare');
           }
-        } catch (_wv) { /* WebView fallback also failed */ }
+          // 静态 WebView 结果为空/太小/0结果 → 尝试交互式 Cloudflare 验证
+          if (WebViewFetcher.needsInteractive(url, msg)) {
+            console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(url);
+            if (interactiveHtml && interactiveHtml.length > 200) {
+              console.info('[SrcEx] Interactive WebView got', interactiveHtml.length, 'bytes for', source.sourceName);
+              return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
+                Date.now() - Date.now(), finalUrl);
+            }
+          }
+        } catch (_wv) { /* WebView fallback also failed */
+          // WebView 纯加载失败 → 尝试交互式 Cloudflare 验证
+          if (WebViewFetcher.needsInteractive(url, msg)) {
+            try {
+              console.info('[SrcEx] Trying interactive WebView (catch) for', source.sourceName);
+              const interactiveHtml = await WebViewFetcher.fetchInteractive(url);
+              if (interactiveHtml && interactiveHtml.length > 200) {
+                return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
+                  Date.now() - Date.now(), finalUrl);
+              }
+            } catch (_ie) { /* interactive also failed */ }
+          }
+        }
       }
       console.warn('[SrcEx] Search failed', source.sourceName, ':', msg);
       if (throwOnFailure) throw err;
@@ -1261,11 +1320,40 @@ export class SourceExecutor {
       const doc = parser.parse(body);
       const root: unknown = doc; // HtmlElement
 
+      // tocUrl 整段 @js: 规则（如 "@js:baseUrl.replace(...) + '/1/'"）：
+      // 走 Worker 异步求值（主线程引擎可能不可用导致静默返回空），
+      // baseUrl 按 Android 语义为当前详情页 URL。
+      let resolvedTocUrl = '';
+      const tocUrlRule = source.ruleBookInfoTocUrl || '';
+      if (/^\s*@js:/i.test(tocUrlRule)) {
+        const jsCode = tocUrlRule.replace(/^\s*@js:/i, '');
+        const v = await JsExpressionEvaluator.evaluate(jsCode, {
+          source: source,
+          result: '',
+          baseUrl: noteUrl,
+        });
+        resolvedTocUrl = v ? v.replace(/^['"`]|['"`]$/g, '') : '';
+      }
+
       const extractField = (rule: string): string => {
         if (!rule) return '';
         return resolveFieldRule(rule, (subRule: string) => {
           const extractSingle = (singleRule: string): string => {
             const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(singleRule);
+            // 整段规则都是 @js:（无 CSS 部分，如 tocUrl: "@js:baseUrl.replace(...) + '/1/'"）：
+            // 直接求值，baseUrl 按 Android 语义为当前详情页 URL；
+            // 不能交给 extractAttr——空选择器会返回整页文本，污染后续拼接。
+            if (!ruleBeforeJs && jsCode) {
+              const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, {
+                source: source,
+                result: '',
+                baseUrl: noteUrl,
+              });
+              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+                return evalResult.replace(/^['"`]|['"`]$/g, '');
+              }
+              return '';
+            }
             const normalized = this.normalizeCssRule(ruleBeforeJs);
             const value = parser.extractAttr(doc, normalized);
             if (!jsCode || !value) return value;
@@ -1304,7 +1392,8 @@ export class SourceExecutor {
         kind: extractField(source.ruleBookInfoKind) || '',
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
-        tocUrl: this.resolvePageUrl(extractField(source.ruleBookInfoTocUrl) || '', noteUrl),
+        tocUrl: this.resolvePageUrl(
+          resolvedTocUrl || extractField(source.ruleBookInfoTocUrl) || '', noteUrl),
         chapters: [] as BookSourceChapter[],
       };
     } catch (_e) {
@@ -2677,6 +2766,36 @@ export class SourceExecutor {
     // 字段规则可使用 {{JS}} 动态模板；列表规则则按 Android 语义执行 @js:。
     let listRule = await this.resolveDynamicRuleTemplate(source.ruleSearchList, source, ruleUrl);
     if (!listRule) return [];
+
+    // bookList 为 <js>...</js> 时：先执行 JS（如 cfCheck 检测 Cloudflare），
+    // 再用返回的 HTML（如果 JS 返回了新的 body）和 <js> 后的纯 CSS 选择器。
+    const jsPrefixMatch = listRule.match(/^<js>([\s\S]*?)<\/js>\s*/);
+    if (jsPrefixMatch) {
+      const cssPart = listRule.substring(jsPrefixMatch[0].length).trim();
+      if (cssPart) {
+        listRule = cssPart;
+      }
+      console.info('[SrcEx] <js> prefix in list rule, cssPart="' + (cssPart || '').substring(0, 80) + '" for', source.sourceName);
+      try {
+        // 先用 cfCheck 等 JS 库处理 body；若返回新 HTML（> 100）则替换 body
+        // 注入 result/baseUrl 变量供 JS 库使用，最后 return result（避免 ASI）
+        const evalBody = '(function() {\n' +
+          '  var result = ' + JSON.stringify(body) + ';\n' +
+          '  var baseUrl = ' + JSON.stringify(ruleUrl) + ';\n' +
+          '  ' + jsPrefixMatch[1] + '\n' +
+          '  return result;\n' +
+          '})()';
+        const evalResult = await JsExpressionEvaluator.evaluate(evalBody, {
+          baseUrl: ruleUrl, source: source, jsLib: source.jsLib || ''
+        });
+        if (evalResult && evalResult !== 'null' && evalResult !== 'undefined' && evalResult.length > 100) {
+          console.info('[SrcEx] <js> list rule returned new body (' + evalResult.length + ' chars) for', source.sourceName);
+          body = evalResult;
+        }
+      } catch (_jsErr) {
+        console.info('[SrcEx] <js> list rule eval failed for', source.sourceName, ':', (_jsErr as Error).message);
+      }
+    }
 
     // bookList 为 @js: 时执行条件逻辑并取得 java.getElement(s) 的选择器。
     if (/^@js:/i.test(listRule.trimStart())) {

@@ -424,6 +424,54 @@ export function getPolyfillScript(): string {
 	      };
 	      _j.ajax._isMock = true; // 标记为 mock，让 getAjaxPolyfill 替换为真实实现
 	    }
+	    if (!_j.put) {
+	      _j.put = function(key, value) {
+	        console.log('[Polyfill] java.put: ' + key + '=' + (typeof value === 'string' ? value.substring(0, 40) : JSON.stringify(value)));
+	        if (!globalThis.__javaStore) globalThis.__javaStore = {};
+	        globalThis.__javaStore[key] = value;
+	      };
+	    }
+	    if (!_j.get) {
+	      _j.get = function(key) {
+	        var store = globalThis.__javaStore || {};
+	        return store[key] !== undefined ? store[key] : '';
+	      };
+	    }
+	    if (!_j.getVerificationCode) {
+	      _j.getVerificationCode = function(imgUrl) {
+	        console.log('[Polyfill] java.getVerificationCode: ' + (imgUrl || '').substring(0, 80));
+	        // QuickJS 原生桥可用时走同步阻塞（与 Android Legado 行为一致）：
+	        // __captchaOp 由 napi_bridge 注入，内部泵事件循环等主线程弹窗返回
+	        if (typeof __captchaOp === 'function') {
+	          return String(__captchaOp(String(imgUrl || '')) || '');
+	        }
+	        // Worker 环境：通过 postMessage 请求主线程显示验证码弹窗
+	        if (typeof parentPort !== 'undefined' && typeof parentPort.postMessage === 'function') {
+	          var msgId = Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+	          return new Promise(function(resolve) {
+	            var listener = function(event) {
+	              var data = event.data;
+	              if (data && data.type === 'captcha_result' && data.id === msgId) {
+	                parentPort.removeEventListener('message', listener);
+	                resolve(data.value || '');
+	              }
+	            };
+	            parentPort.addEventListener('message', listener);
+	            parentPort.postMessage({ type: 'captcha', url: imgUrl, id: msgId });
+	            // 60秒超时
+	            setTimeout(function() {
+	              parentPort.removeEventListener('message', listener);
+	              resolve('');
+	            }, 60000);
+	          });
+	        }
+	        // 非 Worker 环境：尝试全局回调
+	        if (typeof globalThis.__showCaptcha === 'function') {
+	          return globalThis.__showCaptcha(imgUrl);
+	        }
+	        return '';
+	      };
+	    }
     if (!_j.longToast) {
       _j.longToast = function(msg) {
         console.log('[java.longToast] ' + msg);
@@ -437,6 +485,20 @@ export function getPolyfillScript(): string {
 	    if (!_j.startBrowser) {
 	      _j.startBrowser = function(url, title) {
 	        console.log('[java.startBrowser] ' + (title || '') + ': ' + url);
+	      };
+	    }
+	    if (!_j.startBrowserAwait) {
+	      _j.startBrowserAwait = function(url, title) {
+	        console.log('[java.startBrowserAwait] ' + (title || '') + ': ' + url);
+	        // 如果宿主注册了 __startBrowserAwait 回调，用它加载 URL 并返回 HTML
+	        if (typeof globalThis.__startBrowserAwait === 'function') {
+	          var html = globalThis.__startBrowserAwait(url);
+	          if (html) {
+	            return { body: function() { return html; } };
+	          }
+	        }
+	        // 无回调时返回空 HTML
+	        return { body: function() { return ''; } };
 	      };
 	    }
 	    if (!_j.log) {

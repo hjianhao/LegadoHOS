@@ -71,7 +71,8 @@ export struct CloudflareDialog {
             })
             .onHttpErrorReceive((event) => {
               const code = event?.response?.getResponseCode();
-              if (code === 403 || code === 404 || (code && code >= 500)) {
+              // 403 可能来自 Cloudflare 验证页（Turnstile），让用户看到页面而非报错
+              if ((code && code >= 500) || code === 404 || code === 410) {
                 console.warn('[CloudflareDialog] HTTP error:', code);
                 this.hasError = true;
                 this.pageTitle = '页面错误 ' + (code || '');
