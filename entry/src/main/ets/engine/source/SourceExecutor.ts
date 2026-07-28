@@ -3022,6 +3022,7 @@ export class SourceExecutor {
                   return JSON.stringify(val || '');
                 });
               const ctx: JsEvalContext = { result: result, baseUrl: baseUrl } as unknown as JsEvalContext;
+            ctx.jsLib = source.jsLib || '';
               const evalResult = JsExpressionEvaluator.evaluateSync(processedCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {

@@ -527,8 +527,13 @@ export class JsExpressionEvaluator {
     const parts: string[] = [];
 
     // 书源 jsLib — 最先加载，定义 hosts、getCloudSettings 等核心函数
-    if (ctx.jsLib && ctx.jsLib.trim()) {
-      parts.push(ctx.jsLib);
+    let jsLibStr = ctx.jsLib || '';
+    if (!jsLibStr && ctx.source) {
+      const src = ctx.source as Record<string, unknown>;
+      jsLibStr = (src.jsLib as string) || '';
+    }
+    if (jsLibStr && jsLibStr.trim()) {
+      parts.push(jsLibStr.trim());
     }
 
     // key / keyword
