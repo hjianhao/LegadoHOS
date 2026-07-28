@@ -15,9 +15,8 @@ import { BookSource, isImageSource } from '../model/BookSource';
 import { MangaImageLoader } from '../util/MangaImageLoader';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import notificationManager from '@ohos.notificationManager';
-import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
-import wantAgent from '@ohos.app.ability.wantAgent';
 import { common } from '@kit.AbilityKit';
+import { BackgroundRunningManager } from './BackgroundRunningManager';
 
 /** 待缓存章节的最小信息（BookChapter / BookSourceChapter 均可适配） */
 export interface CacheChapterItem {
@@ -76,9 +75,6 @@ export class BookCacheService {
 
   /** 每本书同时只允许一个缓存任务 */
   private activeTasks_: Map<number, ActiveTask> = new Map();
-  /** 正在进行后台保活的任务数 */
-  private bgTaskCount_: number = 0;
-
   /** 并发数（对齐安卓上限 8） */
   readonly concurrency: number = 4;
   /** 单章失败重试次数（对齐安卓 3 次） */
@@ -132,7 +128,7 @@ export class BookCacheService {
     const task: ActiveTask = { cancelled: false, done: 0, total: indices.length };
     this.activeTasks_.set(req.bookId, task);
     const notifId = 2000 + (req.bookId % 10000);
-    if (req.context) this.startBgTask(req.context);
+    if (req.context) await this.startBgTask(req.context, req.bookId);
 
     await AppDatabase.getInstance().waitForInit();
     const chapterTable = new ChapterTable(AppDatabase.getInstance().rdbStore);
@@ -206,7 +202,7 @@ export class BookCacheService {
       this.activeTasks_.delete(req.bookId);
       this.publishNotif(notifId, '离线缓存' + (result.cancelled ? '已取消' : '完成'),
         '《' + req.bookName + '》 成功 ' + result.success + ' 章，失败 ' + result.failed + ' 章');
-      if (req.context) this.stopBgTask(req.context);
+      if (req.context) await this.stopBgTask(req.context, req.bookId);
     }
     return result;
   }
@@ -306,26 +302,18 @@ export class BookCacheService {
     }
   }
 
-  private async startBgTask(context: common.Context): Promise<void> {
-    this.bgTaskCount_++;
-    if (this.bgTaskCount_ > 1) return;
+  private async startBgTask(context: common.Context, bookId: number): Promise<void> {
     try {
-      const want = await wantAgent.getWantAgent({
-        wants: [{ bundleName: 'io.hjianhao.aireader', abilityName: 'MainAbility' }],
-        operationType: wantAgent.OperationType.START_ABILITY, requestCode: 0,
-      });
-      await backgroundTaskManager.startBackgroundRunning(context, ['dataTransfer'], want);
+      await BackgroundRunningManager.acquire(context, 'book-cache-' + bookId);
       console.info('[BookCache] bg task started');
     } catch (e) {
       console.warn('[BookCache] bg task fail:', JSON.stringify(e));
     }
   }
 
-  private async stopBgTask(context: common.Context): Promise<void> {
-    this.bgTaskCount_ = Math.max(0, this.bgTaskCount_ - 1);
-    if (this.bgTaskCount_ > 0) return;
+  private async stopBgTask(context: common.Context, bookId: number): Promise<void> {
     try {
-      await backgroundTaskManager.stopBackgroundRunning(context);
+      await BackgroundRunningManager.release(context, 'book-cache-' + bookId);
       console.info('[BookCache] bg task stopped');
     } catch (e) {
       console.warn('[BookCache] stopBgTask fail:', JSON.stringify(e));

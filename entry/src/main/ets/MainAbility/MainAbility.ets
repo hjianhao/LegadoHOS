@@ -24,12 +24,14 @@ import { CloudCredentialStore } from '../data/preferences/CloudCredentialStore';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { AppContextHolder } from '../util/AppContext';
 import { CloudLocalFileStore } from '../service/cloud/CloudLocalFileStore';
+import { SourceCheckService } from '../service/SourceCheckService';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[MainAbility] onCreate');
     // 通过「打开方式/分享」冷启动：解析文件并广播给页面
     ShareImportService.handleWant(want, this.context);
+    this.handleSourceCheckAction_(want);
     // 提前启动异步初始化
     this.initServices();
   }
@@ -38,6 +40,13 @@ export default class MainAbility extends UIAbility {
     console.info('[MainAbility] onNewWant');
     // 应用已运行时再收到「打开方式/分享」
     ShareImportService.handleWant(want, this.context);
+    this.handleSourceCheckAction_(want);
+  }
+
+  private handleSourceCheckAction_(want: Want): void {
+    if (String(want.parameters?.['sourceCheckAction'] || '') === 'stop') {
+      SourceCheckService.getInstance().cancel();
+    }
   }
 
   private async initServices(): Promise<void> {

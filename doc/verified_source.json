@@ -349,7 +349,7 @@
     "ruleExplore": {
       "author": ".s5@text",
       "bookList": ".l@li",
-      "bookUrl": "a.0@href",
+      "bookUrl": "a.0@href##http://www\\.xbiqugu\\.la/\\d+/(\\d+)/##http://wap.xbiqugu.la/wapbook/$1.html###",
       "coverUrl": "a.0@href##.+\\D((\\d+)\\d{3})\\D##/files/article/image/$2/$1/$1s.jpg###",
       "kind": ".s3@textNodes##\\(|\\)",
       "lastChapter": "a.1@text",

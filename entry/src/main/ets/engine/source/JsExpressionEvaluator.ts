@@ -59,6 +59,12 @@ function getPolyfillForWorker(): string {
  */
 function unwrapJsResult(raw: string): string {
   if (!raw || raw === 'null' || raw === 'undefined') return '';
+  // 原生桥会把 QuickJS 异常作为普通字符串返回。异常文本不能继续参与 URL 拼接，
+  // 否则会把脚本错误伪装成 HTTP 403/404，误导书源校验结果。
+  if (/^(?:SyntaxError|TypeError|ReferenceError|RangeError|EvalError|URIError|InternalError|Error):/.test(raw.trim())) {
+    console.warn('[JsEval] JS returned error:', raw.trim().substring(0, 120));
+    return '';
+  }
   // 仅尝试解开字符串包装（JSON.parse 对对象/数字/布尔值返回原值）
   try {
     const parsed = JSON.parse(raw) as Object;
@@ -103,16 +109,26 @@ export class JsExpressionEvaluator {
   private static nextId: number = 1;
   private static workerReady: boolean = false;
   private static workerInitPromise: Promise<boolean> | null = null;
+  // QuickJS 的同步网络/验证码桥会占住 Worker。串行派发可让超时从真正执行时
+  // 开始计算，也避免一个慢请求把已经排队的脚本全部误判为超时。
+  private static workerEvalQueue: Promise<void> = Promise.resolve();
 
   /**
    * 获取或创建 Worker 实例
    */
   private static async getWorker(): Promise<worker.ThreadWorker | null> {
-    if (this.workerInstance) return this.workerInstance;
-    if (this.workerInitPromise) return this.workerInitPromise.then(() => this.workerInstance);
+    if (this.workerReady && this.workerInstance) return this.workerInstance;
+    // createWorker() 会在等待 init_done 前先写入 workerInstance。并发调用必须先等
+    // workerInitPromise，不能仅凭实例已存在就把未就绪的 Worker 返回给调用方。
+    if (this.workerInitPromise) {
+      const ready = await this.workerInitPromise;
+      return ready ? this.workerInstance : null;
+    }
+    if (this.workerInstance) this.terminateWorker();
 
     this.workerInitPromise = this.createWorker();
-    return this.workerInitPromise.then(() => this.workerInstance);
+    const ready = await this.workerInitPromise;
+    return ready ? this.workerInstance : null;
   }
 
   private static async createWorker(): Promise<boolean> {
@@ -239,8 +255,8 @@ export class JsExpressionEvaluator {
   /**
    * 向 Worker 发送消息并等待响应
    */
-  private static sendToWorker(type: string, timeoutMs: number = 30000, code?: string): Promise<any> {
-    return new Promise((resolve, reject) => {
+  private static sendToWorker(type: string, timeoutMs: number = 30000, code?: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout((): void => {
         this.workerPromise.delete(id);
@@ -266,6 +282,27 @@ export class JsExpressionEvaluator {
         reject(e);
       }
     });
+  }
+
+  /**
+   * 串行执行必须走 Worker 的脚本。
+   * Worker 的创建也放进队列，前一个任务超时并销毁 Worker 后，后一个任务能重新初始化。
+   */
+  private static enqueueWorkerEvaluation(timeoutMs: number, code: string): Promise<string> {
+    const task = this.workerEvalQueue
+      .catch((): void => {})
+      .then(async (): Promise<string> => {
+        const workerInstance = await this.getWorker();
+        if (!workerInstance) throw new Error('Worker unavailable');
+        try {
+          return await this.sendToWorker('eval', timeoutMs, code);
+        } catch (err) {
+          this.terminateWorker();
+          throw err;
+        }
+      });
+    this.workerEvalQueue = task.then((): void => {}, (): void => {});
+    return task;
   }
 
   /**
@@ -311,47 +348,32 @@ export class JsExpressionEvaluator {
     // let/const → var：引擎复用时 let 重声明会报错，var 不报
     const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
     const fullScript = `${setupCode}\n${safeCode}`;
-    // java.ajax/post/connect/get、cookie.* 都需要 Worker（同步网络/Cookie 桥只在 Worker 注册完整实现）
-    const hasAjax = /java\.(ajax|post|connect|get)\s*\(|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(/.test(fullScript);
+    // java.get() 只是书源局部变量读取，可以直接在主线程求值。只有同步网络、
+    // Cookie 和验证码桥必须进入 Worker，否则普通 URL 计算会被慢请求一起堵住。
+    const requiresWorker = /java\.(ajax|post|connect)\s*\(|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(|(?:java\.)?getVerificationCode\s*\(|__captchaOp\s*\(/.test(fullScript);
 
-    // 有 java.ajax() 时必须用 Worker；主线程原生桥不可用时也必须用 Worker，
-    // 否则 mock bridge 只会返回 null，导致 @js: 规则静默失效。
-    if (!this.workerReady && (hasAjax || !isNativeLoaded())) {
-      console.info('[JsEval] Init Worker for JS evaluation...');
-      const worker = await this.getWorker();
-      if (!worker) {
-        console.warn('[JsEval] Worker unavailable, skipping JS evaluation');
-        return '';
-      }
-    }
-
-    // 用 Worker 执行（Worker 的 QuickJS 引擎独立于主线程，需注入 polyfill）
-    if (this.workerReady && this.workerInstance) {
-      try {
-        const polyfill = getPolyfillForWorker();
-        const workerScript = polyfill + '\n' + fullScript;
-        // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
-        const evalTimeout = /getVerificationCode|__captchaOp/.test(fullScript) ? 125000 : 35000;
-        const result = await this.sendToWorker('eval', evalTimeout, workerScript);
-        return unwrapJsResult(result);
-      } catch (e) {
-        console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));
-        this.workerReady = false;
-      }
-    }
-
-    // 无 java.ajax() 时安全回退主线程
-    if (!hasAjax) {
+    // 原生主线程引擎可用时，普通表达式直接执行；Worker 即使已经创建也不抢占它们。
+    if (!requiresWorker && isNativeLoaded()) {
       try {
         const result = await globalScriptEngine.executeScript(fullScript);
         return unwrapJsResult(result);
       } catch (err) {
-        console.error('[JsEval] Evaluate error:', (err instanceof Error) ? err.message : String(err));
-        return '';
+        console.warn('[JsEval] Main engine failed, falling back to Worker:',
+          (err instanceof Error) ? err.message.substring(0, 80) : String(err).substring(0, 80));
       }
     }
 
-    return '';
+    // 同步网络/验证码脚本必须在 Worker 执行；非原生环境的普通脚本也在这里降级。
+    try {
+      const workerScript = getPolyfillForWorker() + '\n' + fullScript;
+      // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
+      const evalTimeout = /getVerificationCode|__captchaOp/.test(fullScript) ? 125000 : 65000;
+      const result = await this.enqueueWorkerEvaluation(evalTimeout, workerScript);
+      return unwrapJsResult(result);
+    } catch (e) {
+      console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));
+      return '';
+    }
   }
 
   /**

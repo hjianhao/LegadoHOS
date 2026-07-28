@@ -2,6 +2,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
 import { CheckDetail, CheckResult, SourceChecker } from '../service/SourceChecker';
+import { applyCheckResultToSource } from '../service/SourceCheckPersistence';
 import { ThemeColors } from '../theme/ThemeColors';
 import { UiUtil } from '../util/UiUtil';
 
@@ -48,18 +49,15 @@ export struct BookSourceDebugPage {
     this.checker = new SourceChecker({
       keyword: this.keyword.trim(), timeout: 30000,
       checkSearch: true, checkDiscovery: false, checkInfo: true,
-      checkCategory: true, checkContent: true
+      checkCategory: true, checkContent: true, concurrency: 1
     });
     try {
       const result: CheckResult = await this.checker.checkSource(this.source);
       this.details = result.details.slice();
-      this.statusText = result.status === 'success' ? '全部规则检查通过'
-        : result.status === 'partial' ? '部分规则通过，请展开失败阶段排查' : '规则检查失败';
-      const search = result.details.find((item: CheckDetail): boolean => item.name === '搜索' && item.passed);
-      if (search && search.duration > 0) {
-        const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-        await dao.updateRespondTime(this.source.id, search.duration);
-      }
+      this.statusText = result.status === 'success' ? '全部规则检查通过' : '规则检查失败';
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      applyCheckResultToSource(this.source, result, 30000);
+      await dao.updateSource(this.source);
     } catch (e) {
       this.statusText = '调试失败：' + String(e);
     } finally {
@@ -70,7 +68,7 @@ export struct BookSourceDebugPage {
 
   private cancelDebug(): void {
     this.checker?.cancel();
-    this.statusText = '已请求停止；当前网络请求结束后不再继续。';
+    this.statusText = '正在停止并取消当前网络请求。';
   }
 
   build() {

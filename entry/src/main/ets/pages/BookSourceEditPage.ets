@@ -34,7 +34,7 @@ const TAB_BASIC: FieldGroup[] = [
   { key: 'loginCheckJs', label: '登录检测 JS', placeholder: $r('app.string.ui_5fac32676a') },
   { key: 'coverDecodeJs', label: '封面解密 JS', placeholder: $r('app.string.ui_b685e2d33d') },
   { key: 'weight', label: '权重', placeholder: $r('app.string.ui_9458b775c5') },
-  { key: 'respondTime', label: '响应超时 (ms)', placeholder: $r('app.string.ui_1c822c4b5c') },
+  { key: 'respondTime', label: '响应时间 (ms)', placeholder: $r('app.string.ui_1c822c4b5c') },
   { key: 'concurrentRate', label: '并发率', placeholder: $r('app.string.ui_5b636f79d2') },
   { key: 'jsLib', label: 'JS 库', placeholder: $r('app.string.ui_6b0a3df4f1') },
 ];

@@ -7,7 +7,7 @@ import http from '@ohos.net.http';
 import util from '@ohos.util';
 import zlib from '@ohos.zlib';
 import { CookieStore } from './CookieStore';
-import { DISABLE_COOKIE_HEADER } from '../engine/source/SourceNetworkPolicy';
+import { DISABLE_COOKIE_HEADER, REQUEST_GROUP_HEADER } from '../engine/source/SourceNetworkPolicy';
 
 interface PooledSession {
   session: rcp.Session;
@@ -15,7 +15,38 @@ interface PooledSession {
   retired: boolean;
 }
 
+interface RequestGroupState {
+  cancelled: boolean;
+  sessions: Set<rcp.Session>;
+  systemRequests: Set<http.HttpRequest>;
+}
+
 export class NetUtil {
+  private static requestGroups_: Map<string, RequestGroupState> = new Map();
+
+  static startRequestGroup(id: string): void {
+    if (id) NetUtil.requestGroups_.set(id, { cancelled: false, sessions: new Set(), systemRequests: new Set() });
+  }
+
+  static cancelRequestGroup(id: string): void {
+    const group = NetUtil.requestGroups_.get(id);
+    if (!group) return;
+    group.cancelled = true;
+    group.sessions.forEach((session: rcp.Session) => {
+      try { session.close(); } catch (_error) { /* already closed */ }
+    });
+    group.systemRequests.forEach((request: http.HttpRequest) => {
+      try { request.destroy(); } catch (_error) { /* already destroyed */ }
+    });
+    group.sessions.clear();
+    group.systemRequests.clear();
+  }
+
+  static finishRequestGroup(id: string): void {
+    if (!id) return;
+    NetUtil.cancelRequestGroup(id);
+    NetUtil.requestGroups_.delete(id);
+  }
   /** 请求前注入持久化的 Cookie 头（不覆盖显式设置的 Cookie，含空字符串=禁用） */
   private static injectCookie_(url: string, headers: Record<string, string>): void {
     try {
@@ -308,9 +339,13 @@ export class NetUtil {
     requestUrl: string,
     body: string,
     headers: Record<string, string>,
-    timeout: number
+    timeout: number,
+    requestGroup: string = ''
   ): Promise<string> {
     const request = http.createHttp();
+    const group = requestGroup ? NetUtil.requestGroups_.get(requestGroup) : undefined;
+    if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
+    group?.systemRequests.add(request);
     try {
       const cookieEnabled = NetUtil.prepareCookiePolicy_(headers);
       if (cookieEnabled) NetUtil.injectCookie_(requestUrl, headers);
@@ -333,6 +368,7 @@ export class NetUtil {
       }
       return await NetUtil.httpResultToText(response.result, requestUrl);
     } finally {
+      group?.systemRequests.delete(request);
       request.destroy();
     }
   }
@@ -348,17 +384,31 @@ export class NetUtil {
   private static async httpRequest(method: string, url: string, body?: string, headers?: Record<string, string>, timeout: number = 30000): Promise<string> {
     const startMs: number = Date.now();
     const requestUrl = NetUtil.normalizeUrl(url);
+    const baseHeaders = NetUtil.buildHeaders(headers);
+    const requestGroup = baseHeaders[REQUEST_GROUP_HEADER] || '';
+    delete baseHeaders[REQUEST_GROUP_HEADER];
     let lastError: string = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       let sessionEntry: PooledSession | null = null;
+      let dedicatedSession: rcp.Session | null = null;
+      const group = requestGroup ? NetUtil.requestGroups_.get(requestGroup) : undefined;
       try {
-        const h = NetUtil.buildHeaders(headers);
+        if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
+        const h = { ...baseHeaders };
         const cookieEnabled = NetUtil.prepareCookiePolicy_(h);
         if (cookieEnabled) NetUtil.injectCookie_(requestUrl, h);
         const reqHeaders = h as rcp.RequestHeaders;
         const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
-        sessionEntry = NetUtil.acquireSession(timeout);
-        const response = await sessionEntry.session.fetch(request);
+        let session: rcp.Session;
+        if (group) {
+          dedicatedSession = NetUtil.createSession_(timeout);
+          group.sessions.add(dedicatedSession);
+          session = dedicatedSession;
+        } else {
+          sessionEntry = NetUtil.acquireSession(timeout);
+          session = sessionEntry.session;
+        }
+        const response = await session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
         if (cookieEnabled) {
           CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
@@ -384,13 +434,18 @@ export class NetUtil {
         }
         break;
       } finally {
+        if (dedicatedSession) {
+          group?.sessions.delete(dedicatedSession);
+          try { dedicatedSession.close(); } catch (_error) { /* ignore */ }
+        }
         if (sessionEntry) NetUtil.releaseSession(sessionEntry);
       }
     }
     if (NetUtil.isTransientConnectionError(lastError) && !NetUtil.proxyHost) {
       try {
         console.warn('[NetUtil] RCP connection failed, falling back to system HTTP:', lastError);
-        return await NetUtil.systemHttpRequest(method, requestUrl, body || '', NetUtil.buildHeaders(headers), timeout);
+        if (requestGroup && NetUtil.requestGroups_.get(requestGroup)?.cancelled) throw new Error('校验已取消');
+        return await NetUtil.systemHttpRequest(method, requestUrl, body || '', baseHeaders, timeout, requestGroup);
       } catch (fallbackError) {
         lastError = (fallbackError as Error).message || String(fallbackError);
       }
@@ -398,6 +453,28 @@ export class NetUtil {
     const elapsedMs: number = Date.now() - startMs;
     console.error('[NetUtil]', method, requestUrl, 'FAILED (' + elapsedMs + 'ms):', lastError);
     throw new Error(lastError);
+  }
+
+  private static createSession_(timeout: number): rcp.Session {
+    const security: rcp.SecurityConfiguration = {
+      remoteValidation: 'system',
+      tlsRange: { min: 'TlsV1.0' as rcp.TlsVersion, max: 'TlsV1.3' as rcp.TlsVersion }
+    };
+    const configuration: rcp.Configuration = {
+      transfer: { timeout: { connectMs: timeout, transferMs: timeout } },
+      security: security,
+    };
+    if (NetUtil.dnsEnabled && NetUtil.dnsServers) {
+      const dnsList = NetUtil.dnsServers.split(',').map((value: string): string => value.trim())
+        .filter((value: string): boolean => !!value);
+      if (dnsList.length > 0) {
+        configuration.dns = { dnsRules: dnsList.map((ip: string): rcp.IpAndPort => ({ ip: ip, port: 53 })) } as rcp.DnsConfiguration;
+      }
+    }
+    if (NetUtil.proxyHost && NetUtil.proxyPort > 0) {
+      configuration.proxy = { url: 'http://' + NetUtil.proxyHost + ':' + NetUtil.proxyPort } as rcp.WebProxy;
+    }
+    return rcp.createSession({ requestConfiguration: configuration } as rcp.SessionConfiguration);
   }
 
   private static buildHeaders(headers?: Record<string, string>): Record<string, string> {

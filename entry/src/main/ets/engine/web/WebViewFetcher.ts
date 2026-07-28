@@ -25,6 +25,8 @@ export class WebViewFetcher {
   private static loadCount: number = 0;
   /** 最近一次页面结束时间；重载时重置，用于避免过早提取 WAF 探针页。 */
   private static lastPageEndAt: number = 0;
+  /** 当前 fetch 已确认属于本次导航的 URL，防止队列切换后接收上一页迟到的 onPageEnd。 */
+  private static activeNavigationUrls: Set<string> = new Set();
   // 轮询定时器
   private static pollIntervalId: number = -1;
   // 请求队列：排队等待的 fetch（WebView 同时只能处理一个）
@@ -148,11 +150,17 @@ export class WebViewFetcher {
   static onPageEnd(event?: { url: string }): void {
     if (!WebViewFetcher.pendingResolve) return;
 
+    const currentUrl = event?.url || '';
+    if (currentUrl && !WebViewFetcher.belongsToActiveNavigation(currentUrl)) {
+      console.info('[WebViewFetcher] Ignoring stale onPageEnd:', currentUrl.substring(0, 60));
+      return;
+    }
+
     WebViewFetcher.loadCount++;
     WebViewFetcher.lastPageEndAt = Date.now();
-    const currentUrl = event?.url || '';
     if (currentUrl) {
       WebViewFetcher.pendingUrl = currentUrl;
+      WebViewFetcher.activeNavigationUrls.add(WebViewFetcher.normalizeNavigationUrl(currentUrl));
     }
 
     console.info('[WebViewFetcher] onPageEnd #' + WebViewFetcher.loadCount +
@@ -203,6 +211,7 @@ export class WebViewFetcher {
       WebViewFetcher.lastPageEndAt = 0;
       WebViewFetcher.initialRequestUrl = url;
       WebViewFetcher.redirectCount = 0;
+      WebViewFetcher.activeNavigationUrls = new Set([WebViewFetcher.normalizeNavigationUrl(url)]);
 
       // 设置总超时
       WebViewFetcher.timeoutId = setTimeout(() => {
@@ -242,9 +251,12 @@ export class WebViewFetcher {
 
     // 首次加载（与 fetch 传入的 URL 相同）不计为重定向
     if (url === WebViewFetcher.initialRequestUrl) {
+      WebViewFetcher.activeNavigationUrls.add(WebViewFetcher.normalizeNavigationUrl(url));
       return false;
     }
 
+    WebViewFetcher.activeNavigationUrls.add(WebViewFetcher.normalizeNavigationUrl(url));
+    WebViewFetcher.pendingUrl = url;
     WebViewFetcher.redirectCount++;
     console.info('[WebViewFetcher] Redirect #' + WebViewFetcher.redirectCount + ' to:', url.substring(0, 60));
 
@@ -482,6 +494,22 @@ export class WebViewFetcher {
     WebViewFetcher.stopPolling();
   }
 
+  private static normalizeNavigationUrl(url: string): string {
+    return (url || '').replace(/#.*$/, '').replace(/\/$/, '');
+  }
+
+  private static navigationHost(url: string): string {
+    const match = (url || '').match(/^https?:\/\/([^\/?#]+)/i);
+    return match ? match[1].toLowerCase() : '';
+  }
+
+  private static belongsToActiveNavigation(url: string): boolean {
+    const normalized = WebViewFetcher.normalizeNavigationUrl(url);
+    if (WebViewFetcher.activeNavigationUrls.has(normalized)) return true;
+    const initialHost = WebViewFetcher.navigationHost(WebViewFetcher.initialRequestUrl);
+    return !!initialHost && WebViewFetcher.navigationHost(url) === initialHost;
+  }
+
   /** 提取 HTML 并 resolve Promise */
   private static extractAndResolve(): void {
     if (!WebViewFetcher.controller || !WebViewFetcher.pendingResolve) return;
@@ -517,6 +545,7 @@ export class WebViewFetcher {
     WebViewFetcher.pendingResolve = null;
     WebViewFetcher.pendingReject = null;
     WebViewFetcher.pendingUrl = '';
+    WebViewFetcher.activeNavigationUrls.clear();
     WebViewFetcher.requestQueue = [];
     WebViewFetcher.controller = null;
     console.info('[WebViewFetcher] Cleared all state');
@@ -528,6 +557,9 @@ export class WebViewFetcher {
     const next = WebViewFetcher.requestQueue.shift();
     if (!next) return;
     console.info('[WebViewFetcher] Processing next queued request');
-    WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers).then(next.resolve).catch(next.reject);
+    // ArkWeb may deliver the previous page's final onPageEnd after outerHTML extraction resolves.
+    setTimeout(() => {
+      WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers).then(next.resolve).catch(next.reject);
+    }, 120);
   }
 }

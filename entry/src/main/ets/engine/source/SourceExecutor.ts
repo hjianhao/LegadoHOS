@@ -127,6 +127,27 @@ export function isInvalidAiContentResult(content: string): boolean {
   return /(转码失败|请换(?:以下)?其他源|章节内容(?:加载|获取)失败|正文(?:加载|获取)失败|Enable JavaScript and cookies to continue|Just a moment\.\.\.)/i.test(content);
 }
 
+/** HTTP 成功状态也可能只返回 WAF 探针页，此时必须交给 WebView 执行脚本。 */
+export function isWafProbeHtml(html: string): boolean {
+  if (!html || html.length > 8192) return false;
+  const hasProbeScript = /(?:\/|["'])probe\.js(?:\?|["'])/i.test(html) ||
+    /\bvar\s+buid\s*=\s*["'][a-f0-9-]+["']/i.test(html);
+  const hasEmptyBody = /<body(?:\s[^>]*)?>\s*<\/body>/i.test(html);
+  return hasProbeScript && hasEmptyBody;
+}
+
+/** 识别用空 result 明确关闭搜索的 Android 书源模板。 */
+export function isExplicitlyDisabledSearchTemplate(template: string): boolean {
+  const match = (template || '').match(/<js>([\s\S]*?)<\/js>\s*$/i);
+  if (!match) return false;
+  return /\bresult\s*=\s*(['"])\1\s*;\s*result\s*;?\s*$/i.test(match[1].trim());
+}
+
+/** GET 请求遇到上游网关瞬时错误时允许安全重试一次。 */
+export function isTransientGetFailure(message: string): boolean {
+  return /\bHTTP\s+(?:502|503|504)\b/i.test(message || '');
+}
+
 function getBaseUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   // 剥离 # 片段（含 ##webView 标记及源作者加的 #emoji 标记）。
@@ -707,6 +728,10 @@ export class SourceExecutor {
     allowLineRetry: boolean = true, throwOnFailure: boolean = false
   ): Promise<SearchResult[]> {
     if (!source.enabled || !source.ruleSearchUrl) return [];
+    if (isExplicitlyDisabledSearchTemplate(source.ruleSearchUrl)) {
+      console.info('[SrcEx] Search explicitly disabled by source template for', source.sourceName);
+      return [];
+    }
     let baseUrl = getBaseUrl(source.sourceUrl);
 
     // 如果 sourceUrl 不是合法 HTTP URL（聚合书源常见），尝试从 rawJson 或 jsLib 中获取后端地址
@@ -787,17 +812,22 @@ export class SourceExecutor {
             baseUrl: baseUrl,
             source: source,
           });
-          if (jsResult && jsResult.trim()) {
+          if (jsResult && jsResult.trim() && !/^(SyntaxError|ReferenceError|TypeError|Error:)/i.test(jsResult.trim())) {
             searchUrlTemplate = jsResult.trim();
             console.info('[SrcEx] @js: prefix evaluated, URL:', searchUrlTemplate.substring(0, 120));
           } else {
-            console.warn('[SrcEx] @js: prefix evaluated empty for', source.sourceName);
+            const reason = jsResult.trim() || 'empty result';
+            console.warn('[SrcEx] @js: prefix evaluation failed for', source.sourceName, ':', reason.substring(0, 120));
+            if (throwOnFailure) throw new Error('搜索 URL JS 执行失败：' + reason);
+            return [];
           }
         } else {
           console.warn('[SrcEx] Engine not initialized, cannot evaluate @js: for', source.sourceName);
         }
       } catch (e) {
         console.warn('[SrcEx] @js: prefix evaluation failed for', source.sourceName, ':', (e as Error).message);
+        if (throwOnFailure) throw e;
+        return [];
       }
     }
 
@@ -979,7 +1009,9 @@ export class SourceExecutor {
   /** 校验专用单源搜索：保留真实网络/解析异常，供 UI 区分失败与正常零结果。 */
   async searchForCheck(keyword: string, source: BookSource, page: number = 1): Promise<SearchResult[]> {
     if (!this.engineInitialized) await this.initialize();
-    return await this.searchSingle(keyword, source, page, true, true);
+    // Android 会校验用户选中的停用书源；这里只启用副本，不改变数据库中的开关状态。
+    const checkSource = source.enabled ? source : { ...source, enabled: true } as BookSource;
+    return await this.searchSingle(keyword, checkSource, page, true, true);
   }
 
   /** 带超时的搜索（20s 总超时，兜底 WebView hang 等） */
@@ -1288,8 +1320,56 @@ export class SourceExecutor {
         }
         return await NetUtil.httpGet(url, requestHeaders, requestTimeout);
       }
+      if (method === 'GET' && isTransientGetFailure(msg)) {
+        console.info('[SrcEx] fetchWithOpts transient failure, retrying once:', url.substring(0, 60));
+        await new Promise<void>((resolve: () => void) => setTimeout(resolve, 250));
+        await SourceNetworkPolicy.wait(source);
+        return await NetUtil.httpGet(url, requestHeaders, requestTimeout);
+      }
       throw err;
     }
+  }
+
+  private async fetchContentHtml(
+    url: string, headers: Record<string, string>, source: BookSource
+  ): Promise<string> {
+    let directHtml = '';
+    let directError: Error | null = null;
+    try {
+      directHtml = await this.fetchWithOpts(url, headers, source);
+      if (!isWafProbeHtml(directHtml)) return directHtml;
+      console.info('[SrcEx] getContent WAF probe detected, trying WebView:', url.substring(0, 80));
+    } catch (err) {
+      directError = err as Error;
+      const message = directError.message || '';
+      if (!/(?:HTTP\s+(?:403|429|5\d\d)|Cloudflare|WAF|page not found)/i.test(message)) throw err;
+      console.info('[SrcEx] getContent HTTP block detected, trying WebView:', url.substring(0, 80));
+    }
+
+    if (!WebViewFetcher.isReady()) {
+      if (directError) throw directError;
+      return directHtml;
+    }
+
+    // WebView 只能重放 GET 导航；带 POST 选项的正文地址保留原请求结果。
+    const requestOptions = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
+    if (requestOptions && /["']method["']\s*:\s*["']POST["']/i.test(requestOptions[2])) {
+      if (directError) throw directError;
+      return directHtml;
+    }
+    const webViewUrl = requestOptions ? requestOptions[1] : url;
+    try {
+      const webViewResult = await WebViewFetcher.fetch(webViewUrl, 30000, headers);
+      const webViewHtml = webViewResult.html || '';
+      if (webViewHtml.length > 100 && !isWafProbeHtml(webViewHtml)) {
+        console.info('[SrcEx] getContent WebView got', webViewHtml.length, 'bytes from', source.sourceName);
+        return webViewHtml;
+      }
+    } catch (webViewError) {
+      console.warn('[SrcEx] getContent WebView fallback failed:', (webViewError as Error).message);
+    }
+    if (directError) throw directError;
+    return directHtml;
   }
 
   // ============ 书籍详情 ============
@@ -1574,7 +1654,8 @@ export class SourceExecutor {
     return lastPathMatch ? decodeURIComponent(lastPathMatch[1]) : '';
   }
 
-  async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false): Promise<string> {
+  async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false,
+    nextChapterUrl?: string): Promise<string> {
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
     console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
 
@@ -1636,7 +1717,7 @@ export class SourceExecutor {
           headers['Cookie'] = `qttoken=${token}`;
         }
       }
-      let raw = await this.fetchWithOpts(contentUrl, headers, source);
+      let raw = await this.fetchContentHtml(contentUrl, headers, source);
       console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
       if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
 
@@ -1777,7 +1858,7 @@ export class SourceExecutor {
             console.warn('[SrcEx] getContent detected placeholder/transcode failure, retrying current page:',
               pageUrl.substring(0, 100));
             for (let retry = 0; retry < 2; retry++) {
-              const retryHtml = await this.fetchWithOpts(pageUrl, headers, source);
+              const retryHtml = await this.fetchContentHtml(pageUrl, headers, source);
               if (!retryHtml) continue;
               const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent });
               if (!isInvalidAiContentResult(retryResult)) {
@@ -1829,6 +1910,10 @@ export class SourceExecutor {
             if (sniffedNextUrl) nextUrl = sniffedNextUrl;
           }
           if (!nextUrl || visited.has(nextUrl)) break;
+          if (nextChapterUrl && this.resolvePageUrl(nextChapterUrl, bookUrl || contentUrl) === nextUrl) {
+            console.info('[SrcEx] getContent stopping at next chapter boundary');
+            break;
+          }
           // 明确嗅探到"下一页"时支持 query/path 等分页 URL；普通规则仍保留跨章保护。
           const confirmedBySniffing = !!sniffedNextUrl && sniffedNextUrl === nextUrl;
           if (!confirmedBySniffing && !isLikelySameChapterPageUrl(contentUrl, nextUrl)) {
@@ -1837,7 +1922,7 @@ export class SourceExecutor {
             break;
           }
           pageUrl = nextUrl;
-          pageHtml = await this.fetchWithOpts(pageUrl, headers, source);
+          pageHtml = await this.fetchContentHtml(pageUrl, headers, source);
           if (!pageHtml) break;
           console.info('[SrcEx] getContent next page', page + 2, pageUrl.substring(0, 100));
         }
@@ -2307,7 +2392,7 @@ export class SourceExecutor {
       }
 
       // 兜底：从 HTML 中提取章节链接
-      const tocChapters = this.extractTocFromHtml(bodyText, source);
+      const tocChapters = this.extractTocFromHtml(bodyText, source, tocUrl);
       if (tocChapters.length > 0) {
         // 如果书源有 ruleBookInfoTocUrl（CSS 选择器），说明可能存在完整的目录页
         // 仅当提取到的章节足够多时才视为完整，否则继续尝试从 CSS 选择器获取完整目录
@@ -2353,6 +2438,41 @@ export class SourceExecutor {
             }
           }
           }
+        }
+      }
+
+      // Some WAF pages (notably Qidian) return HTTP 202 with a small probe document instead of
+      // throwing 403. A source that explicitly opted into webView must get the same fallback for
+      // its book/TOC page, otherwise search passes while the checker falsely reports an empty TOC.
+      if (/webview/i.test(source.ruleSearchUrl || '') && WebViewFetcher.isReady()) {
+        console.info('[SrcEx] getToc empty after HTTP, trying configured WebView for',
+          tocUrl.substring(0, 60));
+        try {
+          const wvResult = await WebViewFetcher.fetch(tocUrl, 30000, headers);
+          const wvHtml = wvResult.html || '';
+          if (wvHtml.length > 100) {
+            let wvChapters: BookSourceChapter[] = [];
+            if (this.shouldTryJsonToc_(tocRules.toc, wvHtml)) {
+              try {
+                const jsonObj = this.tryParseJsonBody_(wvHtml);
+                if (jsonObj !== null) {
+                  wvChapters = await this.parseJsonToc(jsonObj, tocRules, wvResult.finalUrl || tocUrl);
+                }
+              } catch (_wvJson) { /* HTML fallback */ }
+            }
+            if (wvChapters.length === 0) {
+              wvChapters = await this.parseTocFromRules(wvHtml, tocRules, wvResult.finalUrl || tocUrl, source);
+            }
+            if (wvChapters.length === 0) {
+              wvChapters = this.extractTocFromHtml(wvHtml, source, wvResult.finalUrl || tocUrl);
+            }
+            if (wvChapters.length > 0) {
+              console.info('[SrcEx] getToc configured WebView OK:', wvChapters.length, 'chapters');
+              return this.finalizeTocList(wvChapters, source, wvResult.finalUrl || tocUrl);
+            }
+          }
+        } catch (wvError) {
+          console.warn('[SrcEx] getToc configured WebView failed:', (wvError as Error).message);
         }
       }
     } catch (err) {
@@ -3977,143 +4097,149 @@ export class SourceExecutor {
     const titleRule = rules['tocTitle'] || '';
     const urlItemRule = rules['tocUrlItem'] || '';
 
-    return Promise.all(items.map(async (item: TocParseItem, index: number): Promise<BookSourceChapter> => {
-      const htmlItem: HtmlElement | null = (item as HtmlElement).tagName !== undefined ? item as HtmlElement : null;
-      const objectItem: Record<string, unknown> | null = htmlItem ? null : item as Record<string, unknown>;
-      const parseField = async (rule: string): Promise<string> => {
-        if (!rule) return '';
-        // 剥离 ## 后缀 post-processing（例如 $.serialName##正文卷. ）
-        let postProcessors: string[] = [];
-        let cleanRule = rule;
-        if (rule.includes('##')) {
-          const parts = rule.split('##');
-          cleanRule = parts[0];
-          postProcessors = parts.slice(1);
-        }
-        // 处理 \n@js: 后缀（Legado 语法：先提取前面的规则，再用 JS 后处理 result）
-        let jsPostProcess = '';
-        const jsIdx = cleanRule.indexOf('\n@js:');
-        if (jsIdx >= 0) {
-          jsPostProcess = cleanRule.substring(jsIdx + 5); // 去掉 \n，保留 @js:code
-          cleanRule = cleanRule.substring(0, jsIdx).trim();
-        }
-        // 也处理 @js: 不带换行的情况
-        const jsIdx2 = cleanRule.indexOf('@js:');
-        if (jsIdx2 >= 0) {
-          jsPostProcess = cleanRule.substring(jsIdx2);
-          cleanRule = cleanRule.substring(0, jsIdx2).trim();
-        }
-        let result = '';
-        // Legado 规则用 @ 前缀表示提取属性（如 @href、@text、@src、@data-title），去掉前缀再匹配
-        const ruleKey = (cleanRule.startsWith('@') && cleanRule.length > 1 && !cleanRule.startsWith('@@'))
-          ? cleanRule.substring(1) : cleanRule;
-        if (objectItem) {
-          const value = objectItem[ruleKey];
-          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result = String(value);
-        } else if (ruleKey === 'text') {
-          result = htmlItem?.text || '';
-        } else if (ruleKey === 'ownText' || ruleKey === 'textNodes') {
-          result = htmlItem?.ownText || '';
-        } else if (ruleKey === 'href' || ruleKey === 'src') {
-          result = htmlItem ? parser.getAttr(htmlItem, ruleKey) : '';
-        } else if (ruleKey === 'html') {
-          result = htmlItem?.innerHtml || '';
-        } else if (cleanRule !== ruleKey && ruleKey) {
-          // @attrName — 提取任意 HTML 属性（如 @data-title、@title、@data-src）
-          result = htmlItem ? parser.getAttr(htmlItem, ruleKey) || '' : '';
-        } else if (cleanRule && htmlItem) {
-          result = parser.extractAttr(htmlItem, this.normalizeCssRule(cleanRule));
-        }
-        // 应用 @js: 后处理（通过 JsExpressionEvaluator.processJsResult）
-        if (jsPostProcess && result) {
-          const processed = await JsExpressionEvaluator.processJsResultAsync(jsPostProcess, result, { source: source });
-          if (processed) {
-            result = processed;
-          } else {
-            // @js: 失败时保留原始值会产生"看起来正常但指向错误地址"的章节，必须暴露出来
-            console.warn('[SrcEx] toc @js post-process failed, keep raw: ' + result.substring(0, 60)
-              + ' js=' + jsPostProcess.substring(0, 40));
+    // 批次处理以避免主线程阻塞（THREAD_BLOCK_6S）
+    // 大批量章节的 CSS 解析 / HTML 属性提取 / JS 求值会连续同步执行，
+    // 批次间用 await 让出主线程，避免 ANR。
+    const BATCH_SIZE = 30;
+    const chapters: BookSourceChapter[] = [];
+    for (let batchStart = 0; batchStart < items.length; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, items.length);
+      const batch = items.slice(batchStart, batchEnd);
+      const batchResults = await Promise.all(batch.map(async (item: TocParseItem, batchIndex: number): Promise<BookSourceChapter> => {
+        const index = batchStart + batchIndex;
+        const htmlItem: HtmlElement | null = (item as HtmlElement).tagName !== undefined ? item as HtmlElement : null;
+        const objectItem: Record<string, unknown> | null = htmlItem ? null : item as Record<string, unknown>;
+        const parseField = async (rule: string): Promise<string> => {
+          if (!rule) return '';
+          let postProcessors: string[] = [];
+          let cleanRule = rule;
+          if (rule.includes('##')) {
+            const parts = rule.split('##');
+            cleanRule = parts[0];
+            postProcessors = parts.slice(1);
           }
-        }
-        // 应用 ## 后缀 post-processing（Legado 格式：##regex##replacement，成对处理）
-        for (let pi = 0; pi < postProcessors.length; pi += 2) {
-          const pattern = postProcessors[pi];
-          const replacement = pi + 1 < postProcessors.length ? postProcessors[pi + 1] : '';
-          if (pattern === 'trim' || pattern === 'Trim' || pattern === 'TRIM') {
-            result = result.trim();
-            continue;
+          let jsPostProcess = '';
+          const jsIdx = cleanRule.indexOf('\n@js:');
+          if (jsIdx >= 0) {
+            jsPostProcess = cleanRule.substring(jsIdx + 5);
+            cleanRule = cleanRule.substring(0, jsIdx).trim();
           }
-          try {
-            // Android Legado 的普通 ## 替换保留未匹配部分，并支持 $1 等反向引用。
-            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
-          } catch (_e) { /* 忽略无效正则 */ }
-        }
-        // 单个 postProcessor（如 ##trim）
-        if (postProcessors.length === 1) {
-          const proc = postProcessors[0];
-          if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
-            result = result.trim();
+          const jsIdx2 = cleanRule.indexOf('@js:');
+          if (jsIdx2 >= 0) {
+            jsPostProcess = cleanRule.substring(jsIdx2);
+            cleanRule = cleanRule.substring(0, jsIdx2).trim();
           }
-        }
-        // 解析结果中的 {{Get('xxx')}} 等模板（通过 JS 求值）
-        if (result.includes('{{') && source) {
-          const ctx: JsEvalContext = { source: source, jsLib: source.jsLib || '', variableBlob: source.variableComment || '' };
-          const exprRegex = /\{\{([^}]+)\}\}/g;
-          const matches: string[] = [];
-          let mm: RegExpExecArray | null;
-          while ((mm = exprRegex.exec(result)) !== null) {
-            matches.push(mm[0]);
+          let result = '';
+          const ruleKey = (cleanRule.startsWith('@') && cleanRule.length > 1 && !cleanRule.startsWith('@@'))
+            ? cleanRule.substring(1) : cleanRule;
+          if (objectItem) {
+            const value = objectItem[ruleKey];
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result = String(value);
+          } else if (ruleKey === 'text') {
+            result = htmlItem?.text || '';
+          } else if (ruleKey === 'ownText' || ruleKey === 'textNodes') {
+            result = htmlItem?.ownText || '';
+          } else if (ruleKey === 'href' || ruleKey === 'src') {
+            result = htmlItem ? parser.getAttr(htmlItem, ruleKey) : '';
+          } else if (ruleKey === 'html') {
+            result = htmlItem?.innerHtml || '';
+          } else if (cleanRule !== ruleKey && ruleKey) {
+            result = htmlItem ? parser.getAttr(htmlItem, ruleKey) || '' : '';
+          } else if (cleanRule && htmlItem) {
+            result = parser.extractAttr(htmlItem, this.normalizeCssRule(cleanRule));
           }
-          for (const tmpl of matches) {
-            const expr = tmpl.replace(/^\{\{/, '').replace(/\}\}$/, '');
+          if (jsPostProcess && result) {
+            const processed = await JsExpressionEvaluator.processJsResultAsync(jsPostProcess, result, { source: source });
+            if (processed) {
+              result = processed;
+            } else {
+              console.warn('[SrcEx] toc @js post-process failed, keep raw: ' + result.substring(0, 60)
+                + ' js=' + jsPostProcess.substring(0, 40));
+            }
+          }
+          for (let pi = 0; pi < postProcessors.length; pi += 2) {
+            const pattern = postProcessors[pi];
+            const replacement = pi + 1 < postProcessors.length ? postProcessors[pi + 1] : '';
+            if (pattern === 'trim' || pattern === 'Trim' || pattern === 'TRIM') {
+              result = result.trim();
+              continue;
+            }
             try {
-              const val = JsExpressionEvaluator.evaluateSync(expr, ctx);
-              if (val && val !== 'null' && val !== 'undefined') {
-                result = result.replace(tmpl, val);
-              } else {
-                result = result.replace(tmpl, '');
-              }
-            } catch (_e) { result = result.replace(tmpl, ''); }
+              result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
+            } catch (_e) { /* 忽略无效正则 */ }
           }
-        }
-        return HtmlUtil.stripHtml(result).trim();
-      };
+          if (postProcessors.length === 1) {
+            const proc = postProcessors[0];
+            if (proc === 'trim' || proc === 'Trim' || proc === 'TRIM') {
+              result = result.trim();
+            }
+          }
+          if (result.includes('{{') && source) {
+            const ctx: JsEvalContext = { source: source, jsLib: source.jsLib || '', variableBlob: source.variableComment || '' };
+            const exprRegex = /\{\{([^}]+)\}\}/g;
+            const matches: string[] = [];
+            let mm: RegExpExecArray | null;
+            while ((mm = exprRegex.exec(result)) !== null) {
+              matches.push(mm[0]);
+            }
+            for (const tmpl of matches) {
+              const expr = tmpl.replace(/^\{\{/, '').replace(/\}\}$/, '');
+              try {
+                const val = JsExpressionEvaluator.evaluateSync(expr, ctx);
+                if (val && val !== 'null' && val !== 'undefined') {
+                  result = result.replace(tmpl, val);
+                } else {
+                  result = result.replace(tmpl, '');
+                }
+              } catch (_e) { result = result.replace(tmpl, ''); }
+            }
+          }
+          return HtmlUtil.stripHtml(result).trim();
+        };
 
-      // 用 resolveFieldRule 支持 || && 操作符
-      const resolveTocField = async (rule: string): Promise<string> => {
-        if (!rule) return '';
-        const { rules: fieldRules, connector: fieldConnector } = splitConnectorRules(rule.trim());
-        const values: string[] = [];
-        for (const fieldRule of fieldRules) {
-          const value = await parseField(fieldRule);
-          if (value) values.push(value);
-          if (value && fieldConnector !== '&&') break;
-        }
-        if (fieldConnector === '&&') return mergeAll(values);
-        return firstNonEmpty(values);
-      };
+        const resolveTocField = async (rule: string): Promise<string> => {
+          if (!rule) return '';
+          const { rules: fieldRules, connector: fieldConnector } = splitConnectorRules(rule.trim());
+          const values: string[] = [];
+          for (const fieldRule of fieldRules) {
+            const value = await parseField(fieldRule);
+            if (value) values.push(value);
+            if (value && fieldConnector !== '&&') break;
+          }
+          if (fieldConnector === '&&') return mergeAll(values);
+          return firstNonEmpty(values);
+        };
 
-      let title = await resolveTocField(titleRule);
-      if (title) {
-        if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
-      } else {
-        title = htmlItem ? HtmlUtil.stripHtml(htmlItem.text || '').trim() : '';
+        let title = await resolveTocField(titleRule);
+        if (title) {
+          if (index < 3) console.info('[SrcEx] TocTitle OK titleRule=' + titleRule + ' title=' + title.substring(0, 40));
+        } else {
+          title = htmlItem ? HtmlUtil.stripHtml(htmlItem.text || '').trim() : '';
+        }
+        let chapterUrl = await resolveTocField(urlItemRule) || '';
+        const hasRuleUrl = !!chapterUrl;
+        const isVolumeValue = await resolveTocField(rules['isVolume'] || '');
+        const isVolume = /^(true|1)$/i.test(isVolumeValue);
+        if (!chapterUrl) chapterUrl = isVolume ? (title + index) : tocUrl;
+        if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
+        if (chapterUrl && (!isVolume || hasRuleUrl) &&
+          !chapterUrl.startsWith('http://') && !chapterUrl.startsWith('https://')) {
+          chapterUrl = this.resolvePageUrl(chapterUrl, tocUrl);
+        }
+        return {
+          title: title || `第${index + 1}章`,
+          url: chapterUrl,
+          index: index,
+          isVolume: isVolume,
+        };
+      }));
+      chapters.push(...batchResults);
+      // 每批次后让出主线程，避免 THREAD_BLOCK_6S
+      if (batchEnd < items.length) {
+        await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
       }
-      let chapterUrl = await resolveTocField(urlItemRule) || '';
-      const isVolumeValue = await resolveTocField(rules['isVolume'] || '');
-      const isVolume = /^(true|1)$/i.test(isVolumeValue);
-      if (!chapterUrl) chapterUrl = isVolume ? (title + index) : tocUrl;
-      if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
-      if (chapterUrl && !chapterUrl.startsWith('http://') && !chapterUrl.startsWith('https://')) {
-        chapterUrl = this.resolvePageUrl(chapterUrl, tocUrl);
-      }
-      return {
-        title: title || `第${index + 1}章`,
-        url: chapterUrl,
-        index: index,
-        isVolume: isVolume,
-      };
-    }));
+    }
+    return chapters;
   }
 
   /**
@@ -4194,7 +4320,7 @@ export class SourceExecutor {
    * 从 HTML 中提取章节链接（兜底方案）
    * 查找常见目录结构中的 <a> 标签
    */
-  private extractTocFromHtml(html: string, source: BookSource): BookSourceChapter[] {
+  private extractTocFromHtml(html: string, source: BookSource, pageUrl: string = ''): BookSourceChapter[] {
     const chapters: BookSourceChapter[] = [];
     const seen = new Set<string>();
 
@@ -4214,7 +4340,7 @@ export class SourceExecutor {
       /<a[^>]*href=["']([^"']+)["'][^>]*>([^<]*第[^<]{1,30}章[^<]{0,80})<\/a>/gi,
     ];
 
-    const baseUrl = getBaseUrl(source.sourceUrl);
+    const baseUrl = pageUrl || source.sourceUrl;
 
     for (const regex of patterns) {
       chapters.length = 0;
@@ -4239,11 +4365,7 @@ export class SourceExecutor {
         // 相对路径转绝对
         if (!linkUrl.startsWith('http://') && !linkUrl.startsWith('https://')) {
           const before = linkUrl;
-          if (linkUrl.startsWith('//')) {
-            linkUrl = 'https:' + linkUrl;
-          } else {
-            linkUrl = (baseUrl || '') + (linkUrl.startsWith('/') ? linkUrl : '/' + linkUrl);
-          }
+          linkUrl = resolveContentPageUrl(linkUrl, baseUrl);
           console.info('[SrcEx] extractTocFromHtml URL resolved:', before, '->', linkUrl);
         }
 

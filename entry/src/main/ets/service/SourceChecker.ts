@@ -1,379 +1,566 @@
-/**
- * 书源校验服务
- *
- * 对书源执行以下检查（可配置）：
- * - 搜索：使用关键词搜索，验证是否有返回结果
- * - 发现：如果有发现 URL，尝试拉取发现页内容
- * - 详情：从搜索结果取一个书籍详情页，验证详情解析
- * - 目录：从详情结果取目录 URL，验证目录解析
- * - 正文：取第一章正文，验证内容解析
- */
-import { BookSource, BookSourceBookInfo, BookSourceChapter } from '../model/BookSource';
+/** Android Legado compatible book-source validity checker. */
+import { BookSource, BookSourceBookInfo, BookSourceChapter, BookSourceType, isImageSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceExecutor, isExplicitlyDisabledSearchTemplate } from '../engine/source/SourceExecutor';
+import { JsEvalContext, JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
+import { NetUtil } from '../util/NetUtil';
 
 export interface CheckConfig {
   keyword: string;
+  /** Whole-source timeout in milliseconds. */
   timeout: number;
   checkSearch: boolean;
   checkDiscovery: boolean;
   checkInfo: boolean;
   checkCategory: boolean;
   checkContent: boolean;
-}
-
-export interface CheckResult {
-  sourceUrl: string;
-  sourceName: string;
-  status: string;  // 'success' | 'partial' | 'fail'
-  totalChecks: number;
-  passedChecks: number;
-  details: CheckDetail[];
-  errorMessage: string;
+  concurrency: number;
 }
 
 export interface CheckDetail {
   name: string;
   passed: boolean;
+  skipped?: boolean;
   message: string;
   duration: number;
 }
 
-function getErrorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return String(e);
+export interface CheckResult {
+  sourceUrl: string;
+  sourceName: string;
+  status: string; // success | fail
+  totalChecks: number;
+  passedChecks: number;
+  details: CheckDetail[];
+  errorMessage: string;
+  invalidGroups: string[];
+  duration: number;
+}
+
+export interface CheckStageProgress {
+  sourceUrl: string;
+  sourceName: string;
+  detail: CheckDetail;
+}
+
+interface BookPathState {
+  result: SearchResult;
+  info: BookSourceBookInfo | null;
+  chapters: BookSourceChapter[];
+}
+
+export class SourceCheckCancelledError extends Error {
+  constructor() { super('校验已取消'); }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getUrlHost(url: string): string {
+  const match = (url || '').match(/^https?:\/\/([^\/?#]+)/i);
+  return match ? match[1].toLowerCase().replace(/^www\./, '') : '';
+}
+
+function isUnresolvedResult(result: SearchResult): boolean {
+  const text = (result.name || '') + '\n' + (result.noteUrl || '');
+  return !result.name.trim() || !result.noteUrl.trim() ||
+    /\{\{|\}\}|\$\{|\bundefined\b|\bnull\b/i.test(text);
+}
+
+/** Pick a real book entry instead of a template row or an advertisement returned by a broad list rule. */
+export function selectCheckResult(source: BookSource, results: SearchResult[]): SearchResult | null {
+  const sourceHost = getUrlHost(source.sourceUrl);
+  let selected: SearchResult | null = null;
+  let selectedScore = -10000;
+  for (const result of results) {
+    if (isUnresolvedResult(result)) continue;
+    const noteUrl = result.noteUrl.trim();
+    const host = getUrlHost(noteUrl);
+    let score = 0;
+    if (!host || (sourceHost && host === sourceHost)) score += 20;
+    if (/\/(?:book|books|novel|album|comic|manga|read)\b|\/\d+[\/_-]/i.test(noteUrl)) score += 5;
+    if (result.author.trim()) score += 2;
+    if (/ref_id=|doubleclick|googlesyndication|\/ads?\b|\badvert/i.test(noteUrl)) score -= 30;
+    if (score > selectedScore) {
+      selected = result;
+      selectedScore = score;
+    }
+  }
+  return selected;
+}
+
+function firstUrlFromExploreValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const url = firstUrlFromExploreValue(item);
+      if (url) return url;
+    }
+    return '';
+  }
+  if (!value || typeof value !== 'object') return '';
+  const item = value as Record<string, unknown>;
+  const direct = String(item['url'] || item['exploreUrl'] || item['Url'] || '').trim();
+  if (direct) return direct;
+  const nestedKeys = ['data', 'categories', 'category', 'list', 'items', 'result', 'results'];
+  for (const key of nestedKeys) {
+    const nested = firstUrlFromExploreValue(item[key]);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+/** Parse Android exploreKinds output and skip visual section headers whose URL is empty. */
+export function firstExploreUrlFromText(text: string): string {
+  const raw = (text || '').trim();
+  if (!raw) return '';
+  try {
+    const fromJson = firstUrlFromExploreValue(JSON.parse(raw) as unknown);
+    if (fromJson) return fromJson;
+  } catch (_error) { /* text format */ }
+  const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/&&/g, '\n').split('\n');
+  for (const line of lines) {
+    const item = line.trim();
+    if (!item) continue;
+    const separator = item.indexOf('::');
+    const url = separator >= 0 ? item.substring(separator + 2).trim() : item;
+    if (url && (separator >= 0 || /^(?:https?:\/\/|\/|data:)/i.test(url))) return url;
+  }
+  return '';
 }
 
 export function normalizeCheckConfig(config: CheckConfig): CheckConfig {
   const normalized: CheckConfig = {
-    keyword: config.keyword.trim() || '我',
-    timeout: Math.max(1000, config.timeout),
+    keyword: config.keyword.trim() || '我的',
+    timeout: Math.max(1000, Math.floor(config.timeout)),
     checkSearch: config.checkSearch,
     checkDiscovery: config.checkDiscovery,
     checkInfo: config.checkInfo,
     checkCategory: config.checkCategory,
     checkContent: config.checkContent,
+    concurrency: Math.min(32, Math.max(1, Math.floor(config.concurrency || 5))),
   };
-  if (normalized.checkInfo || normalized.checkCategory || normalized.checkContent) {
-    normalized.checkSearch = true;
+  if (!normalized.checkSearch && !normalized.checkDiscovery) normalized.checkSearch = true;
+  if (!normalized.checkInfo) {
+    normalized.checkCategory = false;
+    normalized.checkContent = false;
   }
-  if (normalized.checkContent) {
-    normalized.checkCategory = true;
-  }
+  if (!normalized.checkCategory) normalized.checkContent = false;
   return normalized;
+}
+
+/** Android checks selected sources even when they are currently disabled. */
+export function createSourceForCheck(source: BookSource): BookSource {
+  const copy = JSON.parse(JSON.stringify(source)) as BookSource;
+  copy.enabled = true;
+  return copy;
+}
+
+/** Skip search checks only when the source explicitly documents or scripts search as disabled. */
+export function isSearchCheckDisabled(source: BookSource): boolean {
+  if (isExplicitlyDisabledSearchTemplate(source.ruleSearchUrl || '')) return true;
+  const metadata = (source.group || '') + '\n' + (source.bookSourceComment || '');
+  return /(搜索暂不可用|搜索暂时不可用|不支持搜索|搜索已关闭|默认关闭搜索)/i.test(metadata);
+}
+
+/** Volume headings are display-only TOC entries and must never be fetched as chapter content. */
+export function selectReadableChapters(chapters: BookSourceChapter[], limit: number = 2): BookSourceChapter[] {
+  return chapters.filter((chapter: BookSourceChapter): boolean =>
+    !chapter.isVolume && !!(chapter.url || '').trim()).slice(0, Math.max(0, limit));
 }
 
 export class SourceChecker {
   private config: CheckConfig;
-  private cancelFlag: boolean = false;
-  private resultsMap: Map<string, CheckResult> = new Map();
+  private cancelled_: boolean = false;
+  private runId_: string = '';
+  private activeGroups_: Set<string> = new Set();
+  private results_: Map<string, CheckResult> = new Map();
+  private onStage_?: (progress: CheckStageProgress) => void;
 
   constructor(config?: Partial<CheckConfig>) {
     this.config = normalizeCheckConfig({
-      keyword: (config && config.keyword !== undefined) ? config.keyword : '我',
-      timeout: (config && config.timeout !== undefined) ? config.timeout : 30000,
-      checkSearch: (config && config.checkSearch !== undefined) ? config.checkSearch : true,
-      checkDiscovery: (config && config.checkDiscovery !== undefined) ? config.checkDiscovery : false,
-      checkInfo: (config && config.checkInfo !== undefined) ? config.checkInfo : false,
-      checkCategory: (config && config.checkCategory !== undefined) ? config.checkCategory : false,
-      checkContent: (config && config.checkContent !== undefined) ? config.checkContent : false,
+      keyword: config?.keyword ?? '我的',
+      timeout: config?.timeout ?? 180000,
+      checkSearch: config?.checkSearch ?? true,
+      checkDiscovery: config?.checkDiscovery ?? true,
+      checkInfo: config?.checkInfo ?? true,
+      checkCategory: config?.checkCategory ?? true,
+      checkContent: config?.checkContent ?? true,
+      concurrency: config?.concurrency ?? 5,
     });
   }
 
-  getConfig(): CheckConfig {
-    return this.config;
-  }
+  getConfig(): CheckConfig { return this.config; }
+  getResult(sourceUrl: string): CheckResult | undefined { return this.results_.get(sourceUrl); }
+  getAllResults(): Map<string, CheckResult> { return this.results_; }
 
   updateConfig(partial: Partial<CheckConfig>): void {
-    if (partial.keyword !== undefined) this.config.keyword = partial.keyword;
-    if (partial.timeout !== undefined) this.config.timeout = partial.timeout;
-    if (partial.checkSearch !== undefined) this.config.checkSearch = partial.checkSearch;
-    if (partial.checkDiscovery !== undefined) this.config.checkDiscovery = partial.checkDiscovery;
-    if (partial.checkInfo !== undefined) this.config.checkInfo = partial.checkInfo;
-    if (partial.checkCategory !== undefined) this.config.checkCategory = partial.checkCategory;
-    if (partial.checkContent !== undefined) this.config.checkContent = partial.checkContent;
-    this.config = normalizeCheckConfig(this.config);
-  }
-
-  getResult(sourceUrl: string): CheckResult | undefined {
-    return this.resultsMap.get(sourceUrl);
-  }
-
-  getAllResults(): Map<string, CheckResult> {
-    return this.resultsMap;
+    this.config = normalizeCheckConfig({ ...this.config, ...partial });
   }
 
   cancel(): void {
-    this.cancelFlag = true;
+    this.cancelled_ = true;
+    this.activeGroups_.forEach((group: string) => NetUtil.cancelRequestGroup(group));
   }
 
   reset(): void {
-    this.cancelFlag = false;
-    this.resultsMap.clear();
+    this.cancel();
+    this.cancelled_ = false;
+    this.results_.clear();
   }
 
   async checkSources(
     sources: BookSource[],
     onProgress?: (completed: number, total: number, result: CheckResult) => void,
-    concurrency: number = 5
+    concurrency?: number,
+    onStage?: (progress: CheckStageProgress) => void
   ): Promise<Map<string, CheckResult>> {
-    this.cancelFlag = false;
-    this.resultsMap.clear();
+    this.beginRun_(onStage);
     const total = sources.length;
     let completed = 0;
     let cursor = 0;
-
     const worker = async (): Promise<void> => {
-      while (cursor < sources.length && !this.cancelFlag) {
-        const idx = cursor;
-        cursor++;
-        const result = await this.checkSingleSource(sources[idx]);
-        if (this.cancelFlag) break;
-        this.resultsMap.set(sources[idx].sourceUrl, result);
-        completed++;
-        if (onProgress) {
-          onProgress(completed, total, result);
+      while (!this.cancelled_) {
+        const index = cursor++;
+        if (index >= sources.length) break;
+        try {
+          const prepared = this.prepareSource_(sources[index]);
+          let result: CheckResult;
+          try {
+            result = await this.checkSingleSource_(prepared);
+          } finally {
+            this.finishSource_(prepared);
+          }
+          if (this.cancelled_) break;
+          this.results_.set(result.sourceUrl, result);
+          completed++;
+          onProgress?.(completed, total, result);
+        } catch (error) {
+          if (error instanceof SourceCheckCancelledError || this.cancelled_) break;
+          throw error;
         }
       }
     };
-
+    const count = Math.min(concurrency || this.config.concurrency, Math.max(1, sources.length));
     const workers: Promise<void>[] = [];
-    const limit = Math.min(Math.max(1, concurrency), sources.length);
-    for (let w = 0; w < limit; w++) {
-      workers.push(worker());
+    for (let i = 0; i < count; i++) workers.push(worker());
+    try {
+      await Promise.all(workers);
+      return this.results_;
+    } finally {
+      this.runId_ = '';
+      this.onStage_ = undefined;
     }
-    await Promise.all<void>(workers);
-    return this.resultsMap;
   }
 
-  async checkSource(source: BookSource): Promise<CheckResult> {
-    this.cancelFlag = false;
-    this.resultsMap.clear();
-    const result = await this.checkSingleSource(source);
-    if (!this.cancelFlag) this.resultsMap.set(source.sourceUrl, result);
+  async checkSource(source: BookSource, onStage?: (progress: CheckStageProgress) => void): Promise<CheckResult> {
+    this.beginRun_(onStage);
+    try {
+      const prepared = this.prepareSource_(source);
+      let result: CheckResult;
+      try {
+        result = await this.checkSingleSource_(prepared);
+      } finally {
+        this.finishSource_(prepared);
+      }
+      if (!this.cancelled_) this.results_.set(source.sourceUrl, result);
+      return result;
+    } finally {
+      this.runId_ = '';
+      this.onStage_ = undefined;
+    }
+  }
+
+  private beginRun_(onStage?: (progress: CheckStageProgress) => void): void {
+    this.cancelled_ = false;
+    this.results_.clear();
+    this.onStage_ = onStage;
+    this.runId_ = 'source-check-' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
+  }
+
+  private prepareSource_(source: BookSource): BookSource {
+    const copy = createSourceForCheck(source);
+    copy.checkRequestGroup = this.runId_ + '-' + source.id + '-' + Math.floor(Math.random() * 1000000);
+    NetUtil.startRequestGroup(copy.checkRequestGroup);
+    this.activeGroups_.add(copy.checkRequestGroup);
+    return copy;
+  }
+
+  private finishSource_(source: BookSource): void {
+    const group = source.checkRequestGroup || '';
+    if (!group) return;
+    NetUtil.finishRequestGroup(group);
+    this.activeGroups_.delete(group);
+  }
+
+  private async checkSingleSource_(source: BookSource): Promise<CheckResult> {
+    const start = Date.now();
+    const deadline = start + this.config.timeout;
+    const details: CheckDetail[] = [];
+    const invalidGroups: string[] = [];
+    const errors: string[] = [];
+
+    const runChannel = async (channel: string, task: () => Promise<void>): Promise<void> => {
+      try {
+        await task();
+      } catch (error) {
+        if (error instanceof SourceCheckCancelledError) throw error;
+        const message = getErrorMessage(error);
+        if (!errors.includes(message)) errors.push(message);
+        if (!details.some((item: CheckDetail): boolean => item.name === channel)) {
+          this.addDetail_(source, details, {
+            name: channel, passed: false, message: '失败：' + message, duration: 0
+          });
+        }
+        if (message.includes('校验超时')) invalidGroups.push('校验超时');
+        else if (/script|javascript|quickjs|js\s/i.test(message)) invalidGroups.push(channel + 'js失效');
+        else invalidGroups.push(channel + '失效');
+      }
+    };
+
+    await runChannel('搜索', async (): Promise<void> => {
+      if (this.config.checkSearch) {
+        if (!source.ruleSearchUrl.trim() || isSearchCheckDisabled(source)) {
+          const reason = source.ruleSearchUrl.trim() ? '书源已明确关闭搜索' : '搜索链接规则为空';
+          this.addDetail_(source, details, { name: '搜索', passed: true, skipped: true,
+            message: '跳过：' + reason, duration: 0 });
+        } else {
+          const searchResults = await this.checkList_(source, '搜索', this.getCheckKeyword_(source), deadline, details, errors);
+          const result = selectCheckResult(source, searchResults);
+          if (!result) {
+            invalidGroups.push('搜索失效');
+            if (searchResults.length > 0) {
+              this.addDetail_(source, details, { name: '搜索结果', passed: false,
+                message: '结果均为占位项或无效链接', duration: 0 });
+            }
+          } else {
+            await this.checkBookPath_(source, result, '搜索', deadline, details, invalidGroups, errors);
+          }
+        }
+      }
+    });
+
+    await runChannel('发现', async (): Promise<void> => {
+      if (this.config.checkDiscovery) {
+        const exploreUrl = await this.runBeforeDeadline_(this.getFirstExploreUrl_(source), deadline,
+          source.checkRequestGroup || '');
+        if (!exploreUrl) {
+          this.addDetail_(source, details, { name: '发现', passed: true, skipped: true, message: '跳过：未配置发现', duration: 0 });
+        } else if (!source.ruleExploreList.trim()) {
+          this.addDetail_(source, details, { name: '发现', passed: true, skipped: true, message: '跳过：发现规则为空', duration: 0 });
+          invalidGroups.push('发现规则为空');
+        } else {
+          const exploreSource = this.createExploreSource_(source, exploreUrl);
+          const exploreResults = await this.checkList_(exploreSource, '发现', '', deadline, details, errors);
+          const result = selectCheckResult(source, exploreResults);
+          if (!result) {
+            invalidGroups.push('发现失效');
+            if (exploreResults.length > 0) {
+              this.addDetail_(source, details, { name: '发现结果', passed: false,
+                message: '结果均为占位项或无效链接', duration: 0 });
+            }
+          } else {
+            await this.checkBookPath_(source, result, '发现', deadline, details, invalidGroups, errors);
+          }
+        }
+      }
+    });
+
+    this.downgradeEmptySearch_(source, details, invalidGroups);
+
+    const uniqueInvalid = Array.from(new Set(invalidGroups));
+    const failed = details.filter((item: CheckDetail): boolean => !item.passed).length;
+    const totalChecks = details.filter((item: CheckDetail): boolean => !item.skipped).length;
+    const passedChecks = details.filter((item: CheckDetail): boolean => item.passed && !item.skipped).length;
+    const status = uniqueInvalid.some((name: string): boolean => name.includes('失效') || name === '校验超时') || failed > 0
+      ? 'fail' : 'success';
+    const errorMessage = errors[0] || (status === 'fail' ? uniqueInvalid.join(', ') : '');
+    const result: CheckResult = {
+      sourceUrl: source.sourceUrl, sourceName: source.sourceName, status: status,
+      totalChecks: totalChecks, passedChecks: passedChecks, details: details,
+      errorMessage: errorMessage, invalidGroups: uniqueInvalid, duration: Date.now() - start,
+    };
+    console.info('[SourceChecker] result ' + source.sourceName + ' status=' + status +
+      ' details=' + details.map((item: CheckDetail): string =>
+        item.name + ':' + (item.skipped ? 'skip' : item.passed ? 'pass' : 'fail') + '(' + item.message + ')').join(' | '));
     return result;
   }
 
-  private async checkSingleSource(source: BookSource): Promise<CheckResult> {
-    const details: CheckDetail[] = [];
-    let passedChecks = 0;
-    let totalChecks = 0;
-
-    let searchResults: SearchResult[] = [];
-    let bookInfo: BookSourceBookInfo | null = null;
-    let chapters: BookSourceChapter[] = [];
-
-    // 1. 搜索检查 — 跳过未配置搜索规则的书源
-    if (this.config.checkSearch && !this.cancelFlag) {
-      if (!source.ruleSearchUrl || !source.ruleSearchUrl.trim()) {
-        details.push({ name: '搜索', passed: false, message: '未配置搜索规则', duration: 0 });
-        totalChecks++;
-      } else {
-        totalChecks++;
-        const startTime = Date.now();
-        try {
-          const results: SearchResult[] = await this.runWithTimeout(
-            globalSourceExecutor.searchForCheck(this.config.keyword, source),
-            this.config.timeout
-          );
-          const elapsed = Date.now() - startTime;
-          if (results.length > 0) {
-            searchResults = results;
-            passedChecks++;
-            details.push({ name: '搜索', passed: true, message: '成功返回 ' + results.length + ' 条结果', duration: elapsed });
-          } else {
-            details.push({ name: '搜索', passed: false, message: '无搜索结果', duration: elapsed });
-          }
-        } catch (e) {
-          const elapsed = Date.now() - startTime;
-          details.push({ name: '搜索', passed: false, message: '失败: ' + getErrorMessage(e), duration: elapsed });
-        }
-      }
+  private async checkList_(source: BookSource, name: string, keyword: string, deadline: number,
+    details: CheckDetail[], errors: string[]): Promise<SearchResult[]> {
+    const start = Date.now();
+    try {
+      const results = await this.runBeforeDeadline_(globalSourceExecutor.searchForCheck(keyword, source), deadline,
+        source.checkRequestGroup || '');
+      const passed = results.length > 0;
+      this.addDetail_(source, details, { name: name, passed: passed,
+        message: passed ? '成功返回 ' + results.length + ' 条结果' : (name + '无结果'), duration: Date.now() - start });
+      return results;
+    } catch (error) {
+      if (error instanceof SourceCheckCancelledError) throw error;
+      const message = getErrorMessage(error);
+      errors.push(message);
+      this.addDetail_(source, details, { name: name, passed: false, message: '失败：' + message, duration: Date.now() - start });
+      throw error;
     }
-
-    // 2. 发现检查：使用发现 URL 和发现规则真实执行一次请求与解析
-    if (this.config.checkDiscovery && !this.cancelFlag) {
-      totalChecks++;
-      const exploreUrl = this.getFirstExploreUrl_(source);
-      if (!exploreUrl) {
-        details.push({ name: '发现', passed: false, message: '未配置可执行的发现 URL', duration: 0 });
-      } else if (!source.ruleExploreList || !source.ruleExploreList.trim()) {
-        details.push({ name: '发现', passed: false, message: '未配置发现列表规则', duration: 0 });
-      } else {
-        const startTime = Date.now();
-        try {
-          const exploreSource = this.createExploreSource_(source, exploreUrl);
-          const results: SearchResult[] = await this.runWithTimeout(
-            globalSourceExecutor.searchForCheck('', exploreSource),
-            this.config.timeout
-          );
-          const elapsed = Date.now() - startTime;
-          if (results.length > 0) {
-            passedChecks++;
-            details.push({
-              name: '发现', passed: true,
-              message: '成功返回 ' + results.length + ' 条结果', duration: elapsed
-            });
-          } else {
-            details.push({ name: '发现', passed: false, message: '发现页无解析结果', duration: elapsed });
-          }
-        } catch (e) {
-          details.push({
-            name: '发现', passed: false,
-            message: '失败: ' + getErrorMessage(e), duration: Date.now() - startTime
-          });
-        }
-      }
-    }
-
-    // 3. 详情检查
-    if (this.config.checkInfo && !this.cancelFlag) {
-      totalChecks++;
-      if (searchResults.length > 0 && searchResults[0].noteUrl) {
-        const startTime = Date.now();
-        try {
-          bookInfo = await this.runWithTimeout(
-            globalSourceExecutor.getBookInfo(source, searchResults[0].noteUrl),
-            this.config.timeout
-          );
-          const elapsed = Date.now() - startTime;
-          if (bookInfo.name || bookInfo.author || bookInfo.tocUrl || bookInfo.introduce) {
-            passedChecks++;
-            const summary = [bookInfo.name, bookInfo.author, bookInfo.wordCount]
-              .filter((value: string | undefined): boolean => !!value).join(' · ');
-            details.push({ name: '详情', passed: true, message: summary || '详情解析成功', duration: elapsed });
-          } else {
-            details.push({ name: '详情', passed: false, message: '详情字段均为空', duration: elapsed });
-          }
-        } catch (e) {
-          details.push({ name: '详情', passed: false, message: '失败: ' + getErrorMessage(e), duration: Date.now() - startTime });
-        }
-      } else {
-        details.push({ name: '详情', passed: false, message: '搜索无结果', duration: 0 });
-      }
-    }
-
-    // 4. 目录检查
-    if (this.config.checkCategory && !this.cancelFlag) {
-      totalChecks++;
-      const tocUrl: string = (bookInfo && bookInfo.tocUrl) ? bookInfo.tocUrl : searchResults.length > 0 ? searchResults[0].noteUrl :
-        (source.ruleTocUrl || source.sourceUrl || '');
-      if (!tocUrl) {
-        details.push({ name: '目录', passed: false, message: '无目录 URL', duration: 0 });
-      } else {
-        const startTime = Date.now();
-        try {
-          const toc: BookSourceChapter[] = await this.runWithTimeout(
-            globalSourceExecutor.getToc(source, tocUrl),
-            this.config.timeout
-          );
-          const elapsed = Date.now() - startTime;
-          if (toc.length > 0) {
-            chapters = toc;
-            passedChecks++;
-            details.push({ name: '目录', passed: true, message: '共 ' + toc.length + ' 章', duration: elapsed });
-          } else {
-            details.push({ name: '目录', passed: false, message: '目录为空', duration: elapsed });
-          }
-        } catch (e) {
-          const elapsed = Date.now() - startTime;
-          details.push({ name: '目录', passed: false, message: '失败: ' + getErrorMessage(e), duration: elapsed });
-        }
-      }
-    }
-
-    // 5. 正文检查
-    if (this.config.checkContent && !this.cancelFlag) {
-      totalChecks++;
-      if (chapters.length === 0) {
-        details.push({ name: '正文', passed: false, message: '没有可测试的章节', duration: 0 });
-      } else {
-      const startTime = Date.now();
-      try {
-        const content: string = await this.runWithTimeout(
-          globalSourceExecutor.getContent(source, chapters[0].url),
-          this.config.timeout
-        );
-        const elapsed = Date.now() - startTime;
-        if (content && content.trim().length > 50) {
-          passedChecks++;
-          details.push({ name: '正文', passed: true, message: '获取到 ' + content.length + ' 字内容', duration: elapsed });
-        } else {
-          const msg: string = content ? '内容过短 (' + content.length + ' 字)' : '正文为空';
-          details.push({ name: '正文', passed: false, message: msg, duration: elapsed });
-        }
-      } catch (e) {
-        const elapsed = Date.now() - startTime;
-        details.push({ name: '正文', passed: false, message: '失败: ' + getErrorMessage(e), duration: elapsed });
-      }
-      }
-    }
-
-    // 判定状态
-    let status: string = 'fail';
-    if (totalChecks === 0) {
-      status = 'fail';
-    } else if (passedChecks === totalChecks) {
-      status = 'success';
-    } else if (passedChecks > 0) {
-      status = 'partial';
-    }
-
-    const errMsg: string = (passedChecks === 0 && details.length > 0) ? details[0].message : '';
-
-    return {
-      sourceUrl: source.sourceUrl,
-      sourceName: source.sourceName,
-      status: status,
-      totalChecks: totalChecks,
-      passedChecks: passedChecks,
-      details: details,
-      errorMessage: errMsg,
-    };
   }
 
-  private getFirstExploreUrl_(source: BookSource): string {
+  private async checkBookPath_(source: BookSource, result: SearchResult, channel: string, deadline: number,
+    details: CheckDetail[], invalidGroups: string[], errors: string[]): Promise<void> {
+    if (!this.config.checkInfo) return;
+    const state: BookPathState = { result: result, info: null, chapters: [] };
+    const detailName = channel + '详情';
+    const infoStart = Date.now();
+    try {
+      state.info = await this.runBeforeDeadline_(globalSourceExecutor.getBookInfo(source, result.noteUrl), deadline,
+        source.checkRequestGroup || '');
+      const info = state.info;
+      const parsed = !!(info.name || info.author || info.tocUrl || info.introduce);
+      // Android can continue directly from a search/explore Book object when the source has no
+      // detail rules (or only @get cached fields). Directory/content are the decisive checks.
+      const passed = parsed || !!(result.name || result.author || result.introduce);
+      const parsedSummary = [info.name, info.author, info.wordCount]
+        .filter((v: string | undefined): boolean => !!v && !/^(?:字|章|页|万字)$/.test(v.trim())).join(' · ');
+      const listSummary = [result.name, result.author, result.wordCount]
+        .filter((v: string): boolean => !!v).join(' · ');
+      this.addDetail_(source, details, { name: detailName, passed: passed,
+        message: passed ? (parsed ? (parsedSummary || listSummary) : ('沿用列表信息：' + listSummary)) : '详情解析为空',
+        duration: Date.now() - infoStart });
+      if (!passed) throw new Error(channel + '详情失效');
+    } catch (error) {
+      if (error instanceof SourceCheckCancelledError) throw error;
+      const message = getErrorMessage(error);
+      errors.push(message);
+      if (!details.some((item: CheckDetail): boolean => item.name === detailName)) {
+        this.addDetail_(source, details, { name: detailName, passed: false, message: '失败：' + message, duration: Date.now() - infoStart });
+      }
+      invalidGroups.push(channel + '详情失效');
+      return;
+    }
+
+    if (!this.config.checkCategory || source.sourceType === BookSourceType.FILE) {
+      if (source.sourceType === BookSourceType.FILE && this.config.checkCategory) {
+        this.addDetail_(source, details, { name: channel + '目录', passed: true, skipped: true, message: '文件类书源跳过目录与正文', duration: 0 });
+      }
+      return;
+    }
+
+    const tocName = channel + '目录';
+    const tocStart = Date.now();
+    try {
+      const tocUrl = state.info?.tocUrl || result.noteUrl;
+      const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(source, tocUrl), deadline,
+        source.checkRequestGroup || '');
+      state.chapters = selectReadableChapters(toc, 2);
+      const passed = state.chapters.length > 0;
+      this.addDetail_(source, details, { name: tocName, passed: passed,
+        message: passed ? '共 ' + toc.length + ' 章' : '目录为空', duration: Date.now() - tocStart });
+      if (!passed) invalidGroups.push(channel + '目录失效');
+    } catch (error) {
+      if (error instanceof SourceCheckCancelledError) throw error;
+      const message = getErrorMessage(error);
+      errors.push(message);
+      this.addDetail_(source, details, { name: tocName, passed: false, message: '失败：' + message, duration: Date.now() - tocStart });
+      invalidGroups.push(channel + '目录失效');
+    }
+
+    if (!this.config.checkContent || state.chapters.length === 0) return;
+    const contentName = channel + '正文';
+    const contentStart = Date.now();
+    try {
+      const chapter = state.chapters[0];
+      const content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
+        source, chapter.url, result.noteUrl, isImageSource(source), state.chapters[1]?.url), deadline,
+        source.checkRequestGroup || '');
+      const passed = content.trim().length > 0;
+      this.addDetail_(source, details, { name: contentName, passed: passed,
+        message: passed ? '获取到 ' + content.length + ' 字内容' : '正文为空', duration: Date.now() - contentStart });
+      if (!passed) invalidGroups.push(channel + '正文失效');
+    } catch (error) {
+      if (error instanceof SourceCheckCancelledError) throw error;
+      const message = getErrorMessage(error);
+      errors.push(message);
+      this.addDetail_(source, details, { name: contentName, passed: false, message: '失败：' + message, duration: Date.now() - contentStart });
+      invalidGroups.push(channel + '正文失效');
+    }
+  }
+
+  private addDetail_(source: BookSource, details: CheckDetail[], detail: CheckDetail): void {
+    if (details.length >= 0 && !details.some((item: CheckDetail): boolean => item.name === detail.name)) details.push(detail);
+    this.onStage_?.({ sourceUrl: source.sourceUrl, sourceName: source.sourceName, detail: detail });
+  }
+
+  private downgradeEmptySearch_(source: BookSource, details: CheckDetail[], invalidGroups: string[]): void {
+    if (source.ruleSearchCheckKeyWord.trim()) return;
+    const searchDetail = details.find((item: CheckDetail): boolean =>
+      item.name === '搜索' && !item.passed && item.message === '搜索无结果');
+    if (!searchDetail) return;
+
+    const expected: string[] = ['发现'];
+    if (this.config.checkInfo) expected.push('发现详情');
+    if (this.config.checkCategory && source.sourceType !== BookSourceType.FILE) expected.push('发现目录');
+    if (this.config.checkContent && source.sourceType !== BookSourceType.FILE) expected.push('发现正文');
+    const discoveryPassed = expected.every((name: string): boolean =>
+      details.some((item: CheckDetail): boolean => item.name === name && item.passed && !item.skipped));
+    if (!discoveryPassed) return;
+
+    searchDetail.passed = true;
+    searchDetail.skipped = true;
+    searchDetail.message = '警告：当前关键词无结果，发现链路正常';
+    for (let i = invalidGroups.length - 1; i >= 0; i--) {
+      if (invalidGroups[i] === '搜索失效') invalidGroups.splice(i, 1);
+    }
+    this.onStage_?.({ sourceUrl: source.sourceUrl, sourceName: source.sourceName, detail: searchDetail });
+  }
+
+  private getCheckKeyword_(source: BookSource): string {
+    const custom = source.ruleSearchCheckKeyWord.trim();
+    if (custom && !custom.includes('http') && !custom.includes('::') && !custom.includes('++') && !custom.includes('--')) return custom;
+    return this.config.keyword;
+  }
+
+  private async getFirstExploreUrl_(source: BookSource): Promise<string> {
     let raw = (source.exploreUrl || source.ruleExplores || '').trim();
     if (!raw) return '';
-    try {
-      const parsed = JSON.parse(raw);
-      const first = Array.isArray(parsed) ? parsed[0] : parsed;
-      if (first && typeof first === 'object') {
-        const value = String(first['url'] || first['exploreUrl'] || '');
-        if (value) raw = value;
+    if (raw.startsWith('@js:') || raw.startsWith('<js>')) {
+      let code = raw.startsWith('@js:') ? raw.substring(4).trim() : '';
+      if (raw.startsWith('<js>')) {
+        const match = raw.match(/<js>([\s\S]*?)<\/js>/i);
+        code = match ? match[1] : '';
       }
-    } catch (_e) {
-      const firstLine = raw.split(/\r?\n|&&/)[0].trim();
-      const separator = firstLine.indexOf('::');
-      raw = separator >= 0 ? firstLine.substring(separator + 2).trim() : firstLine;
+      if (!code) throw new Error('发现分类脚本为空');
+      const context: JsEvalContext = {
+        source: source,
+        jsLib: source.jsLib || '',
+        baseUrl: source.sourceUrl.replace(/##.*$/, '').replace(/\/+$/, ''),
+        variableBlob: source.variableComment || '',
+      };
+      raw = (await JsExpressionEvaluator.evaluate(code, context)).trim();
+      if (!raw) throw new Error('发现分类脚本执行结果为空');
     }
-    raw = raw.replace(/\{\{page\}\}/g, '1').split('##')[0].trim();
-    if (!raw || raw.startsWith('@js') || raw.indexOf('<js>') >= 0) return '';
-    if (/^https?:\/\//.test(raw)) return raw;
-    const base = source.sourceUrl.match(/^(https?:\/\/[^/]+)/);
-    if (!base) return '';
-    if (raw.startsWith('/')) return base[1] + raw;
-    return source.sourceUrl.replace(/\/[^/]*$/, '/') + raw;
+    return firstExploreUrlFromText(raw).replace(/\{\{page\}\}/g, '1').trim();
   }
 
   private createExploreSource_(source: BookSource, exploreUrl: string): BookSource {
-    const cloned = JSON.parse(JSON.stringify(source)) as BookSource;
-    cloned.enabled = true;
-    cloned.isExploreRequest = true;
-    cloned.ruleSearchUrl = exploreUrl;
-    cloned.ruleSearchList = source.ruleExploreList;
-    cloned.ruleSearchName = source.ruleExploreName;
-    cloned.ruleSearchAuthor = source.ruleExploreAuthor;
-    cloned.ruleSearchCover = source.ruleExploreCover;
-    cloned.ruleSearchKind = source.ruleExploreKind;
-    cloned.ruleSearchWordCount = source.ruleExploreWordCount;
-    cloned.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime;
-    cloned.ruleSearchIntroduce = source.ruleExploreIntroduce;
-    cloned.ruleSearchNoteUrl = source.ruleExploreNoteUrl;
-    return cloned;
+    const copy = JSON.parse(JSON.stringify(source)) as BookSource;
+    copy.enabled = true;
+    copy.isExploreRequest = true;
+    copy.ruleSearchUrl = exploreUrl;
+    copy.ruleSearchList = source.ruleExploreList;
+    copy.ruleSearchName = source.ruleExploreName;
+    copy.ruleSearchAuthor = source.ruleExploreAuthor;
+    copy.ruleSearchCover = source.ruleExploreCover;
+    copy.ruleSearchKind = source.ruleExploreKind;
+    copy.ruleSearchWordCount = source.ruleExploreWordCount;
+    copy.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime;
+    copy.ruleSearchIntroduce = source.ruleExploreIntroduce;
+    copy.ruleSearchNoteUrl = source.ruleExploreNoteUrl;
+    return copy;
   }
 
-  private runWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  private runBeforeDeadline_<T>(promise: Promise<T>, deadline: number, requestGroup: string): Promise<T> {
+    this.ensureRunning_(deadline);
+    const remaining = Math.max(1, deadline - Date.now());
     return new Promise<T>((resolve: (value: T) => void, reject: (reason: Error) => void) => {
       let settled = false;
       const finish = (action: () => void): void => {
@@ -383,19 +570,20 @@ export class SourceChecker {
         clearInterval(cancelTimer);
         action();
       };
-      const timer = setTimeout(() => {
-        finish(() => { reject(new Error('操作超时 (' + timeoutMs + 'ms)')); });
-      }, timeoutMs);
+      const timer = setTimeout(() => finish(() => {
+        NetUtil.cancelRequestGroup(requestGroup);
+        reject(new Error('校验超时 (' + this.config.timeout + 'ms)'));
+      }), remaining);
       const cancelTimer = setInterval(() => {
-        if (this.cancelFlag) {
-          finish(() => { reject(new Error('校验已取消')); });
-        }
-      }, 100);
-      promise.then((result: T) => {
-        finish(() => { resolve(result); });
-      }).catch((err: Error) => {
-        finish(() => { reject(err); });
-      });
+        if (this.cancelled_) finish(() => reject(new SourceCheckCancelledError()));
+      }, 50);
+      promise.then((value: T) => finish(() => resolve(value)))
+        .catch((error: Error) => finish(() => this.cancelled_ ? reject(new SourceCheckCancelledError()) : reject(error)));
     });
+  }
+
+  private ensureRunning_(deadline: number): void {
+    if (this.cancelled_) throw new SourceCheckCancelledError();
+    if (Date.now() >= deadline) throw new Error('校验超时 (' + this.config.timeout + 'ms)');
   }
 }

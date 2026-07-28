@@ -6,7 +6,10 @@ import { ImportSourceDialog } from './ImportSourceDialog';
 import { GroupManageDialog } from './GroupManageDialog';
 import { SourceGroupAssignDialog } from '../components/source/SourceGroupAssignDialog';
 import { SourceCheckConfigDialog } from '../components/source/SourceCheckConfigDialog';
-import { SourceChecker, CheckConfig, CheckResult, CheckDetail } from '../service/SourceChecker';
+import { CheckConfig, CheckResult, CheckDetail } from '../service/SourceChecker';
+import { SourceCheckService, SourceCheckSnapshot } from '../service/SourceCheckService';
+import { SourceCheckConfigStore } from '../service/SourceCheckConfigStore';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 import { SourceLoginDialog } from '../components/source/SourceLoginDialog';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
@@ -15,6 +18,9 @@ import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AppBackButton } from '../components/common/AppTitleBar';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
+import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
+import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { image } from '@kit.ImageKit';
 
 @Entry
 @Component
@@ -27,6 +33,7 @@ export struct BookSourcePage {
   @State sortMode: number = 0;
   @State sortAscending: boolean = true;
   @State groupFilter: string = '';
+  @State failedOnly_: boolean = false;
   @State groupByDomain: boolean = false;
   @State isLoading: boolean = true;
   @State selectedIds: number[] = [];
@@ -45,6 +52,8 @@ export struct BookSourcePage {
   @State checkResults: CheckResult[] = [];
   @State checkResByUrl: Map<string, CheckResult> = new Map();
   @State showCheckSummary: boolean = false;
+  @State checkCurrentMessage: string = '';
+  @State expandedCheckUrls_: string[] = [];
   private dao_: BookSourceTable | null = null;
   private groups_: string[] = [];
   private sortLabels_: string[] = ['手动', '名称', 'URL', '权重', '更新时间', '响应', '启用'];
@@ -53,13 +62,21 @@ export struct BookSourcePage {
   private groupAssignDlg?: CustomDialogController;
   private loginDlg?: CustomDialogController;
   private checkConfigDlg?: CustomDialogController;
-  private activeChecker_: SourceChecker | null = null;
+  private checkService_: SourceCheckService = SourceCheckService.getInstance();
   private loadRequestId_: number = 0;
-  private checkRequestId_: number = 0;
   private isActive_: boolean = false;
+  private lastCheckRunning_: boolean = false;
+  private lastCheckError_: string = '';
+  private checkConfigOpening_: boolean = false;
+  private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
+  private checkListener_: (snapshot: SourceCheckSnapshot) => void = (snapshot: SourceCheckSnapshot): void => {
+    this.applyCheckSnapshot_(snapshot);
+  };
 
   aboutToAppear(): void {
     this.isActive_ = true;
+    this.registerCaptchaHandler_();
+    this.checkService_.subscribe(this.checkListener_);
     this.importDlg = new CustomDialogController({
       builder: ImportSourceDialog({
         controller: this.importDlg!,
@@ -78,6 +95,8 @@ export struct BookSourcePage {
   /** 从新建/编辑页返回时重新读取数据库，避免列表保留旧的页面内存状态。 */
   onPageShow(): void {
     this.isActive_ = true;
+    this.registerCaptchaHandler_();
+    this.checkService_.subscribe(this.checkListener_);
     // 首次进入由 aboutToAppear 负责加载，避免两个生命周期并发查询后旧结果覆盖新结果。
     if (!this.isLoading || this.sources.length > 0) void this.load();
   }
@@ -85,10 +104,31 @@ export struct BookSourcePage {
   aboutToDisappear(): void {
     this.isActive_ = false;
     this.loadRequestId_++;
-    this.checkRequestId_++;
-    this.activeChecker_?.cancel();
-    this.activeChecker_ = null;
-    this.isChecking = false;
+    this.checkService_.unsubscribe(this.checkListener_);
+    if (JsExpressionEvaluator.captchaHandler === this.captchaHandler_) {
+      JsExpressionEvaluator.captchaHandler = null;
+    }
+  }
+
+  private registerCaptchaHandler_(): void {
+    if (!this.captchaHandler_) {
+      this.captchaHandler_ = (captchaUrl: string, captchaImage?: image.PixelMap | null): Promise<string> => {
+        return new Promise<string>((resolve: (code: string) => void) => {
+          let dialog: CustomDialogController | null = null;
+          dialog = new CustomDialogController({
+            builder: CaptchaDialog({
+              controller: dialog!, captchaUrl: captchaUrl,
+              captchaImage: captchaImage ?? null, captchaResolve: resolve
+            }),
+            autoCancel: false,
+            customStyle: true,
+            alignment: DialogAlignment.Center,
+          });
+          dialog.open();
+        });
+      };
+    }
+    JsExpressionEvaluator.captchaHandler = this.captchaHandler_;
   }
 
   private async load(): Promise<void> {
@@ -133,7 +173,13 @@ export struct BookSourcePage {
 
   private applyFilters(): void {
     let list = this.sources.slice();
-    const query = this.searchText.trim().toLowerCase();
+    if (this.failedOnly_) {
+      const failedUrls = new Set(this.checkResults
+        .filter((result: CheckResult): boolean => result.status === 'fail')
+        .map((result: CheckResult): string => result.sourceUrl));
+      list = list.filter((source: BookSource): boolean => failedUrls.has(source.sourceUrl));
+    }
+    const query = this.failedOnly_ ? '' : this.searchText.trim().toLowerCase();
     if (query) list = list.filter((source: BookSource): boolean =>
       source.sourceName.toLowerCase().includes(query) || source.sourceUrl.toLowerCase().includes(query)
         || (source.group || '').toLowerCase().includes(query)
@@ -404,66 +450,78 @@ export struct BookSourcePage {
     });
   }
 
-  private openCheckConfig(): void {
-    if (this.selectedIds.length === 0) return;
-    this.checkConfigDlg = new CustomDialogController({
-      builder: SourceCheckConfigDialog({
-        controller: this.checkConfigDlg!, onStart: (config: CheckConfig) => { this.startCheck(config); }
-      }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
-    });
-    this.checkConfigDlg.open();
+  private async openCheckConfig(): Promise<void> {
+    if (this.selectedIds.length === 0 || this.checkConfigOpening_) return;
+    this.checkConfigOpening_ = true;
+    try {
+      await SettingsStore.getInstance().init(UiUtil.getHostContext(this.getUIContext()));
+      const initialConfig = await SourceCheckConfigStore.load();
+      if (!this.isActive_ || this.selectedIds.length === 0) return;
+      this.checkConfigDlg = new CustomDialogController({
+        builder: SourceCheckConfigDialog({
+          controller: this.checkConfigDlg!, initialConfig: initialConfig,
+          onStart: (config: CheckConfig) => { this.startCheck(config); }
+        }), autoCancel: true, alignment: UiUtil.adaptiveDialogAlignment(), customStyle: true
+      });
+      this.checkConfigDlg.open();
+    } catch (error) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '加载校验配置失败：' + ((error as Error).message || String(error)), duration: 1800
+      });
+    } finally {
+      this.checkConfigOpening_ = false;
+    }
   }
 
   private startCheck(config: CheckConfig): void {
-    const requestId = ++this.checkRequestId_;
     const targets = this.selectedSources();
     if (targets.length === 0) return;
-    this.isChecking = true;
-    this.checkProgress = 0;
-    this.checkTotal = targets.length;
-    this.checkResults = [];
-    this.checkResByUrl = new Map();
-    this.showCheckSummary = false;
+    if (this.failedOnly_) {
+      this.failedOnly_ = false;
+      if (this.searchText === '失效') this.searchText = '';
+    }
     this.clearSelection_();
-    this.activeChecker_ = new SourceChecker(config);
-    this.activeChecker_.checkSources(targets, (completed: number, total: number, result: CheckResult) => {
-      if (!this.isActive_ || requestId !== this.checkRequestId_) return;
-      this.checkProgress = completed;
-      this.checkTotal = total;
-      this.checkResults = [...this.checkResults, result];
-      const map = new Map(this.checkResByUrl);
-      map.set(result.sourceUrl, result);
-      this.checkResByUrl = map;
-      const search = result.details.find((item: CheckDetail): boolean => item.name === '搜索' && item.passed);
-      const source = targets.find((item: BookSource): boolean => item.sourceUrl === result.sourceUrl);
-      if (search && source && this.dao_) {
-        this.dao_.updateRespondTime(source.id, search.duration).then(() => {
-          source.respondTime = search.duration;
-          this.applyFilters();
-        }).catch((e: Error) => {
-          console.warn('[BookSourcePage] update respond time failed:', e.message);
-        });
-      }
-    }).then(() => {
-      if (!this.isActive_ || requestId !== this.checkRequestId_) return;
-      this.isChecking = false;
-      this.showCheckSummary = true;
-      this.activeChecker_ = null;
-    }).catch((e: Error) => {
-      if (!this.isActive_ || requestId !== this.checkRequestId_) return;
-      this.isChecking = false;
-      this.activeChecker_ = null;
-      UiUtil.showToast(this.getUIContext(), { message: '校验失败：' + e.message, duration: 2000 });
+    this.checkService_.start(targets.map((source: BookSource): number => source.id), config,
+      UiUtil.getHostContext(this.getUIContext())).then((started: boolean) => {
+      if (!started) UiUtil.showToast(this.getUIContext(), { message: '已有书源正在校验', duration: 1600 });
+    }).catch((error: Error) => {
+      UiUtil.showToast(this.getUIContext(), { message: '校验启动失败：' + error.message, duration: 2000 });
     });
   }
 
   private cancelCheck(): void {
-    this.checkRequestId_++;
-    this.activeChecker_?.cancel();
-    this.activeChecker_ = null;
-    this.isChecking = false;
-    if (this.checkResults.length > 0) this.showCheckSummary = true;
-    UiUtil.showToast(this.getUIContext(), { message: '已停止校验', duration: 1200 });
+    this.checkService_.cancel();
+    UiUtil.showToast(this.getUIContext(), { message: '正在停止校验', duration: 1200 });
+  }
+
+  private applyCheckSnapshot_(snapshot: SourceCheckSnapshot): void {
+    const wasRunning = this.lastCheckRunning_;
+    this.lastCheckRunning_ = snapshot.running;
+    this.isChecking = snapshot.running;
+    this.checkProgress = snapshot.completed;
+    this.checkTotal = snapshot.total;
+    this.checkCurrentMessage = snapshot.currentMessage;
+    this.checkResults = snapshot.results.slice();
+    const map = new Map<string, CheckResult>();
+    snapshot.results.forEach((result: CheckResult) => map.set(result.sourceUrl, result));
+    this.checkResByUrl = map;
+    this.showCheckSummary = !snapshot.running && snapshot.results.length > 0;
+    if (snapshot.errorMessage && snapshot.errorMessage !== this.lastCheckError_) {
+      this.lastCheckError_ = snapshot.errorMessage;
+      UiUtil.showToast(this.getUIContext(), { message: '校验失败：' + snapshot.errorMessage, duration: 2200 });
+    }
+    if (wasRunning && !snapshot.running) {
+      const hasInvalid = snapshot.results.some((result: CheckResult): boolean => result.status === 'fail');
+      if (hasInvalid && !this.searchText.trim()) {
+        this.failedOnly_ = true;
+        this.searchText = '失效';
+        UiUtil.showToast(this.getUIContext(), { message: '发现失效书源，已自动筛选', duration: 1800 });
+      } else if (!hasInvalid && this.failedOnly_) {
+        this.failedOnly_ = false;
+        if (this.searchText === '失效') this.searchText = '';
+      }
+      void this.load();
+    }
   }
 
   private clearSelection_(): void {
@@ -508,6 +566,23 @@ export struct BookSourcePage {
     return result ? result.details : [];
   }
 
+  private getCheckMessage_(url: string): string {
+    const result = this.checkResByUrl.get(url);
+    if (!result) return '';
+    const failed = result.details.find((detail: CheckDetail): boolean => !detail.passed);
+    if (failed) return failed.name + '：' + failed.message;
+    const last = result.details.filter((detail: CheckDetail): boolean => !detail.skipped).pop();
+    return last ? last.name + '：' + last.message : '无需检查的阶段已跳过';
+  }
+
+  private isCheckExpanded_(url: string): boolean { return this.expandedCheckUrls_.includes(url); }
+
+  private toggleCheckExpanded_(url: string): void {
+    this.expandedCheckUrls_ = this.isCheckExpanded_(url)
+      ? this.expandedCheckUrls_.filter((item: string): boolean => item !== url)
+      : [...this.expandedCheckUrls_, url];
+  }
+
   build() {
     Column() {
       Row() {
@@ -542,7 +617,11 @@ export struct BookSourcePage {
           .height(48).layoutWeight(1).borderRadius(24).padding({ left: 16, right: 12 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
-          .onChange((value: string) => { this.searchText = value; this.applyFilters(); })
+          .onChange((value: string) => {
+            if (this.failedOnly_ && value !== '失效') this.failedOnly_ = false;
+            this.searchText = value;
+            this.applyFilters();
+          })
         Button(this.sortLabels_[this.sortMode] + (this.sortAscending ? ' ↑' : ' ↓'))
           .height(48).borderRadius(24).margin({ left: 8 }).padding({ left: 14, right: 14 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
@@ -576,7 +655,14 @@ export struct BookSourcePage {
               .fontColor(this.groupFilter === group ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
               .backgroundColor(this.groupFilter === group ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
               .borderRadius(22).margin({ right: 8 }).textAlign(TextAlign.Center)
-              .onClick(() => { this.groupFilter = this.groupFilter === group ? '' : group; this.applyFilters(); })
+              .onClick(() => {
+                if (this.failedOnly_) {
+                  this.failedOnly_ = false;
+                  if (this.searchText === '失效') this.searchText = '';
+                }
+                this.groupFilter = this.groupFilter === group ? '' : group;
+                this.applyFilters();
+              })
           })
         }.padding({ left: 16, right: 8, top: 10, bottom: 8 })
       }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
@@ -644,7 +730,8 @@ export struct BookSourcePage {
         Row() {
           Progress({ value: this.checkProgress, total: Math.max(1, this.checkTotal), type: ProgressType.Ring })
             .width(28).height(28).color(ThemeColors.primary(this.isDark))
-          Text('正在校验 ' + this.checkProgress + '/' + this.checkTotal).fontSize(13).layoutWeight(1)
+          Text((this.checkCurrentMessage || '正在校验') + '  ' + this.checkProgress + '/' + this.checkTotal)
+            .fontSize(13).layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
             .fontColor(ThemeColors.onSurface(this.isDark)).margin({ left: 10 })
           Button($r('app.string.common_stop')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.error(this.isDark))
             .onClick(() => { this.cancelCheck(); })
@@ -652,11 +739,18 @@ export struct BookSourcePage {
       } else if (this.showCheckSummary && this.checkResults.length > 0) {
         Row() {
           Text('校验：通过 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'success').length +
-            ' · 部分 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'partial').length +
             ' · 失败 ' + this.checkResults.filter((item: CheckResult): boolean => item.status === 'fail').length).fontColor(ThemeColors.onSurface(this.isDark))
             .fontSize(13).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
           Button($r('app.string.common_close')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
-            .onClick(() => { this.showCheckSummary = false; })
+            .onClick(() => {
+              this.checkService_.clearResults();
+              this.showCheckSummary = false;
+              if (this.failedOnly_) {
+                this.failedOnly_ = false;
+                if (this.searchText === '失效') this.searchText = '';
+                this.applyFilters();
+              }
+            })
         }.height(52).padding({ left: 16, right: 12 }).width('100%').backgroundColor(ThemeColors.surface(this.isDark))
       }
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
@@ -700,13 +794,35 @@ export struct BookSourcePage {
               .margin({ left: 10 })
           }.width('100%').margin({ top: 6 })
           if (this.checkResByUrl.has(source.sourceUrl)) {
+            Scroll() {
+              Row() {
+                ForEach(this.getCheckDetails(source.sourceUrl), (detail: CheckDetail) => {
+                  Text((detail.skipped ? '− ' : detail.passed ? '✓ ' : '! ') + detail.name +
+                    (detail.duration > 0 ? ' ' + detail.duration + 'ms' : '')).fontSize(10)
+                    .fontColor(detail.skipped ? ThemeColors.secondaryText(this.isDark) :
+                      detail.passed ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
+                    .margin({ right: 8 })
+                }, (detail: CheckDetail): string => detail.name)
+              }
+            }.width('100%').margin({ top: 6 }).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
             Row() {
-              ForEach(this.getCheckDetails(source.sourceUrl), (detail: CheckDetail) => {
-                Text((detail.passed ? '✓ ' : '! ') + detail.name).fontSize(10)
-                  .fontColor(detail.passed ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
-                  .margin({ right: 8 })
-              }, (detail: CheckDetail): string => detail.name)
-            }.width('100%').margin({ top: 6 })
+              Text(this.getCheckMessage_(source.sourceUrl)).fontSize(11).lineHeight(16).maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                .fontColor(this.checkResByUrl.get(source.sourceUrl)?.status === 'success' ?
+                  ThemeColors.secondaryText(this.isDark) : ThemeColors.error(this.isDark))
+              Button(this.isCheckExpanded_(source.sourceUrl) ? '收起' : '详情').height(32).fontSize(11)
+                .backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
+                .onClick(() => { this.toggleCheckExpanded_(source.sourceUrl); })
+            }.width('100%').margin({ top: 4 })
+            if (this.isCheckExpanded_(source.sourceUrl)) {
+              Column({ space: 4 }) {
+                ForEach(this.getCheckDetails(source.sourceUrl), (detail: CheckDetail) => {
+                  Text(detail.name + '：' + detail.message + (detail.duration > 0 ? ' (' + detail.duration + ' ms)' : ''))
+                    .fontSize(11).lineHeight(16).width('100%')
+                    .fontColor(detail.skipped || detail.passed ? ThemeColors.secondaryText(this.isDark) : ThemeColors.error(this.isDark))
+                }, (detail: CheckDetail): string => 'message-' + detail.name)
+              }.width('100%').margin({ top: 2 })
+            }
           }
         }.layoutWeight(1).onClick(() => {
           if (this.suppressClick_) return;
