@@ -64,6 +64,64 @@ export function resolveContentPageUrl(url: string, currentUrl: string): string {
   return (base + nextUrl).replace(/#.*$/, '');
 }
 
+function collectLikelyTocLinks_(html: string, pageUrl: string): Set<string> {
+  const links = new Set<string>();
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(html || '')) !== null && links.size < 10000) {
+    const href = contentLinkAttribute_(match[1] || '', 'href');
+    if (!href) continue;
+    const text = contentLinkText_(match[2] || '');
+    if (!/第[零一二三四五六七八九十百千两\d]+\s*[章节回]/.test(text) &&
+      !/(?:^|\/)\d+\.html?(?:[?#]|$)/i.test(href)) continue;
+    const resolved = resolveContentPageUrl(href, pageUrl);
+    if (resolved) links.add(resolved.toLowerCase());
+  }
+  return links;
+}
+
+/** 两个目录分页包含高度重合的章节链接时，后页是重复的完整目录。 */
+export function isDuplicateTocPage(firstHtml: string, firstUrl: string,
+  candidateHtml: string, candidateUrl: string): boolean {
+  const first = collectLikelyTocLinks_(firstHtml, firstUrl);
+  const candidate = collectLikelyTocLinks_(candidateHtml, candidateUrl);
+  if (first.size < 10 || candidate.size < 10) return false;
+  const smaller = first.size <= candidate.size ? first : candidate;
+  const larger = first.size <= candidate.size ? candidate : first;
+  let overlap = 0;
+  for (const key of smaller) {
+    if (larger.has(key)) overlap++;
+  }
+  return overlap / smaller.size >= 0.9;
+}
+
+/** Android Legado 仅在书源明确配置 nextTocUrl 时加载目录分页。 */
+export function hasExplicitTocPaginationRule(rule: string): boolean {
+  return !!(rule || '').trim();
+}
+
+export interface SourceScriptEvaluationResult {
+  body: string;
+  variableBlob: string;
+}
+
+/** 解包同一次 Worker 求值返回的页面正文和 source.setVariable() 最终状态。 */
+export function decodeSourceScriptEvaluation(raw: string): SourceScriptEvaluationResult {
+  if (!raw) return { body: '', variableBlob: '' };
+  try {
+    const parsed = JSON.parse(raw) as Record<string, Object>;
+    if (parsed['__legadoSourceEval'] === true) {
+      const bodyValue = parsed['body'];
+      const variableValue = parsed['variableBlob'];
+      return {
+        body: bodyValue === null || bodyValue === undefined ? '' : String(bodyValue),
+        variableBlob: variableValue === null || variableValue === undefined ? '' : String(variableValue),
+      };
+    }
+  } catch (_e) { /* 兼容普通字符串结果 */ }
+  return { body: raw, variableBlob: '' };
+}
+
 /** 嗅探明确的"下一页"链接；不会把"下一章"当成分页。 */
 export function sniffNextContentPageUrl(html: string, currentUrl: string): string {
   if (!html || !currentUrl) return '';
@@ -753,7 +811,7 @@ export class SourceExecutor {
         try {
           const resolved = await JsExpressionEvaluator.evaluate(
             '(function(){var v=getVariable("线路");if(v&&/^https?:\\/\\//.test(v))return v;if(typeof hosts==="string"&&/^https?:\\/\\//.test(hosts))return hosts;if(Array.isArray(hosts)&&hosts.length>0)return hosts[0];return "";})()',
-            { source: source, jsLib: source.jsLib || '' }
+            { source: source, jsLib: source.jsLib || '', variableBlob: source.variableComment || '' }
           );
           if (resolved && resolved.startsWith('http')) {
             console.info('[SrcEx] Resolved base URL from JS vars:', resolved);
@@ -782,6 +840,7 @@ export class SourceExecutor {
             page: page,
             baseUrl: baseUrl,
             source: source,
+            variableBlob: source.variableComment || '',
           });
           if (jsResult && jsResult.trim()) {
             searchUrlTemplate = searchUrlTemplate.replace(/<js>[\s\S]*?<\/js>/gi, jsResult.trim());
@@ -811,6 +870,7 @@ export class SourceExecutor {
             page: page,
             baseUrl: baseUrl,
             source: source,
+            variableBlob: source.variableComment || '',
           });
           if (jsResult && jsResult.trim() && !/^(SyntaxError|ReferenceError|TypeError|Error:)/i.test(jsResult.trim())) {
             searchUrlTemplate = jsResult.trim();
@@ -2234,31 +2294,18 @@ export class SourceExecutor {
       }
 
       const tocBodies: string[] = [resp];
+      const tocBodyUrls: string[] = [tocUrl];
       const visitedToc = new Set<string>();
       visitedToc.add(tocUrl);
 
       const nextRule = source.ruleTocNextTocUrl || '';
-      // 始终运行分页循环：即使 ruleTocNextTocUrl 为空，
-      // collectTocPageUrls 内部的 extractTocOptionPageUrls 会自动检测 <option> 分页
-      try {
+      // 对齐 Android BookChapterList：nextTocUrl 为空时只解析当前响应，绝不猜测页面分页控件。
+      if (hasExplicitTocPaginationRule(nextRule)) {
+        try {
           let currentBody = resp;
           let currentUrl = tocUrl;
-      let runningChapters = 0;  // 增量章节计数
-      // 统计首页章节数
-      if (onProgress) {
-        const links = resp.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
-        if (links) {
-          for (const link of links) {
-            if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
-                /href=["'][^"']*\d+\.html?["']/.test(link)) {
-              runningChapters++;
-            }
-          }
-        }
-        onProgress(runningChapters);
-      }
-      while (tocBodies.length < 60) {
-            const nextUrls = this.collectTocPageUrls(currentBody, nextRule, currentUrl);
+          while (tocBodies.length < 60) {
+            const nextUrls = this.extractTocPageUrls(currentBody, nextRule, currentUrl);
             const newUrls: string[] = [];
             for (const url of nextUrls) {
               if (url && !visitedToc.has(url)) {
@@ -2281,8 +2328,21 @@ export class SourceExecutor {
 
               const maxConcurrency = 5;
               const pageResults: (string | null)[] = new Array(pageUrls.length);
-              let nextIdx = 0;
-              let completed = 0;
+              let nextIdx = 1;
+
+              // 很多站点的分页地址实际仍返回完整目录。先探测第二页，避免一次性下载并解析几十份重复目录。
+              try {
+                const probeBody = await this.fetchWithOpts(pageUrls[0], headers, source);
+                if (probeBody && probeBody.length > 100) {
+                  if (isDuplicateTocPage(currentBody, currentUrl, probeBody, pageUrls[0])) {
+                    console.info('[SrcEx] getToc duplicate full-catalog page detected, stop pagination:',
+                      pageUrls[0].substring(0, 80));
+                    break;
+                  }
+                  pageResults[0] = probeBody;
+                }
+              } catch (_probeError) { /* skip the failed probe page */ }
+
               const workers: Promise<void>[] = [];
               const fetchPage = async (): Promise<void> => {
                 while (nextIdx < pageUrls.length) {
@@ -2291,23 +2351,11 @@ export class SourceExecutor {
                     const b = await this.fetchWithOpts(pageUrls[i], headers, source);
                     if (b && b.length > 100) {
                       pageResults[i] = b;
-                      // 统计本章节的链接数
-                      const links = b.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
-                      if (links) {
-                        for (const link of links) {
-                          if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
-                              /href=["'][^"']*\d+\.html?["']/.test(link)) {
-                            runningChapters++;
-                          }
-                        }
-                      }
                     }
                   } catch (_pf) { /* skip */ }
-                  completed++;
-                  if (onProgress) { onProgress(runningChapters); }
                 }
               };
-              const workerCount = Math.min(maxConcurrency, pageUrls.length);
+              const workerCount = Math.min(maxConcurrency, Math.max(0, pageUrls.length - 1));
               for (let w = 0; w < workerCount; w++) {
                 workers.push(fetchPage());
               }
@@ -2315,6 +2363,7 @@ export class SourceExecutor {
               for (let i = 0; i < pageResults.length; i++) {
                 if (pageResults[i]) {
                   tocBodies.push(pageResults[i]!);
+                  tocBodyUrls.push(pageUrls[i]);
                 }
               }
               break;
@@ -2326,29 +2375,21 @@ export class SourceExecutor {
             if (!nextBody || nextBody.length < 100) {
               break;
             }
+            if (isDuplicateTocPage(currentBody, currentUrl, nextBody, nextUrl)) {
+              console.info('[SrcEx] getToc duplicate next page detected, stop pagination:',
+                nextUrl.substring(0, 80));
+              break;
+            }
             tocBodies.push(nextBody);
+            tocBodyUrls.push(nextUrl);
             currentBody = nextBody;
             currentUrl = nextUrl;
-            // 增量统计章节数
-            if (onProgress) {
-              const links = nextBody.match(/<a\s+[^>]*href=["'][^"']+["'][^>]*>/gi);
-              if (links) {
-                for (const link of links) {
-                  if (/第[零一二三四五六七八九十百千\d]+章/.test(link) ||
-                      /href=["'][^"']*\d+\.html?["']/.test(link)) {
-                    runningChapters++;
-                  }
-                }
-              }
-              onProgress(runningChapters);
-            }
           }
         } catch (_e) {
           /* ignore */
         }
+      }
       console.info('[SrcEx] getToc pages fetched:', tocBodies.length);
-
-      const bodyText = tocBodies.join('\n');
 
       // 规则解析
       let tocListRule = source.ruleToc || '';
@@ -2367,21 +2408,25 @@ export class SourceExecutor {
       };
       if (tocRules.toc) {
         let chapters: BookSourceChapter[] = [];
-        // API 类书源经常返回 JSON，但 ruleToc 可能写成 "*" / "data" / "list"，
-        // 不只是标准 JSONPath "$.xxx"。响应像 JSON 时优先走 JSON 解析。
-        if (this.shouldTryJsonToc_(tocRules.toc, bodyText)) {
-          try {
-            const jsonObj = this.tryParseJsonBody_(bodyText);
-            if (jsonObj !== null) {
-              chapters = await this.parseJsonToc(jsonObj, tocRules, tocUrl);
-              if (chapters.length > 0) {
-                console.info('[SrcEx] getToc JSON OK:', chapters.length, 'chapters rule=', tocRules.toc);
-              }
-            }
-          } catch (_je) { /* fallback to CSS */ }
-        }
-        if (chapters.length === 0) {
-          chapters = await this.parseTocFromRules(bodyText, tocRules, tocUrl, source);
+        const chapterKeys = new Set<string>();
+        for (let pageIndex = 0; pageIndex < tocBodies.length; pageIndex++) {
+          const pageBody = tocBodies[pageIndex];
+          const pageUrl = tocBodyUrls[pageIndex] || tocUrl;
+          let pageChapters: BookSourceChapter[] = [];
+          if (this.shouldTryJsonToc_(tocRules.toc, pageBody)) {
+            try {
+              const jsonObj = this.tryParseJsonBody_(pageBody);
+              if (jsonObj !== null) pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl);
+            } catch (_je) { /* fallback to CSS */ }
+          }
+          if (pageChapters.length === 0) {
+            pageChapters = await this.parseTocFromRules(pageBody, tocRules, pageUrl, source);
+          }
+          this.appendUniqueTocChapters_(chapters, pageChapters, chapterKeys, tocUrl);
+          if (onProgress) onProgress(chapters.length);
+          if (pageIndex + 1 < tocBodies.length) {
+            await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
+          }
         }
         chapters = this.finalizeTocList(chapters, source, tocUrl);
         console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)',
@@ -2392,7 +2437,13 @@ export class SourceExecutor {
       }
 
       // 兜底：从 HTML 中提取章节链接
-      const tocChapters = this.extractTocFromHtml(bodyText, source, tocUrl);
+      const tocChapters: BookSourceChapter[] = [];
+      const fallbackKeys = new Set<string>();
+      for (let pageIndex = 0; pageIndex < tocBodies.length; pageIndex++) {
+        const pageUrl = tocBodyUrls[pageIndex] || tocUrl;
+        const pageChapters = this.extractTocFromHtml(tocBodies[pageIndex], source, pageUrl);
+        this.appendUniqueTocChapters_(tocChapters, pageChapters, fallbackKeys, tocUrl);
+      }
       if (tocChapters.length > 0) {
         // 如果书源有 ruleBookInfoTocUrl（CSS 选择器），说明可能存在完整的目录页
         // 仅当提取到的章节足够多时才视为完整，否则继续尝试从 CSS 选择器获取完整目录
@@ -2406,7 +2457,7 @@ export class SourceExecutor {
       if (source.ruleBookInfoTocUrl) {
         // 当作 CSS 选择器解析，从当前 HTML 中提取真实的目录页 URL
         const parser = getHtmlParser();
-        const doc = parser.parse(bodyText);
+        const doc = parser.parse(resp);
         const cssRule = this.normalizeCssRule(source.ruleBookInfoTocUrl);
         const tocPageUrl = parser.extractAttr(doc, cssRule);
         if (tocPageUrl && tocPageUrl !== tocUrl) {
@@ -2639,60 +2690,6 @@ export class SourceExecutor {
     return urls;
   }
 
-  private collectTocPageUrls(body: string, rule: string, currentUrl: string): string[] {
-    const urls: string[] = [];
-    const seen = new Set<string>();
-    const add = (url: string): void => {
-      if (url && !seen.has(url)) {
-        seen.add(url);
-        urls.push(url);
-      }
-    };
-
-    for (const url of this.extractTocPageUrls(body, rule, currentUrl)) {
-      add(url);
-    }
-
-    const optionUrls = this.extractTocOptionPageUrls(body, currentUrl);
-    if (optionUrls.length > 1) {
-      for (const url of optionUrls) {
-        add(url);
-      }
-    }
-
-    return urls;
-  }
-
-  private extractTocOptionPageUrls(body: string, currentUrl: string): string[] {
-    if (!body) return [];
-
-    const parser = getHtmlParser();
-    const doc = parser.parse(body);
-    const options = parser.querySelectorAll(doc, 'option@value');
-    const urls: string[] = [];
-    const seen = new Set<string>();
-    for (const option of options) {
-      const raw = option.attributes['value'] || '';
-      if (!this.isLikelyUrlValue(raw)) {
-        continue;
-      }
-      const url = this.resolvePageUrl(raw, currentUrl);
-      if (url && !seen.has(url)) {
-        seen.add(url);
-        urls.push(url);
-      }
-    }
-    return urls;
-  }
-
-  private isLikelyUrlValue(value: string): boolean {
-    const raw = (value || '').trim();
-    if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) return false;
-    return /^(https?:)?\/\//i.test(raw) || raw.startsWith('/') || raw.startsWith('./') ||
-      raw.startsWith('../') || raw.startsWith('?') || /\.(html?|php|aspx?)([?#].*)?$/i.test(raw) ||
-      raw.includes('/');
-  }
-
   /**
    * 将 Legado Default 规则语法转换为标准 CSS
    * - id.xxx → #xxx
@@ -2903,35 +2900,37 @@ export class SourceExecutor {
           '  var result = ' + JSON.stringify(body) + ';\n' +
           '  var baseUrl = ' + JSON.stringify(ruleUrl) + ';\n' +
           '  ' + jsPrefixMatch[1] + '\n' +
-          '  try { globalThis.__lastSourceVars = source.getVariable(); } catch (_ve) {}\n' +
-          '  return result;\n' +
+          '  var __sourceVars = "";\n' +
+          '  try { __sourceVars = source.getVariable() || ""; } catch (_ve) {}\n' +
+          '  return JSON.stringify({' +
+          '__legadoSourceEval:true,body:result,variableBlob:__sourceVars});\n' +
           '})()';
-        const evalResult = await JsExpressionEvaluator.evaluate(evalBody, {
+        const evalRaw = await JsExpressionEvaluator.evaluate(evalBody, {
           baseUrl: ruleUrl, source: source, jsLib: source.jsLib || '',
           variableBlob: source.variableComment || '',
         });
+        const evaluation = decodeSourceScriptEvaluation(evalRaw);
+        const evalResult = evaluation.body;
         if (evalResult && evalResult !== 'null' && evalResult !== 'undefined' && evalResult.length > 100) {
           console.info('[SrcEx] <js> list rule returned new body (' + evalResult.length + ' chars) for', source.sourceName);
           body = evalResult;
         }
-        // setVariable 写回：脚本调用过 setVariable 时，取回最终变量持久化到 DB
-        // （验证码源靠它缓存验证码，一段时间内免重复输入）
+        // setVariable 写回必须使用同一次 Worker 求值返回的状态；Worker 与主线程 QuickJS 不共享 globalThis。
         if (/setVariable\s*\(/.test(jsPrefixMatch[1])) {
-          try {
-            const varsRaw = await JsExpressionEvaluator.evaluate(
-              'globalThis.__lastSourceVars || ""',
-              { baseUrl: ruleUrl, source: source }
-            );
-            const vars = (varsRaw || '').replace(/^['"`]|['"`]$/g, '');
-            if (vars && vars !== 'null' && vars !== '{}' && vars !== (source.variableComment || '')) {
-              source.variableComment = vars;
+          const vars = evaluation.variableBlob;
+          if (vars && vars !== 'null' && vars !== '{}' && vars !== (source.variableComment || '')) {
+            source.variableComment = vars;
+            try {
               await AppDatabase.getInstance().waitForInit();
               const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
               await dao.updateVariable(source.id, source.sourceUrl, vars);
               console.info('[SrcEx] Persisted source variable for', source.sourceName,
                 'len=' + vars.length);
+            } catch (persistError) {
+              console.warn('[SrcEx] Failed to persist source variable for', source.sourceName,
+                ':', (persistError as Error).message);
             }
-          } catch (_pe) { /* 持久化失败不影响搜索 */ }
+          }
         }
       } catch (_jsErr) {
         console.info('[SrcEx] <js> list rule eval failed for', source.sourceName, ':', (_jsErr as Error).message);
@@ -4291,6 +4290,21 @@ export class SourceExecutor {
       deduped[i].index = i;
     }
     return deduped;
+  }
+
+  private appendUniqueTocChapters_(target: BookSourceChapter[], incoming: BookSourceChapter[],
+    seen: Set<string>, baseTocUrl: string): void {
+    for (const chapter of incoming) {
+      if (!chapter) continue;
+      const title = (chapter.title || '').trim();
+      let url = (chapter.url || '').trim();
+      if (baseTocUrl) url = this.resolveTocUrlTemplate(url, baseTocUrl) || url;
+      if (!title && !url) continue;
+      const key = url ? ('u:' + this.normalizeTocDedupUrl_(url)) : ('t:' + title);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.push(chapter);
+    }
   }
 
   private normalizeTocDedupUrl_(url: string): string {

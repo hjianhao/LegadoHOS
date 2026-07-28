@@ -6,6 +6,7 @@ import {
 } from '../main/ets/service/SourceChecker';
 import { createSearchResult, SearchResult } from '../main/ets/model/SearchResult';
 import {
+  decodeSourceScriptEvaluation, hasExplicitTocPaginationRule, isDuplicateTocPage,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml, resolveContentPageUrl
 } from '../main/ets/engine/source/SourceExecutor';
 import {
@@ -73,6 +74,43 @@ export default function bookSourceManagementTest() {
         '<script src="/C2WF946J0/probe.js?v=1"></script><body></body></html>';
       expect(isWafProbeHtml(probe)).assertTrue();
       expect(isWafProbeHtml('<html><body><p>正常正文</p></body></html>')).assertFalse();
+    });
+
+    it('stopsDuplicateFullCatalogPagination', 0, () => {
+      let first = '<ul>';
+      let duplicate = '<ul>';
+      let different = '<ul>';
+      for (let i = 1; i <= 20; i++) {
+        first += `<li><a href="/book/1/${i}.html">第${i}章</a></li>`;
+        duplicate += `<li><a href="/book/1/${i}.html">第${i}章 标题</a></li>`;
+        different += `<li><a href="/book/1/${i + 20}.html">第${i + 20}章</a></li>`;
+      }
+      first += '</ul>';
+      duplicate += '</ul>';
+      different += '</ul>';
+      expect(isDuplicateTocPage(first, 'https://example.com/book/1/', duplicate,
+        'https://example.com/book/1_2/')).assertTrue();
+      expect(isDuplicateTocPage(first, 'https://example.com/book/1/', different,
+        'https://example.com/book/1_2/')).assertFalse();
+    });
+
+    it('loadsTocPaginationOnlyWhenTheSourceDeclaresIt', 0, () => {
+      expect(hasExplicitTocPaginationRule('')).assertFalse();
+      expect(hasExplicitTocPaginationRule('   ')).assertFalse();
+      expect(hasExplicitTocPaginationRule('select[name=pageselect] option@value')).assertTrue();
+    });
+
+    it('returnsCaptchaVariablesWithTheSameWorkerEvaluation', 0, () => {
+      const decoded = decodeSourceScriptEvaluation(JSON.stringify({
+        __legadoSourceEval: true,
+        body: '<html><div class="list">搜索结果</div></html>',
+        variableBlob: '4821'
+      }));
+      expect(decoded.body).assertContain('搜索结果');
+      expect(decoded.variableBlob).assertEqual('4821');
+      const plain = decodeSourceScriptEvaluation('<html>普通结果</html>');
+      expect(plain.body).assertEqual('<html>普通结果</html>');
+      expect(plain.variableBlob).assertEqual('');
     });
 
     it('resolvesFallbackChaptersAgainstTheActualTocPage', 0, () => {
