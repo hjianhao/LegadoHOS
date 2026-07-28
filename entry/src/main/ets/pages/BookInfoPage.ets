@@ -155,7 +155,10 @@ export struct BookInfoPage {
       const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
       if (info.name && !this.bookName) this.bookName = info.name;
       if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
-      if (info.coverUrl && !this.coverUrl) this.coverUrl = info.coverUrl;
+      // 对齐 Android analyzeBookInfo：详情页解析出的封面无条件覆盖搜索带来的旧值，
+      // 否则搜索阶段产生的错误封面（如书源规则失效时退化为书籍 URL）会一直挡住正确封面。
+      // 自定义封面不受影响：展示层 getDisplayCover() 始终优先 customCoverPath。
+      if (info.coverUrl) this.coverUrl = info.coverUrl;
       if (info.introduce) this.introduce = info.introduce;
       if (info.kind && !this.kind) this.kind = info.kind;
       if (info.wordCount && !this.wordCount) this.wordCount = info.wordCount;

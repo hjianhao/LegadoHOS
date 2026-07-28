@@ -317,8 +317,25 @@ export class RuleAnalyzer {
  * 便捷函数：按 &&、||、%% 分割规则，返回分割后的规则列表和连接符类型
  */
 export function splitConnectorRules(rule: string): { rules: string[]; connector: string } {
-  const analyzer = new RuleAnalyzer(rule);
+  // @js: 到规则末尾都是 JS 代码（对齐 Android JS_PATTERN: @js:([\w\W]*)）。
+  // JS 内部可能出现 && || %%（如 (t==='上'||t==='中')），不能参与连接符拆分，
+  // 否则 JS 会被截断成语法错误。先剥离 @js: 后缀，拆分完再挂回最后一条子规则。
+  let cssPart = rule;
+  let jsSuffix = '';
+  const jsIdx = rule.indexOf('@js:');
+  if (jsIdx >= 0 && (jsIdx === 0 || rule[jsIdx - 1] !== '@')) {
+    cssPart = rule.substring(0, jsIdx);
+    jsSuffix = rule.substring(jsIdx);
+  }
+  const analyzer = new RuleAnalyzer(cssPart);
   const result = analyzer.splitRule('&&', '||', '%%');
+  if (jsSuffix) {
+    if (result.length > 0) {
+      result[result.length - 1] += jsSuffix;
+    } else {
+      result.push(jsSuffix);
+    }
+  }
   return { rules: result, connector: analyzer.elementsType };
 }
 

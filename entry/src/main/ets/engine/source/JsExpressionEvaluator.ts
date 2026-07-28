@@ -387,7 +387,9 @@ export class JsExpressionEvaluator {
     const fullScript = `${setupCode}\n${safeCode}`;
     try {
       const result = globalScriptEngine.evaluateJsSync(fullScript);
-      return result;
+      // 原生桥会把 JS 异常作为普通字符串返回（如 "ReferenceError: cover is not defined"），
+      // 必须用 unwrapJsResult 过滤，否则错误文本会被调用方当成字段值（封面 URL 等）。
+      return unwrapJsResult(result);
     } catch (_e) {
       return '';
     }
