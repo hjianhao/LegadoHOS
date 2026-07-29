@@ -1884,10 +1884,10 @@ export class SourceExecutor {
             // 注入 source（含 header 字段），java.ajax 默认请求头依赖它
             source: source,
             jsLib: source.jsLib || '',
-            baseUrl: (() => {
-              const m = (contentUrl || '').match(/^https?:\/\/[^\/]+/);
-              return m ? m[0] : '';
-            })(),
+            // 对齐 Android：正文规则 JS 中的 baseUrl 是当前章节页 URL（而非源站根域）。
+            // 得奇等源靠 baseUrl 匹配出 aid/cid 拼 ajax 接口，给根域会导致正则不命中、
+            // 整段取数逻辑被静默跳过。
+            baseUrl: contentUrl || '',
           };
           // java.getString('rule') 在 QuickJS 沙箱中不存在（调用会抛 TypeError 导致整段
           // @js: 规则失败）。按 compileOne 同款方式，预先用当前章节 HTML 提取并替换为字面量。
