@@ -2425,7 +2425,7 @@ export class SourceExecutor {
       };
       if (tocRules.toc) {
         let chapters: BookSourceChapter[] = [];
-        const chapterKeys = new Set<string>();
+        const chapterKeys = new Map<string, number>();
         for (let pageIndex = 0; pageIndex < tocBodies.length; pageIndex++) {
           const pageBody = tocBodies[pageIndex];
           const pageUrl = tocBodyUrls[pageIndex] || tocUrl;
@@ -2455,7 +2455,7 @@ export class SourceExecutor {
 
       // 兜底：从 HTML 中提取章节链接
       const tocChapters: BookSourceChapter[] = [];
-      const fallbackKeys = new Set<string>();
+      const fallbackKeys = new Map<string, number>();
       for (let pageIndex = 0; pageIndex < tocBodies.length; pageIndex++) {
         const pageUrl = tocBodyUrls[pageIndex] || tocUrl;
         const pageChapters = this.extractTocFromHtml(tocBodies[pageIndex], source, pageUrl);
@@ -4311,7 +4311,7 @@ export class SourceExecutor {
   }
 
   private appendUniqueTocChapters_(target: BookSourceChapter[], incoming: BookSourceChapter[],
-    seen: Set<string>, baseTocUrl: string): void {
+    seen: Map<string, number>, baseTocUrl: string): void {
     for (const chapter of incoming) {
       if (!chapter) continue;
       const title = (chapter.title || '').trim();
@@ -4319,8 +4319,17 @@ export class SourceExecutor {
       if (baseTocUrl) url = this.resolveTocUrlTemplate(url, baseTocUrl) || url;
       if (!title && !url) continue;
       const key = url ? ('u:' + this.normalizeTocDedupUrl_(url)) : ('t:' + title);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const existing = seen.get(key);
+      if (existing !== undefined) {
+        // 去重保留后出现的条目（对齐 legado "反转→去重→反转回来" 的效果）：
+        // 目录页头部"最新章节"倒序块与正序全本重复时（如 kk笔趣阁新站），
+        // 保留正序全本中的位置，移除倒序块中的位置。
+        target.splice(existing, 1);
+        for (const [k, v] of seen) {
+          if (v > existing) seen.set(k, v - 1);
+        }
+      }
+      seen.set(key, target.length);
       target.push(chapter);
     }
   }
