@@ -1886,7 +1886,19 @@ export class SourceExecutor {
               return m ? m[0] : '';
             })(),
           };
-          const evalResult = await JsExpressionEvaluator.evaluate(jsCode, ctx);
+          // java.getString('rule') 在 QuickJS 沙箱中不存在（调用会抛 TypeError 导致整段
+          // @js: 规则失败）。按 compileOne 同款方式，预先用当前章节 HTML 提取并替换为字面量。
+          let processedJs = jsCode;
+          if (processedJs.includes('java.getString')) {
+            const docParser = getHtmlParser();
+            const docRoot = docParser.parse(raw);
+            processedJs = processedJs.replace(/java\.getString\(\s*['"]([^'"]+)['"]\s*\)/g,
+              (_m: string, rule: string): string => {
+                const val = docParser.extractAttr(docRoot, this.normalizeCssRule(rule));
+                return JSON.stringify(val || '');
+              });
+          }
+          const evalResult = await JsExpressionEvaluator.evaluate(processedJs, ctx);
           if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
             let content = evalResult;
             try {
@@ -1894,7 +1906,9 @@ export class SourceExecutor {
               if (typeof parsed === 'string') content = parsed;
             } catch (_e) { /* not JSON, use as-is */ }
             content = this.applyReplaceRegex(content, source.ruleBookContentReplaceRegex);
-            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(content, contentUrl) : content;
+            // @js: 返回的正文可能含 <br> 等 HTML（ajax 接口返回的原始格式），
+            // 与 CSS 路径一致做 HTML → 文本清洗，否则 <br> 原样进入排版
+            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(content, contentUrl) : this.stripHtml(content);
             console.info('[SrcEx] getContent @js: rule returned', finalContent.length, 'bytes');
             return finalContent;
           }

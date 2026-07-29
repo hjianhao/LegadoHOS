@@ -40,14 +40,21 @@ export function getAjaxPolyfill(): string {
       var s = String(url);
       if (typeof http !== "undefined" && http.get) {
         var m = s.match(/^(https?:\\/\\/[^,]+),(\\{[\\s\\S]*\\})$/);
-        var u = s, method = "GET", body = "";
+        var u = s, method = "GET", body = "", headers = {};
         if (m) {
           u = m[1];
-          try { var o = JSON.parse(m[2]); if (o.method) method = o.method.toUpperCase(); if (o.body !== undefined) body = String(o.body); } catch(_) {}
+          try {
+            var o = JSON.parse(m[2]);
+            if (o.method) method = o.method.toUpperCase();
+            if (o.body !== undefined) body = String(o.body);
+            // headers 必须透传（对齐 Android AnalyzeUrl），否则 X-Requested-With/
+            // Referer 丢失会导致 ajax 接口拒绝请求（如得奇 ajax2.php）
+            if (o.headers && typeof o.headers === 'object') headers = o.headers;
+          } catch(_) {}
         }
         try {
-          if (method === "POST") return extractBody(http.post(u, body));
-          return extractBody(http.get(u));
+          if (method === "POST") return extractBody(http.post(u, body, { headers: headers }));
+          return extractBody(http.get(u, { headers: headers }));
         } catch(_e) {}
       }
       return "";
