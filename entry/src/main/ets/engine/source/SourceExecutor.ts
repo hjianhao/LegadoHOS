@@ -1881,6 +1881,9 @@ export class SourceExecutor {
           const ctx: JsEvalContext = {
             src: raw,
             result: extractedResult,
+            // 注入 source（含 header 字段），java.ajax 默认请求头依赖它
+            source: source,
+            jsLib: source.jsLib || '',
             baseUrl: (() => {
               const m = (contentUrl || '').match(/^https?:\/\/[^\/]+/);
               return m ? m[0] : '';

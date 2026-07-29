@@ -36,11 +36,28 @@ export function getAjaxPolyfill(): string {
       }
       return String(resp);
     }
+    // 书源 header 字段作为默认请求头（对齐 Android AnalyzeUrl 的 source.getHeaderMap）。
+    // 单次调用 url,{headers:{...}} 中的同名头覆盖默认值。
+    // 得奇 ajax2.php 会校验 User-Agent，缺了书源 UA 会返回 "不支持该客户端访问"。
+    function __srcHeaders() {
+      var h = {};
+      try {
+        if (typeof source !== 'undefined' && source && source.header) {
+          var sh = typeof source.header === 'string' ? JSON.parse(source.header) : source.header;
+          if (sh && typeof sh === 'object') {
+            for (var k in sh) {
+              if (Object.prototype.hasOwnProperty.call(sh, k)) h[k] = String(sh[k]);
+            }
+          }
+        }
+      } catch(_) {}
+      return h;
+    }
     _j.ajax = function(url) {
       var s = String(url);
       if (typeof http !== "undefined" && http.get) {
         var m = s.match(/^(https?:\\/\\/[^,]+),(\\{[\\s\\S]*\\})$/);
-        var u = s, method = "GET", body = "", headers = {};
+        var u = s, method = "GET", body = "", headers = __srcHeaders();
         if (m) {
           u = m[1];
           try {
@@ -49,7 +66,11 @@ export function getAjaxPolyfill(): string {
             if (o.body !== undefined) body = String(o.body);
             // headers 必须透传（对齐 Android AnalyzeUrl），否则 X-Requested-With/
             // Referer 丢失会导致 ajax 接口拒绝请求（如得奇 ajax2.php）
-            if (o.headers && typeof o.headers === 'object') headers = o.headers;
+            if (o.headers && typeof o.headers === 'object') {
+              for (var hk in o.headers) {
+                if (Object.prototype.hasOwnProperty.call(o.headers, hk)) headers[hk] = String(o.headers[hk]);
+              }
+            }
           } catch(_) {}
         }
         try {
