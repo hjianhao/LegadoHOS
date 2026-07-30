@@ -125,18 +125,21 @@ export class SettingsStore {
   private async getEncKeyMaterial_(): Promise<Uint8Array> {
     try {
       const stored = await this.get('huks_key_material', '') as string;
-      if (stored.length === 32) {
+      if (stored.length === 32 && this.isPrintableKey_(stored)) {
         const bytes = new Uint8Array(32);
         for (let i = 0; i < 32; i++) {
           bytes[i] = stored.charCodeAt(i);
         }
         return bytes;
       }
-      // 首次生成：使用 UUID + timestamp 构造 32 字节种子
+      // 首次生成（或旧数据损坏）：用随机数构造 32 字节可打印字符密钥。
+      // 密钥必须全部为可打印 ASCII：preferences 走 XML 持久化，NUL 等控制字符
+      // 写入后会被转义/损坏，导致下次启动读回长度不符而重新生成密钥，
+      // 此前加密的数据全部无法解密。
       const seed = cryptoFramework.createRandom().generateRandomSync(16);
       const chars: string[] = [];
       for (let i = 0; i < 32; i++) {
-        const b = seed[i % 16];
+        const b = seed.data[i % 16];
         chars.push(String.fromCharCode((b % 95) + 32));
       }
       const keyStr = chars.join('');
@@ -164,6 +167,15 @@ export class SettingsStore {
     }
   }
 
+  /** 密钥材料必须全部是可见 ASCII（32-126），否则视为损坏需重新生成 */
+  private isPrintableKey_(s: string): boolean {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 32 || c > 126) return false;
+    }
+    return true;
+  }
+
   /** 使用显式随机 IV 的 AES-GCM 加密，格式为 v2:{iv}:{ciphertext}:{authTag}。 */
   private async encrypt_(plaintext: string): Promise<string> {
     if (!this.cryptoReady_) return plaintext;
@@ -184,6 +196,9 @@ export class SettingsStore {
       }
       const encrypted = await cipher.update({ data: plainBytes });
       const tag = await cipher.doFinal(null);
+      if (!encrypted || !tag) {
+        throw new Error('GCM encrypt returned empty output');
+      }
       const payload: EncryptedPayload = {
         iv: this.bytesToBase64_(Array.from(randomData.data)),
         ciphertext: this.bytesToBase64_(Array.from(encrypted.data)),
@@ -215,12 +230,14 @@ export class SettingsStore {
         await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, params);
         const updated = await cipher.update({ data: new Uint8Array(this.base64ToBytes_(payload.ciphertext)) });
         const finalData = await cipher.doFinal(null);
-        const bytes = Array.from(updated.data).concat(Array.from(finalData.data));
+        // GCM 解密时 doFinal 只做认证 tag 校验，部分设备返回 null，明文全部来自 update
+        const bytes = (updated ? Array.from(updated.data) : [])
+          .concat(finalData ? Array.from(finalData.data) : []);
         let result = '';
         for (let i = 0; i < bytes.length; i++) result += String.fromCharCode(bytes[i]);
         return result;
       } catch (_e) {
-        console.warn('[SettingsStore] Decrypt v2 failed');
+        console.warn('[SettingsStore] Decrypt v2 failed:', (_e as Error).message);
         return '';
       }
     }

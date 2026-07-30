@@ -685,6 +685,8 @@ export class AiBookImporter {
 - “查看全部章节”是从详情页进入完整目录页的入口，绝不能填入 ruleTocNextTocUrl。
 - ruleTocNextTocUrl 只填写完整目录页面中用于继续读取第 2、3……页的“下一页”链接选择器。
 - 当前页面已经是完整目录页时，选择完整章节列表，并识别真实目录分页；没有目录分页才填空字符串。
+- 避免使用 :nth-of-type(N)、:nth-child(N)、:eq(N) 等位置伪类：它们都按“元素在父节点下的同级位置”计数，而不是“相同 class 中的第 N 个”，页面结构稍有变化就会选不中。如果需要区分多个相似容器（如“最新章节”和“正文目录”两个列表），优先利用更具体的祖先 id/class、列表标题特征或专属容器来定位；实在无法区分时，让 ruleToc 同时匹配多个容器即可，引擎会按章节链接自动去重。
+- 目录分页控件如果是“上一页/下一页”链接，ruleTocNextTocUrl 优先用 :last-child 或 class 名定位“下一页”链接，例如 .index-container a:last-child@href。
 
 返回 JSON：
 {

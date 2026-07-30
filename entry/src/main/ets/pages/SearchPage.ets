@@ -266,8 +266,8 @@ export struct SearchPage {
   }
 
   private onlineSearchUrl_(keyword: string): string {
-    const query = `"${keyword}" 小说 在线阅读 目录 -电视剧 -动漫 -漫画`;
-    const encoded = encodeURIComponent(query);
+    // 直接使用用户输入的原始关键词：附加引号/排除词会导致必应等引擎搜不到结果
+    const encoded = encodeURIComponent(keyword);
     switch (this.onlineEngine) {
       case 'baidu': return 'https://www.baidu.com/s?wd=' + encoded;
       case 'sogou': return 'https://www.sogou.com/web?query=' + encoded;
@@ -688,6 +688,33 @@ export struct SearchPage {
     });
   }
 
+  /** 搜索地址实际使用页码变量时，才允许继续请求下一页。 */
+  private supportsSearchPagination_(source: BookSource): boolean {
+    const template = (source.ruleSearchUrl || '').trim();
+    if (!template) return false;
+    if (/\{\{\s*(?:page|pageNum)(?:\s*[+-]\s*\d+)?\s*\}\}/i.test(template)) return true;
+    if (/<[^<>,]+(?:,[^<>,]+)+>/.test(template)) return true;
+
+    const hasScript = template.startsWith('@js:') || /<js>[\s\S]*<\/js>/i.test(template);
+    if (!hasScript) return false;
+    if (/\$\{\s*page(?:Num)?\b/.test(template)) return true;
+    const scriptWithoutStrings = template.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, '');
+    return /\bpage(?:Num)?\b/.test(scriptWithoutStrings);
+  }
+
+  private getPageableSearchSources_(sources: BookSource[]): BookSource[] {
+    return sources.filter((source: BookSource): boolean => this.supportsSearchPagination_(source));
+  }
+
+  private hasPageableSearchResult_(results: SearchResult[], sources: BookSource[]): boolean {
+    if (results.length === 0 || sources.length === 0) return false;
+    const sourceUrls = new Set<string>(sources.map((source: BookSource): string => source.sourceUrl));
+    return results.some((result: SearchResult): boolean => {
+      if (sourceUrls.has(result.originUrl)) return true;
+      return (result.sourceOriginUrls || []).some((url: string): boolean => sourceUrls.has(url));
+    });
+  }
+
   getScopeLabel(): string {
     if (this.scopeBySource && this.selectedSourceUrls.length > 0) {
       const names = this.sources
@@ -843,7 +870,8 @@ export struct SearchPage {
     this.manualStop = true;
     this.isSearching = false;
     this.isLoadingMore = false;
-    this.hasMore = this.results.length > 0;
+    const pageableSources = this.getPageableSearchSources_(this.getActiveSources());
+    this.hasMore = this.hasPageableSearchResult_(this.results, pageableSources);
     UiUtil.showToast(this.getUIContext(), { message: '已停止搜索', duration: 1200 });
   }
 
@@ -903,7 +931,8 @@ export struct SearchPage {
         + ' exact=' + (this.matchModeExact ? 'true' : 'false')
         + ' first=' + this.results.slice(0, 5).map((r: SearchResult): string => r.name + '/' + r.sourceCount.toString()).join(','));
       const exactShouldStop = this.matchModeExact && this.currentPage === 1 && this.results.length <= 3;
-      this.hasMore = merged.length > 0 && !exactShouldStop;
+      const pageableSources = this.getPageableSearchSources_(searchable);
+      this.hasMore = !exactShouldStop && this.hasPageableSearchResult_(merged, pageableSources);
     } catch (_e) {
       if (runId === this.searchRunId) {
         UiUtil.showToast(this.getUIContext(), { message: '搜索失败', duration: 1500 });
@@ -922,7 +951,7 @@ export struct SearchPage {
 
   async loadMore(): Promise<void> {
     if (this.isSearching || this.isLoadingMore || !this.hasMore || !this.committedKeyword) return;
-    const searchable = this.getActiveSources();
+    const searchable = this.getPageableSearchSources_(this.getActiveSources());
     if (searchable.length === 0) return;
     const nextPage = this.currentPage + 1;
     const runId = ++this.searchRunId;
@@ -969,7 +998,8 @@ export struct SearchPage {
     this.expandedSourceBooks = group.items;
     this.expandedSourcePage = Math.max(1, this.currentPage);
     this.expandedSourceLoading = false;
-    this.expandedSourceHasMore = !!this.committedKeyword;
+    const source = this.sources.find((item: BookSource): boolean => item.sourceUrl === group.sourceUrl);
+    this.expandedSourceHasMore = !!this.committedKeyword && !!source && this.supportsSearchPagination_(source);
     this.expandedSourceError = '';
     this.showExpandedSourceSheet = true;
   }

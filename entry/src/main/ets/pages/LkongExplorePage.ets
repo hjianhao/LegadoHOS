@@ -518,6 +518,11 @@ export struct LkongExplorePage {
         Button($r('app.string.common_select_all')).fontSize(12).height(44).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark)).margin({ right: 6 })
           .onClick((): void => { this.toggleAllLoaded(); })
+        Button($r('app.string.common_select_none')).fontSize(12).height(44).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark)).margin({ right: 6 })
+          .opacity(this.selectedIds.length > 0 ? 1 : 0.4)
+          .enabled(this.selectedIds.length > 0)
+          .onClick((): void => { this.setSelectedIds([]); })
         Select(RECENT_DAY_OPTIONS)
           .selected(this.recentDays - 1).value(this.isSelectingRecent ? '读取中…' : '最近 ' + this.recentDays.toString() + ' 天')
           .height(44).fontColor(ThemeColors.primary(this.isDark))
@@ -594,7 +599,9 @@ export struct LkongExplorePage {
   private buildThreadRow(item: LkongThreadItem) {
     Row() {
       Checkbox({ name: 'lkong_' + item.tid.toString(), group: 'lkong_threads' })
-        .select(this.isSelected(item.tid)).selectedColor(ThemeColors.primary(this.isDark)).margin({ right: 10 })
+        // 必须读 @State selectedIds 建立订阅：读普通字段 selectedSet 时，
+        // 点击行切换选择不会触发该行重建，checkbox 勾选状态不刷新。
+        .select(this.selectedIds.includes(item.tid)).selectedColor(ThemeColors.primary(this.isDark)).margin({ right: 10 })
         .accessibilityText('选择帖子：' + item.title)
         .onChange((selected: boolean): void => { this.toggleSelected(item.tid, selected); })
       Column() {
@@ -608,7 +615,7 @@ export struct LkongExplorePage {
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
     }.width('100%').padding(12).margin({ left: 12, right: 12 })
       .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(10)
-      .border({ width: 1, color: this.isSelected(item.tid) ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
+      .border({ width: 1, color: this.selectedIds.includes(item.tid) ? ThemeColors.primary(this.isDark) : ThemeColors.outlineVariant(this.isDark) })
       .onClick((): void => { this.toggleSelected(item.tid); })
   }
 

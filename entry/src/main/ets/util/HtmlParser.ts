@@ -818,10 +818,36 @@ export class HtmlParser {
       return expectedText.length > 0 && el.ownText.includes(expectedText);
     }
 
-    // CSS 伪类: :nth-of-type(n), :eq(n), :first, :last
+    // CSS 伪类: :nth-of-type(n), :nth-child(n), :first-child, :last-child, :eq(n), :first, :last
     // 先提取伪类，再从选择器中去掉
     let pseudoType = '';
     let pseudoArg = '';
+    // 必须先处理 :first-child / :last-child：否则 :first / :last 的正则会吃掉
+    // 前缀留下 "-child"，导致整个选择器无法匹配（Jsoup 支持这两个标准伪类）。
+    const firstChildMatch = s.match(/:first-child/i);
+    if (firstChildMatch) {
+      pseudoType = 'first-child';
+      pseudoArg = '';
+      s = s.replace(/:first-child/i, '');
+    }
+    const lastChildMatch = s.match(/:last-child/i);
+    if (lastChildMatch) {
+      pseudoType = 'last-child';
+      pseudoArg = '';
+      s = s.replace(/:last-child/i, '');
+    }
+    const firstOfTypeMatch = s.match(/:first-of-type/i);
+    if (firstOfTypeMatch) {
+      pseudoType = 'first-of-type';
+      pseudoArg = '';
+      s = s.replace(/:first-of-type/i, '');
+    }
+    const lastOfTypeMatch = s.match(/:last-of-type/i);
+    if (lastOfTypeMatch) {
+      pseudoType = 'last-of-type';
+      pseudoArg = '';
+      s = s.replace(/:last-of-type/i, '');
+    }
     const nthMatch = s.match(/:nth-of-type\((\d+)\)/i);
     if (nthMatch) {
       pseudoType = 'nth-of-type';
@@ -891,7 +917,7 @@ export class HtmlParser {
 	
 	      // 收集符合条件的兄弟元素
 	      let siblings: HtmlElement[];
-	      if (pseudoType === 'nth-of-type') {
+	      if (pseudoType === 'nth-of-type' || pseudoType === 'first-of-type' || pseudoType === 'last-of-type') {
 	        siblings = parent.children.filter(child => child.tagName === el.tagName);
 	      } else {
 	        siblings = parent.children;
@@ -908,11 +934,16 @@ export class HtmlParser {
 	          if (pseudoArg === 'even') return idx % 2 === 1;
 	          return idx === n - 1;
 	        case 'nth-of-type':
-	        case 'eq':
 	          return idx === n - 1; // CSS :nth-of-type is 1-indexed, :eq(0) is 0-indexed
+	        case 'eq':
+	          return idx === n; // Jsoup :eq(n) 是 0 起计的同级元素位置
 	        case 'first':
+	        case 'first-child':
+	        case 'first-of-type':
 	          return idx === 0;
 	        case 'last':
+	        case 'last-child':
+	        case 'last-of-type':
 	          return idx === siblings.length - 1;
 	      }
 	    }

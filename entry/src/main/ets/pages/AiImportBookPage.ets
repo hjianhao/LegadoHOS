@@ -101,7 +101,8 @@ export struct AiImportBookPage {
       UiUtil.showToast(this.getUIContext(), { message: '请输入书名', duration: 1500 });
       return;
     }
-    const query = `"${keyword}" 小说 在线阅读 目录 -电视剧 -动漫 -漫画`;
+    // 直接使用用户输入的原始关键词：附加引号/排除词会导致必应等引擎搜不到结果
+    const query = keyword;
     this.searchInitialScript = '';
     this.searchFallbackUrl = '';
     this.searchFallbackMessage = '';
