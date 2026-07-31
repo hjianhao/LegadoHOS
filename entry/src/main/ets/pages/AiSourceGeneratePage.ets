@@ -12,6 +12,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource, serializeBookSource } from '../model/BookSource';
 import { SourceRevisionService } from '../service/SourceRevisionService';
+import pasteboard from '@ohos.pasteboard';
 
 @Entry
 @Component
@@ -49,7 +50,8 @@ struct AiSourceGeneratePage {
         this.steps = next;
       },
       onLog: (message: string): void => {
-        this.logMessages = [...this.logMessages.slice(-119), message];
+        // 保留完整过程供复制排障；界面 List 仍只渲染可见区域，不需要截断数据。
+        this.logMessages = [...this.logMessages, message];
       },
       onRequestWebView: (url: string, reason: string): Promise<string> => {
         return this.openInteractiveWebView_(url, reason);
@@ -235,6 +237,46 @@ struct AiSourceGeneratePage {
     return '−';
   }
 
+  private buildProcessLog_(): string {
+    const lines: string[] = [
+      'AI 书源 Agent 过程日志',
+      '模式：' + (this.repairMode ? '诊断修复' : '生成书源'),
+      '网站：' + this.homepageUrl,
+      '测试关键词：' + this.searchKeyword,
+      '',
+      '阶段结果：',
+    ];
+    for (const step of this.steps) {
+      let stage = '[' + step.label + '] ' + step.status;
+      if (step.summary) stage += ' - ' + step.summary;
+      lines.push(stage);
+      if (Object.keys(step.data).length > 0) {
+        lines.push(JSON.stringify(step.data, null, 2));
+      }
+    }
+    lines.push('', '执行日志：');
+    for (const message of this.logMessages) lines.push(message);
+    return lines.join('\n');
+  }
+
+  private async copyProcessLog_(): Promise<void> {
+    if (this.logMessages.length === 0 && this.steps.length === 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '暂无可复制的过程日志', duration: 1500 });
+      return;
+    }
+    try {
+      const data = pasteboard.createData(
+        pasteboard.MIMETYPE_TEXT_PLAIN, this.buildProcessLog_());
+      await pasteboard.getSystemPasteboard().setData(data);
+      UiUtil.showToast(this.getUIContext(), {
+        message: '完整过程已复制到剪贴板', duration: 1500
+      });
+    } catch (e) {
+      console.error('[AiSourceGeneratePage] copy process log failed: ' + String(e));
+      UiUtil.showToast(this.getUIContext(), { message: '复制过程日志失败', duration: 1800 });
+    }
+  }
+
   build() {
     Column() {
       Row() {
@@ -322,14 +364,26 @@ struct AiSourceGeneratePage {
           }.layoutWeight(1).padding({ left: 12, right: 12 })
 
           if (this.logMessages.length > 0) {
-            List() {
-              ForEach(this.logMessages, (message: string, index: number) => {
-                ListItem() {
-                  Text(message).fontSize(10).lineHeight(15).fontFamily('monospace')
-                    .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
-                }
-              }, (_message: string, index: number): string => index.toString())
-            }.height(112).padding(8).margin({ left: 12, right: 12, top: 6 })
+            Column() {
+              Row() {
+                Text('整个过程').fontSize(12).fontWeight(FontWeight.Medium)
+                  .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+                Button('复制').fontSize(12).height(32).borderRadius(16)
+                  .backgroundColor(ThemeColors.transparent())
+                  .fontColor(ThemeColors.primary(this.isDark))
+                  .accessibilityText('复制完整过程日志')
+                  .onClick(() => { void this.copyProcessLog_(); })
+              }.width('100%').height(34)
+              List() {
+                ForEach(this.logMessages, (message: string, index: number) => {
+                  ListItem() {
+                    Text(message).fontSize(10).lineHeight(15).fontFamily('monospace')
+                      .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+                  }
+                }, (_message: string, index: number): string => index.toString())
+              }.layoutWeight(1).width('100%')
+            }.height(146).padding({ left: 8, right: 8, bottom: 8 })
+              .margin({ left: 12, right: 12, top: 6 })
               .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(10)
           }
 
