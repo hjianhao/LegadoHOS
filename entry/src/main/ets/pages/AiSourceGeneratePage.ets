@@ -15,6 +15,60 @@ import { changedSourceFields, SourceRevisionService } from '../service/SourceRev
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import pasteboard from '@ohos.pasteboard';
 
+@CustomDialog
+struct AiSourceSaveDialog {
+  controller: CustomDialogController;
+  @StorageLink('isDark') isDark: boolean = false;
+  initialName: string = '';
+  @State sourceName: string = '';
+  onConfirm?: (sourceName: string) => void;
+
+  aboutToAppear(): void {
+    this.sourceName = this.initialName;
+  }
+
+  private confirm_(): void {
+    const name = this.sourceName.trim();
+    if (!name) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '书源名称不能为空', duration: 1500
+      });
+      return;
+    }
+    this.controller.close();
+    this.onConfirm?.(name);
+  }
+
+  build() {
+    Column() {
+      Text('保存书源').fontSize(20).fontWeight(FontWeight.Bold)
+        .fontColor(ThemeColors.onSurface(this.isDark)).width('100%')
+      Text('Agent 已自动生成名称，你可以修改后再保存。').fontSize(13).lineHeight(19)
+        .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+        .margin({ top: 8, bottom: 16 })
+      TextInput({ text: this.sourceName, placeholder: '请输入书源名称' })
+        .width('100%').height(48).borderRadius(12).maxLength(100)
+        .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+        .fontColor(ThemeColors.onSurface(this.isDark))
+        .placeholderColor(ThemeColors.secondaryText(this.isDark))
+        .onChange((value: string): void => { this.sourceName = value; })
+        .onSubmit((): void => { this.confirm_(); })
+      Row({ space: 12 }) {
+        Button('取消').height(44).layoutWeight(1).borderRadius(22)
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .onClick((): void => { this.controller.close(); })
+        Button('保存').height(44).layoutWeight(1).borderRadius(22)
+          .backgroundColor(ThemeColors.primary(this.isDark))
+          .fontColor(ThemeColors.onPrimary(this.isDark))
+          .onClick((): void => { this.confirm_(); })
+      }.width('100%').margin({ top: 20 })
+    }.width('88%').constraintSize({ maxWidth: 520 })
+      .padding(20).borderRadius(20)
+      .backgroundColor(ThemeColors.surface(this.isDark))
+  }
+}
+
 @Entry
 @Component
 struct AiSourceGeneratePage {
@@ -33,6 +87,7 @@ struct AiSourceGeneratePage {
   private agent_: AiSourceAgent | null = null;
   private repairSource_: BookSource | null = null;
   private challengeDlg?: CustomDialogController;
+  private saveNameDlg?: CustomDialogController;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
   private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
 
@@ -195,10 +250,38 @@ struct AiSourceGeneratePage {
       this.steps[AiStep.COMPILE].status === 'done';
   }
 
-  private async saveGeneratedSource_(): Promise<void> {
+  private promptSaveGeneratedSource_(): void {
     if (this.isSaving) return;
     const candidate = this.agent_?.getCompiledBookSource();
     if (!candidate) return;
+    this.saveNameDlg = new CustomDialogController({
+      builder: AiSourceSaveDialog({
+        controller: this.saveNameDlg!,
+        initialName: candidate.sourceName || '',
+        onConfirm: (sourceName: string): void => {
+          this.saveNameDlg = undefined;
+          void this.saveGeneratedSource_(sourceName);
+        }
+      }),
+      autoCancel: false,
+      customStyle: true,
+      alignment: DialogAlignment.Center,
+    });
+    this.saveNameDlg.open();
+  }
+
+  private async saveGeneratedSource_(sourceName: string): Promise<void> {
+    if (this.isSaving) return;
+    const candidate = this.agent_?.getCompiledBookSource();
+    if (!candidate) return;
+    const normalizedName = sourceName.trim();
+    if (!normalizedName) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '书源名称不能为空', duration: 1500
+      });
+      return;
+    }
+    candidate.sourceName = normalizedName;
 
     this.isSaving = true;
     try {
@@ -221,7 +304,8 @@ struct AiSourceGeneratePage {
       }
 
       const changed = changedSourceFields(existing, candidate);
-      if (changed.length === 0) {
+      const nameChanged = existing.sourceName !== candidate.sourceName;
+      if (changed.length === 0 && !nameChanged) {
         UiUtil.showToast(this.getUIContext(), {
           message: '已有书源与生成结果一致，无需重复保存', duration: 2000
         });
@@ -232,7 +316,8 @@ struct AiSourceGeneratePage {
       const result = await UiUtil.showDialog(this.getUIContext(), {
         title: '更新已有书源？',
         message: '网址对应的书源“' + existing.sourceName + '”已经存在。\n\n' +
-          '更新会替换 AI 识别出的规则，同时保留原书源名称、分组、启用状态和排序；旧规则会保存为可回滚版本。',
+          '更新后名称为“' + candidate.sourceName + '”，同时替换 AI 识别出的规则；' +
+          '原分组、启用状态和排序会保留，旧配置会保存为可回滚版本。',
         buttons: [
           { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
           { text: '更新', color: ThemeColors.primary(this.isDark) },
@@ -241,7 +326,7 @@ struct AiSourceGeneratePage {
       if (result.index !== 1) return;
 
       const applied = await SourceRevisionService.applyRepair(
-        existing, candidate, 'AI 生成书源：更新已有同网址书源');
+        existing, candidate, 'AI 生成书源：更新已有同网址书源', false);
       UiUtil.showToast(this.getUIContext(), {
         message: '书源已更新，修改 ' + applied.length + ' 个字段', duration: 2000
       });
@@ -480,7 +565,7 @@ struct AiSourceGeneratePage {
                     .backgroundColor(ThemeColors.primary(this.isDark))
                     .fontColor(ThemeColors.onPrimary(this.isDark))
                     .enabled(!this.isSaving)
-                    .onClick(() => { void this.saveGeneratedSource_(); })
+                    .onClick(() => { this.promptSaveGeneratedSource_(); })
                 }
               }
             }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%')

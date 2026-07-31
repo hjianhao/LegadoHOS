@@ -26,12 +26,14 @@ export function changedSourceFields(before: BookSource, after: BookSource): stri
 }
 
 export class SourceRevisionService {
-  static async applyRepair(before: BookSource, candidate: BookSource, reason: string): Promise<string[]> {
+  static async applyRepair(before: BookSource, candidate: BookSource, reason: string,
+    preserveSourceName: boolean = true): Promise<string[]> {
     if (!before.id || before.sourceUrl !== candidate.sourceUrl) {
       throw new Error('修复版本与原书源身份不一致');
     }
     candidate.id = before.id;
-    candidate.sourceName = before.sourceName;
+    candidate.sourceName = preserveSourceName ? before.sourceName :
+      (candidate.sourceName.trim() || before.sourceName);
     candidate.sourceUrl = before.sourceUrl;
     candidate.group = before.group;
     candidate.enabled = before.enabled;
@@ -41,6 +43,9 @@ export class SourceRevisionService {
     candidate.updateTime = Date.now();
 
     const changed = changedSourceFields(before, candidate);
+    if (!preserveSourceName && before.sourceName !== candidate.sourceName) {
+      changed.unshift('bookSourceName');
+    }
     if (changed.length === 0) throw new Error('修复结果没有产生规则变化');
 
     await AppDatabase.getInstance().waitForInit();
