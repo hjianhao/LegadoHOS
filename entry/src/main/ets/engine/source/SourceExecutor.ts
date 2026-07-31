@@ -42,6 +42,11 @@ export function boundedSearchParseCount(total: number): number {
   return Math.min(Math.floor(total), MAX_HTML_SEARCH_PARSE_COUNT);
 }
 
+/** 搜索结果必须同时具备可显示书名和可进入的详情地址。 */
+export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean {
+  return !!(name || '').trim() && !!(noteUrl || '').trim();
+}
+
 function contentLinkAttribute_(attributes: string, name: string): string {
   const match = attributes.match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
   return match && match.length > 2 ? match[2].replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').trim() : '';
@@ -549,7 +554,7 @@ export class SourceExecutor {
         const cleanName = formatBookName(rawName);
 
         // 2. 过滤无效结果
-        if (!isValidBookName(cleanName)) {
+        if (!isValidBookName(cleanName) || !hasUsableSearchIdentity(cleanName, r.noteUrl || '')) {
           console.info('[SrcEx] Filtered out: name="' + rawName + '" clean="' + cleanName + '" author="' + rawAuthor + '" from', r.origin);
           continue;
         }
@@ -3243,6 +3248,8 @@ export class SourceExecutor {
       if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
         noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
       }
+      // 表格表头、加载占位符等通常有文字但没有详情链接，不能作为书籍结果返回。
+      if (!hasUsableSearchIdentity(name, noteUrl)) continue;
 
       const cssKind = getKind(item);
       const cssWordCount = getWordCount(item);

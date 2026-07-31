@@ -7,6 +7,7 @@ import {
 import { createSearchResult, SearchResult } from '../main/ets/model/SearchResult';
 import {
   decodeSourceScriptEvaluation, hasExplicitTocPaginationRule, isDuplicateTocPage,
+  hasUsableSearchIdentity,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount
 } from '../main/ets/engine/source/SourceExecutor';
@@ -142,6 +143,11 @@ export default function bookSourceManagementTest() {
       expect(boundedSearchParseCount(5201)).assertEqual(200);
       expect(boundedSearchParseCount(20)).assertEqual(20);
       expect(boundedSearchParseCount(-1)).assertEqual(0);
+    });
+
+    it('rejectsSearchTableHeadersWithoutBookUrl', 0, () => {
+      expect(hasUsableSearchIdentity('类型书名', '')).assertFalse();
+      expect(hasUsableSearchIdentity('四合院之饮食男女', '/book/1')).assertTrue();
     });
 
     it('normalizesCheckDependencies', 0, () => {

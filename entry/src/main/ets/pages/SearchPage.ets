@@ -12,6 +12,7 @@ import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookCover } from '../components/BookCover';
 import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { WebViewEngine } from '../components/WebViewEngine';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
@@ -131,6 +132,8 @@ export struct SearchPage {
   private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
   private onlineImporter_: AiBookImporter | null = null;
   private pageActive_: boolean = false;
+  private challengeDlg?: CustomDialogController;
+  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
 
   private onResultsChanged_(): void {
     this.resultDataSource_.reset(this.results);
@@ -150,6 +153,11 @@ export struct SearchPage {
         dlg.open();
       });
     };
+    if (!this.interactiveFetcher_) {
+      this.interactiveFetcher_ = (url: string): Promise<string> =>
+        this.openInteractiveWebView_(url);
+    }
+    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     this.pageActive_ = true;
     this.onlineImporter_ = new AiBookImporter((progress: ImportProgress): void => {
       if (!this.pageActive_) return;
@@ -169,13 +177,33 @@ export struct SearchPage {
   }
 
   aboutToDisappear(): void {
-   this.pageActive_ = false;
-   this.onlineImporter_?.cancel();
-   WebViewFetcher.cancelPending();
-   if (this.queryHintTimer >= 0) {
+    this.pageActive_ = false;
+    this.onlineImporter_?.cancel();
+    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+      WebViewFetcher.interactiveFetcher = null;
+    }
+    if (WebViewFetcher.interactiveResolve) {
+      WebViewFetcher.interactiveResolve('');
+      WebViewFetcher.interactiveResolve = null;
+    }
+    WebViewFetcher.cancelPending();
+    if (this.queryHintTimer >= 0) {
       clearTimeout(this.queryHintTimer);
       this.queryHintTimer = -1;
     }
+  }
+
+  private openInteractiveWebView_(url: string): Promise<string> {
+    return new Promise<string>((resolve: (html: string) => void) => {
+      WebViewFetcher.interactiveResolve = resolve;
+      this.challengeDlg = new CustomDialogController({
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        autoCancel: false,
+        customStyle: true,
+        alignment: DialogAlignment.Center,
+      });
+      this.challengeDlg.open();
+    });
   }
 
   async initPage(): Promise<void> {
