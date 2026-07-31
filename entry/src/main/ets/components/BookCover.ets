@@ -6,6 +6,40 @@ import { NetUtil } from '../util/NetUtil';
 import { CoverDecoder } from '../util/CoverDecoder';
 import { ThemeColors } from '../theme/ThemeColors';
 
+/**
+ * 防盗链封面通常需要先下载再转成 data URL。页面切换或列表重建时复用结果，
+ * 避免同一张封面反复请求，也避免慢站点被并发请求进一步拖慢。
+ */
+class BookCoverMemoryCache {
+  private static readonly MAX_ENTRIES: number = 40;
+  private static readonly data_: Map<string, string> = new Map();
+
+  static get(url: string): string {
+    const dataUrl = BookCoverMemoryCache.data_.get(url) || '';
+    if (dataUrl) {
+      // 刷新插入顺序，作为轻量 LRU。
+      BookCoverMemoryCache.data_.delete(url);
+      BookCoverMemoryCache.data_.set(url, dataUrl);
+    }
+    return dataUrl;
+  }
+
+  static put(url: string, dataUrl: string): void {
+    if (!url || !dataUrl) return;
+    BookCoverMemoryCache.data_.delete(url);
+    BookCoverMemoryCache.data_.set(url, dataUrl);
+    while (BookCoverMemoryCache.data_.size > BookCoverMemoryCache.MAX_ENTRIES) {
+      let firstKey: string = '';
+      for (const key of BookCoverMemoryCache.data_.keys()) {
+        firstKey = key;
+        break;
+      }
+      if (!firstKey) break;
+      BookCoverMemoryCache.data_.delete(firstKey);
+    }
+  }
+}
+
 @Component
 export struct BookCover {
   @StorageLink('isDark') isDark: boolean = false;
@@ -25,6 +59,7 @@ export struct BookCover {
 
   aboutToAppear(): void {
     this.applyCoverUrl();
+    this.restoreCachedNetworkCover_();
     console.info('[BookCover] init name=' + (this.name || '').substring(0, 10) + ' url=' +
       (this.coverUrl || '').substring(0, 50) + ' decode=' + (this.coverDecodeJs ? 'yes' : 'no'));
 
@@ -53,8 +88,15 @@ export struct BookCover {
     this.imgFailed = false;
     this.decryptedDataUrl = '';
     this.networkDataUrl = '';
+    this.restoreCachedNetworkCover_();
     if (this.useNetwork && this.coverUrl && this.coverDecodeJs && !this.decryptedDataUrl && !this.isDecoding) {
       this.loadAndDecryptCover();
+    }
+  }
+
+  private restoreCachedNetworkCover_(): void {
+    if (!this.coverDecodeJs && /^https?:\/\//i.test(this.coverUrl)) {
+      this.networkDataUrl = BookCoverMemoryCache.get(this.coverUrl);
     }
   }
 
@@ -91,11 +133,12 @@ export struct BookCover {
     this.isLoadingFallback = true;
     try {
       const response = await NetUtil.httpGetBinary(
-        requestUrl, this.coverRequestHeaders_(requestUrl), 20000);
+        requestUrl, this.coverRequestHeaders_(requestUrl), NetUtil.getDefaultTimeout());
       if (!response || response.byteLength < 32 || this.coverUrl !== requestUrl) return;
       const bytes = new Uint8Array(response);
       const mimeType = this.getImageMimeType(bytes);
       this.networkDataUrl = this.bytesToDataUrl(bytes, mimeType);
+      BookCoverMemoryCache.put(requestUrl, this.networkDataUrl);
       this.imgFailed = false;
       console.info('[BookCover] protected cover fallback OK, size=' + bytes.length);
     } catch (e) {
@@ -211,7 +254,8 @@ export struct BookCover {
       }
 
       // 网络封面（无解密时直接加载，或有解密但还在解码中时作为兜底）
-      if (this.useNetwork && this.coverUrl && !this.imgFailed && !this.decryptedDataUrl) {
+      if (this.useNetwork && this.coverUrl && !this.imgFailed &&
+        !this.decryptedDataUrl && !this.networkDataUrl) {
         Image(this.coverUrl)
           .accessibilityText((this.name || '书籍') + '封面')
           .width(this.coverWidth).height(this.coverHeight)
