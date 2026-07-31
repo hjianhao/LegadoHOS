@@ -10,7 +10,8 @@ import {
   hasUsableSearchIdentity,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
-  sanitizeAiGeneratedTocUrlRule
+  sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
+  preferCompleteBookName
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -161,6 +162,19 @@ export default function bookSourceManagementTest() {
       expect(sanitizeAiGeneratedTocUrlRule(
         'https://www.ghjun.com/0/uxiijz9/1/', false))
         .assertEqual('https://www.ghjun.com/0/uxiijz9/1/');
+    });
+
+    it('keepsCompleteBookNamesFromAiSearchAndDetailPages', 0, () => {
+      expect(aiTitleAttributeRule('td:nth-child(2) a@href'))
+        .assertEqual('td:nth-child(2) a@title');
+      expect(preferCompleteBookName(
+        '四合院：我从四三年开', '四合院：我从四三年开始打鬼子'))
+        .assertEqual('四合院：我从四三年开始打鬼子');
+      expect(preferCompleteBookName('四合院：从中医开始', '网站首页'))
+        .assertEqual('四合院：从中医开始');
+      expect(formatLegadoBookName('我，刘立东，专治四合院各种不服'))
+        .assertEqual('我，刘立东，专治四合院各种不服');
+      expect(formatLegadoBookName('三体 作者：刘慈欣')).assertEqual('三体');
     });
 
     it('normalizesCheckDependencies', 0, () => {

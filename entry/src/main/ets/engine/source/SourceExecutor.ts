@@ -47,6 +47,46 @@ export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean 
   return !!(name || '').trim() && !!(noteUrl || '').trim();
 }
 
+/** 对齐 Android BookHelp.formatBookName：只移除明确的作者尾注，不截断合法书名标点。 */
+export function formatLegadoBookName(raw: string): string {
+  return (raw || '').replace(/\s+作\s*者.*|\s+\S+\s+著/g, '').trim();
+}
+
+/** 将书名链接/文本规则转换为同一元素的 title 属性规则，title 常保存网站未截短的完整书名。 */
+export function aiTitleAttributeRule(rule: string): string {
+  if (!rule || /@js:/i.test(rule)) return '';
+  const titleRule = rule
+    .replace(/@href\b/gi, '@title')
+    .replace(/@(ownText|text)\b/gi, '@title');
+  return titleRule !== rule ? titleRule : '';
+}
+
+/** 仅当候选书名明显是当前书名的完整版本时替换，避免误用无关 title。 */
+export function preferCompleteBookName(currentName: string, candidateName: string): string {
+  const current = (currentName || '').trim();
+  const candidate = (candidateName || '').trim();
+  if (!candidate) return current;
+  if (!current) return candidate;
+  if (candidate.length <= current.length) return current;
+  const comparable = (value: string): string => value
+    .replace(/^[《『“"「【（(]+|[》』”"」】）)]+$/g, '')
+    .replace(/[.…·]+$/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  const currentKey = comparable(current);
+  const candidateKey = comparable(candidate);
+  if (!currentKey || !candidateKey) return current;
+  if (candidateKey.startsWith(currentKey)) return candidate;
+  if (currentKey.length >= 4 && candidateKey.includes(currentKey)) return candidate;
+  let commonPrefix = 0;
+  const compareLength = Math.min(currentKey.length, candidateKey.length);
+  while (commonPrefix < compareLength &&
+    currentKey[commonPrefix] === candidateKey[commonPrefix]) {
+    commonPrefix++;
+  }
+  return compareLength >= 4 && commonPrefix / compareLength >= 0.8 ? candidate : current;
+}
+
 /**
  * AI Agent 分析目录时访问的是某一本样本书，不能把该样本的实际目录地址保存成 ruleTocUrl。
  * 动态模板仍按 Legado 语义保留；非 AI 书源不改变原有兼容行为。
@@ -535,29 +575,7 @@ export class SourceExecutor {
      * 参考 legado-with-MD3 BookHelp.formatBookName()
      */
     function formatBookName(raw: string): string {
-      let n = raw
-        // 去掉开头装饰字符（emoji、特殊符号等非文字前缀）
-        .replace(/^[^\w\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\s]+/, '')
-        .replace(/\s*[|｜]\s*作\s*者[:：\s].*$/g, '')
-        .replace(/\s+作\s*者[:：\s].*$/g, '')
-        .replace(/\s+\S+\s+著\s*$/g, '')
-        .replace(/[-—·・][\s]*作\s*者[:：\s].*$/g, '')
-        // 拆分符：书名 第X章 → 只留书名
-        .replace(/\s+第[一二三四五六七八九十\d零○百千]+\s*[章节回卷].*$/g, '')
-        .replace(/\s+第[一二三四五六七八九十\d零○百千]+.*$/g, '')
-        // 分类标签
-        .replace(/\s*[（(]?(全本|全文|完结|完本|连载|连载中|已完结|已完本|精校|精校版|无错版|无删减|未删减|珍藏版|修订版|校对版)[）)]?\s*$/g, '')
-        .replace(/\s*[（(]?(玄幻|奇幻|仙侠|武侠|都市|言情|历史|军事|科幻|灵异|游戏|体育|同人|轻小说|二次元|其他|男频|女频|修真|修真小说|竞技|网游|悬疑|推理|恐怖|冒险|穿越|重生|系统|末世|废土|异界|异能|进化|无限|洪荒|西游|水浒|三国|红楼|聊斋|封神|神话|民间|传奇|传说)[）)]?\s*$/g, '')
-        // 去掉末尾的 | 或空括号
-        .replace(/[\s]*[|｜][\s]*$/g, '')
-        .replace(/[\s]*[\[【（(][\]】）)]*$/g, '')
-        // 去掉末尾逗号及之后
-        .replace(/[\s]*[，,].*$/g, '')
-        .replace(/[\s]*[-—]\s*[^-—]+$/g, '')  // "书名 - 网站名"
-        .trim();
-      n = n.replace(/(最新章节|最后更新|今日更新|本站推荐).*$/g, '');
-      n = n.replace(/^[《『""「」''【[（(]+|[》』""「」''】\])）]+$/g, '');
-      return n.trim();
+      return formatLegadoBookName(raw);
     }
 
     const isValidBookName = (name: string): boolean => this.isValidSearchBookName(name);
@@ -1556,6 +1574,7 @@ export class SourceExecutor {
       const parser = getHtmlParser();
       const doc = parser.parse(body);
       const root: unknown = doc; // HtmlElement
+      const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
 
       // tocUrl 整段 @js: 规则（如 "@js:baseUrl.replace(...) + '/1/'"）：
       // 走 Worker 异步求值（主线程引擎可能不可用导致静默返回空），
@@ -1620,8 +1639,16 @@ export class SourceExecutor {
         });
       };
 
+      let infoName = extractField(source.ruleBookInfoName) || '';
+      if (isAiSource) {
+        const fullNameRule = aiTitleAttributeRule(source.ruleBookInfoName || '');
+        if (fullNameRule) {
+          infoName = preferCompleteBookName(infoName, extractField(fullNameRule));
+        }
+      }
+
       return {
-        name: extractField(source.ruleBookInfoName) || '',
+        name: infoName,
         author: extractField(source.ruleBookInfoAuthor) || '',
         coverUrl: extractField(source.ruleBookInfoCover) || '',
         // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
@@ -3126,6 +3153,9 @@ export class SourceExecutor {
     const wordCountRule = dynamicRules[5];
     const introRule = dynamicRules[6];
     const lastChapterRule = dynamicRules[7];
+    const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
+    const fullNameRule = isAiSource
+      ? (aiTitleAttributeRule(noteUrlRule) || aiTitleAttributeRule(nameRule)) : '';
 
     // 编译 || && 后的子规则
     const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
@@ -3183,6 +3213,7 @@ export class SourceExecutor {
     const getWordCount = compileFieldRule(wordCountRule);
     const getIntro = compileFieldRule(introRule);
     const getLastChapter = compileFieldRule(lastChapterRule);
+    const getFullName = compileFieldRule(fullNameRule);
 
     const results: SearchResult[] = [];
 
@@ -3198,6 +3229,9 @@ export class SourceExecutor {
 
       // 提取字段
       let name = getName(item);
+      if (fullNameRule) {
+        name = preferCompleteBookName(name, getFullName(item));
+      }
 
       // 书名兜底：取元素内的第一个 <a> 文本
       if (!name) {

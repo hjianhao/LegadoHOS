@@ -529,6 +529,7 @@ export class AiSourceAgent {
 ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
 必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
 ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作者链接或文本。
+如果书名链接的可见文本因页面排版被截短，而 title 属性包含完整书名，ruleSearchName 必须取同一链接的 @title。
 优先稳定 id/class，避免 nth-child/nth-of-type。
 测试关键词：${keyword}
 上次验证错误：${lastError || '无'}
@@ -667,6 +668,7 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
         const prompt = `分析小说详情页，生成 Legado CSS 规则。只返回 JSON。
 当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
 每个文本字段必须使用具体容器的 CSS 选择器并显式提取 @text；封面提取 @src，目录入口提取 @href。
+如果书名元素的可见文本被截短而 title/content 属性包含完整书名，应提取完整属性，禁止保存省略后的书名。
 禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
 ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填写本次样本书的绝对或相对目录 URL。

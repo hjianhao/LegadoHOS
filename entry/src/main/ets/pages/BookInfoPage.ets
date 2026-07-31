@@ -9,7 +9,7 @@ import { LoginDialog } from '../components/reader/LoginDialog';
 import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceChapter } from '../model/BookSource';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceExecutor, preferCompleteBookName } from '../engine/source/SourceExecutor';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
@@ -153,7 +153,14 @@ export struct BookInfoPage {
       this.coverDecodeJs = matched?.coverDecodeJs || '';
       // 获取书籍详情（始终请求，确保简介等字段为最新）
       const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
-      if (info.name && !this.bookName) this.bookName = info.name;
+      if (info.name) {
+        const isAiSource = matched.isAiGenerated || (matched.sourceName || '').endsWith('(AI)');
+        if (!this.bookName) {
+          this.bookName = info.name;
+        } else if (isAiSource) {
+          this.bookName = preferCompleteBookName(this.bookName, info.name);
+        }
+      }
       if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
       // 对齐 Android analyzeBookInfo：详情页解析出的封面无条件覆盖搜索带来的旧值，
       // 否则搜索阶段产生的错误封面（如书源规则失效时退化为书籍 URL）会一直挡住正确封面。
