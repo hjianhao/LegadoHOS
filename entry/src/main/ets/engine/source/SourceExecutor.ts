@@ -2439,10 +2439,59 @@ export class SourceExecutor {
         console.info('[SrcEx] getToc BookInfo JSON OK tocUrl=', (parsed.tocUrl || '').substring(0, 100));
       }
 
+      // 目录分页可能持续数十秒。规则和进度解析必须在抓取分页前准备好，
+      // 每取得一页就立即累计可用章节，不能等全部页面下载完才首次通知界面。
+      let tocListRule = source.ruleToc || '';
+      let reverseToc = false;
+      if (tocListRule.startsWith('-')) {
+        reverseToc = true;
+        tocListRule = tocListRule.substring(1);
+      } else if (tocListRule.startsWith('+')) {
+        tocListRule = tocListRule.substring(1);
+      }
+      const tocRules: Record<string, string> = {
+        toc: tocListRule,
+        tocTitle: source.ruleTocTitle || '',
+        tocUrlItem: source.ruleTocUrlItem || '',
+        isVolume: source.ruleTocIsVolume || '',
+      };
+      const progressChapters: BookSourceChapter[] = [];
+      const progressChapterKeys = new Map<string, number>();
+      let lastProgressCount = 0;
+      let progressPageCount = 0;
+      const reportTocPageProgress = async (pageBody: string, pageUrl: string): Promise<void> => {
+        if (!onProgress || !pageBody) return;
+        let pageChapters: BookSourceChapter[] = [];
+        if (tocRules.toc && this.shouldTryJsonToc_(tocRules.toc, pageBody)) {
+          try {
+            const jsonObj = this.tryParseJsonBody_(pageBody);
+            if (jsonObj !== null) {
+              pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl);
+            }
+          } catch (_progressJsonError) { /* 使用 HTML 规则继续解析 */ }
+        }
+        if (tocRules.toc && pageChapters.length === 0) {
+          pageChapters = await this.parseTocFromRules(pageBody, tocRules, pageUrl, source);
+        }
+        if (pageChapters.length === 0) {
+          pageChapters = this.extractTocFromHtml(pageBody, source, pageUrl);
+        }
+        this.appendUniqueTocChapters_(
+          progressChapters, pageChapters, progressChapterKeys, tocUrl);
+        progressPageCount++;
+        if (progressChapters.length > lastProgressCount) {
+          lastProgressCount = progressChapters.length;
+          onProgress(lastProgressCount);
+          console.info('[SrcEx] getToc progress:', lastProgressCount,
+            'chapters from', progressPageCount, 'pages');
+        }
+      };
+
       const tocBodies: string[] = [resp];
       const tocBodyUrls: string[] = [tocUrl];
       const visitedToc = new Set<string>();
       visitedToc.add(tocUrl);
+      await reportTocPageProgress(resp, tocUrl);
 
       const nextRule = source.ruleTocNextTocUrl || '';
       // 对齐 Android BookChapterList：nextTocUrl 为空时只解析当前响应，绝不猜测页面分页控件。
@@ -2486,6 +2535,7 @@ export class SourceExecutor {
                     break;
                   }
                   pageResults[0] = probeBody;
+                  await reportTocPageProgress(probeBody, pageUrls[0]);
                 }
               } catch (_probeError) { /* skip the failed probe page */ }
 
@@ -2497,6 +2547,7 @@ export class SourceExecutor {
                     const b = await this.fetchWithOpts(pageUrls[i], headers, source);
                     if (b && b.length > 100) {
                       pageResults[i] = b;
+                      await reportTocPageProgress(b, pageUrls[i]);
                     }
                   } catch (_pf) { /* skip */ }
                 }
@@ -2528,6 +2579,7 @@ export class SourceExecutor {
             }
             tocBodies.push(nextBody);
             tocBodyUrls.push(nextUrl);
+            await reportTocPageProgress(nextBody, nextUrl);
             currentBody = nextBody;
             currentUrl = nextUrl;
           }
@@ -2537,21 +2589,7 @@ export class SourceExecutor {
       }
       console.info('[SrcEx] getToc pages fetched:', tocBodies.length);
 
-      // 规则解析
-      let tocListRule = source.ruleToc || '';
-      let reverseToc = false;
-      if (tocListRule.startsWith('-')) {
-        reverseToc = true;
-        tocListRule = tocListRule.substring(1);
-      } else if (tocListRule.startsWith('+')) {
-        tocListRule = tocListRule.substring(1);
-      }
-      const tocRules: Record<string, string> = {
-        toc: tocListRule,
-        tocTitle: source.ruleTocTitle || '',
-        tocUrlItem: source.ruleTocUrlItem || '',
-        isVolume: source.ruleTocIsVolume || '',
-      };
+      // 全部页面抓取完成后按原始页面顺序生成最终目录。
       if (tocRules.toc) {
         let chapters: BookSourceChapter[] = [];
         const chapterKeys = new Map<string, number>();
@@ -2569,7 +2607,10 @@ export class SourceExecutor {
             pageChapters = await this.parseTocFromRules(pageBody, tocRules, pageUrl, source);
           }
           this.appendUniqueTocChapters_(chapters, pageChapters, chapterKeys, tocUrl);
-          if (onProgress) onProgress(chapters.length);
+          if (onProgress && chapters.length > lastProgressCount) {
+            lastProgressCount = chapters.length;
+            onProgress(lastProgressCount);
+          }
           if (pageIndex + 1 < tocBodies.length) {
             await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
           }

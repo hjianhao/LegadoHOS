@@ -175,7 +175,9 @@ export struct BookInfoPage {
       }
       // 获取目录统计（带进度回调）
       const rawChapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
-        (loaded: number) => { this.tocLoadProgress = loaded; });
+        (loaded: number) => {
+          if (loaded > this.tocLoadProgress) this.tocLoadProgress = loaded;
+        });
       const aiProfileDao = new AiBookProfileTable(AppDatabase.getInstance().rdbStore);
       const aiProfile = this.bookId > 0
         ? await aiProfileDao.getByBookId(this.bookId) : await aiProfileDao.getByBookUrl(this.noteUrl);
@@ -1450,8 +1452,9 @@ export struct BookInfoPage {
 
   @Builder buildSummary() {
     Column() {
-      Text('目录：' + (this.durChapterTitle ||
-        (this.isRefreshing ? (this.tocLoadProgress > 0 ? `加载中(${this.tocLoadProgress}章)` : '加载中') : '未开始阅读'))).fontColor(ThemeColors.onSurface(this.isDark))
+      Text('目录：' + (this.isRefreshing
+        ? (this.tocLoadProgress > 0 ? `正在加载 · 已发现${this.tocLoadProgress}章` : '正在加载…')
+        : (this.durChapterTitle || '未开始阅读'))).fontColor(ThemeColors.onSurface(this.isDark))
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.primaryTextColor())
