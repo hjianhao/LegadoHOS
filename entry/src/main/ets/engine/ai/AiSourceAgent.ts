@@ -212,6 +212,49 @@ export function prepareSourceAgentHtml(html: string): string {
     .replace(/<meta\b[^>]*(?:csrf|token|authorization)[^>]*>/gi, '');
 }
 
+function normalizeAiBookName_(value: string): string {
+  return (value || '').toLowerCase()
+    .replace(/[\s\u3000《》〈〉「」『』【】\[\]（）()·•:：,，。.!！?？_\-—]/g, '');
+}
+
+/**
+ * Agent 生成的是 HTML/CSS 规则时，链接字段必须显式提取 href。
+ * 同时保留 JSONPath/JS 规则，以免修复模式误伤现有的 API/脚本书源。
+ */
+export function isAiLinkExtractionRule(rule: string): boolean {
+  const normalized = (rule || '').trim();
+  if (!normalized) return false;
+  if (/@href\b/i.test(normalized) || /\/@href\b/i.test(normalized)) return true;
+  if (/^(?:\$|json:|@json:)/i.test(normalized)) return true;
+  return /(?:<js>|@js:|{{)/i.test(normalized);
+}
+
+/** 排除分类、标签、作者、榜单和搜索页等明显不是单本书详情的 URL。 */
+export function isLikelyAiBookDetailUrl(url: string): boolean {
+  if (!isSafeAiImportUrl(url)) return false;
+  const pathMatch = url.trim().match(/^https?:\/\/[^/?#]+([^?#]*)/i);
+  const path = pathMatch && pathMatch.length > 1 ? pathMatch[1].toLowerCase() : '';
+  return !/(^|\/)(?:bookcat|category|categories|genre|genres|tag|tags|author|authors|rank|ranking|sort|classify|search)(?:\/|$)/i
+    .test(path);
+}
+
+/** 搜索书名与详情页书名允许站点后缀和轻微标点差异，但不能是完全不同的页面。 */
+export function isAiBookNameConsistent(actual: string, expected: string): boolean {
+  const normalizedActual = normalizeAiBookName_(actual);
+  const normalizedExpected = normalizeAiBookName_(expected);
+  if (!normalizedActual || !normalizedExpected) return false;
+  return normalizedActual.includes(normalizedExpected) || normalizedExpected.includes(normalizedActual);
+}
+
+function aiSearchRelevance_(item: SearchResult, keyword: string): number {
+  const name = normalizeAiBookName_(item.name);
+  const expected = normalizeAiBookName_(keyword);
+  if (!name || !expected) return 0;
+  if (name === expected) return 3;
+  if (name.includes(expected) || expected.includes(name)) return 2;
+  return 0;
+}
+
 export class AiSourceAgent {
   private callback_: AiAgentCallback;
   private endpoint_: string = '';
@@ -323,7 +366,7 @@ export class AiSourceAgent {
       if (!bookUrl || !isSafeAiImportUrl(bookUrl)) throw new Error('搜索结果没有有效的书籍详情 URL');
 
       await this.prepareDiscovery_(homepage, keyword);
-      const info = await this.prepareBookInfo_(bookUrl);
+      const info = await this.prepareBookInfo_(bookUrl, searchResults[0].name);
       const tocUrl = info.tocUrl || bookUrl;
       const chapters = await this.prepareToc_(tocUrl);
       if (chapters.length === 0) throw new Error('目录规则验证失败，无法取得正文样本');
@@ -444,7 +487,10 @@ export class AiSourceAgent {
       if (attempt > 0 || this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchList) {
         const evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
         const prompt = `分析小说网站搜索结果页，生成 Legado CSS 规则。只返回 JSON。
-规则必须相对于每个列表项；优先稳定 id/class，避免 nth-child/nth-of-type。
+ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
+必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
+ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作者链接或文本。
+优先稳定 id/class，避免 nth-child/nth-of-type。
 测试关键词：${keyword}
 上次验证错误：${lastError || '无'}
 返回：
@@ -462,9 +508,27 @@ export class AiSourceAgent {
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, SEARCH_FIELDS);
       }
+      if (!isAiLinkExtractionRule(this.draft_.ruleSearchNoteUrl || '')) {
+        lastError = 'ruleSearchNoteUrl 没有显式提取书名主链接的 @href';
+        this.log_('  搜索验证失败：' + lastError);
+        continue;
+      }
       const results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
-      const usable = results.filter((item: SearchResult): boolean =>
+      const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+      const navigationItems = extracted.filter((item: SearchResult): boolean =>
+        !isLikelyAiBookDetailUrl(item.noteUrl));
+      if (navigationItems.length > 0) {
+        const sample = navigationItems[0];
+        lastError = '列表规则混入了导航/分类项（' + sample.name + ' → ' + sample.noteUrl +
+          '）；请缩小 ruleSearchList，并让 ruleSearchNoteUrl 指向书名主链接@href';
+        this.log_('  搜索验证失败：' + lastError);
+        continue;
+      }
+      const usable = extracted.filter((item: SearchResult): boolean =>
+        isLikelyAiBookDetailUrl(item.noteUrl));
+      usable.sort((left: SearchResult, right: SearchResult): number =>
+        aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
       if (usable.length > 0) {
         this.done_(AiStep.SEARCH, '真实搜索返回 ' + usable.length + ' 本书', {
           sampleBook: usable[0].name,
@@ -472,7 +536,7 @@ export class AiSourceAgent {
         });
         return usable;
       }
-      lastError = '规则执行后没有有效书名和详情 URL';
+      lastError = '规则执行后没有单本书的有效书名和详情 URL';
       this.log_('  搜索验证失败，准备第 ' + (attempt + 2) + ' 轮');
     }
     this.error_(AiStep.SEARCH, lastError || '搜索验证失败');
@@ -552,14 +616,16 @@ export class AiSourceAgent {
     this.done_(AiStep.DISCOVERY, '发现规则未通过验证，已安全跳过');
   }
 
-  private async prepareBookInfo_(bookUrl: string): Promise<BookSourceBookInfo> {
+  private async prepareBookInfo_(bookUrl: string, expectedName: string): Promise<BookSourceBookInfo> {
     if (!this.draft_) throw new Error('书源草稿不存在');
+    if (!isLikelyAiBookDetailUrl(bookUrl)) throw new Error('搜索结果指向分类/导航页，不是书籍详情页：' + bookUrl);
     this.start_(AiStep.BOOK_INFO, '验证书籍详情');
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       if (attempt > 0 || this.shouldRepair_(['详情']) || !this.draft_.ruleBookInfoName) {
         const evidence = await this.fetchPage_(bookUrl, '书籍详情');
         const prompt = `分析小说详情页，生成 Legado CSS 规则。只返回 JSON。
+当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
 上次验证错误：${lastError || '无'}
 返回：
@@ -577,7 +643,8 @@ export class AiSourceAgent {
         this.applyStringFields_(this.draft_, parsed, INFO_FIELDS);
       }
       const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
-      if (info.name || info.author || info.introduce || info.tocUrl) {
+      const hasSecondaryField = !!info.author || !!info.coverUrl || !!info.introduce || !!info.tocUrl;
+      if (info.name && isAiBookNameConsistent(info.name, expectedName) && hasSecondaryField) {
         this.done_(AiStep.BOOK_INFO, '详情解析通过', {
           name: info.name || '',
           author: info.author || '',
@@ -585,7 +652,13 @@ export class AiSourceAgent {
         });
         return info;
       }
-      lastError = '详情字段全部为空';
+      if (!info.name) {
+        lastError = '详情页没有解析出书名';
+      } else if (!isAiBookNameConsistent(info.name, expectedName)) {
+        lastError = '详情页书名不一致：搜索结果为《' + expectedName + '》，详情解析为《' + info.name + '》';
+      } else {
+        lastError = '详情页只有书名，缺少作者、封面、简介或目录入口，疑似误命中列表页';
+      }
     }
     this.error_(AiStep.BOOK_INFO, lastError);
     throw new Error(lastError);
@@ -600,6 +673,8 @@ export class AiSourceAgent {
         const evidence = await this.fetchPage_(tocUrl, '目录');
         const prompt = `分析小说完整目录页，生成 Legado CSS 规则。只返回 JSON。
 必须选择完整章节列表，排除“最新章节”摘要；不要使用 nth-child/nth-of-type。
+ruleTocTitle 提取章节标题，ruleTocUrlItem 必须提取同一章节链接的 @href，不能复制标题规则；
+页面若是书籍列表/分类页，不能把每本书误当成章节。
 ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“查看全部章节”。
 上次验证错误：${lastError || '无'}
 返回：
@@ -613,9 +688,16 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
         this.applyStringFields_(this.draft_, parsed, TOC_FIELDS);
         this.draft_.ruleTocUrl = tocUrl;
       }
+      if (!isAiLinkExtractionRule(this.draft_.ruleTocUrlItem || '') ||
+        this.draft_.ruleTocUrlItem === this.draft_.ruleTocTitle) {
+        lastError = 'ruleTocUrlItem 必须显式提取章节链接 @href，且不能与标题规则相同';
+        this.log_('  目录验证失败：' + lastError);
+        continue;
+      }
       const chapters = await globalSourceExecutor.getToc(this.draft_, tocUrl);
       const usable = chapters.filter((chapter: BookSourceChapter): boolean =>
-        !chapter.isVolume && !!chapter.title && !!chapter.url);
+        !chapter.isVolume && !!chapter.title && !!chapter.url &&
+        isSafeAiImportUrl(chapter.url) && chapter.url !== tocUrl);
       if (usable.length > 0) {
         this.done_(AiStep.TOC, '真实读取 ' + chapters.length + ' 章', {
           firstChapter: usable[0].title,

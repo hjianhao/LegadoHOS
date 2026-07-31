@@ -15,7 +15,8 @@ import {
 } from '../main/ets/engine/source/SourceNetworkPolicy';
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
 import {
-  inferSearchRequest, materializeAgentRequest, prepareSourceAgentHtml
+  inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
+  isLikelyAiBookDetailUrl, materializeAgentRequest, prepareSourceAgentHtml
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 
@@ -57,6 +58,22 @@ export default function bookSourceManagementTest() {
       expect(prepared).assertContain('href="/book/1"');
       expect(prepared.indexOf('secret')).assertEqual(-1);
       expect(prepared.indexOf('ignore()')).assertEqual(-1);
+    });
+
+    it('rejectsNavigationPagesAndTextRulesFromAiSourceSamples', 0, () => {
+      expect(isLikelyAiBookDetailUrl(
+        'https://www.pinshuzhai.com/bookcat/shuxiangwenku')).assertFalse();
+      expect(isLikelyAiBookDetailUrl(
+        'https://www.pinshuzhai.com/book/1648.html')).assertTrue();
+      expect(isAiLinkExtractionRule('div.bookinfo h4 a')).assertFalse();
+      expect(isAiLinkExtractionRule('div.bookinfo h4 a@text')).assertFalse();
+      expect(isAiLinkExtractionRule('div.bookinfo h4 a@href')).assertTrue();
+      expect(isAiLinkExtractionRule('$.data[*].url')).assertTrue();
+    });
+
+    it('requiresSearchAndDetailBookNamesToDescribeTheSameBook', 0, () => {
+      expect(isAiBookNameConsistent('马可瓦尔多 - 品书斋', '《马可瓦尔多》')).assertTrue();
+      expect(isAiBookNameConsistent('书香文库', '马可瓦尔多')).assertFalse();
     });
 
     it('reportsOnlyRepairRuleChanges', 0, () => {
