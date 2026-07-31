@@ -194,6 +194,22 @@ export function isWafProbeHtml(html: string): boolean {
   return hasProbeScript && hasEmptyBody;
 }
 
+/**
+ * 判断详情、目录和正文的直连响应是否必须交给浏览器环境。
+ * 除 WAF 探针外，还覆盖常见 SPA 空壳和登录门禁；JSON API 不会被误判。
+ */
+export function needsWebViewDocument(html: string, url: string = ''): boolean {
+  if (!html) return true;
+  const text = html.trim();
+  if (text.startsWith('{') || text.startsWith('[')) return false;
+  if (isWafProbeHtml(text)) return true;
+  if (/<div[^>]+id=["'](?:app|root|__next)["'][^>]*>\s*<\/div>/i.test(text)) return true;
+  const loginUrl = /\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url);
+  const passwordForm = /<input\b[^>]*type=["']?password/i.test(text) &&
+    /登录|sign\s*in|log\s*in/i.test(text);
+  return loginUrl || passwordForm;
+}
+
 /** 识别用空 result 明确关闭搜索的 Android 书源模板。 */
 export function isExplicitlyDisabledSearchTemplate(template: string): boolean {
   const match = (template || '').match(/<js>([\s\S]*?)<\/js>\s*$/i);
@@ -1326,7 +1342,7 @@ export class SourceExecutor {
   private async fetchWithOpts(
     url: string, headers: Record<string, string>, source: BookSource, timeout?: number
   ): Promise<string> {
-    let method = 'GET', body = '';
+    let method = 'GET', body = '', forceWebView = false;
     const jm = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
     if (jm) {
       try {
@@ -1334,6 +1350,7 @@ export class SourceExecutor {
         if (opts.method) method = opts.method.toUpperCase();
         if (opts.body && typeof opts.body === 'string') body = opts.body;
         else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
+        forceWebView = opts.webView === true || opts.webview === true;
         // 提取 headers 合并到请求头
         if (opts.headers && typeof opts.headers === 'object') {
           for (const [hk, hv] of Object.entries(opts.headers as Record<string, Object>)) {
@@ -1363,14 +1380,53 @@ export class SourceExecutor {
     const requestHeaders = SourceNetworkPolicy.headers(source, headers);
     const requestTimeout = timeout || SourceNetworkPolicy.timeout(source);
     console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(requestHeaders).substring(0, 200));
+
+    const fetchByWebView = async (reason: string): Promise<string> => {
+      if (method === 'POST') return '';
+      if (!WebViewFetcher.isReady()) {
+        await WebViewFetcher.waitForReady(3000);
+      }
+      if (!WebViewFetcher.isReady()) return '';
+      try {
+        console.info('[SrcEx] fetchWithOpts WebView fallback:', reason, url.substring(0, 80));
+        const rendered = await WebViewFetcher.fetch(url, requestTimeout, requestHeaders);
+        let renderedHtml = rendered.html || '';
+        if (needsWebViewDocument(renderedHtml, rendered.finalUrl || url) &&
+          WebViewFetcher.interactiveFetcher) {
+          const interactive = await WebViewFetcher.fetchInteractive(rendered.finalUrl || url);
+          if (interactive && interactive.length > 200) renderedHtml = interactive;
+        }
+        return renderedHtml;
+      } catch (webViewError) {
+        console.warn('[SrcEx] fetchWithOpts WebView failed:', (webViewError as Error).message);
+        return '';
+      }
+    };
+
+    if (forceWebView && method !== 'POST') {
+      const rendered = await fetchByWebView('source option');
+      if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
+    }
+
     try {
+      let directHtml = '';
       if (method === 'POST') {
         requestHeaders['Content-Type'] = requestHeaders['Content-Type'] || 'application/json';
-        return await NetUtil.httpPost(url, body, requestHeaders, requestTimeout);
+        directHtml = await NetUtil.httpPost(url, body, requestHeaders, requestTimeout);
+      } else {
+        directHtml = await NetUtil.httpGet(url, requestHeaders, requestTimeout);
       }
-      return await NetUtil.httpGet(url, requestHeaders, requestTimeout);
+      if (method === 'GET' && needsWebViewDocument(directHtml, url)) {
+        const rendered = await fetchByWebView('dynamic, WAF, or login document');
+        if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
+      }
+      return directHtml;
     } catch (err) {
       const msg = (err as Error).message || '';
+      if (method === 'GET' && /(?:HTTP\s+(?:403|429|5\d\d)|Cloudflare|WAF|page not found)/i.test(msg)) {
+        const rendered = await fetchByWebView(msg.substring(0, 100));
+        if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
+      }
       // RCP 并发取消错误，重试一次
       if (msg.includes('canceled') || msg.includes('Cancelled')) {
         console.info('[SrcEx] fetchWithOpts canceled, retrying once:', url.substring(0, 60));

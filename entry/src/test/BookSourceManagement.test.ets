@@ -7,12 +7,17 @@ import {
 import { createSearchResult, SearchResult } from '../main/ets/model/SearchResult';
 import {
   decodeSourceScriptEvaluation, hasExplicitTocPaginationRule, isDuplicateTocPage,
-  isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml, resolveContentPageUrl
+  isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
+  needsWebViewDocument, resolveContentPageUrl
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
 } from '../main/ets/engine/source/SourceNetworkPolicy';
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
+import {
+  inferSearchRequest, materializeAgentRequest, prepareSourceAgentHtml
+} from '../main/ets/engine/ai/AiSourceAgent';
+import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 
 export default function bookSourceManagementTest() {
   describe('bookSourceManagement', () => {
@@ -23,6 +28,48 @@ export default function bookSourceManagementTest() {
       expect(source.concurrentRate).assertEqual('2/1000');
       expect(source.enabledCookieJar).assertTrue();
       expect(createEmptyBookSource().respondTime).assertEqual(180000);
+    });
+
+    it('infersGetAndPostSearchFormsWithoutLlmGuessing', 0, () => {
+      const getForm = '<form action="/search" method="get"><input type="hidden" name="type" value="book">' +
+        '<input type="search" name="q" placeholder="搜索小说"><button>搜索</button></form>';
+      const getRequest = inferSearchRequest(getForm, 'https://example.com/index.html', '三体');
+      expect(getRequest?.ruleSearchUrl || '').assertEqual(
+        'https://example.com/search?q={{key}}&type=book');
+      expect(getRequest?.probeUrl || '').assertContain('q=%E4%B8%89%E4%BD%93');
+
+      const postForm = '<form action="/api/search" method="post">' +
+        '<input name="keyword" placeholder="书名"><button>查询</button></form>';
+      const postRequest = inferSearchRequest(postForm, 'https://example.com/', '诡秘之主');
+      expect(postRequest?.method || '').assertEqual('POST');
+      const spec = materializeAgentRequest(
+        postRequest?.ruleSearchUrl || '', '诡秘之主', 1, 'https://example.com');
+      expect(spec.url).assertEqual('https://example.com/api/search');
+      expect(spec.body).assertContain('keyword=%E8%AF%A1%E7%A7%98%E4%B9%8B%E4%B8%BB');
+    });
+
+    it('redactsCredentialValuesButKeepsSelectorDom', 0, () => {
+      const html = '<html><head><script>ignore()</script></head><body>' +
+        '<input type="password" name="password" value="secret">' +
+        '<ul class="books"><li><a href="/book/1">书名</a></li></ul></body></html>';
+      const prepared = prepareSourceAgentHtml(html);
+      expect(prepared).assertContain('class="books"');
+      expect(prepared).assertContain('href="/book/1"');
+      expect(prepared.indexOf('secret')).assertEqual(-1);
+      expect(prepared.indexOf('ignore()')).assertEqual(-1);
+    });
+
+    it('reportsOnlyRepairRuleChanges', 0, () => {
+      const before = createEmptyBookSource();
+      before.id = 1;
+      before.sourceUrl = 'https://example.com';
+      before.sourceName = '测试';
+      const after = parseBookSource(JSON.parse(JSON.stringify(before)));
+      after.ruleToc = '.new-list@li';
+      after.updateTime = Date.now();
+      const changed = changedSourceFields(before, after);
+      expect(changed.length).assertEqual(1);
+      expect(changed[0]).assertEqual('ruleToc');
     });
 
     it('normalizesCheckDependencies', 0, () => {
@@ -74,6 +121,13 @@ export default function bookSourceManagementTest() {
         '<script src="/C2WF946J0/probe.js?v=1"></script><body></body></html>';
       expect(isWafProbeHtml(probe)).assertTrue();
       expect(isWafProbeHtml('<html><body><p>正常正文</p></body></html>')).assertFalse();
+      expect(needsWebViewDocument('<div id="app"></div>',
+        'https://example.com/book/1')).assertTrue();
+      expect(needsWebViewDocument(
+        '<form><input type="password"><button>登录</button></form>',
+        'https://example.com/book/1')).assertTrue();
+      expect(needsWebViewDocument('{"data":{"title":"三体"}}',
+        'https://example.com/api/book/1')).assertFalse();
     });
 
     it('stopsDuplicateFullCatalogPagination', 0, () => {

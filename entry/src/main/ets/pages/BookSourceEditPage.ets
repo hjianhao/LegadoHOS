@@ -7,7 +7,7 @@
  * - 加载/保存到数据库
  * - 新建或编辑已有书源
  */
-import { BookSource } from '../model/BookSource';
+import { BookSource, parseBookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
@@ -143,6 +143,24 @@ export struct BookSourceEditPage {
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
+    const sourceJson = params ? String(params['sourceJson'] || '') : '';
+    if (sourceJson) {
+      try {
+        this.editSource = parseBookSource(JSON.parse(sourceJson));
+        this.editSource.isAiGenerated = String(params['aiGenerated'] || '') === '1';
+        if (this.editSource.isAiGenerated && this.editSource.createTime <= 0) {
+          this.editSource.createTime = Date.now();
+        }
+        this.sourceUrl = this.editSource.sourceUrl;
+        this.isNew = this.editSource.id <= 0;
+        this.isDirty = true;
+        this.isLoading = false;
+        this.loadVersion++;
+        return;
+      } catch (e) {
+        console.warn('[SrcEdit] invalid sourceJson:', (e as Error).message);
+      }
+    }
     const url: string = params ? (params['url'] || params['sourceUrl'] || '') : '';
     this.sourceUrl = url;
     console.info('[SrcEdit] opening, url param:', url);

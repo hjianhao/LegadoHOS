@@ -414,6 +414,17 @@ export struct BookSourcePage {
     });
   }
 
+  private openAiRepair(source: BookSource): void {
+    UiUtil.pushUrl(this.getUIContext(), {
+      url: 'pages/AiSourceGeneratePage',
+      params: {
+        repairSourceUrl: source.sourceUrl,
+        repairKeyword: source.ruleSearchCheckKeyWord || '我',
+        invalidGroups: JSON.stringify(['搜索', '发现', '详情', '目录', '正文']),
+      }
+    });
+  }
+
   private openLogin(source: BookSource): void {
     this.loginDlg = new CustomDialogController({
       builder: SourceLoginDialog({
@@ -602,6 +613,11 @@ export struct BookSourcePage {
           .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
+        Button('AI').height(40).padding({ left: 12, right: 12 })
+          .backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
+          .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
+          .accessibilityText('AI 生成书源')
+          .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiSourceGeneratePage' }); })
         Button($r('app.string.common_import')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
           .onClick(() => { this.importDlg?.open(); })
@@ -849,6 +865,7 @@ export struct BookSourcePage {
           this.menuItem(this.isExploreEnabled(source) ? '停用发现' : '启用发现', false, () => { this.toggleExplore(source); })
           this.menuItem('搜索测试', false, () => { this.contextMenuId = 0; this.openSearch(source); })
           this.menuItem('规则调试', false, () => { this.contextMenuId = 0; this.openDebug(source); })
+          this.menuItem('AI 诊断修复', false, () => { this.contextMenuId = 0; this.openAiRepair(source); })
           this.menuItem('删除', true, () => {
             this.selectedIds = [source.id]; this.syncSelectedSet_();
             this.isSelectMode_ = false; this.contextMenuId = 0; this.confirmDelete();

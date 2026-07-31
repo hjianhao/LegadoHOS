@@ -20,6 +20,10 @@ import { SearchResultTable, SearchResultTableCreate } from './SearchResultTable'
 import { SearchKeywordTable, SearchKeywordTableCreate } from './SearchKeywordTable';
 import { AiBookProfileTableCreate } from './AiBookProfileTable';
 import {
+  SourceRevisionIndexUrl,
+  SourceRevisionTableCreate,
+} from './SourceRevisionTable';
+import {
   CloudSourceTable,
   CloudSourceTableCreate,
 } from './CloudSourceTable';
@@ -138,6 +142,8 @@ export class AppDatabase {
     await RdbUtil.executeSql(this.rdbStore_, SearchResultTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, SearchKeywordTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, AiBookProfileTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, SourceRevisionTableCreate);
+    await RdbUtil.executeSql(this.rdbStore_, SourceRevisionIndexUrl);
     // 云端书库：先 sources 后 bindings；对已有用户库幂等
     await RdbUtil.executeSql(this.rdbStore_, CloudSourceTableCreate);
     await RdbUtil.executeSql(this.rdbStore_, CloudBookBindingTableCreate);
@@ -323,3 +329,4 @@ export { CacheTable, TxtTocRuleTable } from './CacheTable';
 export { SearchResultTable } from './SearchResultTable';
 export { SearchKeywordTable } from './SearchKeywordTable';
 export { AiBookProfileTable } from './AiBookProfileTable';
+export { SourceRevisionTable } from './SourceRevisionTable';

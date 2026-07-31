@@ -1,12 +1,17 @@
-/**
- * AI 书源生成页面
- */
+/** AI 全站书源生成与现有书源修复页面。 */
 import { AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
-import router from '@ohos.router';
-import promptAction from '@ohos.promptAction';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
+import { WebViewEngine } from '../components/WebViewEngine';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
+import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
+import { image } from '@kit.ImageKit';
+import { AppDatabase } from '../data/database/AppDatabase';
+import { BookSourceTable } from '../data/database/BookSourceTable';
+import { BookSource, serializeBookSource } from '../model/BookSource';
+import { SourceRevisionService } from '../service/SourceRevisionService';
 
 @Entry
 @Component
@@ -15,209 +20,343 @@ struct AiSourceGeneratePage {
   @State homepageUrl: string = '';
   @State searchKeyword: string = '斗罗大陆';
   @State isAnalyzing: boolean = false;
-  @State currentStep: number = -1;
   @State steps: AiStepResult[] = [];
   @State expandedStep: number = -1;
-  @State showWebViewPrompt: boolean = false;
-  @State webViewUrl_: string = '';
   @State logMessages: string[] = [];
+  @State repairMode: boolean = false;
+  @State repairSourceName: string = '';
+  @State invalidGroups: string[] = [];
 
   private agent_: AiSourceAgent | null = null;
+  private repairSource_: BookSource | null = null;
+  private challengeDlg?: CustomDialogController;
+  private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
 
   aboutToAppear(): void {
+    this.registerCaptchaHandler_();
+    if (!this.interactiveFetcher_) {
+      this.interactiveFetcher_ = (url: string): Promise<string> =>
+        this.openInteractiveWebView_(url, '页面需要登录或人工验证');
+    }
+    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     this.agent_ = new AiSourceAgent({
-      onStepUpdate: (r: AiStepResult) => {
-        this.steps = [...this.steps.map(s => s.step === r.step ? r : s)];
-        if (r.status === 'done' || r.status === 'error') {
-          this.currentStep = r.step + 1;
-        }
+      onStepUpdate: (result: AiStepResult): void => {
+        const next = this.steps.slice();
+        const index = next.findIndex((item: AiStepResult): boolean => item.step === result.step);
+        if (index >= 0) next[index] = result;
+        else next.push(result);
+        this.steps = next;
       },
-      onLog: (msg: string) => {
-        this.logMessages = [...this.logMessages, msg];
+      onLog: (message: string): void => {
+        this.logMessages = [...this.logMessages.slice(-119), message];
       },
-      onRequestWebView: async (url: string): Promise<string> => {
-        return new Promise<string>((resolve: (val: string) => void) => {
-          this.webViewUrl_ = url;
-          this.showWebViewPrompt = true;
-          // 用户点击确认后，通过 WebViewFetcher 加载
-          // 这里简化处理：直接通知用户手动使用 WebView
-          setTimeout(() => {
-            if (WebViewFetcher.isReady()) {
-              WebViewFetcher.fetch(url, 30000).then((r) => {
-                resolve(r.html || '');
-              }).catch(() => resolve(''));
-            } else {
-              resolve('');
-            }
-          }, 500);
+      onRequestWebView: (url: string, reason: string): Promise<string> => {
+        return this.openInteractiveWebView_(url, reason);
+      },
+    });
+
+    const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
+    const repairUrl = params ? String(params['repairSourceUrl'] || '') : '';
+    if (repairUrl) {
+      this.repairMode = true;
+      this.searchKeyword = String(params['repairKeyword'] || '我');
+      try {
+        const groups = JSON.parse(String(params['invalidGroups'] || '[]')) as string[];
+        this.invalidGroups = Array.isArray(groups) ? groups : [];
+      } catch (_e) {
+        this.invalidGroups = [];
+      }
+      void this.loadRepairSource_(repairUrl);
+    }
+  }
+
+  aboutToDisappear(): void {
+    if (JsExpressionEvaluator.captchaHandler === this.captchaHandler_) {
+      JsExpressionEvaluator.captchaHandler = null;
+    }
+    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+      WebViewFetcher.interactiveFetcher = null;
+    }
+    if (WebViewFetcher.interactiveResolve) {
+      WebViewFetcher.interactiveResolve('');
+      WebViewFetcher.interactiveResolve = null;
+    }
+  }
+
+  private registerCaptchaHandler_(): void {
+    if (!this.captchaHandler_) {
+      this.captchaHandler_ = (captchaUrl: string,
+        captchaImage?: image.PixelMap | null): Promise<string> => {
+        return new Promise<string>((resolve: (code: string) => void) => {
+          let dialog: CustomDialogController | null = null;
+          dialog = new CustomDialogController({
+            builder: CaptchaDialog({
+              controller: dialog!, captchaUrl: captchaUrl,
+              captchaImage: captchaImage ?? null, captchaResolve: resolve
+            }),
+            autoCancel: false,
+            customStyle: true,
+            alignment: DialogAlignment.Center,
+          });
+          dialog.open();
         });
-      },
-      onRequestLogin: async (): Promise<Record<string, string>> => {
-        return {};
-      },
+      };
+    }
+    JsExpressionEvaluator.captchaHandler = this.captchaHandler_;
+  }
+
+  private openInteractiveWebView_(url: string, reason: string): Promise<string> {
+    return new Promise<string>((resolve: (html: string) => void) => {
+      this.logMessages = [...this.logMessages, '👤 ' + reason + '，请完成后点击“验证完成”'];
+      WebViewFetcher.interactiveResolve = resolve;
+      this.challengeDlg = new CustomDialogController({
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        autoCancel: false,
+        customStyle: true,
+        alignment: DialogAlignment.Center,
+      });
+      this.challengeDlg.open();
     });
   }
 
-  async startAnalyze(): Promise<void> {
+  private async loadRepairSource_(sourceUrl: string): Promise<void> {
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      this.repairSource_ = await new BookSourceTable(AppDatabase.getInstance().rdbStore)
+        .getSourceByUrl(sourceUrl);
+      if (!this.repairSource_) throw new Error('未找到需要修复的书源');
+      this.homepageUrl = this.repairSource_.sourceUrl;
+      this.repairSourceName = this.repairSource_.sourceName;
+      if (this.invalidGroups.length === 0) {
+        this.invalidGroups = ['搜索', '发现', '详情', '目录', '正文'];
+      }
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '加载待修复书源失败：' + (e as Error).message, duration: 2000
+      });
+    }
+  }
+
+  private initializeSteps_(): void {
+    this.steps = [
+      { step: AiStep.HOMEPAGE, label: '首页与搜索入口', status: 'pending', summary: '', data: {} },
+      { step: AiStep.SEARCH, label: '搜索规则', status: 'pending', summary: '', data: {} },
+      { step: AiStep.DISCOVERY, label: '发现规则', status: 'pending', summary: '', data: {} },
+      { step: AiStep.BOOK_INFO, label: '详情规则', status: 'pending', summary: '', data: {} },
+      { step: AiStep.TOC, label: '目录规则', status: 'pending', summary: '', data: {} },
+      { step: AiStep.CONTENT, label: '正文规则', status: 'pending', summary: '', data: {} },
+      { step: AiStep.VALIDATE, label: '全链路校验', status: 'pending', summary: '', data: {} },
+      { step: AiStep.COMPILE, label: '生成书源', status: 'pending', summary: '', data: {} },
+    ];
+  }
+
+  private async startAnalyze(): Promise<void> {
+    if (this.isAnalyzing) return;
     if (!this.homepageUrl.startsWith('http')) {
       UiUtil.showToast(this.getUIContext(), { message: '请输入有效的网址', duration: 1500 });
       return;
     }
-
-    await this.agent_!.init(UiUtil.getHostContext(this.getUIContext()));
-    if (!this.agent_!.isConfigured()) {
-      UiUtil.showToast(this.getUIContext(), { message: '请先配置 AI API', duration: 1500 });
+    if (!this.agent_) return;
+    await this.agent_.init(UiUtil.getHostContext(this.getUIContext()));
+    if (!this.agent_.isConfigured()) {
+      UiUtil.showToast(this.getUIContext(), { message: '请先配置 AI API 和模型', duration: 1800 });
       return;
     }
 
     this.isAnalyzing = true;
-    this.currentStep = 0;
     this.logMessages = [];
-    // 预填充 6 个步骤，显示分析过程
-    this.steps = [
-      { step: AiStep.HOMEPAGE, label: '首页分析', status: 'pending', summary: '', data: {} },
-      { step: AiStep.SEARCH, label: '搜索分析', status: 'pending', summary: '', data: {} },
-      { step: AiStep.BOOK_INFO, label: '详情分析', status: 'pending', summary: '', data: {} },
-      { step: AiStep.TOC, label: '目录分析', status: 'pending', summary: '', data: {} },
-      { step: AiStep.CONTENT, label: '正文分析', status: 'pending', summary: '', data: {} },
-      { step: AiStep.COMPILE, label: '汇总生成', status: 'pending', summary: '', data: {} },
-    ];
-
-    const results = await this.agent_!.analyze(this.homepageUrl, this.searchKeyword);
-    this.steps = results;
-    this.isAnalyzing = false;
-
-    if (results[results.length - 1].status === 'done') {
-      UiUtil.showToast(this.getUIContext(), { message: '分析完成', duration: 1500 });
+    this.initializeSteps_();
+    try {
+      const results = this.repairMode && this.repairSource_
+        ? await this.agent_.repair(this.repairSource_, this.searchKeyword, this.invalidGroups)
+        : await this.agent_.analyze(this.homepageUrl, this.searchKeyword);
+      this.steps = results.slice();
+      const compiled = results[AiStep.COMPILE];
+      UiUtil.showToast(this.getUIContext(), {
+        message: compiled?.status === 'done' ? '全链路验证通过' : '生成未通过，请查看失败阶段',
+        duration: 2000
+      });
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: 'Agent 执行失败：' + (e as Error).message, duration: 2200
+      });
+    } finally {
+      this.isAnalyzing = false;
     }
   }
 
-  /** 跳转编辑页，预填数据 */
-  navigateToEdit(): void {
-    if (!this.agent_) return;
-    const data = this.agent_.getCompiledSource();
-    const params: Record<string, string> = {};
-    params['aiGenerated'] = '1';
-    for (const k of Object.keys(data)) {
-      params[k] = data[k];
-    }
-    UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage', params: params });
+  private canUseResult_(): boolean {
+    return !this.isAnalyzing && this.steps.length > AiStep.COMPILE &&
+      this.steps[AiStep.COMPILE].status === 'done';
   }
 
-  stepLabel(step: AiStep): string {
-    const labels = ['首页分析', '搜索分析', '详情分析', '目录分析', '正文分析', '汇总'];
-    return labels[step] || '';
+  private navigateToEdit(): void {
+    const source = this.agent_?.getCompiledBookSource();
+    if (!source) return;
+    UiUtil.pushUrl(this.getUIContext(), {
+      url: 'pages/BookSourceEditPage',
+      params: { sourceJson: serializeBookSource(source), aiGenerated: '1' }
+    });
   }
 
-  statusIcon(status: string): string {
-    switch (status) {
-      case 'running': return '进行中';
-      case 'done': return '完成';
-      case 'error': return '失败';
-      default: return '⬜';
-    }
+  private applyRepair(): void {
+    if (!this.agent_ || !this.repairSource_) return;
+    const candidate = this.agent_.getCompiledBookSource();
+    if (!candidate) return;
+    const reason = 'AI 修复：' + this.invalidGroups.join('、');
+    UiUtil.showDialog(this.getUIContext(), {
+      title: '应用 AI 修复',
+      message: '新规则已经通过完整链路校验。应用后会保留旧版本，可从规则调试页回滚。',
+      buttons: [
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '应用', color: ThemeColors.primary(this.isDark) },
+      ]
+    }).then(async (result): Promise<void> => {
+      if (result.index !== 1 || !this.repairSource_) return;
+      try {
+        const changed = await SourceRevisionService.applyRepair(this.repairSource_, candidate, reason);
+        UiUtil.showToast(this.getUIContext(), {
+          message: '修复已应用，修改 ' + changed.length + ' 个字段', duration: 2000
+        });
+        UiUtil.back(this.getUIContext());
+      } catch (e) {
+        UiUtil.showToast(this.getUIContext(), {
+          message: '应用失败：' + (e as Error).message, duration: 2200
+        });
+      }
+    });
+  }
+
+  private statusText_(status: string): string {
+    if (status === 'running') return '进行中';
+    if (status === 'done') return '✓';
+    if (status === 'error') return '!';
+    return '−';
   }
 
   build() {
     Column() {
-      // 顶栏
       Row() {
-        Button($r('app.string.ui_8179643cdc')).fontSize(18).fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
-          .backgroundColor(ThemeColors.transparent()).accessibilityText($r('app.string.common_back')).onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text($r('app.string.ui_1ef00e7d2f')).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button($r('app.string.ui_d7d7ce790b')).fontSize(13)
-          .backgroundColor(ThemeColors.transparent()).width(40).height(40)
+        Button($r('app.string.ui_8179643cdc')).fontSize(18)
+          .fontColor(ThemeColors.secondaryText(this.isDark)).width(40).height(40)
+          .backgroundColor(ThemeColors.transparent())
+          .accessibilityText($r('app.string.common_back'))
+          .onClick(() => { UiUtil.back(this.getUIContext()); })
+        Text(this.repairMode ? 'AI 修复书源' : 'AI 生成书源')
+          .fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18)
+          .fontWeight(FontWeight.Bold).layoutWeight(1)
+        Button('AI 设置').fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
+          .fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/AiConfigPage' }); })
-      }.padding({ left: 12, right: 12, top: 0 }).width('100%').expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+      }.padding({ left: 12, right: 12 }).width('100%')
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       if (!this.isAnalyzing && this.steps.length === 0) {
-        // 输入区
         Column() {
-          Text($r('app.string.ui_735c63bd30'))
-            .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ bottom: 6 })
-          TextInput({ text: this.homepageUrl, placeholder: $r('app.string.ui_740e739790') })
+          if (this.repairMode) {
+            Text('待修复：' + (this.repairSourceName || '加载中…')).fontSize(15)
+              .fontWeight(FontWeight.Medium).fontColor(ThemeColors.onSurface(this.isDark))
+              .width('100%').margin({ bottom: 6 })
+            Text('失败阶段：' + this.invalidGroups.join('、')).fontSize(12)
+              .fontColor(ThemeColors.error(this.isDark)).width('100%').margin({ bottom: 16 })
+          }
+          Text('网站首页或小说站 URL').fontSize(14)
+            .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 6 })
+          TextInput({ text: this.homepageUrl, placeholder: 'https://example.com' })
             .fontSize(14).width('100%').type(InputType.URL)
-            .onChange((v: string) => { this.homepageUrl = v; })
-
-          Text($r('app.string.ui_0f19d1f0d6'))
-            .fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).alignSelf(ItemAlign.Start).margin({ top: 16, bottom: 6 })
-          TextInput({ text: this.searchKeyword, placeholder: $r('app.string.ui_1ffe87e82f') })
-            .fontSize(14).width('100%')
-            .onChange((v: string) => { this.searchKeyword = v; })
-
-          Button($r('app.string.ui_4769da8dd6')).fontSize(16).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
+            .enabled(!this.repairMode)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .onChange((value: string): void => { this.homepageUrl = value; })
+          Text('真实测试关键词').fontSize(14)
+            .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+            .margin({ top: 16, bottom: 6 })
+          TextInput({ text: this.searchKeyword, placeholder: '输入站内确实存在的书名' })
+            .fontSize(14).width('100%').fontColor(ThemeColors.onSurface(this.isDark))
+            .onChange((value: string): void => { this.searchKeyword = value; })
+          Button(this.repairMode ? '开始诊断并修复' : '开始生成').fontSize(16)
+            .fontColor(ThemeColors.onPrimary(this.isDark))
+            .backgroundColor(ThemeColors.primary(this.isDark))
             .width('100%').height(48).borderRadius(24).margin({ top: 28 })
-            .onClick(() => { this.startAnalyze(); })
-
-          Text($r('app.string.ui_c46ddaba9a'))
-            .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 12 })
-        }
-        .padding({ left: 16, right: 16 }).width('100%').layoutWeight(1)
+            .enabled(!this.repairMode || this.repairSource_ !== null)
+            .onClick(() => { void this.startAnalyze(); })
+          Text('Agent 会真实执行搜索、详情、目录和正文规则；遇到登录或验证码会暂停等待操作。')
+            .fontSize(11).lineHeight(17).fontColor(ThemeColors.secondaryText(this.isDark))
+            .margin({ top: 12 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 8 }).width('100%').layoutWeight(1)
       } else {
-        // 进度区
         Column() {
-          List() {
-            ForEach(this.steps, (r: AiStepResult) => {
+          List({ space: 4 }) {
+            ForEach(this.steps, (result: AiStepResult) => {
               ListItem() {
                 Column() {
                   Row() {
-                    Text(this.statusIcon(r.status)).fontColor(ThemeColors.onSurface(this.isDark)).fontSize(14)
-                    Text(this.stepLabel(r.step)).fontSize(14)
-                      .fontWeight(r.status === 'running' ? FontWeight.Bold : FontWeight.Normal)
-                      .fontColor(ThemeColors.onBackground(this.isDark)).margin({ left: 8 })
-                    Text(r.summary).fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1).margin({ left: 8 })
-                    Button(this.expandedStep === r.step ? '▲' : '▼').fontSize(12)
-                      .backgroundColor(ThemeColors.transparent()).width(40).height(40)
-                      .onClick(() => { this.expandedStep = this.expandedStep === r.step ? -1 : r.step; })
+                    Text(this.statusText_(result.status)).fontSize(14)
+                      .fontWeight(FontWeight.Bold)
+                      .fontColor(result.status === 'error' ? ThemeColors.error(this.isDark) :
+                        result.status === 'done' ? ThemeColors.primary(this.isDark) :
+                          ThemeColors.secondaryText(this.isDark)).width(24)
+                    Text(result.label).fontSize(14).fontWeight(FontWeight.Medium)
+                      .fontColor(ThemeColors.onSurface(this.isDark)).width(110)
+                    Text(result.summary).fontSize(12).maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                      .fontColor(result.status === 'error' ? ThemeColors.error(this.isDark) :
+                        ThemeColors.secondaryText(this.isDark))
+                    Button(this.expandedStep === result.step ? '▲' : '▼').fontSize(11)
+                      .width(40).height(40).backgroundColor(ThemeColors.transparent())
+                      .fontColor(ThemeColors.primary(this.isDark))
+                      .onClick(() => {
+                        this.expandedStep = this.expandedStep === result.step ? -1 : result.step;
+                      })
                   }.width('100%')
-
-                  if (this.expandedStep === r.step && (r.status === 'done' || r.status === 'error')) {
-                    Text(r.status === 'error' ? '错误: ' + r.summary : JSON.stringify(r.data, null, 2))
-                      .fontSize(10).fontColor(r.status === 'error' ? ThemeColors.error(this.isDark) : ThemeColors.secondaryText(this.isDark)).fontFamily('monospace')
-                      .width('100%').padding(8).backgroundColor(ThemeColors.surface(this.isDark))
-                      .borderRadius(6).margin({ top: 6 }).maxLines(20)
+                  if (this.expandedStep === result.step && Object.keys(result.data).length > 0) {
+                    Text(JSON.stringify(result.data, null, 2)).fontSize(10).fontFamily('monospace')
+                      .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+                      .padding(8).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+                      .borderRadius(8).maxLines(20)
                   }
-                }
-                .padding({ top: 10, bottom: 10, left: 12, right: 12 })
+                }.padding({ left: 12, right: 8, top: 6, bottom: 6 })
+                  .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(12)
               }
-              .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
-            })
-          }.layoutWeight(1)
+            }, (result: AiStepResult): string => result.step.toString())
+          }.layoutWeight(1).padding({ left: 12, right: 12 })
 
-          // 交互日志区
           if (this.logMessages.length > 0) {
-            Column() {
-              Text($r('app.string.ui_480e589572')).fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
-                .padding({ top: 6, bottom: 4, left: 4 }).alignSelf(ItemAlign.Start)
-              List() {
-                ForEach(this.logMessages, (msg: string) => {
-                  ListItem() {
-                    Text(msg).fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
-                      .fontFamily('monospace').width('100%')
-                      .padding({ top: 2, bottom: 2, left: 4, right: 4 })
-                  }
-                })
-              }
-              .height(80).width('100%')
-              .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(6)
-            }.padding({ left: 16, right: 16 }).width('100%')
+            List() {
+              ForEach(this.logMessages, (message: string, index: number) => {
+                ListItem() {
+                  Text(message).fontSize(10).lineHeight(15).fontFamily('monospace')
+                    .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+                }
+              }, (_message: string, index: number): string => index.toString())
+            }.height(112).padding(8).margin({ left: 12, right: 12, top: 6 })
+              .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(10)
           }
 
-          if (!this.isAnalyzing && this.steps.length > 0) {
-            if (this.steps.some(s => s.status === 'error')) {
-              Button($r('app.string.ui_6e1dce9241')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.warning(this.isDark))
-                .width('100%').height(44).borderRadius(22)
-                .margin({ top: 12, left: 16, right: 16 })
-                .onClick(() => { this.startAnalyze(); })
-            }
-            Button($r('app.string.ui_fcf0c4061c')).fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.success(this.isDark))
-              .width('100%').height(44).borderRadius(22).margin({ top: 8, bottom: 12, left: 16, right: 16 })
-              .onClick(() => { this.navigateToEdit(); })
+          if (!this.isAnalyzing) {
+            Row({ space: 8 }) {
+              Button('重新运行').height(44).layoutWeight(1).borderRadius(22)
+                .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+                .fontColor(ThemeColors.onSurface(this.isDark))
+                .onClick(() => { void this.startAnalyze(); })
+              if (this.canUseResult_()) {
+                if (this.repairMode) {
+                  Button('应用修复').height(44).layoutWeight(1).borderRadius(22)
+                    .backgroundColor(ThemeColors.primary(this.isDark))
+                    .fontColor(ThemeColors.onPrimary(this.isDark))
+                    .onClick(() => { this.applyRepair(); })
+                } else {
+                  Button('编辑规则').height(44).layoutWeight(1).borderRadius(22)
+                    .backgroundColor(ThemeColors.primary(this.isDark))
+                    .fontColor(ThemeColors.onPrimary(this.isDark))
+                    .onClick(() => { this.navigateToEdit(); })
+                }
+              }
+            }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%')
           }
         }.width('100%').layoutWeight(1)
       }
-    }
-    .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
+      WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
+    }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }
