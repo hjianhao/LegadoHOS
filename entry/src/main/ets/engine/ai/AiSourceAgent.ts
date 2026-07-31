@@ -302,6 +302,7 @@ export class AiSourceAgent {
   private lastCheck_: CheckResult | null = null;
   private repairMode_: boolean = false;
   private invalidGroups_: string[] = [];
+  private requiresWebView_: boolean = false;
 
   constructor(callback: AiAgentCallback) {
     this.callback_ = callback;
@@ -368,6 +369,7 @@ export class AiSourceAgent {
 
     this.repairMode_ = !!request.existingSource;
     this.invalidGroups_ = request.invalidGroups || [];
+    this.requiresWebView_ = false;
     this.original_ = request.existingSource
       ? { ...request.existingSource } as BookSource : null;
     this.draft_ = this.original_
@@ -495,6 +497,7 @@ export class AiSourceAgent {
       const parsed = await this.askRules_(prompt, evidence.html);
       if (parsed['sourceName']) this.draft_.sourceName = parsed['sourceName'] + '(AI)';
       this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
+      this.ensureSearchWebViewOption_();
       this.draft_.exploreUrl = parsed['exploreUrl'] || this.draft_.exploreUrl;
       this.draft_.ruleExplores = this.draft_.exploreUrl;
       this.draft_.loginUrl = parsed['loginUrl'] || this.draft_.loginUrl;
@@ -521,6 +524,7 @@ export class AiSourceAgent {
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       if (attempt > 0 || this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchList) {
         const evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
+        this.ensureSearchWebViewOption_();
         const prompt = `分析小说网站搜索结果页，生成 Legado CSS 规则。只返回 JSON。
 ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
 必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
@@ -619,7 +623,8 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
         }
         const probe = { ...this.draft_ } as BookSource;
         probe.isExploreRequest = true;
-        probe.ruleSearchUrl = firstUrl;
+        probe.ruleSearchUrl = this.requiresWebView_
+          ? this.withWebViewOption_(firstUrl) : firstUrl;
         probe.ruleSearchList = probe.ruleExploreList;
         probe.ruleSearchName = probe.ruleExploreName;
         probe.ruleSearchAuthor = probe.ruleExploreAuthor;
@@ -910,11 +915,15 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
     if ((this.isChallengePage_(html) || this.isLoginPage_(html, finalUrl)) &&
       this.callback_.onRequestWebView) {
       const reason = this.isLoginPage_(html, finalUrl) ? '页面需要登录' : '页面需要人工验证';
-      const interactive = await this.callback_.onRequestWebView(finalUrl, reason);
+      const interactive = WebViewFetcher.interactiveFetcher
+        ? await WebViewFetcher.fetchInteractive(finalUrl)
+        : await this.callback_.onRequestWebView(finalUrl, reason);
       if (interactive && interactive.length > 300) {
         html = interactive;
         usedWebView = true;
         interactiveCompleted = true;
+        this.requiresWebView_ = true;
+        this.ensureSearchWebViewOption_();
       }
     }
     const stillLogin = interactiveCompleted
@@ -924,6 +933,28 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
     }
     if (!html || html.length < 300) throw new Error(label + '页面内容过短，可能被反爬或登录拦截');
     return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView };
+  }
+
+  private ensureSearchWebViewOption_(): void {
+    if (!this.requiresWebView_ || !this.draft_?.ruleSearchUrl) return;
+    this.draft_.ruleSearchUrl = this.withWebViewOption_(this.draft_.ruleSearchUrl);
+  }
+
+  private withWebViewOption_(rawTemplate: string): string {
+    const template = rawTemplate.trim();
+    if (/##web\s*[Vv]iew|["']web\s*[Vv]iew["']\s*:\s*true/i.test(template)) return template;
+
+    const optionMatch = template.match(/^(.*?),(\{[\s\S]*\})$/);
+    if (optionMatch) {
+      try {
+        const options = JSON.parse(optionMatch[2]) as Record<string, Object>;
+        options['webView'] = true;
+        return optionMatch[1] + ',' + JSON.stringify(options);
+      } catch (_e) {
+        // 非标准单引号选项保留原样，使用兼容的后缀标记。
+      }
+    }
+    return template + '##webView';
   }
 
   private isChallengePage_(html: string): boolean {

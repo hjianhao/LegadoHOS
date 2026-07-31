@@ -203,6 +203,10 @@ export function needsWebViewDocument(html: string, url: string = ''): boolean {
   const text = html.trim();
   if (text.startsWith('{') || text.startsWith('[')) return false;
   if (isWafProbeHtml(text)) return true;
+  if (text.length < 65536 &&
+    /challenge-platform|_cf_chl_opt|cf-turnstile|checking your browser|cloudflare|访问验证/i.test(text)) {
+    return true;
+  }
   if (/<div[^>]+id=["'](?:app|root|__next)["'][^>]*>\s*<\/div>/i.test(text)) return true;
   const loginUrl = /\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url);
   const passwordForm = /<input\b[^>]*type=["']?password/i.test(text) &&
@@ -967,7 +971,13 @@ export class SourceExecutor {
         console.info('[SrcEx] WebView request (source config) for', source.sourceName);
         try {
           const wvResult = await WebViewFetcher.fetch(finalUrl, requestTimeout, headers);
-          const bodyText = wvResult.html;
+          let bodyText = wvResult.html;
+          if (needsWebViewDocument(bodyText, wvResult.finalUrl || finalUrl) &&
+            WebViewFetcher.interactiveFetcher) {
+            console.info('[SrcEx] Configured WebView still requires interaction for', source.sourceName);
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(wvResult.finalUrl || finalUrl);
+            if (interactiveHtml && interactiveHtml.length > 200) bodyText = interactiveHtml;
+          }
           if (bodyText && bodyText.length > 100) {
             console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
             return await this.parseResponse(bodyText, source, baseUrl, 0, finalUrl);
@@ -1342,7 +1352,11 @@ export class SourceExecutor {
   private async fetchWithOpts(
     url: string, headers: Record<string, string>, source: BookSource, timeout?: number
   ): Promise<string> {
-    let method = 'GET', body = '', forceWebView = false;
+    let method = 'GET', body = '';
+    // AI 生成的验证码/登录站点在搜索 URL 上记录 webView 能力。
+    // 同站详情、目录和正文也必须沿用浏览器会话，避免重新退回无会话的 HTTP。
+    let forceWebView = /##web\s*[Vv]iew|["']web\s*[Vv]iew["']\s*:\s*true/i
+      .test(source.ruleSearchUrl || '');
     const jm = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
     if (jm) {
       try {
@@ -1350,7 +1364,7 @@ export class SourceExecutor {
         if (opts.method) method = opts.method.toUpperCase();
         if (opts.body && typeof opts.body === 'string') body = opts.body;
         else if (opts.body && typeof opts.body === 'object') body = JSON.stringify(opts.body);
-        forceWebView = opts.webView === true || opts.webview === true;
+        forceWebView = forceWebView || opts.webView === true || opts.webview === true;
         // 提取 headers 合并到请求头
         if (opts.headers && typeof opts.headers === 'object') {
           for (const [hk, hv] of Object.entries(opts.headers as Record<string, Object>)) {

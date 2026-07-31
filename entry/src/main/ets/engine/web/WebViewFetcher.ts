@@ -15,6 +15,11 @@ export class WebViewFetchResult {
   finalUrl: string = '';
 }
 
+interface InteractivePageCacheEntry {
+  html: string;
+  cachedAt: number;
+}
+
 export class WebViewFetcher {
   private static controller: web_webview.WebviewController | null = null;
   private static pendingResolve: ((result: WebViewFetchResult) => void) | null = null;
@@ -53,6 +58,9 @@ export class WebViewFetcher {
 
   /** 交互式验证的 Promise resolve（由 CloudflareDialog 调用） */
   static interactiveResolve: ((html: string) => void) | null = null;
+  private static interactivePageCache: Map<string, InteractivePageCacheEntry> = new Map();
+  private static readonly INTERACTIVE_CACHE_TTL_MS: number = 5 * 60 * 1000;
+  private static readonly INTERACTIVE_CACHE_MAX_ENTRIES: number = 6;
 
   /** 请求是否需要交互式验证 */
   static needsInteractive(url: string, errorMsg: string): boolean {
@@ -62,10 +70,51 @@ export class WebViewFetcher {
 
   /** 弹出交互式 WebView 验证 */
   static async fetchInteractive(url: string): Promise<string> {
+    const cacheKey = WebViewFetcher.interactiveCacheKey(url);
+    const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt <= WebViewFetcher.INTERACTIVE_CACHE_TTL_MS) {
+      console.info('[WebViewFetcher] Reusing interactive HTML:', cacheKey.substring(0, 80));
+      // 命中后移到 Map 末尾并续期，保证完整 Agent 链路最终复检时仍可复用。
+      WebViewFetcher.interactivePageCache.delete(cacheKey);
+      cached.cachedAt = Date.now();
+      WebViewFetcher.interactivePageCache.set(cacheKey, cached);
+      return cached.html;
+    }
+    if (cached) WebViewFetcher.interactivePageCache.delete(cacheKey);
     if (!WebViewFetcher.interactiveFetcher) {
       throw new Error('Interactive fetcher not registered');
     }
-    return await WebViewFetcher.interactiveFetcher(url);
+    const html = await WebViewFetcher.interactiveFetcher(url);
+    if (WebViewFetcher.isReusableInteractiveHtml(html)) {
+      WebViewFetcher.interactivePageCache.set(cacheKey, {
+        html: html,
+        cachedAt: Date.now(),
+      });
+      while (WebViewFetcher.interactivePageCache.size > WebViewFetcher.INTERACTIVE_CACHE_MAX_ENTRIES) {
+        const oldestKey = WebViewFetcher.interactivePageCache.keys().next().value as string | undefined;
+        if (!oldestKey) break;
+        WebViewFetcher.interactivePageCache.delete(oldestKey);
+      }
+    }
+    return html;
+  }
+
+  private static interactiveCacheKey(url: string): string {
+    return (url || '')
+      .replace(/#.*$/, '')
+      .replace(/([?&])(?:t|_|timestamp)=\d+(?=&|$)/gi, '$1')
+      .replace(/\?&/, '?')
+      .replace(/[?&]$/, '');
+  }
+
+  private static isReusableInteractiveHtml(html: string): boolean {
+    if (!html || html.length < 300) return false;
+    // 小型验证页不能进入缓存；验证后的真实内容通常明显更大。
+    if (html.length < 65536 &&
+      /challenge-platform|_cf_chl_opt|cf-turnstile|checking your browser|cloudflare|访问验证/i.test(html)) {
+      return false;
+    }
+    return true;
   }
 
   // ========== DNS（DoH）配置 ==========
