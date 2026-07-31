@@ -12,7 +12,7 @@ import {
   serializeBookSource
 } from '../../model/BookSource';
 import { SearchResult } from '../../model/SearchResult';
-import { globalSourceExecutor } from '../source/SourceExecutor';
+import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule } from '../source/SourceExecutor';
 import { CheckResult, SourceChecker } from '../../service/SourceChecker';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 import {
@@ -669,6 +669,7 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
 每个文本字段必须使用具体容器的 CSS 选择器并显式提取 @text；封面提取 @src，目录入口提取 @href。
 禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
+ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填写本次样本书的绝对或相对目录 URL。
 上次验证错误：${lastError || '无'}
 返回：
 {
@@ -687,6 +688,14 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
       if (this.draft_.ruleBookInfoAuthor &&
         this.draft_.ruleBookInfoAuthor === this.draft_.ruleBookInfoName) {
         lastError = '作者规则不能与书名规则相同，必须定位独立的作者元素';
+        this.log_('  详情验证失败：' + lastError);
+        continue;
+      }
+      if (this.draft_.ruleBookInfoTocUrl &&
+        !isAiLinkExtractionRule(this.draft_.ruleBookInfoTocUrl) &&
+        !/^\s*@js:/i.test(this.draft_.ruleBookInfoTocUrl) &&
+        !this.draft_.ruleBookInfoTocUrl.includes('{{')) {
+        lastError = 'ruleBookInfoTocUrl 必须动态提取当前书籍的目录链接，不能是样本书的固定 URL';
         this.log_('  详情验证失败：' + lastError);
         continue;
       }
@@ -747,8 +756,13 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, TOC_FIELDS);
-        this.draft_.ruleTocUrl = tocUrl;
       }
+      const sanitizedTocUrlRule = sanitizeAiGeneratedTocUrlRule(
+        this.draft_.ruleTocUrl || '', true);
+      if (this.draft_.ruleTocUrl && !sanitizedTocUrlRule) {
+        this.log_('  已移除绑定分析样本书的固定 ruleTocUrl，运行时将使用当前书籍的目录地址');
+      }
+      this.draft_.ruleTocUrl = sanitizedTocUrlRule;
       if (!isAiLinkExtractionRule(this.draft_.ruleTocUrlItem || '') ||
         this.draft_.ruleTocUrlItem === this.draft_.ruleTocTitle) {
         lastError = 'ruleTocUrlItem 必须显式提取章节链接 @href，且不能与标题规则相同';

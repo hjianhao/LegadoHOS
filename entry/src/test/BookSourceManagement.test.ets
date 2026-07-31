@@ -9,7 +9,8 @@ import {
   decodeSourceScriptEvaluation, hasExplicitTocPaginationRule, isDuplicateTocPage,
   hasUsableSearchIdentity,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
-  needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount
+  needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
+  sanitizeAiGeneratedTocUrlRule
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -148,6 +149,18 @@ export default function bookSourceManagementTest() {
     it('rejectsSearchTableHeadersWithoutBookUrl', 0, () => {
       expect(hasUsableSearchIdentity('类型书名', '')).assertFalse();
       expect(hasUsableSearchIdentity('四合院之饮食男女', '/book/1')).assertTrue();
+    });
+
+    it('doesNotReuseAiAnalysisSampleCatalogForEveryBook', 0, () => {
+      expect(sanitizeAiGeneratedTocUrlRule(
+        'https://www.ghjun.com/0/uxiijz9/1/', true)).assertEqual('');
+      expect(sanitizeAiGeneratedTocUrlRule('/0/uxiijz9/1/', true)).assertEqual('');
+      expect(sanitizeAiGeneratedTocUrlRule(
+        'https://www.ghjun.com/{{bookUrl}}/1/', true))
+        .assertEqual('https://www.ghjun.com/{{bookUrl}}/1/');
+      expect(sanitizeAiGeneratedTocUrlRule(
+        'https://www.ghjun.com/0/uxiijz9/1/', false))
+        .assertEqual('https://www.ghjun.com/0/uxiijz9/1/');
     });
 
     it('normalizesCheckDependencies', 0, () => {

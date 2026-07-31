@@ -47,6 +47,24 @@ export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean 
   return !!(name || '').trim() && !!(noteUrl || '').trim();
 }
 
+/**
+ * AI Agent 分析目录时访问的是某一本样本书，不能把该样本的实际目录地址保存成 ruleTocUrl。
+ * 动态模板仍按 Legado 语义保留；非 AI 书源不改变原有兼容行为。
+ */
+export function sanitizeAiGeneratedTocUrlRule(ruleTocUrl: string, isAiGenerated: boolean): string {
+  if (!ruleTocUrl || !isAiGenerated) return ruleTocUrl || '';
+  const rule = ruleTocUrl.trim();
+  if (!rule) return '';
+  if (rule.includes('{{') || /^\s*@js:/i.test(rule) ||
+    /\b(?:baseUrl|bookUrl)\b/.test(rule)) {
+    return ruleTocUrl;
+  }
+  if (/^(?:https?:)?\/\//i.test(rule) || /^(?:\/|\.\/|\.\.\/)/.test(rule)) {
+    return '';
+  }
+  return ruleTocUrl;
+}
+
 function contentLinkAttribute_(attributes: string, name: string): string {
   const match = attributes.match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
   return match && match.length > 2 ? match[2].replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').trim() : '';
@@ -2317,8 +2335,13 @@ export class SourceExecutor {
     // 初始化书源变量（loginUrl）
     await this.ensureSourceVariables(source, tocUrl);
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
-    if (source.ruleTocUrl) {
-      tocUrl = this.resolveUrl(source.ruleTocUrl, tocUrl);
+    const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
+    const effectiveTocUrlRule = sanitizeAiGeneratedTocUrlRule(source.ruleTocUrl || '', isAiSource);
+    if (source.ruleTocUrl && !effectiveTocUrlRule) {
+      console.warn('[SrcEx] getToc ignored fixed AI sample ruleTocUrl, using current book catalog URL');
+    }
+    if (effectiveTocUrlRule) {
+      tocUrl = this.resolveUrl(effectiveTocUrlRule, tocUrl);
     }
     // 协议相对 URL 补全（//www.example.com -> https://www.example.com）
     if (tocUrl.startsWith('//')) {
