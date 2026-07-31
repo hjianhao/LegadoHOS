@@ -8,7 +8,7 @@ import { createSearchResult, SearchResult } from '../main/ets/model/SearchResult
 import {
   decodeSourceScriptEvaluation, hasExplicitTocPaginationRule, isDuplicateTocPage,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
-  needsWebViewDocument, resolveContentPageUrl
+  needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -136,6 +136,12 @@ export default function bookSourceManagementTest() {
       const changed = changedSourceFields(before, after);
       expect(changed.length).assertEqual(1);
       expect(changed[0]).assertEqual('ruleToc');
+    });
+
+    it('boundsHtmlSearchParsingToKeepMainThreadResponsive', 0, () => {
+      expect(boundedSearchParseCount(5201)).assertEqual(200);
+      expect(boundedSearchParseCount(20)).assertEqual(20);
+      expect(boundedSearchParseCount(-1)).assertEqual(0);
     });
 
     it('normalizesCheckDependencies', 0, () => {

@@ -34,6 +34,13 @@ interface JsDomNode {
 type TocParseItem = HtmlElement | Record<string, unknown>;
 
 const MAX_CONTENT_PAGE_COUNT = 100;
+const MAX_HTML_SEARCH_PARSE_COUNT = 200;
+
+/** 防止异常宽泛规则或超大搜索页在主线程同步解析数千条结果。 */
+export function boundedSearchParseCount(total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(Math.floor(total), MAX_HTML_SEARCH_PARSE_COUNT);
+}
 
 function contentLinkAttribute_(attributes: string, name: string): string {
   const match = attributes.match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
@@ -3057,7 +3064,13 @@ export class SourceExecutor {
         'rule:', source.ruleSearchList);
       return [];
     }
-    console.info('[SrcEx] CSS list rule found', items.length, 'items for', source.sourceName);
+    const matchedItemCount = items.length;
+    const parseItemCount = boundedSearchParseCount(matchedItemCount);
+    console.info('[SrcEx] CSS list rule found', matchedItemCount, 'items for', source.sourceName);
+    if (parseItemCount < matchedItemCount) {
+      console.warn('[SrcEx] Limiting HTML search parsing to', parseItemCount, 'of',
+        matchedItemCount, 'items for', source.sourceName);
+    }
 
     const dynamicRules = await Promise.all([
       this.resolveDynamicRuleTemplate(source.ruleSearchName || '', source, ruleUrl),
@@ -3145,7 +3158,13 @@ export class SourceExecutor {
 
     const results: SearchResult[] = [];
 
-    for (let idx = 0; idx < items.length; idx++) {
+    for (let idx = 0; idx < parseItemCount; idx++) {
+      // 字段选择器解析运行在 ArkUI 主线程；定期让出事件循环，避免触发 THREAD_BLOCK。
+      if (idx > 0 && idx % 50 === 0) {
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout(resolve, 0);
+        });
+      }
       const item = items[idx];
       if (!item) continue;
 
@@ -3169,7 +3188,7 @@ export class SourceExecutor {
       let author = this.cleanAuthorName(getAuthor(item));
       // DEBUG: 显示归一化后的规则 + 匹配到的元素数
       const _normAuthor = this.normalizeCssRule(authorRule);
-      if (idx < 3 || !author) {
+      if (idx < 3) {
         const _htmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
         console.info('[SrcEx] Author debug', source.sourceName,
          'rule=' + authorRule, 'norm=' + _normAuthor, 'got="' + author + '"',
