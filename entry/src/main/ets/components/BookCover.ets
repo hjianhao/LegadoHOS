@@ -19,7 +19,9 @@ export struct BookCover {
   @State useNetwork: boolean = false;
   @State isLocalFile: boolean = false;
   @State decryptedDataUrl: string = '';
+  @State networkDataUrl: string = '';
   @State isDecoding: boolean = false;
+  @State isLoadingFallback: boolean = false;
 
   aboutToAppear(): void {
     this.applyCoverUrl();
@@ -49,6 +51,8 @@ export struct BookCover {
   onCoverUrlChange(): void {
     this.applyCoverUrl();
     this.imgFailed = false;
+    this.decryptedDataUrl = '';
+    this.networkDataUrl = '';
     if (this.useNetwork && this.coverUrl && this.coverDecodeJs && !this.decryptedDataUrl && !this.isDecoding) {
       this.loadAndDecryptCover();
     }
@@ -64,6 +68,44 @@ export struct BookCover {
     }
   }
 
+  /** 图片站常用来源校验；没有详情页上下文时，同站首页是最稳定的 Referer。 */
+  private coverReferer_(url: string): string {
+    const match = (url || '').match(/^(https?:\/\/[^/?#]+)/i);
+    return match && match.length > 1 ? match[1] + '/' : '';
+  }
+
+  private coverRequestHeaders_(url: string): Record<string, string> {
+    return {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Referer': this.coverReferer_(url)
+    };
+  }
+
+  /**
+   * ArkUI Image 不支持为普通网络图统一附加来源头。直接加载失败后，
+   * 携带浏览器 UA 和同站 Referer 下载二进制，再转成 data URL 展示。
+   */
+  private async loadNetworkCoverFallback(): Promise<void> {
+    if (this.isLoadingFallback || !/^https?:\/\//i.test(this.coverUrl)) return;
+    const requestUrl = this.coverUrl;
+    this.isLoadingFallback = true;
+    try {
+      const response = await NetUtil.httpGetBinary(
+        requestUrl, this.coverRequestHeaders_(requestUrl), 20000);
+      if (!response || response.byteLength < 32 || this.coverUrl !== requestUrl) return;
+      const bytes = new Uint8Array(response);
+      const mimeType = this.getImageMimeType(bytes);
+      this.networkDataUrl = this.bytesToDataUrl(bytes, mimeType);
+      this.imgFailed = false;
+      console.info('[BookCover] protected cover fallback OK, size=' + bytes.length);
+    } catch (e) {
+      console.warn('[BookCover] protected cover fallback failed url=' +
+        requestUrl.substring(0, 80) + ' err=' + (e as Error).message);
+    } finally {
+      this.isLoadingFallback = false;
+    }
+  }
+
   /**
    * 下载加密封面并用 coverDecodeJs 解密
    * 如果请求被取消（如 Image 组件冲突导致连接中断），自动重试一次
@@ -73,10 +115,7 @@ export struct BookCover {
     this.imgFailed = false; // 清空上一次的失败状态
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const headers: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'no-referrer'
-        };
+        const headers = this.coverRequestHeaders_(this.coverUrl);
         const response = await NetUtil.httpGetBinary(this.coverUrl, headers);
         if (!response || response.byteLength < 32) {
           console.warn('[BookCover] Encrypted cover download failed or too small');
@@ -158,15 +197,15 @@ export struct BookCover {
       .borderRadius(6)
       .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
 
-      // 解密后的封面（data URL）— 优先显示，不受 imgFailed 影响
-      if (this.decryptedDataUrl) {
-        Image(this.decryptedDataUrl)
+      // 二进制下载后的封面（解密或防盗链回退）优先显示，不受 imgFailed 影响。
+      if (this.decryptedDataUrl || this.networkDataUrl) {
+        Image(this.decryptedDataUrl || this.networkDataUrl)
           .accessibilityText((this.name || '书籍') + '封面')
           .width(this.coverWidth).height(this.coverHeight)
           .borderRadius(6)
           .objectFit(ImageFit.Cover)
           .onError((err: ImageError) => {
-            console.warn('[BookCover] decrypted img failed err=' + (err?.message || ''));
+            console.warn('[BookCover] data img failed err=' + (err?.message || ''));
             this.imgFailed = true;
           })
       }
@@ -181,6 +220,7 @@ export struct BookCover {
           .onError((err: ImageError) => {
             console.warn('[BookCover] img failed url=' + (this.coverUrl || '').substring(0, 50) + ' err=' + (err?.message || ''));
             this.imgFailed = true;
+            if (!this.coverDecodeJs) void this.loadNetworkCoverFallback();
           })
       }
 
