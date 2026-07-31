@@ -16,7 +16,8 @@ import {
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
 import {
   inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
-  isLikelyAiBookDetailUrl, materializeAgentRequest, prepareSourceAgentHtml
+  isLikelyAiBookDetailUrl, isPlausibleAiBookInfo, materializeAgentRequest,
+  prepareSourceAgentHtml
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 
@@ -74,6 +75,35 @@ export default function bookSourceManagementTest() {
     it('requiresSearchAndDetailBookNamesToDescribeTheSameBook', 0, () => {
       expect(isAiBookNameConsistent('马可瓦尔多 - 品书斋', '《马可瓦尔多》')).assertTrue();
       expect(isAiBookNameConsistent('书香文库', '马可瓦尔多')).assertFalse();
+      expect(isAiBookNameConsistent(
+        '马可瓦尔多 - 作者 - 无广告阅读 - 很长的网站名称', '马可瓦尔多')).assertFalse();
+      expect(isAiBookNameConsistent(
+        '马可瓦尔多 body{--wp--preset--color--black:#000} new Vue({})',
+        '马可瓦尔多')).assertFalse();
+    });
+
+    it('rejectsWholePageTextExtractedAsBookInfo', 0, () => {
+      expect(isPlausibleAiBookInfo({
+        name: '夏天、烟火和我的尸体',
+        author: '乙一',
+        coverUrl: 'https://example.com/cover.jpg',
+        introduce: '作品简介',
+        kind: '悬疑推理',
+        wordCount: '5.3万字',
+        lastUpdateTime: '',
+        tocUrl: 'https://example.com/book/1504.html',
+        chapters: [],
+      }, '夏天、烟火和我的尸体')).assertTrue();
+      expect(isPlausibleAiBookInfo({
+        name: '夏天、烟火和我的尸体 body{--wp--preset--color--black:#000}',
+        author: '乙一 new Vue({ el: "#app" })',
+        coverUrl: '',
+        introduce: '',
+        kind: '',
+        wordCount: '',
+        lastUpdateTime: '',
+        chapters: [],
+      }, '夏天、烟火和我的尸体')).assertFalse();
     });
 
     it('reportsOnlyRepairRuleChanges', 0, () => {

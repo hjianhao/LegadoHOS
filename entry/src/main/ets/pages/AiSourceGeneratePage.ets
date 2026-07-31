@@ -237,6 +237,11 @@ struct AiSourceGeneratePage {
     return '−';
   }
 
+  private compactDiagnosticValue_(value: string, limit: number = 600): string {
+    if (!value || value.length <= limit) return value || '';
+    return value.substring(0, limit) + '…（已省略 ' + (value.length - limit) + ' 字符）';
+  }
+
   private buildProcessLog_(): string {
     const lines: string[] = [
       'AI 书源 Agent 过程日志',
@@ -244,18 +249,36 @@ struct AiSourceGeneratePage {
       '网站：' + this.homepageUrl,
       '测试关键词：' + this.searchKeyword,
       '',
-      '阶段结果：',
+      '执行日志：',
     ];
+    for (const message of this.logMessages) lines.push(message);
+
+    lines.push('', '阶段结果：');
     for (const step of this.steps) {
       let stage = '[' + step.label + '] ' + step.status;
       if (step.summary) stage += ' - ' + step.summary;
       lines.push(stage);
       if (Object.keys(step.data).length > 0) {
-        lines.push(JSON.stringify(step.data, null, 2));
+        const compactData: Record<string, string> = {};
+        Object.keys(step.data).forEach((key: string): void => {
+          compactData[key] = this.compactDiagnosticValue_(step.data[key]);
+        });
+        lines.push(JSON.stringify(compactData, null, 2));
       }
     }
-    lines.push('', '执行日志：');
-    for (const message of this.logMessages) lines.push(message);
+
+    const rules = this.agent_?.getCompiledSource() || {};
+    const ruleKeys: string[] = [
+      'ruleSearchUrl', 'ruleSearchList', 'ruleSearchName', 'ruleSearchAuthor',
+      'ruleSearchNoteUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreNoteUrl',
+      'ruleBookInfoName', 'ruleBookInfoAuthor', 'ruleBookInfoCover',
+      'ruleBookInfoIntroduce', 'ruleBookInfoTocUrl', 'ruleToc', 'ruleTocTitle',
+      'ruleTocUrlItem', 'ruleTocNextTocUrl', 'ruleBookContent', 'ruleBookContentNext',
+    ];
+    lines.push('', '当前规则快照：');
+    for (const key of ruleKeys) {
+      if (rules[key]) lines.push(key + '=' + this.compactDiagnosticValue_(rules[key], 1000));
+    }
     return lines.join('\n');
   }
 

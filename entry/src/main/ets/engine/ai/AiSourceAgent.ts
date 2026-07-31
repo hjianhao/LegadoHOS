@@ -217,6 +217,22 @@ function normalizeAiBookName_(value: string): string {
     .replace(/[\s\u3000《》〈〉「」『』【】\[\]（）()·•:：,，。.!！?？_\-—]/g, '');
 }
 
+function hasAiPageArtifact_(value: string): boolean {
+  return /(?:--wp--preset|<style\b|<script\b|body\s*\{|new\s+vue\s*\(|document\.|window\.|友情链接|ICP备|all contents are copyrighted)/i
+    .test(value || '');
+}
+
+function isPlausibleAiDetailValue_(value: string, maxLength: number): boolean {
+  if (!value) return true;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length <= maxLength && !hasAiPageArtifact_(normalized);
+}
+
+function previewAiValue_(value: string): string {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 120 ? normalized.substring(0, 120) + '…' : normalized;
+}
+
 /**
  * Agent 生成的是 HTML/CSS 规则时，链接字段必须显式提取 href。
  * 同时保留 JSONPath/JS 规则，以免修复模式误伤现有的 API/脚本书源。
@@ -240,10 +256,29 @@ export function isLikelyAiBookDetailUrl(url: string): boolean {
 
 /** 搜索书名与详情页书名允许站点后缀和轻微标点差异，但不能是完全不同的页面。 */
 export function isAiBookNameConsistent(actual: string, expected: string): boolean {
+  if (!isPlausibleAiDetailValue_(actual, 200) ||
+    !isPlausibleAiDetailValue_(expected, 200)) return false;
   const normalizedActual = normalizeAiBookName_(actual);
   const normalizedExpected = normalizeAiBookName_(expected);
   if (!normalizedActual || !normalizedExpected) return false;
-  return normalizedActual.includes(normalizedExpected) || normalizedExpected.includes(normalizedActual);
+  if (normalizedExpected.includes(normalizedActual)) return true;
+  if (!normalizedActual.includes(normalizedExpected)) return false;
+  // 允许“书名 - 站点”等短后缀，不接受把作者、广告语和页面标题整体当成书名。
+  return normalizedActual.length - normalizedExpected.length <= 8;
+}
+
+/** 防止 body/html/@text 等宽泛规则把整页 CSS、导航和脚本误当成详情字段。 */
+export function isPlausibleAiBookInfo(info: BookSourceBookInfo, expectedName: string): boolean {
+  if (!info.name || !isAiBookNameConsistent(info.name, expectedName)) return false;
+  if (!isPlausibleAiDetailValue_(info.author, 160)) return false;
+  if (!isPlausibleAiDetailValue_(info.introduce, 12000)) return false;
+  if (!isPlausibleAiDetailValue_(info.kind, 300)) return false;
+  if (!isPlausibleAiDetailValue_(info.wordCount, 100)) return false;
+  if (!isPlausibleAiDetailValue_(info.lastUpdateTime, 100)) return false;
+  if (!isPlausibleAiDetailValue_(info.coverUrl, 2048)) return false;
+  if (!isPlausibleAiDetailValue_(info.tocUrl || '', 2048)) return false;
+  if (info.author && normalizeAiBookName_(info.author) === normalizeAiBookName_(info.name)) return false;
+  return !!info.author || !!info.coverUrl || !!info.introduce || !!info.tocUrl;
 }
 
 function aiSearchRelevance_(item: SearchResult, keyword: string): number {
@@ -626,6 +661,8 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
         const evidence = await this.fetchPage_(bookUrl, '书籍详情');
         const prompt = `分析小说详情页，生成 Legado CSS 规则。只返回 JSON。
 当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
+每个文本字段必须使用具体容器的 CSS 选择器并显式提取 @text；封面提取 @src，目录入口提取 @href。
+禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
 上次验证错误：${lastError || '无'}
 返回：
@@ -642,9 +679,14 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, INFO_FIELDS);
       }
+      if (this.draft_.ruleBookInfoAuthor &&
+        this.draft_.ruleBookInfoAuthor === this.draft_.ruleBookInfoName) {
+        lastError = '作者规则不能与书名规则相同，必须定位独立的作者元素';
+        this.log_('  详情验证失败：' + lastError);
+        continue;
+      }
       const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
-      const hasSecondaryField = !!info.author || !!info.coverUrl || !!info.introduce || !!info.tocUrl;
-      if (info.name && isAiBookNameConsistent(info.name, expectedName) && hasSecondaryField) {
+      if (isPlausibleAiBookInfo(info, expectedName)) {
         this.done_(AiStep.BOOK_INFO, '详情解析通过', {
           name: info.name || '',
           author: info.author || '',
@@ -654,8 +696,22 @@ ruleSearchNoteUrl 必须取“书名主链接”的 @href，不能取分类/作�
       }
       if (!info.name) {
         lastError = '详情页没有解析出书名';
+      } else if (!isPlausibleAiDetailValue_(info.name, 200)) {
+        lastError = '书名规则命中了整页内容或页面外壳：' + previewAiValue_(info.name);
       } else if (!isAiBookNameConsistent(info.name, expectedName)) {
-        lastError = '详情页书名不一致：搜索结果为《' + expectedName + '》，详情解析为《' + info.name + '》';
+        lastError = '详情页书名不一致：搜索结果为《' + expectedName +
+          '》，详情解析为《' + previewAiValue_(info.name) + '》';
+      } else if (!isPlausibleAiDetailValue_(info.author, 160)) {
+        lastError = '作者规则命中了整页内容或页面外壳：' + previewAiValue_(info.author);
+      } else if (info.author &&
+        normalizeAiBookName_(info.author) === normalizeAiBookName_(info.name)) {
+        lastError = '作者解析结果与书名完全相同，作者规则疑似复用了书名元素';
+      } else if (!isPlausibleAiDetailValue_(info.introduce, 12000)) {
+        lastError = '简介规则命中了整页内容或页面外壳';
+      } else if (!isPlausibleAiDetailValue_(info.kind, 300) ||
+        !isPlausibleAiDetailValue_(info.wordCount, 100) ||
+        !isPlausibleAiDetailValue_(info.lastUpdateTime, 100)) {
+        lastError = '详情附加字段命中了整页内容或页面外壳';
       } else {
         lastError = '详情页只有书名，缺少作者、封面、简介或目录入口，疑似误命中列表页';
       }
