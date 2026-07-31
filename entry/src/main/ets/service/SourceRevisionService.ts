@@ -37,6 +37,7 @@ export class SourceRevisionService {
     candidate.enabled = before.enabled;
     candidate.weight = before.weight;
     candidate.customOrder = before.customOrder;
+    candidate.createTime = before.createTime;
     candidate.updateTime = Date.now();
 
     const changed = changedSourceFields(before, candidate);

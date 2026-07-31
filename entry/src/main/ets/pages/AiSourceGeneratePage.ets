@@ -10,8 +10,9 @@ import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { image } from '@kit.ImageKit';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
-import { BookSource, serializeBookSource } from '../model/BookSource';
-import { SourceRevisionService } from '../service/SourceRevisionService';
+import { BookSource } from '../model/BookSource';
+import { changedSourceFields, SourceRevisionService } from '../service/SourceRevisionService';
+import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import pasteboard from '@ohos.pasteboard';
 
 @Entry
@@ -27,6 +28,7 @@ struct AiSourceGeneratePage {
   @State repairMode: boolean = false;
   @State repairSourceName: string = '';
   @State invalidGroups: string[] = [];
+  @State isSaving: boolean = false;
 
   private agent_: AiSourceAgent | null = null;
   private repairSource_: BookSource | null = null;
@@ -193,13 +195,64 @@ struct AiSourceGeneratePage {
       this.steps[AiStep.COMPILE].status === 'done';
   }
 
-  private navigateToEdit(): void {
-    const source = this.agent_?.getCompiledBookSource();
-    if (!source) return;
-    UiUtil.pushUrl(this.getUIContext(), {
-      url: 'pages/BookSourceEditPage',
-      params: { sourceJson: serializeBookSource(source), aiGenerated: '1' }
-    });
+  private async saveGeneratedSource_(): Promise<void> {
+    if (this.isSaving) return;
+    const candidate = this.agent_?.getCompiledBookSource();
+    if (!candidate) return;
+
+    this.isSaving = true;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      const existing = await dao.getSourceByUrl(candidate.sourceUrl);
+      if (!existing) {
+        const now = Date.now();
+        candidate.id = 0;
+        candidate.enabled = true;
+        candidate.createTime = candidate.createTime || now;
+        candidate.updateTime = now;
+        candidate.id = await dao.insertSource(candidate);
+        BookSourceChangeNotifier.notify();
+        UiUtil.showToast(this.getUIContext(), {
+          message: '书源已新增并启用', duration: 1800
+        });
+        UiUtil.back(this.getUIContext());
+        return;
+      }
+
+      const changed = changedSourceFields(existing, candidate);
+      if (changed.length === 0) {
+        UiUtil.showToast(this.getUIContext(), {
+          message: '已有书源与生成结果一致，无需重复保存', duration: 2000
+        });
+        UiUtil.back(this.getUIContext());
+        return;
+      }
+
+      const result = await UiUtil.showDialog(this.getUIContext(), {
+        title: '更新已有书源？',
+        message: '网址对应的书源“' + existing.sourceName + '”已经存在。\n\n' +
+          '更新会替换 AI 识别出的规则，同时保留原书源名称、分组、启用状态和排序；旧规则会保存为可回滚版本。',
+        buttons: [
+          { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+          { text: '更新', color: ThemeColors.primary(this.isDark) },
+        ]
+      });
+      if (result.index !== 1) return;
+
+      const applied = await SourceRevisionService.applyRepair(
+        existing, candidate, 'AI 生成书源：更新已有同网址书源');
+      UiUtil.showToast(this.getUIContext(), {
+        message: '书源已更新，修改 ' + applied.length + ' 个字段', duration: 2000
+      });
+      UiUtil.back(this.getUIContext());
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '保存失败：' + (e as Error).message, duration: 2400
+      });
+    } finally {
+      this.isSaving = false;
+    }
   }
 
   private applyRepair(): void {
@@ -423,10 +476,11 @@ struct AiSourceGeneratePage {
                     .fontColor(ThemeColors.onPrimary(this.isDark))
                     .onClick(() => { this.applyRepair(); })
                 } else {
-                  Button('编辑规则').height(44).layoutWeight(1).borderRadius(22)
+                  Button(this.isSaving ? '保存中…' : '保存书源').height(44).layoutWeight(1).borderRadius(22)
                     .backgroundColor(ThemeColors.primary(this.isDark))
                     .fontColor(ThemeColors.onPrimary(this.isDark))
-                    .onClick(() => { this.navigateToEdit(); })
+                    .enabled(!this.isSaving)
+                    .onClick(() => { void this.saveGeneratedSource_(); })
                 }
               }
             }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%')
