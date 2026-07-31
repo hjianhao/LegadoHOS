@@ -76,6 +76,7 @@ export class WebViewFetcher {
       console.info('[WebViewFetcher] Reusing interactive HTML:', cacheKey.substring(0, 80));
       // 命中后移到 Map 末尾并续期，保证完整 Agent 链路最终复检时仍可复用。
       WebViewFetcher.interactivePageCache.delete(cacheKey);
+      cached.html = WebViewFetcher.decodeJavaScriptString(cached.html);
       cached.cachedAt = Date.now();
       WebViewFetcher.interactivePageCache.set(cacheKey, cached);
       return cached.html;
@@ -84,7 +85,8 @@ export class WebViewFetcher {
     if (!WebViewFetcher.interactiveFetcher) {
       throw new Error('Interactive fetcher not registered');
     }
-    const html = await WebViewFetcher.interactiveFetcher(url);
+    const rawHtml = await WebViewFetcher.interactiveFetcher(url);
+    const html = WebViewFetcher.decodeJavaScriptString(rawHtml);
     if (WebViewFetcher.isReusableInteractiveHtml(html)) {
       WebViewFetcher.interactivePageCache.set(cacheKey, {
         html: html,
@@ -463,13 +465,11 @@ export class WebViewFetcher {
     return WebViewFetcher.controller !== null;
   }
 
-  // ========== 私有方法 ==========
-
   /**
    * ArkWeb 会把 runJavaScript 的字符串结果再编码成 JSON 字符串。
    * 例如 outerHTML 返回 "\u003Chtml..."，需先反序列化后才能交给 HTML 解析器。
    */
-  private static decodeJavaScriptString(value: string): string {
+  static decodeJavaScriptString(value: string): string {
     if (!value) return '';
     try {
       const decoded = JSON.parse(value) as unknown;
@@ -478,6 +478,8 @@ export class WebViewFetcher {
       return value;
     }
   }
+
+  // ========== 私有方法 ==========
 
   /** 开始轮询 document.readyState */
   private static startPolling(): void {

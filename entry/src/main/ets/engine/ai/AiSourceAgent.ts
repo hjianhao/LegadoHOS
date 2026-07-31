@@ -919,7 +919,7 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
         ? await WebViewFetcher.fetchInteractive(finalUrl)
         : await this.callback_.onRequestWebView(finalUrl, reason);
       if (interactive && interactive.length > 300) {
-        html = interactive;
+        html = WebViewFetcher.decodeJavaScriptString(interactive);
         usedWebView = true;
         interactiveCompleted = true;
         this.requiresWebView_ = true;

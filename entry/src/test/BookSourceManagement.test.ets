@@ -20,6 +20,7 @@ import {
   prepareSourceAgentHtml
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
+import { WebViewFetcher } from '../main/ets/engine/web/WebViewFetcher';
 
 export default function bookSourceManagementTest() {
   describe('bookSourceManagement', () => {
@@ -59,6 +60,15 @@ export default function bookSourceManagementTest() {
       expect(prepared).assertContain('href="/book/1"');
       expect(prepared.indexOf('secret')).assertEqual(-1);
       expect(prepared.indexOf('ignore()')).assertEqual(-1);
+    });
+
+    it('decodesArkWebOuterHtmlBeforeRuleParsing', 0, () => {
+      const encoded = '"\\u003Chtml\\u003E\\u003Cbody class=\\"books\\"\\u003E小说\\n列表' +
+        '\\u003C/body\\u003E\\u003C/html\\u003E"';
+      const decoded = WebViewFetcher.decodeJavaScriptString(encoded);
+      expect(decoded).assertEqual('<html><body class="books">小说\n列表</body></html>');
+      expect(WebViewFetcher.decodeJavaScriptString('<html>直接结果</html>'))
+        .assertEqual('<html>直接结果</html>');
     });
 
     it('rejectsNavigationPagesAndTextRulesFromAiSourceSamples', 0, () => {

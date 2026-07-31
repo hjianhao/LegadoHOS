@@ -98,7 +98,7 @@ export struct CloudflareDialog {
         'document.documentElement.outerHTML'
       );
       if (html && typeof html === 'string' && html.length > 200) {
-        const clean = html.replace(/^"|"$/g, '');
+        const clean = WebViewFetcher.decodeJavaScriptString(html);
         console.info('[CloudflareDialog] Extracted HTML:', clean.length, 'bytes');
         if (WebViewFetcher.interactiveResolve) {
           WebViewFetcher.interactiveResolve(clean);
