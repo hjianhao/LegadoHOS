@@ -4,6 +4,7 @@
     "pages/SettingsPage",
     "pages/AiConfigPage",
     "pages/AiImportBookPage",
+    "pages/AiSourceGeneratePage",
     "pages/SearchPage",
     "pages/SearchContentPage",
     "pages/ReadPage",

@@ -604,15 +604,11 @@ export struct BookSourcePage {
           Text(this.sources.length + ' 个书源' + (this.isSelectMode_ ? ' · 已选 ' + this.selectedIds.length : ''))
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
         }.layoutWeight(1)
-        // 选择模式：显示"取消"按钮；非选择模式：显示新建/导入/分组按钮
+        // 选择模式：显示"取消"按钮；非选择模式：显示 AI/导入/分组按钮
         // 使用 visibility 避免条件渲染导致组件重建
         Button($r('app.string.common_cancel')).height(40).backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Visible : Visibility.Hidden)
           .onClick(() => { this.exitSelectMode(); })
-        Button($r('app.string.ui_literal_0cda8d1c71')).fontSize(14).height(40).borderRadius(20).padding({ left: 16, right: 16 })
-          .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
-          .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
-          .onClick(() => { UiUtil.pushUrl(this.getUIContext(), { url: 'pages/BookSourceEditPage' }); })
         Button('AI').height(40).padding({ left: 12, right: 12 })
           .backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
           .visibility(this.isSelectMode_ ? Visibility.Hidden : Visibility.Visible)
