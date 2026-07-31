@@ -44,7 +44,6 @@ export struct BookSourcePage {
   @State listRevision_: number = 0;
   private suppressClick_: boolean = false;
   @State showSortMenu: boolean = false;
-  @State contextMenuId: number = 0;
   @State operationBusy_: boolean = false;
   @State isChecking: boolean = false;
   @State checkProgress: number = 0;
@@ -252,7 +251,6 @@ export struct BookSourcePage {
       this.syncSelectedSet_();
       // 最后一项被取消时退出选择模式
       if (this.selectedIds.length === 0) this.isSelectMode_ = false;
-      this.contextMenuId = 0;
     }, 0);
   }
 
@@ -280,7 +278,6 @@ export struct BookSourcePage {
       this.selectedIds = [id];
       this.syncSelectedSet_();
       this.isSelectMode_ = true;
-      this.contextMenuId = 0;
       // 下一帧解除抑制
       setTimeout(() => { this.suppressClick_ = false; }, 50);
     }, 0);
@@ -441,7 +438,6 @@ export struct BookSourcePage {
     if (!this.dao_) return;
     await this.runOperation_(async (): Promise<void> => {
       await this.dao_!.moveSourceToEdge(source.id, top);
-      this.contextMenuId = 0;
       this.sortMode = 0;
       this.sortAscending = true;
       await this.load();
@@ -457,8 +453,36 @@ export struct BookSourcePage {
       this.exploreStateVersion_++;
       BookSourceChangeNotifier.notify();
       this.applyFilters();
-      this.contextMenuId = 0;
     });
+  }
+
+  /** 使用系统浮层菜单，避免菜单内容参与 ListItem 测量并撑高当前行。 */
+  private sourceMenuOptions_(source: BookSource): MenuElement[] {
+    const options: MenuElement[] = [];
+    if (source.loginUrl || source.loginUi) {
+      options.push({ value: '登录', action: (): void => { this.openLogin(source); } });
+    }
+    options.push(
+      { value: '置顶', action: (): void => { void this.moveToEdge(source, true); } },
+      { value: '置底', action: (): void => { void this.moveToEdge(source, false); } },
+      {
+        value: this.isExploreEnabled(source) ? '停用发现' : '启用发现',
+        action: (): void => { void this.toggleExplore(source); }
+      },
+      { value: '搜索测试', action: (): void => { this.openSearch(source); } },
+      { value: '规则调试', action: (): void => { this.openDebug(source); } },
+      { value: 'AI 诊断修复', action: (): void => { this.openAiRepair(source); } },
+      {
+        value: '删除',
+        action: (): void => {
+          this.selectedIds = [source.id];
+          this.syncSelectedSet_();
+          this.isSelectMode_ = false;
+          this.confirmDelete();
+        }
+      }
+    );
+    return options;
   }
 
   private async openCheckConfig(): Promise<void> {
@@ -767,7 +791,7 @@ export struct BookSourcePage {
       }
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
-      .onClick(() => { this.showSortMenu = false; this.contextMenuId = 0; })
+      .onClick(() => { this.showSortMenu = false; })
   }
 
   @Builder
@@ -845,38 +869,13 @@ export struct BookSourcePage {
           .fontColor(ThemeColors.secondaryText(this.isDark))
           .visibility(this.isSelectMode() ? Visibility.None : Visibility.Visible)
           .accessibilityText($r('app.string.ui_77836d3a99'))
-          .onClick(() => { this.contextMenuId = this.contextMenuId === source.id ? 0 : source.id; })
+          .bindMenu(this.sourceMenuOptions_(source))
       }.width('100%').padding({ left: 12, right: 6, top: 12, bottom: 12 })
         .borderRadius(16).backgroundColor(this.isSelected(source.id) ? ThemeColors.surfaceVariant(this.isDark) : ThemeColors.surface(this.isDark))
         .gesture(LongPressGesture().onAction(() => {
           if (!this.isSelectMode_) this.enterSelectMode(source.id);
           else this.toggleSelect(source.id);
         }))
-
-      if (this.contextMenuId === source.id) {
-        Column() {
-          if (source.loginUrl || source.loginUi) this.menuItem('登录', false, () => { this.contextMenuId = 0; this.openLogin(source); })
-          this.menuItem('置顶', false, () => { this.moveToEdge(source, true); })
-          this.menuItem('置底', false, () => { this.moveToEdge(source, false); })
-          this.menuItem(this.isExploreEnabled(source) ? '停用发现' : '启用发现', false, () => { this.toggleExplore(source); })
-          this.menuItem('搜索测试', false, () => { this.contextMenuId = 0; this.openSearch(source); })
-          this.menuItem('规则调试', false, () => { this.contextMenuId = 0; this.openDebug(source); })
-          this.menuItem('AI 诊断修复', false, () => { this.contextMenuId = 0; this.openAiRepair(source); })
-          this.menuItem('删除', true, () => {
-            this.selectedIds = [source.id]; this.syncSelectedSet_();
-            this.isSelectMode_ = false; this.contextMenuId = 0; this.confirmDelete();
-          })
-        }.width(136).padding({ top: 4, bottom: 4 }).borderRadius(16)
-          .backgroundColor(ThemeColors.surface(this.isDark)).shadow({ radius: 12, color: ThemeColors.scrim(this.isDark) })
-          .position({ right: 12, top: 48 }).zIndex(120)
-      }
     }.width('100%')
-  }
-
-  @Builder
-  menuItem(label: string, danger: boolean, action: () => void) {
-    Text(label).fontSize(14).height(44).width('100%').padding({ left: 16, right: 16 })
-      .fontColor(danger ? ThemeColors.error(this.isDark) : ThemeColors.onSurface(this.isDark))
-      .onClick(action)
   }
 }
