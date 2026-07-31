@@ -73,13 +73,17 @@ export class WebViewFetcher {
     const cacheKey = WebViewFetcher.interactiveCacheKey(url);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt <= WebViewFetcher.INTERACTIVE_CACHE_TTL_MS) {
-      console.info('[WebViewFetcher] Reusing interactive HTML:', cacheKey.substring(0, 80));
-      // 命中后移到 Map 末尾并续期，保证完整 Agent 链路最终复检时仍可复用。
       WebViewFetcher.interactivePageCache.delete(cacheKey);
       cached.html = WebViewFetcher.decodeJavaScriptString(cached.html);
-      cached.cachedAt = Date.now();
-      WebViewFetcher.interactivePageCache.set(cacheKey, cached);
-      return cached.html;
+      if (WebViewFetcher.isReusableInteractiveHtml(cached.html)) {
+        console.info('[WebViewFetcher] Reusing interactive HTML:', cacheKey.substring(0, 80));
+        // 命中后移到 Map 末尾并续期，保证完整 Agent 链路最终复检时仍可复用。
+        cached.cachedAt = Date.now();
+        WebViewFetcher.interactivePageCache.set(cacheKey, cached);
+        return cached.html;
+      }
+      console.info('[WebViewFetcher] Discarding unfinished interactive HTML:',
+        cacheKey.substring(0, 80));
     }
     if (cached) WebViewFetcher.interactivePageCache.delete(cacheKey);
     if (!WebViewFetcher.interactiveFetcher) {
@@ -111,12 +115,7 @@ export class WebViewFetcher {
 
   private static isReusableInteractiveHtml(html: string): boolean {
     if (!html || html.length < 300) return false;
-    // 小型验证页不能进入缓存；验证后的真实内容通常明显更大。
-    if (html.length < 65536 &&
-      /challenge-platform|_cf_chl_opt|cf-turnstile|checking your browser|cloudflare|访问验证/i.test(html)) {
-      return false;
-    }
-    return true;
+    return !WebViewFetcher.isInteractiveChallengeHtml(html);
   }
 
   // ========== DNS（DoH）配置 ==========
@@ -477,6 +476,16 @@ export class WebViewFetcher {
     } catch (_e) {
       return value;
     }
+  }
+
+  /**
+   * 判断当前 DOM 是否仍停留在验证码/WAF 输入页。
+   * 不能仅凭 challenge-platform/cloudflare 字样判断：很多正常页面也会加载 Cloudflare 统计脚本。
+   */
+  static isInteractiveChallengeHtml(html: string): boolean {
+    if (!html) return true;
+    return /_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证|请输入验证码|searchcode\.php|__17mb_input/i
+      .test(html);
   }
 
   // ========== 私有方法 ==========

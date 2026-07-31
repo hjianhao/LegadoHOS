@@ -99,6 +99,10 @@ export struct CloudflareDialog {
       );
       if (html && typeof html === 'string' && html.length > 200) {
         const clean = WebViewFetcher.decodeJavaScriptString(html);
+        if (WebViewFetcher.isInteractiveChallengeHtml(clean)) {
+          this.pageTitle = '验证尚未完成，请输入验证码并等待结果出现';
+          return;
+        }
         console.info('[CloudflareDialog] Extracted HTML:', clean.length, 'bytes');
         if (WebViewFetcher.interactiveResolve) {
           WebViewFetcher.interactiveResolve(clean);

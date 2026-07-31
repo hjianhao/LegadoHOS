@@ -958,10 +958,7 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
   }
 
   private isChallengePage_(html: string): boolean {
-    const value = (html || '').toLowerCase();
-    return !value || value.includes('challenge-platform') || value.includes('_cf_chl_opt') ||
-      value.includes('cf-turnstile') || value.includes('cloudflare') ||
-      value.includes('checking your browser') || value.includes('访问验证');
+    return WebViewFetcher.isInteractiveChallengeHtml(html);
   }
 
   private isLoginPage_(html: string, url: string): boolean {

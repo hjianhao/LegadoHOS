@@ -203,10 +203,7 @@ export function needsWebViewDocument(html: string, url: string = ''): boolean {
   const text = html.trim();
   if (text.startsWith('{') || text.startsWith('[')) return false;
   if (isWafProbeHtml(text)) return true;
-  if (text.length < 65536 &&
-    /challenge-platform|_cf_chl_opt|cf-turnstile|checking your browser|cloudflare|访问验证/i.test(text)) {
-    return true;
-  }
+  if (WebViewFetcher.isInteractiveChallengeHtml(text)) return true;
   if (/<div[^>]+id=["'](?:app|root|__next)["'][^>]*>\s*<\/div>/i.test(text)) return true;
   const loginUrl = /\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url);
   const passwordForm = /<input\b[^>]*type=["']?password/i.test(text) &&

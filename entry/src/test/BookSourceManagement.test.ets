@@ -71,6 +71,15 @@ export default function bookSourceManagementTest() {
         .assertEqual('<html>直接结果</html>');
     });
 
+    it('distinguishesCaptchaFormFromNormalCloudflareScript', 0, () => {
+      const captcha = '<script>var url_search="/searchcode.php?t=1"</script>' +
+        '<input id="__17mb_input" title="请输入验证码">';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(captcha)).assertTrue();
+      const normalPage = '<table class="table"><tr><td><a href="/book/1">书名</a></td></tr></table>' +
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(normalPage)).assertFalse();
+    });
+
     it('rejectsNavigationPagesAndTextRulesFromAiSourceSamples', 0, () => {
       expect(isLikelyAiBookDetailUrl(
         'https://www.pinshuzhai.com/bookcat/shuxiangwenku')).assertFalse();
