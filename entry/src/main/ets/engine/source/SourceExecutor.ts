@@ -1388,7 +1388,9 @@ export class SourceExecutor {
 
   private cleanAuthorName(raw: string): string {
     return (raw || '')
+      .replace(/[\r\n]+/g, ' ')
       .replace(/^[\s　]*(作者|作\s*者|著者|作者名|作者名称|author)\s*[:：=－\-]?\s*/i, '')
+      .replace(/[\s　]*(?:最后|最近|最新)?(?:更新时间|更新日期|最后更新|最新更新|更新|最新章节|字数|总字数|作品状态|连载状态|状态|作品类型|分类|类别|类型)\s*[:：=－\-]?\s*[\s\S]*$/i, '')
       .replace(/\s*(著|作品)?\s*$/g, '')
       .trim();
   }
@@ -1649,7 +1651,7 @@ export class SourceExecutor {
 
       return {
         name: infoName,
-        author: extractField(source.ruleBookInfoAuthor) || '',
+        author: this.cleanAuthorName(extractField(source.ruleBookInfoAuthor) || ''),
         coverUrl: extractField(source.ruleBookInfoCover) || '',
         // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
         introduce: HtmlUtil.toPlainText(extractField(source.ruleBookInfoIntroduce) || ''),
@@ -1677,7 +1679,7 @@ export class SourceExecutor {
       }
       const info: BookSourceBookInfo = {
         name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
-        author: this.extractJsonRuleValue(source.ruleBookInfoAuthor, root),
+        author: this.cleanAuthorName(this.extractJsonRuleValue(source.ruleBookInfoAuthor, root)),
         coverUrl: this.extractJsonRuleValue(source.ruleBookInfoCover, root),
         introduce: HtmlUtil.toPlainText(this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root)),
         kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
@@ -3205,9 +3207,14 @@ export class SourceExecutor {
       const compileOne = (rawRule: string): ((item: HtmlElement) => string) => {
         // 分离 @js: 后缀
         const { rule: cssPart, jsCode } = JsExpressionEvaluator.stripJsSuffix(rawRule);
+        const ajaxJs = /java\.ajax\s*\(\s*result\b/i.test(jsCode);
+        // java.ajax(result) 的 result 必须是原始 href，不能先被 ## 正则清空；
+        // 这类后处理应当在 ajax 返回详情 HTML 后再执行。
+        const ajaxPostRule = ajaxJs && cssPart.includes('##') ? cssPart : '';
+        const cssRule = ajaxPostRule ? cssPart.substring(0, cssPart.indexOf('##')).trim() : cssPart;
         return (item: HtmlElement): string => {
           // 先执行 CSS 提取
-          let result = processPutGet(cssPart, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+          let result = processPutGet(cssRule, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
           // 如果有 @js: 后处理，执行 JS
           if (jsCode) {
             try {
@@ -3217,8 +3224,12 @@ export class SourceExecutor {
                   const val = parser.extractAttr(item, this.normalizeCssRule(rule));
                   return JSON.stringify(val || '');
                 });
-              const ctx: JsEvalContext = { result: result, baseUrl: baseUrl } as unknown as JsEvalContext;
-            ctx.jsLib = source.jsLib || '';
+              const ctx: JsEvalContext = {
+                result: result,
+                baseUrl: baseUrl,
+                source: source,
+                jsLib: source.jsLib || '',
+              } as unknown as JsEvalContext;
               const evalResult = JsExpressionEvaluator.evaluateSync(processedCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {
@@ -3229,6 +3240,9 @@ export class SourceExecutor {
                 }
               }
             } catch (_e) { /* ignore JS error */ }
+          }
+          if (ajaxPostRule && result) {
+            result = this.postProcessRule(ajaxPostRule, result);
           }
           return result;
         };
@@ -3649,7 +3663,7 @@ export class SourceExecutor {
 
       // 2) 从每个条目中提取字段
       const name = this.extractFieldByCss(itemHtml, nameRule) || '';
-      const author = this.extractFieldByCss(itemHtml, authorRule) || '';
+      const author = this.cleanAuthorName(this.extractFieldByCss(itemHtml, authorRule) || '');
       const coverRaw = this.extractFieldByCss(itemHtml, coverRule) || '';
       let noteUrl = this.extractFieldByCss(itemHtml, noteUrlRule) || '';
 

@@ -473,11 +473,22 @@ export class JsExpressionEvaluator {
   static stripJsSuffix(rule: string): { rule: string; jsCode: string } {
     if (!rule) return { rule: '', jsCode: '' };
     const jsIdx = rule.indexOf('@js:');
-    if (jsIdx < 0) return { rule, jsCode: '' };
-    if (jsIdx > 0 && rule[jsIdx - 1] === '@') return { rule, jsCode: '' };
+    if (jsIdx >= 0 && !(jsIdx > 0 && rule[jsIdx - 1] === '@')) {
+      return {
+        rule: rule.substring(0, jsIdx).trim(),
+        jsCode: rule.substring(jsIdx + 4).trim(),
+      };
+    }
+    // Legado 书源大量使用 field<js>...</js>##regex##replacement，
+    // 不能把 <js> 块留在 CSS 选择器中，否则 a@href 会被解析成无效选择器。
+    // 保留 </js> 后面的 ## 后处理规则，供调用方在 JS 返回值上继续执行。
+    const jsMatch = rule.match(/<js>([\s\S]*?)<\/js>/i);
+    if (!jsMatch || jsMatch.index === undefined) return { rule, jsCode: '' };
+    const before = rule.substring(0, jsMatch.index).trim();
+    const after = rule.substring(jsMatch.index + jsMatch[0].length).trim();
     return {
-      rule: rule.substring(0, jsIdx).trim(),
-      jsCode: rule.substring(jsIdx + 4).trim(),
+      rule: (before + (after ? ' ' + after : '')).trim(),
+      jsCode: jsMatch[1].trim(),
     };
   }
 
