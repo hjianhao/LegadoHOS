@@ -8,6 +8,7 @@
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../../theme/ThemeColors';
 import { WebViewFetcher } from '../../engine/web/WebViewFetcher';
+import { CookieStore } from '../../util/CookieStore';
 
 @CustomDialog
 export struct CloudflareDialog {
@@ -102,6 +103,16 @@ export struct CloudflareDialog {
         if (WebViewFetcher.isInteractiveChallengeHtml(clean)) {
           this.pageTitle = '验证尚未完成，请输入验证码并等待结果出现';
           return;
+        }
+        try {
+          const webCookie = web_webview.WebCookieManager.fetchCookieSync(this.url);
+          if (webCookie && webCookie.trim()) {
+            await CookieStore.getInstance().setCookie(this.url, webCookie);
+            console.info('[CloudflareDialog] WebView Cookie 已同步，长度=' + webCookie.length);
+          }
+        } catch (cookieError) {
+          console.warn('[CloudflareDialog] 同步 WebView Cookie 失败：',
+            (cookieError as Error).message);
         }
         console.info('[CloudflareDialog] Extracted HTML:', clean.length, 'bytes');
         if (WebViewFetcher.interactiveResolve) {

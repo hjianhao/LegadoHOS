@@ -930,11 +930,34 @@ ${this.evidenceRuleHint_(evidence.html)}
     if (!isSafeAiImportUrl(spec.url)) throw new Error(label + ' URL 无效');
     if (spec.webView) return await this.fetchPage_(spec.url, label, true);
     if (spec.method === 'POST') {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': this.draft_?.sourceUrl || '',
-      };
-      const html = await NetUtil.httpPost(spec.url, spec.body, headers, 30000);
+      const headers: Record<string, string> = this.headerMap_(this.draft_?.header || '');
+      headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
+      headers['Referer'] = this.draft_?.sourceUrl || '';
+      let html: string;
+      try {
+        html = await NetUtil.httpPost(spec.url, spec.body, headers, 30000);
+      } catch (e) {
+        const message = (e as Error).message || String(e);
+        if (!/(403|429|Cloudflare|WAF|Just a moment|5\d\d)/i.test(message)) throw e;
+
+        // WebView 本身不能直接重放 POST，但可以先完成 Cloudflare 验证并把 Cookie
+        // 同步到 CookieStore；随后重试原始 POST，保留表单方法和请求体语义。
+        this.log_('  POST 被 WAF 拦截，转交 WebView 完成人工验证');
+        try {
+          await this.fetchPage_(spec.url, label + '（WebView 验证）', true);
+        } catch (webViewError) {
+          this.log_('  WebView 验证页未返回可分析内容：' +
+            ((webViewError as Error).message || String(webViewError)).substring(0, 120));
+        }
+        try {
+          html = await NetUtil.httpPost(spec.url, spec.body, headers, 30000);
+          this.log_('  WebView 验证后的 POST 重试成功');
+        } catch (retryError) {
+          const retryMessage = (retryError as Error).message || String(retryError);
+          throw new Error(label + ' POST 仍被网站拦截（已尝试 WebView 验证）：' +
+            retryMessage.substring(0, 180));
+        }
+      }
       return {
         url: spec.url,
         finalUrl: spec.url,
