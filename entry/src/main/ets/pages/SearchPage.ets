@@ -128,6 +128,9 @@ export struct SearchPage {
   private expandedSourceRunId: number = 0;
   private queryHintTimer: number = -1;
   private initialized: boolean = false;
+  // 页面初始化是异步的，用户可能在书源列表尚未加载完成时直接点击搜索。
+  // 保存初始化 Promise，搜索入口统一等待它完成，避免把暂时的空数组当成“无书源”。
+  private initPromise_: Promise<void> | null = null;
   private previewItem: SearchResult | null = null;
   private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
   private onlineImporter_: AiBookImporter | null = null;
@@ -173,7 +176,7 @@ export struct SearchPage {
         this.onlineImporting = false;
       }
     });
-    this.initPage();
+    this.initPromise_ = this.initPage();
   }
 
   aboutToDisappear(): void {
@@ -591,7 +594,7 @@ export struct SearchPage {
         this.keyword = key.trim();
         this.showSuggestions = false;
         if (this.searchMode === 1) await this.openOnlineSearch_(key);
-        else await this.doSearch(key);
+        else await this.doSearch(key, true);
       }
     } catch (_e) { /* ignore */ }
   }
@@ -931,7 +934,14 @@ export struct SearchPage {
     UiUtil.showToast(this.getUIContext(), { message: '已停止搜索', duration: 1200 });
   }
 
-  async doSearch(kw?: string): Promise<void> {
+  async doSearch(kw?: string, skipInitWait: boolean = false): Promise<void> {
+    if (!skipInitWait && this.initPromise_) {
+      try {
+        await this.initPromise_;
+      } catch (e) {
+        console.error('[SearchPage] init before search failed: ' + ((e as Error).message || String(e)));
+      }
+    }
     const q = (kw || this.keyword).trim();
     if (!q) return;
     const searchable = this.getActiveSources();
