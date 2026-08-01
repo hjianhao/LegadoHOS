@@ -82,10 +82,12 @@ struct AiSourceGeneratePage {
   @State repairMode: boolean = false;
   @State repairSourceName: string = '';
   @State invalidGroups: string[] = [];
+  @State repairLoadError: string = '';
   @State isSaving: boolean = false;
 
   private agent_: AiSourceAgent | null = null;
   private repairSource_: BookSource | null = null;
+  private repairSourceUrl_: string = '';
   private challengeDlg?: CustomDialogController;
   private saveNameDlg?: CustomDialogController;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
@@ -119,6 +121,7 @@ struct AiSourceGeneratePage {
     const repairUrl = params ? String(params['repairSourceUrl'] || '') : '';
     if (repairUrl) {
       this.repairMode = true;
+      this.repairSourceUrl_ = repairUrl;
       this.searchKeyword = String(params['repairKeyword'] || '我');
       try {
         const groups = JSON.parse(String(params['invalidGroups'] || '[]')) as string[];
@@ -180,6 +183,7 @@ struct AiSourceGeneratePage {
   }
 
   private async loadRepairSource_(sourceUrl: string): Promise<void> {
+    this.repairLoadError = '';
     try {
       await AppDatabase.getInstance().waitForInit();
       this.repairSource_ = await new BookSourceTable(AppDatabase.getInstance().rdbStore)
@@ -190,9 +194,14 @@ struct AiSourceGeneratePage {
       if (this.invalidGroups.length === 0) {
         this.invalidGroups = ['搜索', '发现', '详情', '目录', '正文'];
       }
+      console.info('[AiSourceGeneratePage] repair source loaded: ' + this.repairSourceName);
     } catch (e) {
+      const message = (e as Error).message || String(e);
+      this.repairSource_ = null;
+      this.repairLoadError = message;
+      console.error('[AiSourceGeneratePage] load repair source failed: ' + message);
       UiUtil.showToast(this.getUIContext(), {
-        message: '加载待修复书源失败：' + (e as Error).message, duration: 2000
+        message: '加载待修复书源失败：' + message, duration: 2500
       });
     }
   }
@@ -212,21 +221,30 @@ struct AiSourceGeneratePage {
 
   private async startAnalyze(): Promise<void> {
     if (this.isAnalyzing) return;
+    // 修复模式：进入页面后书源可能尚未加载完成或加载失败，点击时自动重新加载。
+    if (this.repairMode && !this.repairSource_ && this.repairSourceUrl_) {
+      await this.loadRepairSource_(this.repairSourceUrl_);
+    }
+    if (this.repairMode && !this.repairSource_) {
+      UiUtil.showToast(this.getUIContext(), {
+        message: '待修复书源加载失败，请点击“重新加载书源”后重试', duration: 2200
+      });
+      return;
+    }
     if (!this.homepageUrl.startsWith('http')) {
       UiUtil.showToast(this.getUIContext(), { message: '请输入有效的网址', duration: 1500 });
       return;
     }
     if (!this.agent_) return;
-    await this.agent_.init(UiUtil.getHostContext(this.getUIContext()));
-    if (!this.agent_.isConfigured()) {
-      UiUtil.showToast(this.getUIContext(), { message: '请先配置 AI API 和模型', duration: 1800 });
-      return;
-    }
-
     this.isAnalyzing = true;
     this.logMessages = [];
     this.initializeSteps_();
     try {
+      await this.agent_.init(UiUtil.getHostContext(this.getUIContext()));
+      if (!this.agent_.isConfigured()) {
+        UiUtil.showToast(this.getUIContext(), { message: '请先配置 AI API 和模型', duration: 1800 });
+        return;
+      }
       const results = this.repairMode && this.repairSource_
         ? await this.agent_.repair(this.repairSource_, this.searchKeyword, this.invalidGroups)
         : await this.agent_.analyze(this.homepageUrl, this.searchKeyword);
@@ -464,6 +482,21 @@ struct AiSourceGeneratePage {
             Text('失败阶段：' + this.invalidGroups.join('、')).fontSize(12)
               .fontColor(ThemeColors.error(this.isDark)).width('100%').margin({ bottom: 16 })
           }
+          if (this.repairMode && this.repairLoadError.length > 0) {
+            Row() {
+              Text('书源加载失败：' + this.repairLoadError).fontSize(12).lineHeight(18)
+                .fontColor(ThemeColors.error(this.isDark)).layoutWeight(1)
+              Button('重新加载书源').fontSize(12).height(32).borderRadius(16)
+                .backgroundColor(ThemeColors.transparent())
+                .fontColor(ThemeColors.primary(this.isDark))
+                .onClick(() => {
+                  if (this.repairSourceUrl_) void this.loadRepairSource_(this.repairSourceUrl_);
+                })
+            }.width('100%').margin({ bottom: 12 })
+          } else if (this.repairMode && !this.repairSource_) {
+            Text('正在加载待修复书源…').fontSize(12)
+              .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 12 })
+          }
           Text('网站首页或小说站 URL').fontSize(14)
             .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 6 })
           TextInput({ text: this.homepageUrl, placeholder: 'https://example.com' })
@@ -481,7 +514,6 @@ struct AiSourceGeneratePage {
             .fontColor(ThemeColors.onPrimary(this.isDark))
             .backgroundColor(ThemeColors.primary(this.isDark))
             .width('100%').height(48).borderRadius(24).margin({ top: 28 })
-            .enabled(!this.repairMode || this.repairSource_ !== null)
             .onClick(() => { void this.startAnalyze(); })
           Text('Agent 会真实执行搜索、详情、目录和正文规则；遇到登录或验证码会暂停等待操作。')
             .fontSize(11).lineHeight(17).fontColor(ThemeColors.secondaryText(this.isDark))
