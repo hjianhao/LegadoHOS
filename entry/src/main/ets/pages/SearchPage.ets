@@ -514,7 +514,35 @@ export struct SearchPage {
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.sources = await dao.getEnabledSources();
-    } catch (_e) { this.sources = []; }
+      // 书源修复/导入后，旧的搜索范围可能还保存着已经不存在的 sourceUrl。
+      // 若不清理，getActiveSources 会在搜索开始前直接得到空数组。
+      if (this.scopeBySource && this.selectedSourceUrls.length > 0) {
+        const available = new Set<string>(this.sources.map((source: BookSource): string => source.sourceUrl));
+        const selected = this.selectedSourceUrls.slice();
+        const valid = selected.filter((url: string): boolean => available.has(url));
+        if (valid.length !== selected.length) {
+          if (valid.length > 0) {
+            this.selectedSourceUrls = valid;
+          } else {
+            // 原范围中的书源已经全部不存在，恢复到全部书源，避免搜索页永久空转。
+            this.scopeBySource = false;
+            this.selectedSourceUrls = [];
+            this.selectedGroups = [];
+          }
+          void this.saveSearchPrefs();
+          console.warn('[SearchPage] stale source scope cleared selected=' + JSON.stringify(selected)
+            + ' available=' + JSON.stringify(Array.from(available)));
+        }
+      }
+      const searchable = this.sources.filter((source: BookSource): boolean => !!(source.ruleSearchUrl || '').trim());
+      console.info('[SearchPage] sources loaded total=' + this.sources.length.toString()
+        + ' searchable=' + searchable.length.toString()
+        + ' scoped=' + (this.scopeBySource ? 'source' : 'group')
+        + ' selectedUrls=' + JSON.stringify(this.selectedSourceUrls));
+    } catch (e) {
+      this.sources = [];
+      console.error('[SearchPage] load sources failed: ' + ((e as Error).message || String(e)));
+    }
   }
 
   async refreshShelfStates(): Promise<void> {
@@ -908,6 +936,15 @@ export struct SearchPage {
     if (!q) return;
     const searchable = this.getActiveSources();
     if (searchable.length === 0) {
+      const noSearchRule = this.sources
+        .filter((source: BookSource): boolean => !(source.ruleSearchUrl || '').trim())
+        .map((source: BookSource): string => source.sourceName + '<' + source.sourceUrl + '>');
+      console.warn('[SearchPage] no active sources total=' + this.sources.length.toString()
+        + ' noSearchRule=' + JSON.stringify(noSearchRule)
+        + ' typeFilter=' + JSON.stringify(this.selectedSourceTypes)
+        + ' selectedGroups=' + JSON.stringify(this.selectedGroups)
+        + ' selectedUrls=' + JSON.stringify(this.selectedSourceUrls)
+        + ' scopeBySource=' + (this.scopeBySource ? 'true' : 'false'));
       UiUtil.showToast(this.getUIContext(), { message: '当前范围没有可搜索书源', duration: 1500 });
       return;
     }

@@ -40,6 +40,12 @@ export class SourceRevisionService {
     candidate.weight = before.weight;
     candidate.customOrder = before.customOrder;
     candidate.createTime = before.createTime;
+    // 修复阶段可能只返回了详情/目录规则，不能因为模型没有回传搜索入口
+    // 就把一个原本可搜索的书源保存成“当前范围没有可搜索书源”。
+    // 只有候选值为空时才复用旧值；模型明确生成了新搜索 URL 时仍允许更新。
+    if (!candidate.ruleSearchUrl || !candidate.ruleSearchUrl.trim()) {
+      candidate.ruleSearchUrl = before.ruleSearchUrl;
+    }
     candidate.updateTime = Date.now();
 
     const changed = changedSourceFields(before, candidate);
