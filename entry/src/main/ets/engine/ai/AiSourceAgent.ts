@@ -490,7 +490,12 @@ export class AiSourceAgent {
     if (!this.draft_) return;
     this.start_(AiStep.HOMEPAGE, evidence.usedWebView ? '分析渲染后的 DOM' : '分析页面和表单');
     const inferred = inferSearchRequest(evidence.html, evidence.finalUrl || evidence.url, keyword);
-    const needsEntryRepair = this.shouldRepair_(['搜索', '发现']) || !this.draft_.ruleSearchUrl;
+    // 首页同时包含搜索入口和发现入口，但修复必须按失败阶段隔离字段。
+    // 例如只修复“发现”时，不能因为重新分析首页而覆盖原本可用的搜索 URL。
+    const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl;
+    const repairDiscovery = this.shouldRepair_(['发现']) || (!this.repairMode_ &&
+      !this.draft_.exploreUrl && !this.draft_.ruleExplores);
+    const needsEntryRepair = repairSearch || repairDiscovery;
     if (needsEntryRepair) {
       const candidateText = inferred ? JSON.stringify(inferred) : '未检测到标准 HTML form';
       const prompt = `分析小说网站首页或搜索接口响应，识别站点名称、搜索请求、发现分类和登录入口。
@@ -512,13 +517,23 @@ ${this.evidenceRuleHint_(evidence.html)}
   "bookUrlPattern":"书籍详情 URL 的可选正则，没有把握则空字符串"
 }`;
       const parsed = await this.askRules_(prompt, evidence.html);
-      if (parsed['sourceName']) this.draft_.sourceName = parsed['sourceName'] + '(AI)';
-      this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
-      this.ensureSearchWebViewOption_();
-      this.draft_.exploreUrl = parsed['exploreUrl'] || this.draft_.exploreUrl;
-      this.draft_.ruleExplores = this.draft_.exploreUrl;
-      this.draft_.loginUrl = parsed['loginUrl'] || this.draft_.loginUrl;
-      this.draft_.bookUrlPattern = parsed['bookUrlPattern'] || this.draft_.bookUrlPattern;
+      if (!this.repairMode_ && parsed['sourceName']) {
+        this.draft_.sourceName = parsed['sourceName'] + '(AI)';
+      }
+      if (repairSearch) {
+        this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
+        this.ensureSearchWebViewOption_();
+      }
+      if (repairDiscovery) {
+        this.draft_.exploreUrl = parsed['exploreUrl'] || this.draft_.exploreUrl;
+        this.draft_.ruleExplores = this.draft_.exploreUrl;
+      }
+      if (!this.repairMode_ || repairSearch || repairDiscovery) {
+        this.draft_.loginUrl = parsed['loginUrl'] || this.draft_.loginUrl;
+      }
+      if (!this.repairMode_) {
+        this.draft_.bookUrlPattern = parsed['bookUrlPattern'] || this.draft_.bookUrlPattern;
+      }
       this.results_[AiStep.HOMEPAGE].data['searchProbeUrl'] =
         inferred?.probeUrl || parsed['searchProbeUrl'] || '';
       this.results_[AiStep.HOMEPAGE].data['firstExploreUrl'] = parsed['firstExploreUrl'] || '';
