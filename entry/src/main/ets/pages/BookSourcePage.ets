@@ -417,7 +417,9 @@ export struct BookSourcePage {
       params: {
         repairSourceUrl: source.sourceUrl,
         repairKeyword: source.ruleSearchCheckKeyWord || '我',
-        invalidGroups: JSON.stringify(['搜索', '发现', '详情', '目录', '正文']),
+        // 管理列表入口没有预先跑诊断：让 Agent 先使用现有规则做真实校验，
+        // 仅在验证失败或规则缺失时重新生成，不要把修复当成全量新建。
+        invalidGroups: JSON.stringify([]),
       }
     });
   }

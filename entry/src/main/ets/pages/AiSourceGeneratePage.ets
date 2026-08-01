@@ -191,9 +191,6 @@ struct AiSourceGeneratePage {
       if (!this.repairSource_) throw new Error('未找到需要修复的书源');
       this.homepageUrl = this.repairSource_.sourceUrl;
       this.repairSourceName = this.repairSource_.sourceName;
-      if (this.invalidGroups.length === 0) {
-        this.invalidGroups = ['搜索', '发现', '详情', '目录', '正文'];
-      }
       console.info('[AiSourceGeneratePage] repair source loaded: ' + this.repairSourceName);
     } catch (e) {
       const message = (e as Error).message || String(e);
@@ -479,7 +476,9 @@ struct AiSourceGeneratePage {
             Text('待修复：' + (this.repairSourceName || '加载中…')).fontSize(15)
               .fontWeight(FontWeight.Medium).fontColor(ThemeColors.onSurface(this.isDark))
               .width('100%').margin({ bottom: 6 })
-            Text('失败阶段：' + this.invalidGroups.join('、')).fontSize(12)
+            Text(this.invalidGroups.length > 0
+              ? '待修复阶段：' + this.invalidGroups.join('、')
+              : '待修复阶段：先校验现有规则，失败阶段自动修复').fontSize(12)
               .fontColor(ThemeColors.error(this.isDark)).width('100%').margin({ bottom: 16 })
           }
           if (this.repairMode && this.repairLoadError.length > 0) {

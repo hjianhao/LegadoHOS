@@ -470,7 +470,9 @@ export class AiSourceAgent {
 
   private shouldRepair_(markers: string[]): boolean {
     if (!this.repairMode_) return true;
-    if (this.invalidGroups_.length === 0) return true;
+    // 修复入口未指定失败阶段时，先保留现有规则并做真实验证；
+    // 只有验证失败（第二轮 attempt）或规则缺失时才重新交给模型生成。
+    if (this.invalidGroups_.length === 0) return false;
     return this.invalidGroups_.some((group: string): boolean =>
       markers.some((marker: string): boolean => group.includes(marker)));
   }
