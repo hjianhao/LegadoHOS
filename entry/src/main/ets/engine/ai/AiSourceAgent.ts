@@ -351,6 +351,14 @@ function isInvalidAiSearchAuthor_(value: string): boolean {
   return !author || /^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i.test(author);
 }
 
+function isInvalidAiSearchAuthorForItem_(item: SearchResult): boolean {
+  const author = (item.author || '').trim();
+  if (isInvalidAiSearchAuthor_(author)) return true;
+  // 表格规则缺少索引时，作者字段很容易重复提取书名；这同样属于无效作者，
+  // 必须继续尝试 .odd.1、:eq() 等候选，而不是把错误值保存进书源。
+  return !!author && normalizeAiBookName_(author) === normalizeAiBookName_(item.name);
+}
+
 /** 检测 LLM 是否把本次样本书的长数字路径硬编码进了详情/目录规则。 */
 function isSampleSpecificAiRule_(rule: string, sampleUrl: string): boolean {
   if (!rule || !sampleUrl) return false;
@@ -853,7 +861,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       const pollutedNames = extracted.filter((item: SearchResult): boolean =>
         hasAiSearchCardMetadata_(item.name));
       const invalidAuthors = extracted.filter((item: SearchResult): boolean =>
-        isInvalidAiSearchAuthor_(item.author));
+        isInvalidAiSearchAuthorForItem_(item));
       const shouldValidateAuthors = !!(this.draft_.ruleSearchAuthor || '').trim();
       if (pollutedNames.length > 0 || (shouldValidateAuthors && invalidAuthors.length > 0)) {
         // 某些站点的 h3 位于外层 a 内，模型会生成 dd h3 a@text，
@@ -865,7 +873,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
             const correctedExtracted = correctedNameResults.filter((item: SearchResult): boolean =>
               !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
             const correctedInvalidAuthors = correctedExtracted.filter((item: SearchResult): boolean =>
-              isInvalidAiSearchAuthor_(item.author));
+              isInvalidAiSearchAuthorForItem_(item));
             if (correctedExtracted.length > 0 &&
               correctedExtracted.every((item: SearchResult): boolean => !hasAiSearchCardMetadata_(item.name)) &&
               (!shouldValidateAuthors || correctedInvalidAuthors.length === 0)) {
@@ -1188,8 +1196,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       try {
         const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
         const hasAuthor = retried.some((item: SearchResult): boolean =>
-          !!(item.author || '').trim() && !/^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i
-            .test((item.author || '').trim()));
+          !isInvalidAiSearchAuthorForItem_(item));
         if (hasAuthor) {
           this.log_('  已验证作者候选规则：' + candidate);
           return true;
