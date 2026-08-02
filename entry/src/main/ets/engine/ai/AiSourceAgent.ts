@@ -1650,6 +1650,22 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         interactiveCompleted = true;
         this.requiresWebView_ = true;
         this.ensureSearchWebViewOption_();
+      } else {
+        // 交互 WebView 可能因站点 TLS/UA 或页面重载失败返回空内容；不要
+        // 立即把整个 Agent 判定为失败，验证页关闭后用刚同步的 Cookie 再
+        // 重试一次普通 HTTP。书满屋目录页在这种情况下通常可直接读取。
+        this.log_('  WebView 未返回有效页面，重试 HTTP ' + label + ' 请求');
+        try {
+          const retriedHtml = await NetUtil.httpGet(
+            url, this.headerMap_(this.draft_?.header || ''), 30000);
+          if (retriedHtml && retriedHtml.length > 300) {
+            html = retriedHtml;
+            finalUrl = url;
+          }
+        } catch (retryError) {
+          this.log_('  HTTP 重试失败：' +
+            ((retryError as Error).message || String(retryError)).substring(0, 100));
+        }
       }
     }
     const stillLogin = interactiveCompleted

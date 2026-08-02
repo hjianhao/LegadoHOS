@@ -504,8 +504,35 @@ export class NetUtil {
         console.warn('[NetUtil] gzip/zlib decompress failed:', url, errMsg);
       }
     }
-    const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
+    // 很多中文小说站仍以 GBK/GB18030 返回 HTML。此前无论页面声明什么编码
+    // 都按 UTF-8 解码，书名、作者和章节标题会变成 �，还可能让 Agent 误判
+    // 目录/登录页面。响应头在 RCP 层不向调用方暴露，因此从 HTML 前缀读取
+    // meta charset；JSON/API 没有声明时继续使用 UTF-8。
+    const declared = NetUtil.detectHtmlCharset_(bodyBytes);
+    const decoder = util.TextDecoder.create(declared || 'utf-8', { fatal: false } as Record<string, Object>);
     return decoder.decodeToString(bodyBytes);
+  }
+
+  private static detectHtmlCharset_(bytes: Uint8Array): string {
+    if (!bytes || bytes.length === 0) return '';
+    const limit = Math.min(bytes.length, 8192);
+    let ascii = '';
+    for (let i = 0; i < limit; i++) {
+      const value = bytes[i];
+      // HTML 标签、属性和 charset 名称都是 ASCII；非 ASCII 字节用空格替代，
+      // 避免 UTF-8 解码失败导致正则无法识别 meta 标签。
+      ascii += value < 128 ? String.fromCharCode(value) : ' ';
+    }
+    const direct = ascii.match(/<meta\b[^>]*\bcharset\s*=\s*["']?\s*([\w-]+)/i);
+    const httpEquiv = ascii.match(/<meta\b[^>]*\bcontent\s*=\s*["'][^"']*charset\s*=\s*([\w-]+)/i);
+    const raw = (direct && direct[1]) || (httpEquiv && httpEquiv[1]) || '';
+    const normalized = raw.toLowerCase().replace(/_/g, '-');
+    if (normalized === 'gb2312' || normalized === 'gbk') return 'gb18030';
+    if (normalized === 'big5' || normalized === 'utf-8' || normalized === 'utf8' ||
+      normalized === 'iso-8859-1' || normalized === 'windows-1252') {
+      return normalized === 'utf8' ? 'utf-8' : normalized;
+    }
+    return '';
   }
 
   private static looksCompressed(bytes: Uint8Array): boolean {

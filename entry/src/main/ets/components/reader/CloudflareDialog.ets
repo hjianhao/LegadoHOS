@@ -21,6 +21,18 @@ export struct CloudflareDialog {
   @State hasError: boolean = false;
   private loginPanelOpened_: boolean = false;
 
+  aboutToAppear(): void {
+    // 与隐藏 WebViewFetcher 使用同一桌面 UA。部分站点对 HarmonyOS 默认 UA
+    // 返回错误页，用户看到“验证 WebView 加载失败”并不是验证码本身失败。
+    try {
+      this.webController.setCustomUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    } catch (_e) {
+      console.warn('[CloudflareDialog] 设置 WebView UA 失败');
+    }
+  }
+
   build() {
     Column() {
       // 顶部栏
@@ -75,6 +87,9 @@ export struct CloudflareDialog {
               if (event?.error?.getErrorCode() === -1) return;
               const errInfo = event?.error?.getErrorInfo() || '';
               console.warn('[CloudflareDialog] WebView error:', errInfo);
+              this.hasError = true;
+              this.isLoading = false;
+              this.pageTitle = '页面加载出错，请关闭后重试';
             })
             .onHttpErrorReceive((event) => {
               const code = event?.response?.getResponseCode();
@@ -86,6 +101,7 @@ export struct CloudflareDialog {
                 this.isLoading = false;
               }
             })
+            .mixedMode(MixedMode.All)
             .width('100%').layoutWeight(1)
 
           if (this.isLoading) {
