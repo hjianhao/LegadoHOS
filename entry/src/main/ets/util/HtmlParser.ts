@@ -1060,8 +1060,21 @@ export class HtmlParser {
     }
     // 直接文本节点
     if (el.ownText) {
-      const t = el.ownText.replace(/\s+/g, ' ').trim();
-      if (t) parts.push(t);
+      // 许多小说站正文并不用 <br>/<p>，而是在一个文本节点中用换行或
+      // 全角空格（“　　”）分隔段落。不能像 @text 那样把所有空白折叠成
+      // 一个普通空格，否则 `@textNodes` 会退化成一整段文字。
+      const text = el.ownText
+        .replace(/\r\n?/g, '\n')
+        .replace(/\u00a0/g, ' ')
+        // 全角空格是中文正文常用的段首缩进；在文本节点规则中把它
+        // 视为段落边界，交给正文排版统一添加缩进。
+        .replace(/\u3000+/g, '\n')
+        // 页面源码有时把段落边界输出为多个普通空格，保留这种边界。
+        .replace(/[ \t]{4,}(?=[\u3400-\u9fff“‘\"'])/g, '\n');
+      const textParts = text.split(/\n+/)
+        .map((value: string): string => value.replace(/[ \t]+/g, ' ').trim())
+        .filter((value: string): boolean => !!value);
+      parts.push(...textParts);
     }
     // 递归处理子元素
     for (const child of el.children) {
