@@ -54,6 +54,19 @@ export default function bookSourceManagementTest() {
       expect(spec.body).assertContain('keyword=%E8%AF%A1%E7%A7%98%E4%B9%8B%E4%B8%BB');
     });
 
+    it('keepsSelectedSearchTypeInPostSearchForm', 0, () => {
+      const form = '<form action="https://m.example.com/s.php" method="post">' +
+        '<input name="s" id="s_key" placeholder="输入书名">' +
+        '<select name="type"><option value="articlename">书名</option>' +
+        '<option value="author">作者</option></select></form>';
+      const request = inferSearchRequest(form, 'https://m.example.com/', '快穿');
+      expect(request?.ruleSearchUrl || '').assertContain('s={{key}}&type=articlename');
+      const spec = materializeAgentRequest(
+        request?.ruleSearchUrl || '', '快穿', 1, 'https://m.example.com');
+      expect(spec.method).assertEqual('POST');
+      expect(spec.body).assertContain('type=articlename');
+    });
+
     it('redactsCredentialValuesButKeepsSelectorDom', 0, () => {
       const html = '<html><head><script>ignore()</script></head><body>' +
         '<input type="password" name="password" value="secret">' +

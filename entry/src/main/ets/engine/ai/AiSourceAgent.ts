@@ -126,6 +126,58 @@ function absoluteUrl_(value: string, pageUrl: string): string {
   return (slash >= originMatch[1].length ? cleanPage.substring(0, slash + 1) : originMatch[1] + '/') + value;
 }
 
+function urlOrigin_(url: string): string {
+  const match = (url || '').match(/^(https?:\/\/[^/?#]+)/i);
+  return match ? match[1] : '';
+}
+
+/**
+ * 移动站点经常把 m.example.com 永久跳转到 mip.example.com。HTTP POST
+ * 跟随 301 时很多客户端会把请求改成 GET，搜索表单因此变成“空关键词”。
+ * 只接受同一站点的移动域名变体，避免把页面中的第三方链接误当成规范域名。
+ */
+function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
+  const sourceOrigin = urlOrigin_(pageUrl);
+  const sourceMatch = sourceOrigin.match(/^https?:\/\/([^/:]+)(?::\d+)?$/i);
+  if (!sourceMatch) return '';
+  const sourceHost = sourceMatch[1].toLowerCase();
+  const baseHost = sourceHost.replace(/^(?:m|mip|wap|mobile)\./i, '');
+  if (baseHost === sourceHost) return '';
+
+  const candidates: string[] = [];
+  const add = (raw: string): void => {
+    const value = (raw || '').trim();
+    if (!value) return;
+    const resolved = absoluteUrl_(value, pageUrl);
+    const origin = urlOrigin_(resolved);
+    if (!origin || candidates.includes(origin)) return;
+    const hostMatch = origin.match(/^https?:\/\/([^/:]+)(?::\d+)?$/i);
+    if (!hostMatch) return;
+    const host = hostMatch[1].toLowerCase();
+    if (host === sourceHost) return;
+    // 站点常见的移动域名别名：m -> mip、m -> www、m -> 根域名。
+    if (host === 'mip.' + baseHost || host === 'www.' + baseHost || host === baseHost) {
+      candidates.push(origin);
+    }
+  };
+
+  const canonicalPattern = /<link\b[^>]*\brel\s*=\s*(["'])[^"']*canonical[^"']*\1[^>]*>/gi;
+  let match: RegExpExecArray | null = null;
+  while ((match = canonicalPattern.exec(html || '')) !== null) {
+    add(htmlAttribute_(match[0], 'href'));
+  }
+  const metaPattern = /<meta\b[^>]*(?:property|name)\s*=\s*(["'])(?:og:url|twitter:url)\1[^>]*>/gi;
+  while ((match = metaPattern.exec(html || '')) !== null) {
+    add(htmlAttribute_(match[0], 'content'));
+  }
+  // 部分老站没有 canonical，只在页脚提供规范首页链接；仍限制为同一站点移动域名变体。
+  const hrefPattern = /<a\b[^>]*\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>/gi;
+  while ((match = hrefPattern.exec(html || '')) !== null) {
+    add(match[2]);
+  }
+  return candidates[0] || '';
+}
+
 function appendQuery_(url: string, params: string[]): string {
   if (params.length === 0) return url;
   return url + (url.includes('?') ? '&' : '?') + params.join('&');
@@ -162,6 +214,28 @@ export function inferSearchRequest(html: string, pageUrl: string,
       } else if (type === 'hidden' && name && value && value.length < 200) {
         fixed.push(encodeURIComponent(name) + '=' + encodeURIComponent(value));
       }
+    }
+    // 搜索类型、语言等固定条件通常放在 select 中，不能只读取 input。
+    // 书满屋等站点若省略 type=articlename 会把 POST 当成空搜索请求。
+    const selects = form.match(/<select\b[\s\S]*?<\/select>/gi) || [];
+    for (const select of selects) {
+      const name = htmlAttribute_(select.match(/^<select\b[^>]*>/i)?.[0] || '', 'name');
+      if (!name) continue;
+      const options = select.match(/<option\b[^>]*>[\s\S]*?<\/option>/gi) || [];
+      let selectedValue = '';
+      let firstValue = '';
+      for (const option of options) {
+        const openOption = option.match(/^<option\b[^>]*>/i)?.[0] || '';
+        const value = htmlAttribute_(openOption, 'value');
+        if (!value) continue;
+        if (!firstValue) firstValue = value;
+        if (/\bselected\b/i.test(openOption)) {
+          selectedValue = value;
+          break;
+        }
+      }
+      const value = selectedValue || firstValue;
+      if (value) fixed.push(encodeURIComponent(name) + '=' + encodeURIComponent(value));
     }
     if (!keywordField) continue;
     const encodedName = encodeURIComponent(keywordField);
@@ -480,6 +554,7 @@ export class AiSourceAgent {
       // 一些已有书源是 API 源，sourceUrl 只是 API 域名根地址，并没有可供分析的 HTML 首页。
       // 修复时首页抓取失败不能直接终止，应优先用旧书源的搜索请求取得真实取证页面。
       const homepage = await this.fetchRepairEntry_(request.homepageUrl, keyword);
+      this.normalizeMobileSiteOrigin_(homepage);
       await this.analyzeHomepage_(homepage, keyword);
 
       const searchResults = await this.prepareSearch_(keyword);
@@ -501,6 +576,27 @@ export class AiSourceAgent {
       this.failRunningAndCompile_(message);
     }
     return this.results_;
+  }
+
+  /** 将首页明确暴露的同站移动规范域名同步到后续 POST/详情请求。 */
+  private normalizeMobileSiteOrigin_(evidence: PageEvidence): void {
+    if (!this.draft_) return;
+    const pageUrl = evidence.finalUrl || evidence.url;
+    const oldOrigin = urlOrigin_(pageUrl);
+    const canonicalOrigin = inferMobileCanonicalOrigin_(evidence.html, pageUrl);
+    if (!oldOrigin || !canonicalOrigin || oldOrigin.toLowerCase() === canonicalOrigin.toLowerCase()) return;
+    const replaceOrigin = (value: string): string => {
+      if (!value) return value;
+      return value.split(oldOrigin).join(canonicalOrigin)
+        .split(oldOrigin.toLowerCase()).join(canonicalOrigin);
+    };
+    this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
+    this.draft_.ruleSearchUrl = replaceOrigin(this.draft_.ruleSearchUrl);
+    this.draft_.exploreUrl = replaceOrigin(this.draft_.exploreUrl);
+    this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
+    this.draft_.loginUrl = replaceOrigin(this.draft_.loginUrl);
+    evidence.finalUrl = replaceOrigin(evidence.finalUrl || pageUrl);
+    this.log_('  首页已跳转到同站规范域名：' + canonicalOrigin);
   }
 
   private initializeResults_(): void {
@@ -671,9 +767,13 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         this.log_('  搜索规则第 ' + (attempt + 1) + ' 轮：模型规则已返回，开始真实验证');
       }
       if (!isAiLinkExtractionRule(this.draft_.ruleSearchNoteUrl || '')) {
-        lastError = 'ruleSearchNoteUrl 没有显式提取书名主链接的 @href';
-        this.log_('  搜索验证失败：' + lastError);
-        continue;
+        const correctedNote = await this.tryCorrectSearchNoteUrlRule_(keyword);
+        if (!correctedNote) {
+          lastError = 'ruleSearchNoteUrl 没有显式提取书名主链接的 @href';
+          this.log_('  搜索验证失败：' + lastError);
+          continue;
+        }
+        this.log_('  搜索规则已从书名节点补全详情链接 @href');
       }
       const results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
       const extracted = results.filter((item: SearchResult): boolean =>
@@ -833,6 +933,66 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     }
     this.draft_.ruleSearchName = original;
     return [];
+  }
+
+  /**
+   * 模型有时只返回书名文本规则，或返回了不带属性提取器的选择器。
+   * 详情链接必须来自同一书名节点的 @href；先从现有书名规则派生，
+   * 再尝试少量常见搜索卡片结构，并用真实搜索结果确认后才写入草稿。
+   */
+  private async tryCorrectSearchNoteUrlRule_(keyword: string): Promise<boolean> {
+    if (!this.draft_) return false;
+    const originalName = this.draft_.ruleSearchName || '';
+    const originalAuthor = this.draft_.ruleSearchAuthor || '';
+    const originalCover = this.draft_.ruleSearchCover || '';
+    const originalNote = this.draft_.ruleSearchNoteUrl || '';
+    const candidates: Array<{ name: string; note: string; author: string; cover: string }> = [];
+    const add = (name: string, note: string, author: string = originalAuthor,
+      cover: string = originalCover): void => {
+      const item = { name: name.trim(), note: note.trim(), author: author.trim(), cover: cover.trim() };
+      if (!item.note || candidates.some((candidate): boolean =>
+        candidate.name === item.name && candidate.note === item.note)) return;
+      candidates.push(item);
+    };
+
+    const nameRule = originalName.trim();
+    const textRule = nameRule.match(/^([\s\S]+?)@(text|ownText|textNodes)$/i);
+    if (textRule) add(nameRule, textRule[1] + '@href');
+    const taggedTextRule = nameRule.match(/^([\s\S]+?)@tag\.[\w-]+@(text|ownText|textNodes)$/i);
+    if (taggedTextRule) add(nameRule, taggedTextRule[1] + '@href');
+
+    // 站点搜索结果常见的“列表卡片 + 书名链接 + 作者链接”结构。
+    // 即使模型给出了一个疑似书名规则也保留这些候选，避免模型规则语法
+    // 可解析但定位不到节点时直接耗尽三轮重试。
+    add('p.line a.1@text', 'p.line a.1@href', 'p.line a.2@text');
+    add('.block_txt2 h2 a@text', '.block_txt2 h2 a@href', '.block_txt2 p a@text', '.block_img2 img@src');
+    add('h2 a@text', 'h2 a@href', 'p a@text');
+    add('a.1@text', 'a.1@href', 'a.2@text');
+
+    for (const candidate of candidates) {
+      this.draft_.ruleSearchName = candidate.name;
+      this.draft_.ruleSearchNoteUrl = candidate.note;
+      this.draft_.ruleSearchAuthor = candidate.author;
+      this.draft_.ruleSearchCover = candidate.cover;
+      try {
+        const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+        const usable = retried.filter((item: SearchResult): boolean =>
+          !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
+          isLikelyAiBookDetailUrl(item.noteUrl));
+        if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
+          !hasAiSearchCardMetadata_(item.name))) {
+          this.log_('  已验证书名/详情链接候选规则：' + candidate.name + ' / ' + candidate.note);
+          return true;
+        }
+      } catch (_e) {
+        // 候选规则失败时继续尝试；最终仍由模型重试并报告原始错误。
+      }
+    }
+    this.draft_.ruleSearchName = originalName;
+    this.draft_.ruleSearchAuthor = originalAuthor;
+    this.draft_.ruleSearchCover = originalCover;
+    this.draft_.ruleSearchNoteUrl = originalNote;
+    return false;
   }
 
   /**
