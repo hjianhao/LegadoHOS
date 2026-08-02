@@ -3461,6 +3461,14 @@ export class SourceExecutor {
 
       // 作者
       const author = this.cleanAuthorName(ajaxAuthorValues[idx] || getAuthor(item));
+      // DEBUG: 显示归一化后的书名规则，便于 AI Agent 判断是否误取整张卡片文本
+      const _normName = this.normalizeCssRule(nameRule);
+      if (idx < 3) {
+        const _nameHtmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
+        console.info('[SrcEx] Name debug', source.sourceName,
+          'rule=' + nameRule, 'norm=' + _normName, 'got="' + name + '"',
+          'html="' + _nameHtmlSnippet + '"');
+      }
       // DEBUG: 显示归一化后的规则 + 匹配到的元素数
       const _normAuthor = this.normalizeCssRule(authorRule);
       if (idx < 3) {

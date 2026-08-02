@@ -864,6 +864,28 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         isInvalidAiSearchAuthorForItem_(item));
       const shouldValidateAuthors = !!(this.draft_.ruleSearchAuthor || '').trim();
       if (pollutedNames.length > 0 || (shouldValidateAuthors && invalidAuthors.length > 0)) {
+        // 旧式小说站经常把搜索结果放在 table.grid 中。模型若生成
+        // `td.odd a@text`，执行器会在同一单元格内取到多个链接的整段文本；
+        // 该结构有一个确定的 Legado 写法：第 0 个 odd 单元格为书名，
+        // 第 1 个 odd 单元格为作者，当前行第 0 个链接为详情页。
+        // 先验证这个确定性组合，避免在通用候选中反复请求同一搜索页。
+        if (pollutedNames.length > 0) {
+          const correctedTableResults = await this.tryCorrectTableSearchRules_(keyword);
+          if (correctedTableResults.length > 0) {
+            const correctedTableExtracted = correctedTableResults.filter((item: SearchResult): boolean =>
+              !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+            if (correctedTableExtracted.length > 0) {
+              correctedTableExtracted.sort((left: SearchResult, right: SearchResult): number =>
+                aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
+              this.done_(AiStep.SEARCH, '真实搜索返回 ' + correctedTableExtracted.length +
+                ' 本书（已修正表格字段规则）', {
+                  sampleBook: correctedTableExtracted[0].name,
+                  sampleUrl: correctedTableExtracted[0].noteUrl,
+                });
+              return correctedTableExtracted;
+            }
+          }
+        }
         // 某些站点的 h3 位于外层 a 内，模型会生成 dd h3 a@text，
         // 但执行器找不到该节点后只能回退到整张卡片文本。先尝试同一标题节点
         // 的直接文本，成功后把修正后的规则保留在草稿中，不依赖运行时清洗。
@@ -1041,6 +1063,47 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     this.draft_.ruleSearchName = original;
     this.draft_.ruleSearchNoteUrl = originalNote;
     this.draft_.ruleSearchAuthor = originalAuthor;
+    return [];
+  }
+
+  /**
+   * 修复旧式表格搜索页的固定字段布局。
+   *
+   * 这不是运行时清洗，而是把验证通过的明确书源规则写回草稿：
+   * `.odd.0@text`（书名）、`.odd.1@text`（作者）、`a.0@href`（详情链接）。
+   * 只有真实搜索结果同时满足干净书名、详情 URL 和作者校验时才保留。
+   */
+  private async tryCorrectTableSearchRules_(keyword: string): Promise<SearchResult[]> {
+    if (!this.draft_) return [];
+    const searchList = (this.draft_.ruleSearchList || '').trim();
+    const nameRule = (this.draft_.ruleSearchName || '').trim();
+    const noteRule = (this.draft_.ruleSearchNoteUrl || '').trim();
+    const tableHint = searchList + ' ' + nameRule + ' ' + noteRule;
+    if (!/(?:table\b|td\.odd|\.odd\b)/i.test(tableHint)) return [];
+
+    const originalName = this.draft_.ruleSearchName || '';
+    const originalAuthor = this.draft_.ruleSearchAuthor || '';
+    const originalNote = this.draft_.ruleSearchNoteUrl || '';
+    try {
+      this.draft_.ruleSearchName = '.odd.0@text';
+      this.draft_.ruleSearchAuthor = '.odd.1@text';
+      this.draft_.ruleSearchNoteUrl = 'a.0@href';
+      const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+      const usable = retried.filter((item: SearchResult): boolean =>
+        !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
+        isLikelyAiBookDetailUrl(item.noteUrl) &&
+        !hasAiSearchCardMetadata_(item.name));
+      if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
+        !isInvalidAiSearchAuthorForItem_(item))) {
+        this.log_('  已验证表格搜索规则：.odd.0@text / .odd.1@text / a.0@href');
+        return usable;
+      }
+    } catch (_e) {
+      // 规则验证失败时恢复原配置，继续通用候选和模型重试。
+    }
+    this.draft_.ruleSearchName = originalName;
+    this.draft_.ruleSearchAuthor = originalAuthor;
+    this.draft_.ruleSearchNoteUrl = originalNote;
     return [];
   }
 
