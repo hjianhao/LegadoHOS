@@ -247,6 +247,11 @@ function hasAiSearchCardMetadata_(value: string): boolean {
     .test(value || '') || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test((value || '').trim());
 }
 
+function isInvalidAiSearchAuthor_(value: string): boolean {
+  const author = (value || '').trim();
+  return !author || /^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i.test(author);
+}
+
 /** 检测 LLM 是否把本次样本书的长数字路径硬编码进了详情/目录规则。 */
 function isSampleSpecificAiRule_(rule: string, sampleUrl: string): boolean {
   if (!rule || !sampleUrl) return false;
@@ -664,10 +669,23 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       const results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
       const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
-      if (extracted.some((item: SearchResult): boolean => hasAiSearchCardMetadata_(item.name))) {
-        if (await this.tryCorrectSearchAuthorRule_(keyword)) {
-          this.log_('  搜索卡片作者规则疑似取到状态字段，已尝试改用前一个作者元素');
+      const pollutedNames = extracted.filter((item: SearchResult): boolean =>
+        hasAiSearchCardMetadata_(item.name));
+      const invalidAuthors = extracted.filter((item: SearchResult): boolean =>
+        isInvalidAiSearchAuthor_(item.author));
+      const shouldValidateAuthors = !!(this.draft_.ruleSearchAuthor || '').trim();
+      if (pollutedNames.length > 0 || (shouldValidateAuthors && invalidAuthors.length > 0)) {
+        let correctedAuthor = false;
+        if (invalidAuthors.length > 0) {
+          correctedAuthor = await this.tryCorrectSearchAuthorRule_(keyword);
         }
+        const reason = pollutedNames.length > 0
+          ? 'ruleSearchName 命中了更新日期/作者/状态等整段卡片文本'
+          : 'ruleSearchAuthor 没有提取到作者字段或命中了状态字段';
+        lastError = reason + '；必须重新定位书名和作者子元素，不能依赖运行时清洗';
+        this.log_('  搜索验证失败：' + lastError +
+          (correctedAuthor ? '（已尝试调整作者索引）' : ''));
+        continue;
       }
       const navigationItems = extracted.filter((item: SearchResult): boolean =>
         !isLikelyAiBookDetailUrl(item.noteUrl) && !isLikelyAiChapterUrl(item.noteUrl));
