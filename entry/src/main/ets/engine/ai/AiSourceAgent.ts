@@ -104,6 +104,7 @@ const TOC_FIELDS: string[] = [
 ];
 const CONTENT_FIELDS: string[] = [
   'ruleBookContent', 'ruleBookContentTitle', 'ruleBookContentNext',
+  'ruleBookContentReplaceRegex',
 ];
 
 function htmlAttribute_(tag: string, name: string): string {
@@ -1116,6 +1117,18 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
       this.log_('  检测到文本源正文使用外层 @html，开始优化为段落文本规则');
     }
     let lastError = '';
+    // 修复时即使校验报告没有把“正文”标为失败，也要为已有的
+    // @textNodes 正文取一次原始证据，才能判断网站是否用空白表示段落。
+    let preparedEvidenceHtml = '';
+    if (this.shouldInferContentReplaceRule_() && samples.length > 0) {
+      try {
+        const evidence = await this.fetchPage_(samples[0].url, '章节正文');
+        preparedEvidenceHtml = evidence.html;
+      } catch (_e) {
+        // 预取只用于推断替换规则，失败时仍让后面的正文真实校验决定结果。
+        this.log_('  正文段落规则预取失败，继续使用现有正文规则校验');
+      }
+    }
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       // 章节正文可能只有一句话，不能只用第一章判定整个正文规则失败。
       // 每轮先用一个样本生成/修复规则，再用最多三个不同章节验证同一规则。
@@ -1125,6 +1138,7 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
         (attempt === 0 && optimizeTextRule)) {
         const evidence = await this.fetchPage_(evidenceSample.url, '章节正文');
         evidenceHtml = evidence.html;
+        preparedEvidenceHtml = evidenceHtml;
         const prompt = `分析小说章节正文页或正文 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 正文规则应命中正文容器，不能选择 body 或整页。
@@ -1135,10 +1149,14 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
 {
   "ruleBookContent":"正文；文本源优先段落级 @text/@textNodes，富媒体源才使用 @html",
   "ruleBookContentTitle":"章节标题，没有则空",
-  "ruleBookContentNext":"章节内下一页 href，没有则空"
+  "ruleBookContentNext":"章节内下一页 href，没有则空",
+  "ruleBookContentReplaceRegex":"可选的正文替换规则，格式为 ##正则##替换文本；只有正文使用空白表示段落时填写，否则为空"
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, CONTENT_FIELDS);
+      }
+      if (preparedEvidenceHtml) {
+        this.generateExplicitContentReplaceRule_(preparedEvidenceHtml);
       }
       if (optimizeTextRule && this.isOuterHtmlContentRule_(this.draft_.ruleBookContent)) {
         const optimized = await this.tryTextContentRules_(samples, bookUrl, evidenceHtml);
@@ -1147,6 +1165,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
             sampleChapter: optimized.sample.title,
             checkedSamples: '1',
             ruleBookContent: this.draft_.ruleBookContent,
+            ruleBookContentReplaceRegex: this.draft_.ruleBookContentReplaceRegex || '',
           });
           return;
         }
@@ -1163,6 +1182,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
             sampleChapter: sample.title,
             checkedSamples: String(checked),
             ruleBookContent: this.draft_.ruleBookContent,
+            ruleBookContentReplaceRegex: this.draft_.ruleBookContentReplaceRegex || '',
           });
           return;
         }
@@ -1172,6 +1192,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         this.done_(AiStep.CONTENT, '正文样本提取 ' + fallback.length + ' 字（已采用候选正文容器）', {
           sampleChapter: fallback.sample.title,
           ruleBookContent: this.draft_.ruleBookContent,
+          ruleBookContentReplaceRegex: this.draft_.ruleBookContentReplaceRegex || '',
         });
         return;
       }
@@ -1179,6 +1200,35 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     }
     this.error_(AiStep.CONTENT, lastError);
     throw new Error(lastError);
+  }
+
+  private shouldInferContentReplaceRule_(): boolean {
+    if (!this.draft_ || !/@textNodes\b/i.test(this.draft_.ruleBookContent || '')) return false;
+    if (this.repairMode_ && this.invalidGroups_.length > 0 &&
+      !this.invalidGroups_.some((group: string): boolean => group.includes('正文'))) {
+      return false;
+    }
+    const sourceType = Number(this.draft_.sourceType);
+    const isTextSource = !Number.isFinite(sourceType) || sourceType === 0;
+    return isTextSource && !(this.draft_.ruleBookContentReplaceRegex || '').trim();
+  }
+
+  /**
+   * 将网站用空白表达段落的事实写入标准书源字段，而不是依赖执行器猜测。
+   * 只对正文 @textNodes 生效，并要求原始取证中确实存在明显的段落空白。
+   */
+  private generateExplicitContentReplaceRule_(html: string): boolean {
+    if (!this.shouldInferContentReplaceRule_() || !html) return false;
+    const paragraphWhitespace = /(?:[。！？；：”』】])[ \t\u00a0\u2000-\u200a\u202f\u205f\u3000]{4,}(?=[\u3400-\u9fff“‘"'])/;
+    const entityWhitespace = /(?:[。！？；：”』】])(?:&(?:nbsp|ensp|emsp|thinsp);){2,}(?=[\u3400-\u9fff“‘"'])/i;
+    if (!paragraphWhitespace.test(html) && !entityWhitespace.test(html)) return false;
+
+    // 书源字段保存的是“##正则##替换”格式；替换文本使用真实换行，
+    // serializeBookSource 时会自动转义为 JSON 中的 \\n。
+    this.draft_.ruleBookContentReplaceRegex =
+      '##(?:&(?:nbsp|ensp|emsp|thinsp);|[ \\t\\u00a0\\u2000-\\u200a\\u202f\\u205f\\u3000]){4,}(?=[\\u3400-\\u9fff“‘\\x22\\x27])##\n';
+    this.log_('  已生成正文段落替换规则：连续空白 → 换行');
+    return true;
   }
 
   private isOuterHtmlContentRule_(rule: string): boolean {

@@ -2191,6 +2191,10 @@ export class SourceExecutor {
             console.info('[SrcEx] getContent source=', source.sourceName, 'replaceRule=', source.ruleBookContentReplaceRegex?.substring(0, 100),
               'newlines=', newlineCount, 'preview=', result.substring(0, 200));
             const cleaned = this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex);
+            const cleanedNewlineCount = (cleaned.match(/\n/g) || []).length;
+            if (cleanedNewlineCount !== newlineCount) {
+              console.info('[SrcEx] getContent replaceRule restored newlines=', cleanedNewlineCount);
+            }
             // 漫画模式：保留并标准化 <img> 标签
             // @html 正文规则返回的是容器 innerHtml。文本阅读器不能直接把 HTML
             // 当纯文本排版，否则 <br>/<p>/<div> 会丢失段落边界；漫画仍保留图片标签。
