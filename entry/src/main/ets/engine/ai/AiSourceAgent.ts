@@ -1112,6 +1112,9 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
     // 书源管理入口没有预先指定失败阶段时，文本源的外层 @html 也需要做一次
     // 规则优化，避免把“当前能读”误认为“配置已经最适合文本阅读器”。
     const optimizeTextRule = this.shouldOptimizeTextContentRule_();
+    if (optimizeTextRule) {
+      this.log_('  检测到文本源正文使用外层 @html，开始优化为段落文本规则');
+    }
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       // 章节正文可能只有一句话，不能只用第一章判定整个正文规则失败。
@@ -1183,8 +1186,14 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
   }
 
   private shouldOptimizeTextContentRule_(): boolean {
-    return this.repairMode_ && this.invalidGroups_.length === 0 && !!this.draft_ &&
-      this.draft_.sourceType === 0 && this.isOuterHtmlContentRule_(this.draft_.ruleBookContent);
+    if (!this.repairMode_ || !this.draft_ || !this.isOuterHtmlContentRule_(this.draft_.ruleBookContent)) {
+      return false;
+    }
+    const sourceType = Number(this.draft_.sourceType);
+    const isTextSource = !Number.isFinite(sourceType) || sourceType === 0;
+    const contentWasMarkedInvalid = this.invalidGroups_.some((group: string): boolean =>
+      group.includes('正文'));
+    return isTextSource && (this.invalidGroups_.length === 0 || contentWasMarkedInvalid);
   }
 
   /** 对已有 @html 正文规则尝试生成并真实验证段落级文本规则。 */
