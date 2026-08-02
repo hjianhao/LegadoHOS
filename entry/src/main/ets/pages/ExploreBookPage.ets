@@ -84,19 +84,24 @@ struct ExploreBookPage {
   }
 
   private makeExploreSource(source: BookSource, catUrl: string): BookSource {
-    source.isExploreRequest = true;
-    source.ruleSearchUrl = catUrl;
-    source.ruleSearchList = source.ruleExploreList || source.ruleSearchList;
-    source.ruleSearchName = source.ruleExploreName || source.ruleSearchName;
-    source.ruleSearchAuthor = source.ruleExploreAuthor || source.ruleSearchAuthor;
-    source.ruleSearchCover = source.ruleExploreCover || source.ruleSearchCover;
-    source.ruleSearchNoteUrl = source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
-    source.ruleSearchKind = source.ruleExploreKind || source.ruleSearchKind;
-    source.ruleSearchWordCount = source.ruleExploreWordCount || source.ruleSearchWordCount;
-    source.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
-    source.ruleSearchLastChapter = source.ruleExploreLastChapter || source.ruleSearchLastChapter;
-    source.ruleSearchIntroduce = source.ruleExploreIntroduce || source.ruleSearchIntroduce;
-    return source;
+    // 发现开关与普通搜索开关是独立的。不能直接复用数据库对象：
+    // enabled=false 的源仍然可以 enabledExplore=true，分类页请求应临时启用，
+    // 同时不能把发现规则写回普通搜索规则或后续页面使用的源对象。
+    const exploreSource: BookSource = JSON.parse(JSON.stringify(source)) as BookSource;
+    exploreSource.enabled = true;
+    exploreSource.isExploreRequest = true;
+    exploreSource.ruleSearchUrl = catUrl;
+    exploreSource.ruleSearchList = source.ruleExploreList || source.ruleSearchList;
+    exploreSource.ruleSearchName = source.ruleExploreName || source.ruleSearchName;
+    exploreSource.ruleSearchAuthor = source.ruleExploreAuthor || source.ruleSearchAuthor;
+    exploreSource.ruleSearchCover = source.ruleExploreCover || source.ruleSearchCover;
+    exploreSource.ruleSearchNoteUrl = source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
+    exploreSource.ruleSearchKind = source.ruleExploreKind || source.ruleSearchKind;
+    exploreSource.ruleSearchWordCount = source.ruleExploreWordCount || source.ruleSearchWordCount;
+    exploreSource.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
+    exploreSource.ruleSearchLastChapter = source.ruleExploreLastChapter || source.ruleSearchLastChapter;
+    exploreSource.ruleSearchIntroduce = source.ruleExploreIntroduce || source.ruleSearchIntroduce;
+    return exploreSource;
   }
 
   async loadBooks(): Promise<void> {
