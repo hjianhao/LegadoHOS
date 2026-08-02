@@ -217,6 +217,39 @@ function normalizeAiBookName_(value: string): string {
     .replace(/[\s\u3000《》〈〉「」『』【】\[\]（）()·•:：,，。.!！?？_\-—]/g, '');
 }
 
+/**
+ * 搜索结果有些站点会把“最新章节”当成书名链接，详情页则会把书名和章节标题拼在一起。
+ * 仅用于样本校验和提示，不改写用户最终看到的书名。
+ */
+function normalizeAiComparableBookName_(value: string): string {
+  return normalizeAiBookName_(value)
+    .replace(/(?:正文卷|正文|章节目录|目录|vip章节|免费章节|vip卷|免费卷|默认卷|最新章节)/gi, '')
+    .replace(/第[零〇一二三四五六七八九十百千万亿\d]+章/gi, '');
+}
+
+/** 从“第X章 书名（大结局）”等误选的章节标题中提取稳定的书名样本。 */
+function cleanAiSearchBookName_(value: string): string {
+  const raw = (value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  let cleaned = raw
+    .replace(/^\s*(?:正文卷?|章节目录|目录|VIP章节|免费章节|VIP卷|免费卷|默认卷|最新章节)\s*[-:：|]?\s*/i, '')
+    .replace(/^\s*第[零〇一二三四五六七八九十百千万亿\d]+章\s*/i, '');
+  // 只有确实去掉了章节前缀时才移除“大结局/完结”等章节状态，避免损伤正常书名。
+  if (cleaned !== raw) {
+    cleaned = cleaned.replace(/\s*[\(（【\[]?\s*(?:大结局|完结全文|全文完|完结)\s*[\)）】\]]?\s*$/i, '');
+  }
+  return cleaned.trim() || raw;
+}
+
+/** 检测 LLM 是否把本次样本书的长数字路径硬编码进了详情/目录规则。 */
+function isSampleSpecificAiRule_(rule: string, sampleUrl: string): boolean {
+  if (!rule || !sampleUrl) return false;
+  const pathMatch = sampleUrl.match(/^https?:\/\/[^/?#]+([^?#]*)/i);
+  const path = pathMatch && pathMatch.length > 1 ? pathMatch[1] : '';
+  const ids = path.match(/\d{4,}/g) || [];
+  return ids.some((id: string): boolean => rule.includes(id));
+}
+
 function hasAiPageArtifact_(value: string): boolean {
   return /(?:--wp--preset|<style\b|<script\b|body\s*\{|new\s+vue\s*\(|document\.|window\.|友情链接|ICP备|all contents are copyrighted)/i
     .test(value || '');
@@ -245,9 +278,26 @@ export function isAiLinkExtractionRule(rule: string): boolean {
   return /(?:<js>|@js:|{{)/i.test(normalized);
 }
 
-/** 排除分类、标签、作者、榜单和搜索页等明显不是单本书详情的 URL。 */
+/** 搜索结果误把“最新章节”链接作为书籍链接时，识别常见的静态章节路径。 */
+export function isLikelyAiChapterUrl(url: string): boolean {
+  if (!isSafeAiImportUrl(url)) return false;
+  const pathMatch = url.trim().match(/^https?:\/\/[^/?#]+([^?#]*)/i);
+  const path = pathMatch && pathMatch.length > 1 ? pathMatch[1] : '';
+  // 常见站群静态结构：/files/article/html/94/94828/36239798.html
+  return /\/files\/article\/html\/\d+\/\d+\/\d+(?:\.html?)?\/?$/i.test(path);
+}
+
+/** 将常见静态章节地址提升到同一本书的目录/详情目录。 */
+export function deriveAiBookUrlFromChapter(url: string): string {
+  if (!isLikelyAiChapterUrl(url)) return '';
+  const match = url.trim().match(/^(https?:\/\/[^/?#]+\/files\/article\/html\/\d+\/\d+\/)(?:\d+)(?:\.html?)?\/?(?:[?#].*)?$/i);
+  return match && match.length > 1 ? match[1] : '';
+}
+
+/** 排除分类、标签、作者、榜单、搜索页和明显的章节页等 URL。 */
 export function isLikelyAiBookDetailUrl(url: string): boolean {
   if (!isSafeAiImportUrl(url)) return false;
+  if (isLikelyAiChapterUrl(url)) return false;
   const pathMatch = url.trim().match(/^https?:\/\/[^/?#]+([^?#]*)/i);
   const path = pathMatch && pathMatch.length > 1 ? pathMatch[1].toLowerCase() : '';
   return !/(^|\/)(?:bookcat|category|categories|genre|genres|tag|tags|author|authors|rank|ranking|sort|classify|search)(?:\/|$)/i
@@ -259,10 +309,28 @@ export function isAiBookNameConsistent(actual: string, expected: string): boolea
   if (!isPlausibleAiDetailValue_(actual, 200) ||
     !isPlausibleAiDetailValue_(expected, 200)) return false;
   const normalizedActual = normalizeAiBookName_(actual);
-  const normalizedExpected = normalizeAiBookName_(expected);
+  // 即使调用方仍传入了“第X章 书名”，校验也以清理后的书名为基准。
+  const normalizedExpected = normalizeAiBookName_(cleanAiSearchBookName_(expected) || expected);
   if (!normalizedActual || !normalizedExpected) return false;
+  const hasChapterMarker = /(?:正文|目录|章节|第[零〇一二三四五六七八九十百千万亿\d]+章|VIP|最新章节)/i
+    .test(actual + expected);
+  const comparableActual = normalizeAiComparableBookName_(actual);
+  const comparableExpected = normalizeAiComparableBookName_(expected);
   if (normalizedExpected.includes(normalizedActual)) return true;
-  if (!normalizedActual.includes(normalizedExpected)) return false;
+  if (!normalizedActual.includes(normalizedExpected)) {
+    if (!comparableActual || !comparableExpected ||
+      (!comparableActual.includes(comparableExpected) && !comparableExpected.includes(comparableActual))) {
+      return false;
+    }
+    // 章节页常把“书名 + 正文 + 第X章 + 书名”拼在标题中，允许一次重复的书名，
+    // 但仍限制差异，避免把整页标题误认为同一本书。
+    return hasChapterMarker &&
+      Math.abs(comparableActual.length - comparableExpected.length) <= 20;
+  }
+  if (hasChapterMarker && comparableActual && comparableExpected &&
+    normalizedActual.startsWith(normalizedExpected) &&
+    comparableActual.includes(comparableExpected) &&
+    comparableActual.length - comparableExpected.length <= 20) return true;
   // 允许“书名 - 站点”等短后缀，不接受把作者、广告语和页面标题整体当成书名。
   return normalizedActual.length - normalizedExpected.length <= 8;
 }
@@ -590,7 +658,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
       const navigationItems = extracted.filter((item: SearchResult): boolean =>
-        !isLikelyAiBookDetailUrl(item.noteUrl));
+        !isLikelyAiBookDetailUrl(item.noteUrl) && !isLikelyAiChapterUrl(item.noteUrl));
       if (navigationItems.length > 0) {
         const sample = navigationItems[0];
         lastError = '列表规则混入了导航/分类项（' + sample.name + ' → ' + sample.noteUrl +
@@ -609,11 +677,87 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         });
         return usable;
       }
+
+      // 部分站点的搜索列表只有“最新章节”链接，书籍目录地址藏在同一目录的上一级。
+      // 这类结果不是导航项，不能直接让 Agent 在章节页上生成详情规则；先提升到书籍根地址。
+      const chapterResults = extracted.filter((item: SearchResult): boolean =>
+        isLikelyAiChapterUrl(item.noteUrl));
+      const corrected = await this.tryCorrectChapterSearchRules_(keyword);
+      if (corrected.length > 0) {
+        corrected.sort((left: SearchResult, right: SearchResult): number =>
+          aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
+        this.log_('  搜索规则取到了章节链接，已改用同一书籍卡片中的书名链接');
+        this.done_(AiStep.SEARCH, '真实搜索返回 ' + corrected.length +
+          ' 本书（已修正书名链接）', {
+            sampleBook: corrected[0].name,
+            sampleUrl: corrected[0].noteUrl,
+          });
+        return corrected;
+      }
+      const promoted: SearchResult[] = [];
+      for (const chapter of chapterResults) {
+        const bookUrl = deriveAiBookUrlFromChapter(chapter.noteUrl);
+        if (!bookUrl) continue;
+        promoted.push({
+          ...chapter,
+          name: cleanAiSearchBookName_(chapter.name) || chapter.name,
+          noteUrl: bookUrl,
+          key: chapter.key + '|book-root',
+        });
+      }
+      if (promoted.length > 0) {
+        promoted.sort((left: SearchResult, right: SearchResult): number =>
+          aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
+        this.log_('  搜索结果链接指向最新章节，已自动提升为书籍目录地址：' +
+          promoted[0].noteUrl);
+        this.done_(AiStep.SEARCH, '真实搜索返回 ' + promoted.length +
+          ' 本书（已修正章节链接）', {
+            sampleBook: promoted[0].name,
+            sampleUrl: promoted[0].noteUrl,
+          });
+        return promoted;
+      }
       lastError = '规则执行后没有单本书的有效书名和详情 URL';
       this.log_('  搜索验证失败，准备第 ' + (attempt + 2) + ' 轮');
     }
     this.error_(AiStep.SEARCH, lastError || '搜索验证失败');
     return [];
+  }
+
+  /**
+   * 站点卡片常同时包含“书名”和“最新章节”两个 a 标签，模型偶尔会选中后者。
+   * 对最常见的 a.N@text + a.N@href 规则尝试前一个链接，并用真实搜索结果验证，
+   * 成功后保留修正后的规则，避免最终生成的书源仍然指向章节页。
+   */
+  private async tryCorrectChapterSearchRules_(keyword: string): Promise<SearchResult[]> {
+    if (!this.draft_) return [];
+    const nameRule = (this.draft_.ruleSearchName || '').trim();
+    const noteRule = (this.draft_.ruleSearchNoteUrl || '').trim();
+    const nameMatch = nameRule.match(/^(\w[\w-]*)\.(\d+)@text$/i);
+    const noteMatch = noteRule.match(/^(\w[\w-]*)\.(\d+)@href$/i);
+    if (!nameMatch || !noteMatch || nameMatch[1].toLowerCase() !== noteMatch[1].toLowerCase() ||
+      nameMatch[2] !== noteMatch[2]) return [];
+    const index = parseInt(nameMatch[2]);
+    if (index <= 0) return [];
+
+    const oldName = this.draft_.ruleSearchName;
+    const oldNote = this.draft_.ruleSearchNoteUrl;
+    this.draft_.ruleSearchName = nameMatch[1] + '.' + String(index - 1) + '@text';
+    this.draft_.ruleSearchNoteUrl = noteMatch[1] + '.' + String(index - 1) + '@href';
+    try {
+      const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+      const usable = retried.filter((item: SearchResult): boolean =>
+        !!item.name && !!item.noteUrl && isLikelyAiBookDetailUrl(item.noteUrl));
+      if (usable.length > 0) return usable;
+      this.draft_.ruleSearchName = oldName;
+      this.draft_.ruleSearchNoteUrl = oldNote;
+      return [];
+    } catch (_e) {
+      // 规则试探失败时恢复模型原始结果，后续仍可使用章节地址提升兜底。
+      this.draft_.ruleSearchName = oldName;
+      this.draft_.ruleSearchNoteUrl = oldNote;
+      return [];
+    }
   }
 
   private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<void> {
@@ -706,7 +850,8 @@ HTML 文本字段必须使用具体容器的 CSS 选择器并显式提取 @text�
 如果书名元素的可见文本被截短而 title/content 属性包含完整书名，应提取完整属性，禁止保存省略后的书名。
 禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
-ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填写本次样本书的绝对或相对目录 URL。
+ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填写本次样本书的绝对或相对目录 URL，
+也禁止把本次样本书的数字 ID 写进 href*= 等选择器；规则必须适用于其他书籍。
 上次验证错误：${lastError || '无'}
 返回：
 {
@@ -733,6 +878,11 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         !/^\s*@js:/i.test(this.draft_.ruleBookInfoTocUrl) &&
         !this.draft_.ruleBookInfoTocUrl.includes('{{')) {
         lastError = 'ruleBookInfoTocUrl 必须动态提取当前书籍的目录链接，不能是样本书的固定 URL';
+        this.log_('  详情验证失败：' + lastError);
+        continue;
+      }
+      if (isSampleSpecificAiRule_(this.draft_.ruleBookInfoTocUrl || '', bookUrl)) {
+        lastError = 'ruleBookInfoTocUrl 包含本次样本书的固定数字 ID，不能适配其他书籍';
         this.log_('  详情验证失败：' + lastError);
         continue;
       }
