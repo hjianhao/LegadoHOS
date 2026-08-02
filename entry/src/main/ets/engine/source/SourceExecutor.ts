@@ -3980,6 +3980,9 @@ export class SourceExecutor {
       // 处理 @js: 后缀
       const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(cssRule);
       cssRule = ruleBeforeJs;
+      // @textNodes 正文有时来自单一文本节点，站点用多个空格或
+      // HTML 空白实体表示段落；只在正文结果阶段恢复，避免影响普通字段。
+      const isTextNodesContentRule = /@textNodes\b/i.test(trimmed);
 
       if (cssRule) {
         const parser = getHtmlParser();
@@ -4023,6 +4026,9 @@ export class SourceExecutor {
             } catch (_e) { /* ignore JS error */ }
           }
 
+          if (isTextNodesContentRule) {
+            result = this.restoreTextNodeParagraphs_(result);
+          }
           return this.stripHtml(result);
         }
       }
@@ -4030,7 +4036,9 @@ export class SourceExecutor {
       // 兜底：直接用 extractHtmlRuleValue（单元素）
       const value = this.extractHtmlRuleValue(html, rule);
       if (value) {
-        return this.stripHtml(value);
+        const normalizedValue = isTextNodesContentRule
+          ? this.restoreTextNodeParagraphs_(value) : value;
+        return this.stripHtml(normalizedValue);
       }
 
       // 已配置内容规则却没有匹配到节点时必须返回空值。此前退回整页纯文本，
@@ -4039,6 +4047,16 @@ export class SourceExecutor {
     }
     // 没有配置规则时才保留历史的整页纯文本兜底。
     return this.stripHtml(html);
+  }
+
+  /** 恢复小说站单文本节点中的段落边界（仅用于正文 @textNodes 结果）。 */
+  private restoreTextNodeParagraphs_(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/&(?:nbsp|ensp|emsp|thinsp);/gi, '\u3000')
+      .replace(/&#(?:160|8194|8195|8201);/gi, '\u3000')
+      .replace(/[\u2000-\u200A\u202F\u205F\u3000]+/g, '\n')
+      .replace(/[ \t]{4,}(?=[\u3400-\u9fff“‘"'])/g, '\n');
   }
 
   private extractHtmlRuleValue(html: string, rule: string): string {
