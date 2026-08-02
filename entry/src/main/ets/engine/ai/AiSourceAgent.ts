@@ -590,7 +590,13 @@ export class AiSourceAgent {
       return value.split(oldOrigin).join(canonicalOrigin)
         .split(oldOrigin.toLowerCase()).join(canonicalOrigin);
     };
-    this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
+    // sourceUrl 是书源在数据库中的身份键。修复已有书源时，即使站点把
+    // m.example.com 规范化跳转到 mip.example.com，也不能改写这个字段，
+    // 否则应用修复时会被 SourceRevisionService 判定为另一条书源。
+    // 新建书源没有既有身份，仍保存规范域名作为新源的正式地址。
+    if (!this.repairMode_) {
+      this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
+    }
     this.draft_.ruleSearchUrl = replaceOrigin(this.draft_.ruleSearchUrl);
     this.draft_.exploreUrl = replaceOrigin(this.draft_.exploreUrl);
     this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
