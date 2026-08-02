@@ -379,6 +379,18 @@ function isPlausibleAiDetailValue_(value: string, maxLength: number): boolean {
   return normalized.length <= maxLength && !hasAiPageArtifact_(normalized);
 }
 
+/**
+ * 作者字段不能只按长度判断。传统站点经常把书名、管理按钮和元数据表
+ * 拼成一个短字符串，长度仍可能小于 160；这些标记必须视为字段污染。
+ */
+function isPlausibleAiAuthor_(value: string): boolean {
+  if (!isPlausibleAiDetailValue_(value, 160)) return false;
+  if (!value) return true;
+  const compact = value.replace(/[\s\u3000]+/g, '');
+  return !/(?:\[管理\]|\[举报\]|&nbsp;|(?:类|類)别[：:]|作(?:者|著者)[：:]|管理(?:员|員)[：:]|全文长度[：:]|最后更新[：:]|文章状态[：:]|最新章节[：:])/i
+    .test(compact);
+}
+
 function previewAiValue_(value: string): string {
   const normalized = (value || '').replace(/\s+/g, ' ').trim();
   return normalized.length > 120 ? normalized.substring(0, 120) + '…' : normalized;
@@ -471,7 +483,7 @@ export function isAiBookNameConsistent(actual: string, expected: string): boolea
 /** 防止 body/html/@text 等宽泛规则把整页 CSS、导航和脚本误当成详情字段。 */
 export function isPlausibleAiBookInfo(info: BookSourceBookInfo, expectedName: string): boolean {
   if (!info.name || !isAiBookNameConsistent(info.name, expectedName)) return false;
-  if (!isPlausibleAiDetailValue_(info.author, 160)) return false;
+  if (!isPlausibleAiAuthor_(info.author)) return false;
   if (!isPlausibleAiDetailValue_(info.introduce, 12000)) return false;
   if (!isPlausibleAiDetailValue_(info.kind, 300)) return false;
   if (!isPlausibleAiDetailValue_(info.wordCount, 100)) return false;
@@ -1426,7 +1438,12 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
       // 部分老式站点的详情页没有 h1/title 专用节点，书名放在面包屑最后
       // 一个链接或内容区首个 span 中。模型容易沿用搜索页规则而返回空值；
       // 从当前详情证据中验证明确 CSS 规则后再写回草稿，不做运行时文本清洗。
-      if ((!info.name || !isAiBookNameConsistent(info.name, expectedName)) && detailEvidenceHtml) {
+      const detailNeedsCorrection = !info.name ||
+        !isAiBookNameConsistent(info.name, expectedName) ||
+        !isPlausibleAiAuthor_(info.author) ||
+        (!info.coverUrl && /<img\b[^>]*\bsrc\s*=/i.test(detailEvidenceHtml)) ||
+        (!info.tocUrl && /\bulrow\b/i.test(detailEvidenceHtml));
+      if (detailNeedsCorrection && detailEvidenceHtml) {
         const correctedInfo = await this.tryCorrectBookInfoRules_(
           bookUrl, expectedName, detailEvidenceHtml);
         if (correctedInfo) {
@@ -1453,7 +1470,7 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
       } else if (!isAiBookNameConsistent(info.name, expectedName)) {
         lastError = '详情页书名不一致：搜索结果为《' + expectedName +
           '》，详情解析为《' + previewAiValue_(info.name) + '》';
-      } else if (!isPlausibleAiDetailValue_(info.author, 160)) {
+      } else if (!isPlausibleAiAuthor_(info.author)) {
         lastError = '作者规则命中了整页内容或页面外壳：' + previewAiValue_(info.author);
       } else if (info.author &&
         normalizeAiBookName_(info.author) === normalizeAiBookName_(info.name)) {
@@ -1475,7 +1492,7 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
   /**
    * 兼容没有 h1 的传统详情页。候选规则来自页面真实结构：
    * #content .readinfo 的最后一个链接是书名，#content 的第一个 span 是标题，
-   * 元数据表格第 6 个 td 是作者，内容区第一个图片是封面。
+   * 元数据表格的语义标签定位作者/分类/字数/更新时间，内容区第一个图片是封面。
    */
   private async tryCorrectBookInfoRules_(bookUrl: string, expectedName: string,
     evidenceHtml: string): Promise<BookSourceBookInfo | null> {
@@ -1487,6 +1504,9 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
     const originalAuthor = this.draft_.ruleBookInfoAuthor || '';
     const originalCover = this.draft_.ruleBookInfoCover || '';
     const originalToc = this.draft_.ruleBookInfoTocUrl || '';
+    const originalKind = this.draft_.ruleBookInfoKind || '';
+    const originalWordCount = this.draft_.ruleBookInfoWordCount || '';
+    const originalLastUpdateTime = this.draft_.ruleBookInfoLastUpdateTime || '';
     const candidates: string[] = [
       '#content .readinfo a.-1@text',
       '#content span.0@text',
@@ -1506,9 +1526,28 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
       // 只有站点详情页明确包含对应元数据表时才替换作者/封面，避免覆盖
       // 模型已经验证通过的专用规则。
       if (/<td\b[^>]*>[\s\S]{0,120}作[\s\S]{0,80}者\s*[：:]/i.test(evidenceHtml)) {
-        this.draft_.ruleBookInfoAuthor = '#content td.5@text##.*作.*者[：:]';
+        // 用文本语义定位作者单元格，避免旧 HTML 嵌套表格导致 td.N
+        // 的全局位置随浏览器容错树变化。
+        this.draft_.ruleBookInfoAuthor = '#content text.者：@text##.*者[：:]';
       } else {
         this.draft_.ruleBookInfoAuthor = originalAuthor;
+      }
+      // 同一元数据表中的附加字段也可能被模型生成为整张表/整页规则。
+      // 有明确标签时按语义文本定位，避免让错误的可选字段阻断整条书源。
+      if (/<td\b[^>]*>[\s\S]{0,120}类[\s\S]{0,80}别\s*[：:]/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoKind = '#content text.别：@text##.*别[：:]';
+      } else {
+        this.draft_.ruleBookInfoKind = originalKind;
+      }
+      if (/<td\b[^>]*>[\s\S]{0,120}全文长度\s*[：:]/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoWordCount = '#content text.全文长度：@text##.*全文长度[：:]';
+      } else {
+        this.draft_.ruleBookInfoWordCount = originalWordCount;
+      }
+      if (/<td\b[^>]*>[\s\S]{0,120}最后更新\s*[：:]/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoLastUpdateTime = '#content text.最后更新：@text##.*最后更新[：:]';
+      } else {
+        this.draft_.ruleBookInfoLastUpdateTime = originalLastUpdateTime;
       }
       if (/<img\b[^>]*\bsrc\s*=\s*["'][^"']+\.(?:jpg|jpeg|png|webp)/i.test(evidenceHtml)) {
         this.draft_.ruleBookInfoCover = '#content img.0@src';
@@ -1534,6 +1573,9 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
     this.draft_.ruleBookInfoAuthor = originalAuthor;
     this.draft_.ruleBookInfoCover = originalCover;
     this.draft_.ruleBookInfoTocUrl = originalToc;
+    this.draft_.ruleBookInfoKind = originalKind;
+    this.draft_.ruleBookInfoWordCount = originalWordCount;
+    this.draft_.ruleBookInfoLastUpdateTime = originalLastUpdateTime;
     return null;
   }
 
