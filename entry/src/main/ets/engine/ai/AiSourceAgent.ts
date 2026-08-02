@@ -22,6 +22,9 @@ import {
 
 const PAGE_EVIDENCE_LIMIT = 48000;
 const MAX_STAGE_ATTEMPTS = 2;
+// 修复模式的第一轮通常只是验证旧规则，因此搜索至少需要两轮重新生成机会。
+// 搜索字段最容易出现“卡片文本兜底”的误命中，给它一次额外的错误反馈重试。
+const MAX_SEARCH_STAGE_ATTEMPTS = 3;
 
 export enum AiStep {
   HOMEPAGE = 0,
@@ -632,10 +635,13 @@ ${this.evidenceRuleHint_(evidence.html)}
     if (!this.draft_) return [];
     this.start_(AiStep.SEARCH, '抓取搜索结果并验证选择器');
     let lastError = '';
-    for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
+    for (let attempt = 0; attempt < MAX_SEARCH_STAGE_ATTEMPTS; attempt++) {
+      this.log_('  搜索规则第 ' + (attempt + 1) + '/' + MAX_SEARCH_STAGE_ATTEMPTS +
+        ' 轮：' + (attempt === 0 ? '验证现有配置' : '根据上次错误重新生成'));
       if (attempt > 0 || this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchList) {
         const evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
         this.ensureSearchWebViewOption_();
+        this.log_('  搜索规则第 ' + (attempt + 1) + ' 轮：请求模型定位书名、作者和详情链接');
         const prompt = `分析小说网站搜索结果页或搜索 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
@@ -660,6 +666,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, SEARCH_FIELDS);
+        this.log_('  搜索规则第 ' + (attempt + 1) + ' 轮：模型规则已返回，开始真实验证');
       }
       if (!isAiLinkExtractionRule(this.draft_.ruleSearchNoteUrl || '')) {
         lastError = 'ruleSearchNoteUrl 没有显式提取书名主链接的 @href';
@@ -675,6 +682,30 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         isInvalidAiSearchAuthor_(item.author));
       const shouldValidateAuthors = !!(this.draft_.ruleSearchAuthor || '').trim();
       if (pollutedNames.length > 0 || (shouldValidateAuthors && invalidAuthors.length > 0)) {
+        // 某些站点的 h3 位于外层 a 内，模型会生成 dd h3 a@text，
+        // 但执行器找不到该节点后只能回退到整张卡片文本。先尝试同一标题节点
+        // 的直接文本，成功后把修正后的规则保留在草稿中，不依赖运行时清洗。
+        if (pollutedNames.length > 0) {
+          const correctedNameResults = await this.tryCorrectSearchNameRule_(keyword);
+          if (correctedNameResults.length > 0) {
+            const correctedExtracted = correctedNameResults.filter((item: SearchResult): boolean =>
+              !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+            const correctedInvalidAuthors = correctedExtracted.filter((item: SearchResult): boolean =>
+              isInvalidAiSearchAuthor_(item.author));
+            if (correctedExtracted.length > 0 &&
+              correctedExtracted.every((item: SearchResult): boolean => !hasAiSearchCardMetadata_(item.name)) &&
+              (!shouldValidateAuthors || correctedInvalidAuthors.length === 0)) {
+              correctedExtracted.sort((left: SearchResult, right: SearchResult): number =>
+                aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
+              this.done_(AiStep.SEARCH, '真实搜索返回 ' + correctedExtracted.length +
+                ' 本书（已修正书名选择器）', {
+                  sampleBook: correctedExtracted[0].name,
+                  sampleUrl: correctedExtracted[0].noteUrl,
+                });
+              return correctedExtracted;
+            }
+          }
+        }
         let correctedAuthor = false;
         if (invalidAuthors.length > 0) {
           correctedAuthor = await this.tryCorrectSearchAuthorRule_(keyword);
@@ -751,6 +782,54 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       this.log_('  搜索验证失败，准备第 ' + (attempt + 2) + ' 轮');
     }
     this.error_(AiStep.SEARCH, lastError || '搜索验证失败');
+    return [];
+  }
+
+  /**
+   * 对“标题节点外层包裹 a”或模型误加 a 的站点，尝试从标题容器直接提取文本。
+   * 这是一次真实规则验证，只有结果同时具备干净书名和详情链接时才保留候选规则。
+   */
+  private async tryCorrectSearchNameRule_(keyword: string): Promise<SearchResult[]> {
+    if (!this.draft_) return [];
+    const original = (this.draft_.ruleSearchName || '').trim();
+    if (!original) return [];
+
+    const candidates: string[] = [];
+    const addCandidate = (rule: string): void => {
+      const value = rule.trim();
+      if (value && value !== original && !candidates.includes(value)) candidates.push(value);
+    };
+    // dd h3 a@text → dd h3@text / dd h3@ownText；保留 @tag 之前的 CSS 层级。
+    const descendantLink = original.match(/^([\s\S]+?)\s+a@(text|ownText)$/i);
+    if (descendantLink) {
+      addCandidate(descendantLink[1] + '@' + descendantLink[2]);
+      addCandidate(descendantLink[1] + '@ownText');
+    }
+    // 同类规则可能使用 @tag.a 语法。
+    const taggedLink = original.match(/^([\s\S]+?)@tag\.a@(text|ownText)$/i);
+    if (taggedLink) {
+      addCandidate(taggedLink[1] + '@' + taggedLink[2]);
+      addCandidate(taggedLink[1] + '@ownText');
+    }
+    if (candidates.length === 0) return [];
+
+    for (const candidate of candidates) {
+      this.draft_.ruleSearchName = candidate;
+      try {
+        const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+        const usable = retried.filter((item: SearchResult): boolean =>
+          !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
+          isLikelyAiBookDetailUrl(item.noteUrl));
+        if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
+          !hasAiSearchCardMetadata_(item.name))) {
+          this.log_('  已验证书名候选规则：' + candidate);
+          return usable;
+        }
+      } catch (_e) {
+        // 候选规则失败时继续尝试下一个，不影响后续模型重试。
+      }
+    }
+    this.draft_.ruleSearchName = original;
     return [];
   }
 
