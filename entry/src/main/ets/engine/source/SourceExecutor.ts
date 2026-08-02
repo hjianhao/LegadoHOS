@@ -264,6 +264,20 @@ export function isWafProbeHtml(html: string): boolean {
   return hasProbeScript && hasEmptyBody;
 }
 
+/** 判断响应是否本身就是登录门禁页面（而不是详情页里隐藏的登录弹窗）。 */
+export function isLoginDocument(html: string, url: string = ''): boolean {
+  if (/\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url || '')) return true;
+  if (!html) return false;
+  const text = html.trim();
+  const passwordForm = /<input\b[^>]*type=["']?password/i.test(text);
+  if (!passwordForm) return false;
+  const titleOrHeading = text.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
+  const formMarker = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(text);
+  const loginMarker = titleOrHeading ? /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]) : false;
+  const bookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(text);
+  return (loginMarker || formMarker) && !bookMarkup;
+}
+
 /**
  * 判断详情、目录和正文的直连响应是否必须交给浏览器环境。
  * 除 WAF 探针外，还覆盖常见 SPA 空壳和登录门禁；JSON API 不会被误判。
@@ -275,19 +289,7 @@ export function needsWebViewDocument(html: string, url: string = ''): boolean {
   if (isWafProbeHtml(text)) return true;
   if (WebViewFetcher.isInteractiveChallengeHtml(text)) return true;
   if (/<div[^>]+id=["'](?:app|root|__next)["'][^>]*>\s*<\/div>/i.test(text)) return true;
-  const loginUrl = /\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url);
-  // 很多小说详情页会把“登录/注册”弹窗表单隐藏在页面 DOM 中，
-  // 仅凭 password input + “登录”会把正常详情页误判成登录页，
-  // 进而弹出没有验证码的交互 WebView。只有页面本身呈现出强登录
-  // 特征且没有书籍内容时，才将它视为登录门禁；明确的 /login URL
-  // 仍然直接走 WebView。
-  const passwordForm = /<input\b[^>]*type=["']?password/i.test(text);
-  const titleOrHeading = text.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
-  const formMarker = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(text);
-  const loginMarker = titleOrHeading ? /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]) : false;
-  const bookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(text);
-  const loginDocument = passwordForm && (loginMarker || formMarker) && !bookMarkup;
-  return loginUrl || loginDocument;
+  return isLoginDocument(text, url);
 }
 
 /** 识别用空 result 明确关闭搜索的 Android 书源模板。 */
@@ -1508,19 +1510,26 @@ export class SourceExecutor {
     const requestTimeout = timeout || SourceNetworkPolicy.timeout(source);
     console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(requestHeaders).substring(0, 200));
 
-    const fetchByWebView = async (reason: string): Promise<string> => {
+    const getLoginWebViewUrl = (): string => {
+      const configured = (source.loginUrl || '').trim();
+      // loginUrl 也可能是登录 JS；只有普通 HTTP 地址才能交给 WebView。
+      if (/^https?:\/\//i.test(configured)) return configured;
+      return url;
+    };
+
+    const fetchByWebView = async (reason: string, targetUrl: string = url): Promise<string> => {
       if (method === 'POST') return '';
       if (!WebViewFetcher.isReady()) {
         await WebViewFetcher.waitForReady(3000);
       }
       if (!WebViewFetcher.isReady()) return '';
       try {
-        console.info('[SrcEx] fetchWithOpts WebView fallback:', reason, url.substring(0, 80));
-        const rendered = await WebViewFetcher.fetch(url, requestTimeout, requestHeaders);
+        console.info('[SrcEx] fetchWithOpts WebView fallback:', reason, targetUrl.substring(0, 100));
+        const rendered = await WebViewFetcher.fetch(targetUrl, requestTimeout, requestHeaders);
         let renderedHtml = rendered.html || '';
         if (WebViewFetcher.isInteractiveChallengeHtml(renderedHtml) &&
           WebViewFetcher.interactiveFetcher) {
-          const interactive = await WebViewFetcher.fetchInteractive(rendered.finalUrl || url);
+          const interactive = await WebViewFetcher.fetchInteractive(rendered.finalUrl || targetUrl);
           if (interactive && interactive.length > 200) renderedHtml = interactive;
         }
         return renderedHtml;
@@ -1544,14 +1553,20 @@ export class SourceExecutor {
         directHtml = await NetUtil.httpGet(url, requestHeaders, requestTimeout);
       }
       if (method === 'GET' && needsWebViewDocument(directHtml, url)) {
-        const rendered = await fetchByWebView('dynamic, WAF, or login document');
+        const loginRequired = isLoginDocument(directHtml, url);
+        const targetUrl = loginRequired ? getLoginWebViewUrl() : url;
+        if (loginRequired && targetUrl !== url) {
+          console.info('[SrcEx] Login document detected, opening source loginUrl:', targetUrl.substring(0, 100));
+        }
+        const rendered = await fetchByWebView(
+          loginRequired ? 'login required' : 'dynamic, WAF, or login document', targetUrl);
         if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
       }
       return directHtml;
     } catch (err) {
       const msg = (err as Error).message || '';
       if (method === 'GET' && /(?:HTTP\s+(?:403|429|5\d\d)|Cloudflare|WAF|page not found)/i.test(msg)) {
-        const rendered = await fetchByWebView(msg.substring(0, 100));
+        const rendered = await fetchByWebView(msg.substring(0, 100), url);
         if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
       }
       // RCP 并发取消错误，重试一次
