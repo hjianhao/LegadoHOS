@@ -1395,6 +1395,63 @@ export class SourceExecutor {
       .trim();
   }
 
+  /**
+   * 在搜索列表中异步执行传统的 `a@href<js>java.ajax(result)</js>` 字段规则。
+   * QuickJS 原生桥不可用时，同步 java.ajax 会静默返回空值；这里复用 ArkTS
+   * 网络层请求详情页，并在返回 HTML 上执行原规则的 ## 后处理。
+   */
+  private async resolveAjaxFieldValues_(
+    items: HtmlElement[], rule: string, source: BookSource, baseUrl: string
+  ): Promise<string[]> {
+    const values: string[] = new Array<string>(items.length).fill('');
+    if (!rule || !/java\.ajax\s*\(\s*result\b/i.test(rule)) return values;
+
+    const parsed = JsExpressionEvaluator.stripJsSuffix(rule);
+    const hashIndex = parsed.rule.indexOf('##');
+    const cssRule = (hashIndex >= 0 ? parsed.rule.substring(0, hashIndex) : parsed.rule).trim();
+    const postRule = hashIndex >= 0 ? parsed.rule.substring(hashIndex) : '';
+    if (!cssRule || !postRule) return values;
+
+    const parser = getHtmlParser();
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'text/html,application/json,*/*',
+      'Referer': source.sourceUrl || '',
+      ...parseHeader(source.header),
+    };
+    const requests = new Map<string, Promise<string>>();
+    const urls: string[] = items.map((item: HtmlElement): string => {
+      const raw = parser.extractAttr(item, this.normalizeCssRule(cssRule));
+      return raw ? this.resolvePageUrl(raw, baseUrl) : '';
+    });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < urls.length) {
+        const index = cursor++;
+        const url = urls[index];
+        if (!url) continue;
+        let request = requests.get(url);
+        if (!request) {
+          request = this.fetchWithOpts(url, requestHeaders, source).catch((error: Error): string => {
+            console.warn('[SrcEx] AJAX author request failed url=' + url.substring(0, 120)
+              + ' error=' + (error.message || String(error)));
+            return '';
+          });
+          requests.set(url, request);
+        }
+        const body = await request;
+        if (body) values[index] = this.cleanAuthorName(this.postProcessRule(postRule, body));
+      }
+    };
+    const workerCount = Math.min(8, Math.max(1, urls.length));
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < workerCount; i++) workers.push(worker());
+    await Promise.all(workers);
+    const filled = values.filter((value: string): boolean => value.length > 0).length;
+    console.info('[SrcEx] AJAX field resolved ' + filled.toString() + '/' + values.length.toString()
+      + ' values for ' + source.sourceName);
+    return values;
+  }
+
   /** 从 URL 提取 JSON 选项并发送请求（支持 POST/GET + body + headers） */
   private async fetchWithOpts(
     url: string, headers: Record<string, string>, source: BookSource, timeout?: number
@@ -3269,6 +3326,8 @@ export class SourceExecutor {
     const getIntro = compileFieldRule(introRule);
     const getLastChapter = compileFieldRule(lastChapterRule);
     const getFullName = compileFieldRule(fullNameRule);
+    const ajaxAuthorValues = await this.resolveAjaxFieldValues_(
+      items.slice(0, parseItemCount), authorRule, source, baseUrl);
 
     const results: SearchResult[] = [];
 
@@ -3302,7 +3361,7 @@ export class SourceExecutor {
       if (!name || name.length < 1) continue;
 
       // 作者
-      let author = this.cleanAuthorName(getAuthor(item));
+      let author = this.cleanAuthorName(ajaxAuthorValues[idx] || getAuthor(item));
       // DEBUG: 显示归一化后的规则 + 匹配到的元素数
       const _normAuthor = this.normalizeCssRule(authorRule);
       if (idx < 3) {
