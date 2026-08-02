@@ -150,6 +150,12 @@ interface VerifiedTocPage {
 export function inferAiContentRule(html: string): string {
   if (!html || isInvalidAiContentResult(html)) return '';
   const candidates: Array<{ rule: string; pattern: RegExp }> = [
+    // 文本小说优先提取段落节点，避免把外层容器 HTML 交给纯文本阅读器。
+    { rule: '#chaptercontent p@textNodes', pattern: /<[^>]+id=["']chaptercontent["'][^>]*>[\s\S]*?<p\b/i },
+    { rule: '#content p@textNodes', pattern: /<[^>]+id=["']content["'][^>]*>[\s\S]*?<p\b/i },
+    { rule: '.chapter-content p@textNodes', pattern: /<[^>]+class=["'][^"']*\bchapter-content\b[^"']*["'][^>]*>[\s\S]*?<p\b/i },
+    { rule: '.read-content p@textNodes', pattern: /<[^>]+class=["'][^"']*\bread-content\b[^"']*["'][^>]*>[\s\S]*?<p\b/i },
+    { rule: '.article-content p@textNodes', pattern: /<[^>]+class=["'][^"']*\barticle-content\b[^"']*["'][^>]*>[\s\S]*?<p\b/i },
     { rule: '#chaptercontent@html', pattern: /<[^>]+id=["']chaptercontent["'][^>]*>/i },
     { rule: '#content@html', pattern: /<[^>]+id=["']content["'][^>]*>/i },
     // 部分移动小说站直接把正文段落放在 txtnav 容器下，没有单独 content 节点。

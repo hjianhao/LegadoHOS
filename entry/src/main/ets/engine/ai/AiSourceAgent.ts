@@ -1109,28 +1109,47 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
     if (!this.draft_) return;
     this.start_(AiStep.CONTENT, '抽样验证正文');
     const samples = chapters.slice(0, Math.min(3, chapters.length));
+    // 书源管理入口没有预先指定失败阶段时，文本源的外层 @html 也需要做一次
+    // 规则优化，避免把“当前能读”误认为“配置已经最适合文本阅读器”。
+    const optimizeTextRule = this.shouldOptimizeTextContentRule_();
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       // 章节正文可能只有一句话，不能只用第一章判定整个正文规则失败。
       // 每轮先用一个样本生成/修复规则，再用最多三个不同章节验证同一规则。
       const evidenceSample = samples[Math.min(attempt, samples.length - 1)];
       let evidenceHtml = '';
-      if (attempt > 0 || this.shouldRepair_(['正文']) || !this.draft_.ruleBookContent) {
+      if (attempt > 0 || this.shouldRepair_(['正文']) || !this.draft_.ruleBookContent ||
+        (attempt === 0 && optimizeTextRule)) {
         const evidence = await this.fetchPage_(evidenceSample.url, '章节正文');
         evidenceHtml = evidence.html;
         const prompt = `分析小说章节正文页或正文 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 正文规则应命中正文容器，不能选择 body 或整页。
 下一页只能是同一章节分页，不能是下一章。
+${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文本规则，如 #content p@textNodes、#content div@textNodes 或正文容器@textNodes；不要把外层容器的 @html 作为最终规则，除非页面没有可提取的文本/段落节点。\n' : ''}
 上次验证错误：${lastError || '无'}
 返回：
 {
-  "ruleBookContent":"正文，如 #content@html 或 .content@textNodes",
+  "ruleBookContent":"正文；文本源优先段落级 @text/@textNodes，富媒体源才使用 @html",
   "ruleBookContentTitle":"章节标题，没有则空",
   "ruleBookContentNext":"章节内下一页 href，没有则空"
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, CONTENT_FIELDS);
+      }
+      if (optimizeTextRule && this.isOuterHtmlContentRule_(this.draft_.ruleBookContent)) {
+        const optimized = await this.tryTextContentRules_(samples, bookUrl, evidenceHtml);
+        if (optimized) {
+          this.done_(AiStep.CONTENT, '正文规则已优化为段落文本，提取 ' + optimized.length + ' 字', {
+            sampleChapter: optimized.sample.title,
+            checkedSamples: '1',
+            ruleBookContent: this.draft_.ruleBookContent,
+          });
+          return;
+        }
+        lastError = '文本小说正文规则仍为外层 @html，必须改为段落级 @text 或 @textNodes';
+        this.log_('  正文规则优化失败：' + lastError);
+        continue;
       }
       let checked = 0;
       for (const sample of samples) {
@@ -1157,6 +1176,46 @@ ${this.evidenceRuleHint_(evidence.html)}
     }
     this.error_(AiStep.CONTENT, lastError);
     throw new Error(lastError);
+  }
+
+  private isOuterHtmlContentRule_(rule: string): boolean {
+    return /@html(?:\s*##|\s*$)/i.test((rule || '').trim());
+  }
+
+  private shouldOptimizeTextContentRule_(): boolean {
+    return this.repairMode_ && this.invalidGroups_.length === 0 && !!this.draft_ &&
+      this.draft_.sourceType === 0 && this.isOuterHtmlContentRule_(this.draft_.ruleBookContent);
+  }
+
+  /** 对已有 @html 正文规则尝试生成并真实验证段落级文本规则。 */
+  private async tryTextContentRules_(samples: BookSourceChapter[], bookUrl: string,
+    evidenceHtml: string): Promise<{ sample: BookSourceChapter; length: number } | null> {
+    if (!this.draft_) return null;
+    const original = this.draft_.ruleBookContent || '';
+    const base = original.split('##')[0].trim().replace(/@html$/i, '').trim();
+    if (!base) return null;
+    const candidates: string[] = [
+      base + ' > p@textNodes', base + ' p@textNodes',
+      base + ' > div@textNodes', base + ' div@textNodes',
+      base + '@textNodes', base + '@text',
+    ];
+    // 证据中没有段落标签时，避免盲试大量规则；容器自身 textNodes 仍保留。
+    const hasParagraph = /<(?:p|div)\b/i.test(evidenceHtml || '');
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      if (!candidate || seen.has(candidate) || (!hasParagraph && /\s[>]?\s*(?:p|div)@/i.test(candidate))) continue;
+      seen.add(candidate);
+      this.draft_.ruleBookContent = candidate;
+      for (const sample of samples) {
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        if (isUsableAiExtractedContent(content)) {
+          this.log_('  已验证段落正文规则：' + candidate);
+          return { sample: sample, length: content.length };
+        }
+      }
+    }
+    this.draft_.ruleBookContent = original;
+    return null;
   }
 
   /**
