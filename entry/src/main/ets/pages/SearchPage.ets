@@ -1124,16 +1124,60 @@ export struct SearchPage {
     }
   }
 
-  /** 后台为没有封面的结果抓取详情页封面（并发 3） */
+  /**
+   * 后台补齐搜索结果缺失的详情元数据（并发 3）。
+   *
+   * 一些站点的搜索卡片只有书名和简介，作者/封面只出现在详情页。
+   * 书源规则本身仍按页面真实结构生成，不能把详情页选择器错误地套到搜索卡片；
+   * 这里使用已验证的详情规则回填作者和封面，兼容这类站点。
+   */
   async fetchMissingCovers(): Promise<void> {
-    const noCover = this.results.filter((r: SearchResult) => !r.coverUrl && r.noteUrl);
-    if (noCover.length === 0) return;
+    const missingMetadata = this.results.filter((r: SearchResult) =>
+      r.noteUrl && (!r.author || !r.coverUrl));
+    if (missingMetadata.length === 0) return;
+
+    const updateResult = (result: SearchResult, author: string, coverUrl: string): void => {
+      if (author && !result.author) result.author = author;
+      if (coverUrl && !result.coverUrl) result.coverUrl = coverUrl;
+      if (!author && !coverUrl) return;
+      const sameResult = (item: SearchResult): boolean => item === result ||
+        (item.key === result.key && item.originUrl === result.originUrl) ||
+        (!!item.noteUrl && item.noteUrl === result.noteUrl && item.originUrl === result.originUrl);
+      // 搜索结果和全量结果通常共享对象，但分页/过滤后可能不是同一数组，
+      // 两边都刷新，避免下一次状态更新把刚回填的字段覆盖掉。
+      this.allResults.forEach((item: SearchResult): void => {
+        if (sameResult(item)) {
+          if (author && !item.author) item.author = author;
+          if (coverUrl && !item.coverUrl) item.coverUrl = coverUrl;
+        }
+      });
+      this.results = [...this.results];
+      this.allResults = [...this.allResults];
+    };
+
     let cursor = 0;
     const worker = async (): Promise<void> => {
-      while (cursor < noCover.length) {
+      while (cursor < missingMetadata.length) {
         const idx = cursor++;
-        const r = noCover[idx];
+        const r = missingMetadata[idx];
+        const source = this.sources.find((item: BookSource): boolean =>
+          item.sourceUrl === r.originUrl || item.sourceName === r.origin);
+        let detailFetched = false;
         try {
+          // 详情规则已由 SourceExecutor/AI Agent 验证时，优先使用它回填作者和封面。
+          // 没有详情字段规则的普通源继续走下面的 HTML 图片兜底。
+          if (source && (source.ruleBookInfoAuthor || source.ruleBookInfoCover)) {
+            const info = await globalSourceExecutor.getBookInfo(source, r.noteUrl);
+            detailFetched = true;
+            updateResult(r, info.author || '', info.coverUrl || '');
+          }
+        } catch (_e) { /* 详情规则失败时继续尝试原始 HTML 封面兜底 */ }
+
+        // 详情规则没有封面字段，或站点把图片放在未配置的 meta/style 中时，
+        // 保留原有的轻量 HTML 图片兜底；没有图片则保持空值，不生成假封面。
+        // 已经用详情规则请求过页面且该规则没有封面字段时，不再重复请求同一详情页；
+        // 这类站点（如 sjks88）详情页本身没有图片，保持空值比重复网络请求更准确。
+        if (!r.coverUrl && (!detailFetched || !!source?.ruleBookInfoCover)) try {
           const html = await NetUtil.httpGet(r.noteUrl, {
             'Accept': 'text/html,*/*',
             'Referer': r.originUrl || r.noteUrl,
@@ -1150,15 +1194,14 @@ export struct SearchPage {
               url = (base || '') + (url.startsWith('/') ? url : '/' + url);
             }
             if (url) {
-              r.coverUrl = url;
-              this.results = [...this.results];
+              updateResult(r, '', url);
             }
           }
         } catch (_e) { /* ignore */ }
       }
     };
     const workers: Promise<void>[] = [];
-    for (let w = 0; w < Math.min(3, noCover.length); w++) workers.push(worker());
+    for (let w = 0; w < Math.min(3, missingMetadata.length); w++) workers.push(worker());
     await Promise.all(workers);
   }
 
