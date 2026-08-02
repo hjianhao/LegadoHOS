@@ -47,9 +47,20 @@ export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean 
   return !!(name || '').trim() && !!(noteUrl || '').trim();
 }
 
-/** 对齐 Android BookHelp.formatBookName：只移除明确的作者尾注，不截断合法书名标点。 */
+/**
+ * 对齐 Android BookHelp.formatBookName，并兼容小说站卡片把元数据拼进书名文本的情况。
+ * 例如“2024-06-27方家四合院作者：笑着人生状态：连载中...”应只显示“方家四合院”。
+ */
 export function formatLegadoBookName(raw: string): string {
-  return (raw || '').replace(/\s+作\s*者.*|\s+\S+\s+著/g, '').trim();
+  let result = (raw || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!result) return '';
+  const authorIndex = result.search(/(?:作\s*者|著者|作者)\s*[:：=]/i);
+  if (authorIndex > 1) result = result.substring(0, authorIndex);
+  const metadataIndex = result.search(/(?:状态|作品状态|连载状态|大小|字数|总字数|最新章节|更新时间|更新日期|最后更新)\s*[:：=]|(?:开始阅读|TXT下载|加入书架|推荐此书)/i);
+  if (metadataIndex > 1) result = result.substring(0, metadataIndex);
+  // 站群常把更新日期直接贴在书名前面，没有空格或分隔符。
+  result = result.replace(/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\s*/, '');
+  return result.replace(/\s+作\s*者.*|\s+\S+\s+著/g, '').trim();
 }
 
 /** 将书名链接/文本规则转换为同一元素的 title 属性规则，title 常保存网站未截短的完整书名。 */
@@ -1398,12 +1409,23 @@ export class SourceExecutor {
   }
 
   private cleanAuthorName(raw: string): string {
-    return (raw || '')
+    const cleaned = (raw || '')
       .replace(/[\r\n]+/g, ' ')
       .replace(/^[\s　]*(作者|作\s*者|著者|作者名|作者名称|author)\s*[:：=－\-]?\s*/i, '')
       .replace(/[\s　]*(?:最后|最近|最新)?(?:更新时间|更新日期|最后更新|最新更新|更新|最新章节|字数|总字数|作品状态|连载状态|状态|作品类型|分类|类别|类型)\s*[:：=－\-]?\s*[\s\S]*$/i, '')
       .replace(/\s*(著|作品)?\s*$/g, '')
       .trim();
+    // 规则误取状态/大小等字段时，不要把它们显示为作者。
+    if (/^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i.test(cleaned)) return '';
+    return cleaned;
+  }
+
+  /** 从小说卡片的整段文本中恢复“作者：xxx”，用于作者规则误选状态字段的兜底。 */
+  private extractAuthorFromCardText(itemText: string): string {
+    const text = (itemText || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    const match = text.match(/(?:作者|作\s*者|著者|作者名|作者名称)\s*[:：=]\s*([\s\S]*?)(?=(?:最后|最近|最新)?(?:更新时间|更新日期|最后更新|最新更新|更新|最新章节|字数|总字数|作品状态|连载状态|状态|大小|作品类型|分类|类别|类型|开始阅读|TXT下载|加入书架|推荐此书)\s*[:：=]?|$)/i);
+    return match && match.length > 1 ? this.cleanAuthorName(match[1]) : '';
   }
 
   /**
@@ -3410,6 +3432,9 @@ export class SourceExecutor {
 
       // 作者
       let author = this.cleanAuthorName(ajaxAuthorValues[idx] || getAuthor(item));
+      if (!author) {
+        author = this.extractAuthorFromCardText(item.text || item.innerHtml || '');
+      }
       // DEBUG: 显示归一化后的规则 + 匹配到的元素数
       const _normAuthor = this.normalizeCssRule(authorRule);
       if (idx < 3) {
@@ -3770,7 +3795,10 @@ export class SourceExecutor {
 
       // 2) 从每个条目中提取字段
       const name = this.extractFieldByCss(itemHtml, nameRule) || '';
-      const author = this.cleanAuthorName(this.extractFieldByCss(itemHtml, authorRule) || '');
+      let author = this.cleanAuthorName(this.extractFieldByCss(itemHtml, authorRule) || '');
+      if (!author) {
+        author = this.extractAuthorFromCardText(this.stripHtml(itemHtml));
+      }
       const coverRaw = this.extractFieldByCss(itemHtml, coverRule) || '';
       let noteUrl = this.extractFieldByCss(itemHtml, noteUrlRule) || '';
 

@@ -242,6 +242,11 @@ function cleanAiSearchBookName_(value: string): string {
   return cleaned.trim() || raw;
 }
 
+function hasAiSearchCardMetadata_(value: string): boolean {
+  return /(?:作者|作\s*者|状态|连载状态|大小|字数|最新章节|更新时间|更新日期|开始阅读|TXT下载|加入书架|推荐此书)\s*[:：]?/i
+    .test(value || '') || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test((value || '').trim());
+}
+
 /** 检测 LLM 是否把本次样本书的长数字路径硬编码进了详情/目录规则。 */
 function isSampleSpecificAiRule_(rule: string, sampleUrl: string): boolean {
   if (!rule || !sampleUrl) return false;
@@ -631,6 +636,7 @@ ${this.evidenceRuleHint_(evidence.html)}
 ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
 必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
 ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能取分类/作者链接或文本；JSON 中必须取能唯一定位当前书籍的 URL/ID 字段，必要时使用 {{字段}} 拼出详情 URL。
+如果卡片文本包含更新日期、作者、状态、大小、最新章节、开始阅读等元数据，ruleSearchName 只能定位书名子元素，不能取整张卡片文本；ruleSearchAuthor 必须定位作者字段，不能取“连载中/完结”等状态。
 如果书名链接的可见文本因页面排版被截短，而 title 属性包含完整书名，ruleSearchName 必须取同一链接的 @title。
 优先稳定 id/class，避免 nth-child/nth-of-type。
 测试关键词：${keyword}
@@ -658,6 +664,11 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       const results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
       const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+      if (extracted.some((item: SearchResult): boolean => hasAiSearchCardMetadata_(item.name))) {
+        if (await this.tryCorrectSearchAuthorRule_(keyword)) {
+          this.log_('  搜索卡片作者规则疑似取到状态字段，已尝试改用前一个作者元素');
+        }
+      }
       const navigationItems = extracted.filter((item: SearchResult): boolean =>
         !isLikelyAiBookDetailUrl(item.noteUrl) && !isLikelyAiChapterUrl(item.noteUrl));
       if (navigationItems.length > 0) {
@@ -759,6 +770,27 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       this.draft_.ruleSearchNoteUrl = oldNote;
       return [];
     }
+  }
+
+  /** 对站群常见的 span.1@text 状态误选，尝试同卡片前一个 span 作为作者。 */
+  private async tryCorrectSearchAuthorRule_(keyword: string): Promise<boolean> {
+    if (!this.draft_) return false;
+    const rule = (this.draft_.ruleSearchAuthor || '').trim();
+    const match = rule.match(/^(\w[\w-]*)\.(\d+)@text$/i);
+    if (!match || parseInt(match[2]) <= 0) return false;
+    const oldRule = this.draft_.ruleSearchAuthor;
+    this.draft_.ruleSearchAuthor = match[1] + '.' + String(parseInt(match[2]) - 1) + '@text';
+    try {
+      const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+      const hasAuthor = retried.some((item: SearchResult): boolean =>
+        !!(item.author || '').trim() && !/^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i
+          .test((item.author || '').trim()));
+      if (hasAuthor) return true;
+    } catch (_e) {
+      // 恢复原规则，搜索结果仍可由执行层的卡片作者兜底提取。
+    }
+    this.draft_.ruleSearchAuthor = oldRule;
+    return false;
   }
 
   private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<void> {
