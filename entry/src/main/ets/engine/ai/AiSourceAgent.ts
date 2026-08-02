@@ -974,6 +974,8 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
   private async tryCorrectSearchNameRule_(keyword: string): Promise<SearchResult[]> {
     if (!this.draft_) return [];
     const original = (this.draft_.ruleSearchName || '').trim();
+    const originalNote = this.draft_.ruleSearchNoteUrl || '';
+    const originalAuthor = this.draft_.ruleSearchAuthor || '';
     if (!original) return [];
 
     const candidates: string[] = [];
@@ -1008,6 +1010,20 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
 
     for (const candidate of candidates) {
       this.draft_.ruleSearchName = candidate;
+      // 书名索引必须和详情链接使用同一张表格行的链接索引；只改书名而保留
+      // `td.odd a@href` 会让验证仍取不到书籍详情，导致正确的 .odd.0 候选被丢弃。
+      this.draft_.ruleSearchNoteUrl = originalNote;
+      this.draft_.ruleSearchAuthor = originalAuthor;
+      const indexedLink = candidate.match(/^([\s\S]+?)\s+a\.(\d+)@(text|ownText)$/i);
+      if (indexedLink) {
+        this.draft_.ruleSearchNoteUrl = indexedLink[1] + ' a.' + indexedLink[2] + '@href';
+      }
+      if (/^(?:td\.)?odd\.0@(text|ownText)$/i.test(candidate)) {
+        this.draft_.ruleSearchNoteUrl = 'a.0@href';
+      }
+      if (/td\.odd|\.odd/i.test(candidate) && /td\.odd|\.odd/i.test(originalAuthor)) {
+        this.draft_.ruleSearchAuthor = 'td.odd.1@text';
+      }
       try {
         const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
         const usable = retried.filter((item: SearchResult): boolean =>
@@ -1023,6 +1039,8 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       }
     }
     this.draft_.ruleSearchName = original;
+    this.draft_.ruleSearchNoteUrl = originalNote;
+    this.draft_.ruleSearchAuthor = originalAuthor;
     return [];
   }
 
