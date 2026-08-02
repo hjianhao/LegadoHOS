@@ -371,6 +371,13 @@ struct AiSourceGeneratePage {
       if (result.index !== 1 || !this.repairSource_) return;
       try {
         const changed = await SourceRevisionService.applyRepair(this.repairSource_, candidate, reason);
+        if (changed.length === 0) {
+          UiUtil.showToast(this.getUIContext(), {
+            message: '当前书源配置已通过校验，无需更新', duration: 2000
+          });
+          UiUtil.back(this.getUIContext());
+          return;
+        }
         UiUtil.showToast(this.getUIContext(), {
           message: '修复已应用，修改 ' + changed.length + ' 个字段', duration: 2000
         });

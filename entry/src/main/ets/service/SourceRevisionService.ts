@@ -52,7 +52,8 @@ export class SourceRevisionService {
     if (!preserveSourceName && before.sourceName !== candidate.sourceName) {
       changed.unshift('bookSourceName');
     }
-    if (changed.length === 0) throw new Error('修复结果没有产生规则变化');
+    // Agent 可能只是重新验证了已经正确的规则；这不是保存异常，也不应创建空版本。
+    if (changed.length === 0) return [];
 
     await AppDatabase.getInstance().waitForInit();
     const db = AppDatabase.getInstance().rdbStore;
