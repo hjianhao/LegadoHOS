@@ -20,6 +20,7 @@ import { ClickActionConfig } from '../components/reader/ClickActionConfig';
 import { NetUtil } from '../util/NetUtil';
 import { WindowLayout } from '../util/WindowLayout';
 import { HtmlUtil } from '../util/HtmlUtil';
+import { ContentCleaner } from '../util/ContentCleaner';
 import fileFs from '@ohos.file.fs';
 import util from '@ohos.util';
 import relationalStore from '@ohos.data.relationalStore';
@@ -1039,6 +1040,11 @@ struct ReadPage {
    */
   private processForDisplay_(raw: string): string {
     let text = raw;
+    // 兼容旧缓存：正文规则使用 @html 时，旧版本可能把 innerHtml 原样缓存。
+    // 阅读页统一转换为带段落换行的纯文本，避免历史缓存仍然挤成一段。
+    if (/<(?:br|p|div|section|article|blockquote|h[1-6])\b/i.test(text)) {
+      text = ContentCleaner.formatHtml(text);
+    }
     if (text && text.length > 50 && this.cfg.chineseMode !== 'original') {
       text = convertChinese(text, this.cfg.chineseMode);
     }

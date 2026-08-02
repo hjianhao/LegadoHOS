@@ -1754,10 +1754,13 @@ export class SourceExecutor {
         }
       }
 
+      const rawCoverUrl = extractField(source.ruleBookInfoCover) || '';
       return {
         name: infoName,
         author: this.cleanAuthorName(extractField(source.ruleBookInfoAuthor) || ''),
-        coverUrl: extractField(source.ruleBookInfoCover) || '',
+        // 详情规则常提取到 /images/cover.jpg 或 //cdn...；统一相对当前详情页解析，
+        // 否则 BookInfoPage 会用相对地址覆盖搜索阶段的绝对封面并回退为占位图。
+        coverUrl: this.resolveMediaUrl_(rawCoverUrl, noteUrl),
         // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
         introduce: HtmlUtil.toPlainText(extractField(source.ruleBookInfoIntroduce) || ''),
         kind: extractField(source.ruleBookInfoKind) || '',
@@ -1785,7 +1788,8 @@ export class SourceExecutor {
       const info: BookSourceBookInfo = {
         name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
         author: this.cleanAuthorName(this.extractJsonRuleValue(source.ruleBookInfoAuthor, root)),
-        coverUrl: this.extractJsonRuleValue(source.ruleBookInfoCover, root),
+        coverUrl: this.resolveMediaUrl_(
+          this.extractJsonRuleValue(source.ruleBookInfoCover, root), noteUrl),
         introduce: HtmlUtil.toPlainText(this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root)),
         kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
         wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
@@ -2188,7 +2192,10 @@ export class SourceExecutor {
               'newlines=', newlineCount, 'preview=', result.substring(0, 200));
             const cleaned = this.applyReplaceRegex(result, source.ruleBookContentReplaceRegex);
             // 漫画模式：保留并标准化 <img> 标签
-            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(cleaned, pageUrl) : cleaned;
+            // @html 正文规则返回的是容器 innerHtml。文本阅读器不能直接把 HTML
+            // 当纯文本排版，否则 <br>/<p>/<div> 会丢失段落边界；漫画仍保留图片标签。
+            const finalContent = preserveImages ? ContentCleaner.formatKeepImg(cleaned, pageUrl) :
+              ContentCleaner.formatHtml(cleaned);
             contentParts.push(finalContent);
             console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars → cleaned', cleaned.length, 'chars');
           } else {
@@ -4059,6 +4066,13 @@ export class SourceExecutor {
     if (nextUrl.startsWith('/')) return origin + nextUrl;
     const base = currentUrl.replace(/[#?].*$/, '').replace(/\/[^\/]*$/, '/');
     return base + nextUrl;
+  }
+
+  /** 解析详情页提取的封面/图片地址，保留 data/blob URI。 */
+  private resolveMediaUrl_(url: string, currentUrl: string): string {
+    const value = (url || '').trim();
+    if (!value || /^(?:data|blob):/i.test(value)) return value;
+    return this.resolvePageUrl(value, currentUrl);
   }
 
   /**
