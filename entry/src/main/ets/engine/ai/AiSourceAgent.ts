@@ -16,7 +16,8 @@ import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule } from '../source/S
 import { CheckResult, SourceChecker } from '../../service/SourceChecker';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 import {
-  isSafeAiImportUrl, isUsableAiExtractedContent, parseAiRulesJson, prepareHtmlForAi
+  inferAiContentRule, isSafeAiImportUrl, isUsableAiExtractedContent,
+  parseAiRulesJson, prepareHtmlForAi
 } from './AiBookImporter';
 
 const PAGE_EVIDENCE_LIMIT = 48000;
@@ -980,9 +981,13 @@ ruleTocNextTocUrl 只能是目录分页的下一页，不能是下一章或“�
     const samples = chapters.slice(0, Math.min(3, chapters.length));
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
-      const sample = samples[Math.min(attempt, samples.length - 1)];
+      // 章节正文可能只有一句话，不能只用第一章判定整个正文规则失败。
+      // 每轮先用一个样本生成/修复规则，再用最多三个不同章节验证同一规则。
+      const evidenceSample = samples[Math.min(attempt, samples.length - 1)];
+      let evidenceHtml = '';
       if (attempt > 0 || this.shouldRepair_(['正文']) || !this.draft_.ruleBookContent) {
-        const evidence = await this.fetchPage_(sample.url, '章节正文');
+        const evidence = await this.fetchPage_(evidenceSample.url, '章节正文');
+        evidenceHtml = evidence.html;
         const prompt = `分析小说章节正文页或正文 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 正文规则应命中正文容器，不能选择 body 或整页。
@@ -997,18 +1002,67 @@ ${this.evidenceRuleHint_(evidence.html)}
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, CONTENT_FIELDS);
       }
-      const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
-      if (isUsableAiExtractedContent(content)) {
-        this.done_(AiStep.CONTENT, '正文样本提取 ' + content.length + ' 字', {
-          sampleChapter: sample.title,
+      let checked = 0;
+      for (const sample of samples) {
+        checked++;
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        if (isUsableAiExtractedContent(content)) {
+          this.done_(AiStep.CONTENT, '正文样本提取 ' + content.length + ' 字', {
+            sampleChapter: sample.title,
+            checkedSamples: String(checked),
+            ruleBookContent: this.draft_.ruleBookContent,
+          });
+          return;
+        }
+      }
+      const fallback = await this.tryFallbackContentRules_(samples, bookUrl, evidenceHtml);
+      if (fallback) {
+        this.done_(AiStep.CONTENT, '正文样本提取 ' + fallback.length + ' 字（已采用候选正文容器）', {
+          sampleChapter: fallback.sample.title,
           ruleBookContent: this.draft_.ruleBookContent,
         });
         return;
       }
-      lastError = '正文过短、命中页面外壳或返回反爬占位页';
+      lastError = '抽查 ' + checked + ' 个章节后，正文均过短、命中页面外壳或返回反爬占位页';
     }
     this.error_(AiStep.CONTENT, lastError);
     throw new Error(lastError);
+  }
+
+  /**
+   * 模型规则执行失败时，对页面中常见的正文容器做一次真实验证。
+   * 站点常把 #content 写成壳节点，或 textNodes 在异常 HTML 上取不到文本，
+   * 这时只重试模型会重复得到同一规则，候选规则可以降低无谓失败。
+   */
+  private async tryFallbackContentRules_(samples: BookSourceChapter[], bookUrl: string,
+    evidenceHtml: string): Promise<{ sample: BookSourceChapter; length: number } | null> {
+    if (!this.draft_ || !evidenceHtml) return null;
+    const originalRule = this.draft_.ruleBookContent || '';
+    const candidates: string[] = [];
+    const inferred = inferAiContentRule(evidenceHtml);
+    if (inferred) candidates.push(inferred);
+    if (originalRule) {
+      candidates.push(originalRule.replace(/@textNodes$/i, '@html'));
+      candidates.push(originalRule.replace(/@text$/i, '@html'));
+    }
+    candidates.push('#chaptercontent@html', '#content@html', '.txtnav p@textNodes',
+      '.chapter-content@html', '.read-content@html', '.article-content@html');
+    const seen = new Set<string>();
+    for (const rule of candidates) {
+      const candidateRule = rule.trim();
+      if (!candidateRule || seen.has(candidateRule) || candidateRule === originalRule) continue;
+      seen.add(candidateRule);
+      this.draft_.ruleBookContent = candidateRule;
+      for (const sample of samples) {
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        if (isUsableAiExtractedContent(content)) {
+          this.log_('  正文规则候选验证通过：' + candidateRule);
+          return { sample: sample, length: content.length };
+        }
+      }
+    }
+    this.draft_.ruleBookContent = originalRule;
+    return null;
   }
 
   private async validate_(keyword: string): Promise<void> {
@@ -1185,6 +1239,12 @@ ${this.evidenceRuleHint_(evidence.html)}
       throw new Error(label + '仍被登录或人工验证拦截，请完成操作后再继续');
     }
     if (!html || html.length < 300) throw new Error(label + '页面内容过短，可能被反爬或登录拦截');
+    if (usedWebView) {
+      // 取证阶段如果只能通过浏览器拿到完整 DOM，后续正文/目录验证及最终书源
+      // 也必须沿用 WebView 会话，否则会再次退回无 Cookie 的短占位页。
+      this.requiresWebView_ = true;
+      this.ensureSearchWebViewOption_();
+    }
     return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView };
   }
 
