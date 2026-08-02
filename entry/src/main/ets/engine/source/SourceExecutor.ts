@@ -312,6 +312,20 @@ function getBaseUrl(rawUrl: string): string {
   return rawUrl.replace(/#.*$/, '').replace(/\/+$/, '');
 }
 
+/** 书满屋等站点把 m. POST 入口 301 到 mip.，RCP 跟随后会丢失 POST body。 */
+function alternateMobilePostUrl_(url: string): string {
+  const match = (url || '').match(/^(https?:\/\/)(m\.)([^/?#]+)([\s\S]*)$/i);
+  if (!match) return '';
+  return match[1] + 'mip.' + match[3] + match[4];
+}
+
+/** 判断 POST 重定向后得到的“空关键词搜索页”，避免把真实无结果误判为重定向。 */
+function isEmptyKeywordSearchResponse_(body: string): boolean {
+  if (!body) return false;
+  return /<title>\s*搜索\s*(?:""|''|“\s*”|&quot;&quot;)\s*(?:结果|搜索结果)/i.test(body) ||
+    /搜索\s*[“"]\s*(?:<[^>]+>\s*)*[“"]?\s*(?:无结果|结果为空)/i.test(body);
+}
+
 /** @put / @get 变量存储（跨段变量引用） */
 let putGetStore: Record<string, string> = {};
 
@@ -1061,6 +1075,23 @@ export class SourceExecutor {
           }
         }
         bodyText = await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout);
+        // 保持原书源 sourceUrl 不变（它是数据库身份），但对移动站点的
+        // POST 入口做一次运行时规范域名重放，避免 301 后请求体被丢弃。
+        if (finalBody && isEmptyKeywordSearchResponse_(bodyText)) {
+          const alternateUrl = alternateMobilePostUrl_(finalUrl);
+          if (alternateUrl && alternateUrl !== finalUrl) {
+            console.info('[SrcEx] POST returned empty-keyword page, retrying canonical mobile host:',
+              alternateUrl.substring(0, 120));
+            const alternateHeaders = { ...requestHeaders, Referer: alternateUrl };
+            const retriedBody = await NetUtil.httpPost(
+              alternateUrl, finalBody, alternateHeaders, requestTimeout);
+            if (retriedBody && !isEmptyKeywordSearchResponse_(retriedBody)) {
+              bodyText = retriedBody;
+              finalUrl = alternateUrl;
+              baseUrl = getBaseUrl(alternateUrl);
+            }
+          }
+        }
       } else {
         bodyText = await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
       }
