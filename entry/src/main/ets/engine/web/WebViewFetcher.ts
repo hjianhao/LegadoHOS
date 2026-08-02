@@ -484,8 +484,24 @@ export class WebViewFetcher {
    */
   static isInteractiveChallengeHtml(html: string): boolean {
     if (!html) return true;
-    return /_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证|请输入验证码|searchcode\.php|__17mb_input/i
-      .test(html);
+    // 这些标记属于真正的 Cloudflare/WAF 或已知验证码挑战页。
+    if (/_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证|searchcode\.php|__17mb_input/i
+      .test(html)) return true;
+
+    // 不能仅凭“请输入验证码”判断挑战页：搬山人等站点会把注册表单
+    // 隐藏在每个正常详情页中，注册表单也带有验证码占位文字。
+    // 只有验证码输入控件/验证码图片与挑战表单同时出现时，才按普通
+    // 验证码页处理；隐藏的登录/注册弹窗不触发交互验证。
+    const hasCaptchaText = /请输入验证码|验证码|captcha|verification\s*code/i.test(html);
+    if (!hasCaptchaText) return false;
+    const hasCaptchaControl = /<(?:input|img|canvas)\b[^>]*(?:captcha|verification|verify|验证码|code)[^>]*>/i.test(html);
+    if (!hasCaptchaControl) return false;
+    const hasHiddenLoginDialog = /<(?:form|div)\b[^>]*(?:login[_-]?regist|register_form|login_form)[^>]*>/i.test(html);
+    const hasBookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(html);
+    if (hasHiddenLoginDialog && hasBookMarkup && !/class=["'][^"']*(?:challenge|captcha|verification)[^"']*["']/i.test(html)) {
+      return false;
+    }
+    return true;
   }
 
   // ========== 私有方法 ==========
