@@ -1088,7 +1088,10 @@ export class SourceExecutor {
             if (retriedBody && !isEmptyKeywordSearchResponse_(retriedBody)) {
               bodyText = retriedBody;
               finalUrl = alternateUrl;
-              baseUrl = getBaseUrl(alternateUrl);
+              // 搜索结果中的 /101/... 是站点根路径，不能用 /s.php
+              // 作为拼接前缀，否则会生成 /s.php/101/...。
+              const alternateOrigin = alternateUrl.match(/^(https?:\/\/[^/?#]+)/i);
+              if (alternateOrigin && alternateOrigin[1]) baseUrl = alternateOrigin[1];
             }
           }
         }
