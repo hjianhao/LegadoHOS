@@ -605,6 +605,30 @@ export class HtmlParser {
   private findElementsInner(root: HtmlElement, selector: string): HtmlElement[] {
     if (!root || !selector) return [];
 
+    // CSS :has(...) 过滤器：小说站表格列表常用
+    // `table.grid tr:has(td.odd)` 排除表头/空行。先用去掉 :has 的基础
+    // 选择器找候选元素，再要求每个候选包含括号内的后代选择器。
+    // 这里处理常见的单层 :has；嵌套括号仍交给原有选择器逻辑，避免误拆
+    // 属性选择器或 :eq(...) 的括号内容。
+    const hasSelectors: string[] = [];
+    const hasPattern = /:has\(([^()]*)\)/gi;
+    let hasMatch: RegExpExecArray | null;
+    while ((hasMatch = hasPattern.exec(selector)) !== null) {
+      if (hasMatch[1].trim()) hasSelectors.push(hasMatch[1].trim());
+    }
+    if (hasSelectors.length > 0) {
+      const baseSelector = selector.replace(hasPattern, '').replace(/\s+/g, ' ').trim();
+      const candidates = baseSelector ? this.findElements(root, baseSelector) : this.allElements(root);
+      return candidates.filter((element: HtmlElement): boolean => hasSelectors.every((hasSelector: string): boolean => {
+        if (hasSelector.startsWith('>')) {
+          const childSelector = hasSelector.substring(1).trim();
+          if (!childSelector) return false;
+          return this.findElementsInChildren(element, this.splitSelector(childSelector)).length > 0;
+        }
+        return this.findElements(element, hasSelector).length > 0;
+      }));
+    }
+
     // 分割组合器: ' ' (descendant) or '>' (child)
     const parts = this.splitSelector(selector);
     if (parts.length === 1) {
