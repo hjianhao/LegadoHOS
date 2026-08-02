@@ -276,9 +276,18 @@ export function needsWebViewDocument(html: string, url: string = ''): boolean {
   if (WebViewFetcher.isInteractiveChallengeHtml(text)) return true;
   if (/<div[^>]+id=["'](?:app|root|__next)["'][^>]*>\s*<\/div>/i.test(text)) return true;
   const loginUrl = /\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url);
-  const passwordForm = /<input\b[^>]*type=["']?password/i.test(text) &&
-    /登录|sign\s*in|log\s*in/i.test(text);
-  return loginUrl || passwordForm;
+  // 很多小说详情页会把“登录/注册”弹窗表单隐藏在页面 DOM 中，
+  // 仅凭 password input + “登录”会把正常详情页误判成登录页，
+  // 进而弹出没有验证码的交互 WebView。只有页面本身呈现出强登录
+  // 特征且没有书籍内容时，才将它视为登录门禁；明确的 /login URL
+  // 仍然直接走 WebView。
+  const passwordForm = /<input\b[^>]*type=["']?password/i.test(text);
+  const titleOrHeading = text.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
+  const formMarker = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(text);
+  const loginMarker = titleOrHeading ? /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]) : false;
+  const bookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(text);
+  const loginDocument = passwordForm && (loginMarker || formMarker) && !bookMarkup;
+  return loginUrl || loginDocument;
 }
 
 /** 识别用空 result 明确关闭搜索的 Android 书源模板。 */
@@ -1017,7 +1026,7 @@ export class SourceExecutor {
         try {
           const wvResult = await WebViewFetcher.fetch(finalUrl, requestTimeout, headers);
           let bodyText = wvResult.html;
-          if (needsWebViewDocument(bodyText, wvResult.finalUrl || finalUrl) &&
+          if (WebViewFetcher.isInteractiveChallengeHtml(bodyText) &&
             WebViewFetcher.interactiveFetcher) {
             console.info('[SrcEx] Configured WebView still requires interaction for', source.sourceName);
             const interactiveHtml = await WebViewFetcher.fetchInteractive(wvResult.finalUrl || finalUrl);
@@ -1509,7 +1518,7 @@ export class SourceExecutor {
         console.info('[SrcEx] fetchWithOpts WebView fallback:', reason, url.substring(0, 80));
         const rendered = await WebViewFetcher.fetch(url, requestTimeout, requestHeaders);
         let renderedHtml = rendered.html || '';
-        if (needsWebViewDocument(renderedHtml, rendered.finalUrl || url) &&
+        if (WebViewFetcher.isInteractiveChallengeHtml(renderedHtml) &&
           WebViewFetcher.interactiveFetcher) {
           const interactive = await WebViewFetcher.fetchInteractive(rendered.finalUrl || url);
           if (interactive && interactive.length > 200) renderedHtml = interactive;
