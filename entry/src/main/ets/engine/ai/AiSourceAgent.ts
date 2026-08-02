@@ -21,6 +21,10 @@ import {
 } from './AiBookImporter';
 
 const PAGE_EVIDENCE_LIMIT = 48000;
+// 模型规则请求不需要携带整页几十万字符；保留头尾及 DOM 结构即可定位常见卡片。
+// 页面取证仍使用 PAGE_EVIDENCE_LIMIT，只有发送给模型时再做一次降载。
+const LLM_EVIDENCE_LIMIT = 30000;
+const LLM_RETRY_EVIDENCE_LIMIT = 16000;
 const MAX_STAGE_ATTEMPTS = 2;
 // 修复模式的第一轮通常只是验证旧规则，因此搜索至少需要两轮重新生成机会。
 // 搜索字段最容易出现“卡片文本兜底”的误命中，给它一次额外的错误反馈重试。
@@ -353,6 +357,21 @@ function isPlausibleAiDetailValue_(value: string, maxLength: number): boolean {
 function previewAiValue_(value: string): string {
   const normalized = (value || '').replace(/\s+/g, ' ').trim();
   return normalized.length > 120 ? normalized.substring(0, 120) + '…' : normalized;
+}
+
+function isAiTimeoutError_(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timeout|timed\s*out|time\s*out|deadline\s*exceeded|Timeout was reached/i.test(message);
+}
+
+/** 仅限制发送给模型的证据，不改变后续规则验证所使用的完整页面。 */
+function limitAiLlmEvidence_(html: string, maxLength: number): string {
+  if (!html || html.length <= maxLength) return html || '';
+  const headLength = Math.floor(maxLength * 0.72);
+  const tailLength = maxLength - headLength;
+  return html.substring(0, headLength) +
+    '\n<!-- model evidence truncated; middle omitted -->\n' +
+    html.substring(html.length - tailLength);
 }
 
 /**
@@ -1770,11 +1789,23 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
   }
 
   private async askRules_(instruction: string, html: string): Promise<StageFieldSet> {
-    const prompt = instruction + '\n\n=== 已净化页面 DOM ===\n' + html;
-    const response = await this.callLlm_(prompt);
-    const parsed = parseAiRulesJson(response);
-    if (Object.keys(parsed).length === 0) throw new Error('模型未返回可解析 JSON');
-    return parsed;
+    const buildPrompt = (evidence: string): string =>
+      instruction + '\n\n=== 已净化页面 DOM ===\n' + evidence;
+    try {
+      const response = await this.callLlm_(buildPrompt(limitAiLlmEvidence_(html, LLM_EVIDENCE_LIMIT)));
+      const parsed = parseAiRulesJson(response);
+      if (Object.keys(parsed).length === 0) throw new Error('模型未返回可解析 JSON');
+      return parsed;
+    } catch (error) {
+      if (!isAiTimeoutError_(error)) throw error;
+      // 首次模型请求可能因页面证据过大或上游瞬时拥塞超时；缩短证据后只重试一次，
+      // 避免在同一轮无限等待，也让用户能在日志中看到明确的降载动作。
+      this.log_('  模型请求超时，压缩页面证据后重试一次');
+      const response = await this.callLlm_(buildPrompt(limitAiLlmEvidence_(html, LLM_RETRY_EVIDENCE_LIMIT)));
+      const parsed = parseAiRulesJson(response);
+      if (Object.keys(parsed).length === 0) throw new Error('模型未返回可解析 JSON');
+      return parsed;
+    }
   }
 
   private async callLlm_(userPrompt: string): Promise<string> {
