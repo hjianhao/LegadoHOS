@@ -23,6 +23,7 @@ interface RequestGroupState {
 
 export class NetUtil {
   private static requestGroups_: Map<string, RequestGroupState> = new Map();
+  private static gbkEncodeMap_: Map<string, number[]> | null = null;
 
   static startRequestGroup(id: string): void {
     if (id) NetUtil.requestGroups_.set(id, { cancelled: false, sessions: new Set(), systemRequests: new Set() });
@@ -194,6 +195,86 @@ export class NetUtil {
       h['Content-Type'] = 'application/x-www-form-urlencoded';
     }
     return NetUtil.httpRequest('POST', url, body, h, timeout || NetUtil.getDefaultTimeout());
+  }
+
+  /**
+   * 按书源声明的 charset 编码 application/x-www-form-urlencoded 请求体。
+   *
+   * HarmonyOS TextEncoder 只提供 UTF-8，但大量旧小说站的 POST 搜索接口仍按
+   * GBK/GB18030 解释百分号字节。这里用系统 TextDecoder 反向建立 GBK 双字节
+   * 映射（只初始化一次），让请求体保持 ASCII 百分号形式，避免 RCP 再次按
+   * UTF-8 改写原始字节。
+   */
+  static encodeFormBody(body: string, charset: string): string {
+    const normalized = (charset || '').toLowerCase().replace(/[_-]/g, '');
+    if (!body || !normalized || (normalized !== 'gbk' && normalized !== 'gb2312' &&
+      normalized !== 'gb18030')) return body || '';
+    return body.split('&').map((part: string): string => {
+      const separator = part.indexOf('=');
+      if (separator < 0) return part;
+      const rawName = part.substring(0, separator);
+      const rawValue = part.substring(separator + 1);
+      const decode = (value: string): string => {
+        try { return decodeURIComponent(value.replace(/\+/g, ' ')); } catch (_e) { return value; }
+      };
+      return NetUtil.encodeFormComponent_(decode(rawName), true) + '=' +
+        NetUtil.encodeFormComponent_(decode(rawValue), false);
+    }).join('&');
+  }
+
+  private static encodeFormComponent_(value: string, _isName: boolean): string {
+    if (!value) return '';
+    const map = NetUtil.getGbkEncodeMap_();
+    const bytes: number[] = [];
+    for (let index = 0; index < value.length; index++) {
+      let char = value.charAt(index);
+      const first = value.charCodeAt(index);
+      if (first >= 0xD800 && first <= 0xDBFF && index + 1 < value.length) {
+        const second = value.charCodeAt(index + 1);
+        if (second >= 0xDC00 && second <= 0xDFFF) {
+          char = value.substring(index, index + 2);
+          index++;
+        }
+      }
+      const mapped = map.get(char);
+      if (mapped) {
+        for (const byte of mapped) bytes.push(byte);
+        continue;
+      }
+      // ASCII 和 GBK 不支持的字符（例如 emoji）回退为 UTF-8，至少不丢失参数。
+      const utf8 = new util.TextEncoder().encodeInto(char);
+      for (const byte of utf8) bytes.push(byte);
+    }
+    let result = '';
+    for (const byte of bytes) {
+      const safe = (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) ||
+        (byte >= 0x61 && byte <= 0x7A) || byte === 0x2D || byte === 0x2E ||
+        byte === 0x5F || byte === 0x7E;
+      result += safe ? String.fromCharCode(byte) : '%' + byte.toString(16).toUpperCase().padStart(2, '0');
+    }
+    return result;
+  }
+
+  private static getGbkEncodeMap_(): Map<string, number[]> {
+    if (NetUtil.gbkEncodeMap_) return NetUtil.gbkEncodeMap_;
+    const map = new Map<string, number[]>();
+    try {
+      const decoder = new util.TextDecoder('gb18030', { fatal: false });
+      for (let lead = 0x81; lead <= 0xFE; lead++) {
+        for (let trail = 0x40; trail <= 0xFE; trail++) {
+          if (trail === 0x7F) continue;
+          const decoded = decoder.decodeToString(new Uint8Array([lead, trail]));
+          if (!decoded || decoded.includes('\uFFFD') || decoded.length !== 1 || map.has(decoded)) continue;
+          map.set(decoded, [lead, trail]);
+        }
+      }
+    } catch (error) {
+      console.warn('[NetUtil] GBK encoder map initialization failed:', (error as Error).message);
+    }
+    // 即使系统编码器不可用也缓存空表，后续请求使用 UTF-8 回退，不反复阻塞。
+    NetUtil.gbkEncodeMap_ = map;
+    console.info('[NetUtil] GBK encoder map ready:', map.size, 'characters');
+    return map;
   }
 
   /**

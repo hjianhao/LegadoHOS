@@ -482,6 +482,12 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
   // 清理多余的空白
   url = url.trim();
 
+  // 老式中文站点在 POST 选项中声明 gb2312/gbk 时，搜索词不能按 UTF-8
+  // 百分号字节提交；否则服务端会把“洪荒”等关键词解码成乱码并返回无结果。
+  if (method === 'POST' && charset && body && !/^\s*[\[{]/.test(body)) {
+    body = NetUtil.encodeFormBody(body, charset);
+  }
+
   return { url, method, body, charset, webView };
 }
 
