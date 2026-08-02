@@ -1517,7 +1517,8 @@ export class SourceExecutor {
       return url;
     };
 
-    const fetchByWebView = async (reason: string, targetUrl: string = url): Promise<string> => {
+    const fetchByWebView = async (reason: string, targetUrl: string = url,
+      purpose: 'challenge' | 'login' = 'challenge'): Promise<string> => {
       if (method === 'POST') return '';
       if (!WebViewFetcher.isReady()) {
         await WebViewFetcher.waitForReady(3000);
@@ -1525,6 +1526,11 @@ export class SourceExecutor {
       if (!WebViewFetcher.isReady()) return '';
       try {
         console.info('[SrcEx] fetchWithOpts WebView fallback:', reason, targetUrl.substring(0, 100));
+        // 登录门禁要直接打开交互 WebView，并在页面加载后自动展开登录面板；
+        // 验证/WAF 挑战仍先抓取原页面，只有确实是挑战页才再次交互。
+        if (purpose === 'login' && WebViewFetcher.interactiveFetcher) {
+          return await WebViewFetcher.fetchInteractive(targetUrl, 'login');
+        }
         const rendered = await WebViewFetcher.fetch(targetUrl, requestTimeout, requestHeaders);
         let renderedHtml = rendered.html || '';
         if (WebViewFetcher.isInteractiveChallengeHtml(renderedHtml) &&
@@ -1559,8 +1565,26 @@ export class SourceExecutor {
           console.info('[SrcEx] Login document detected, opening source loginUrl:', targetUrl.substring(0, 100));
         }
         const rendered = await fetchByWebView(
-          loginRequired ? 'login required' : 'dynamic, WAF, or login document', targetUrl);
-        if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
+          loginRequired ? 'login required' : 'dynamic, WAF, or login document', targetUrl,
+          loginRequired ? 'login' : 'challenge');
+        if (rendered) {
+          if (loginRequired && targetUrl !== url) {
+            // 登录页与原请求地址不同：交互完成后用已同步的 Cookie 重试原请求，
+            // 不能把首页/登录页 HTML 误交给详情、目录或正文解析器。
+            try {
+              const retryHtml = await NetUtil.httpGet(url, requestHeaders, requestTimeout);
+              if (retryHtml && !isLoginDocument(retryHtml, url) &&
+                !needsWebViewDocument(retryHtml, url)) return retryHtml;
+              const retryRendered = await fetchByWebView('retry after login', url, 'challenge');
+              if (retryRendered && !isLoginDocument(retryRendered, url) &&
+                !needsWebViewDocument(retryRendered, '')) return retryRendered;
+            } catch (retryError) {
+              console.warn('[SrcEx] Retry after login failed:', (retryError as Error).message);
+            }
+          } else if (!needsWebViewDocument(rendered, '')) {
+            return rendered;
+          }
+        }
       }
       return directHtml;
     } catch (err) {

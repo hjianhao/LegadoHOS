@@ -19,6 +19,7 @@ export struct CloudflareDialog {
   @State pageTitle: string = '页面加载中...';
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
+  private loginPanelOpened_: boolean = false;
 
   build() {
     Column() {
@@ -63,7 +64,12 @@ export struct CloudflareDialog {
             .onPageBegin(() => { this.isLoading = true; })
             .onPageEnd(() => {
               this.isLoading = false;
-              this.pageTitle = '验证页面（验证后点击"验证完成"）';
+              if (WebViewFetcher.interactivePurpose === 'login') {
+                this.pageTitle = '登录页面（登录后点击"验证完成"）';
+                void this.openLoginPanel_();
+              } else {
+                this.pageTitle = '验证页面（验证后点击"验证完成"）';
+              }
             })
             .onErrorReceive((event) => {
               if (event?.error?.getErrorCode() === -1) return;
@@ -91,6 +97,25 @@ export struct CloudflareDialog {
     .width('96%').height('92%').constraintSize({ maxWidth: 1200, maxHeight: 900 })
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
+  }
+
+  /** 登录模式下自动展开站点常见的登录弹层，避免用户先找登录入口。 */
+  private async openLoginPanel_(): Promise<void> {
+    if (this.loginPanelOpened_) return;
+    this.loginPanelOpened_ = true;
+    try {
+      const result = await this.webController.runJavaScript(`(function() {
+        try {
+          if (typeof toggleLogin === 'function') { toggleLogin(); return 'toggleLogin'; }
+          var trigger = document.querySelector('[onclick*="toggleLogin"]');
+          if (trigger) { trigger.click(); return 'click'; }
+        } catch (e) { return ''; }
+        return '';
+      })()`);
+      console.info('[CloudflareDialog] Login panel auto-open result:', String(result || 'none'));
+    } catch (e) {
+      console.warn('[CloudflareDialog] Auto-open login panel failed:', (e as Error).message);
+    }
   }
 
   private async extractAndClose(): Promise<void> {

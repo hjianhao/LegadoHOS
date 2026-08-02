@@ -58,6 +58,8 @@ export class WebViewFetcher {
 
   /** 交互式验证的 Promise resolve（由 CloudflareDialog 调用） */
   static interactiveResolve: ((html: string) => void) | null = null;
+  /** 当前交互 WebView 的用途；登录模式会在页面加载后自动打开登录面板。 */
+  static interactivePurpose: 'challenge' | 'login' = 'challenge';
   private static interactivePageCache: Map<string, InteractivePageCacheEntry> = new Map();
   private static readonly INTERACTIVE_CACHE_TTL_MS: number = 5 * 60 * 1000;
   private static readonly INTERACTIVE_CACHE_MAX_ENTRIES: number = 6;
@@ -69,10 +71,12 @@ export class WebViewFetcher {
   }
 
   /** 弹出交互式 WebView 验证 */
-  static async fetchInteractive(url: string): Promise<string> {
+  static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge'): Promise<string> {
+    WebViewFetcher.interactivePurpose = purpose;
     const cacheKey = WebViewFetcher.interactiveCacheKey(url);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
-    if (cached && Date.now() - cached.cachedAt <= WebViewFetcher.INTERACTIVE_CACHE_TTL_MS) {
+    // 登录模式必须重新打开页面，不能复用上次验证缓存，否则用户无法进入登录面板。
+    if (purpose !== 'login' && cached && Date.now() - cached.cachedAt <= WebViewFetcher.INTERACTIVE_CACHE_TTL_MS) {
       WebViewFetcher.interactivePageCache.delete(cacheKey);
       cached.html = WebViewFetcher.decodeJavaScriptString(cached.html);
       if (WebViewFetcher.isReusableInteractiveHtml(cached.html)) {
