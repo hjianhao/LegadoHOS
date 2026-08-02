@@ -521,7 +521,12 @@ export class AiSourceAgent {
 
   private async run_(request: SourceAgentRequest): Promise<AiStepResult[]> {
     if (!isSafeAiImportUrl(request.homepageUrl)) throw new Error('请输入有效的公网 HTTP(S) 网站地址');
-    const keyword = request.searchKeyword.trim();
+    const rawKeyword = request.searchKeyword.trim();
+    // 测试关键词常从用户粘贴的“关键词：xxx：”文本中带入句末标点。
+    // 搜索站点通常按完整字符串匹配，尾部的中文冒号会导致真实搜索无结果，
+    // 进而让 Agent 无法验证书名和详情链接。仅清理首尾空白和句末标点，
+    // 不改变关键词主体；如果清理后为空则保留原输入并交给后续校验报错。
+    const keyword = rawKeyword.replace(/[\s\u3000,:：;；。！？!?]+$/g, '').trim() || rawKeyword;
     if (!keyword) throw new Error('测试关键词不能为空');
 
     this.repairMode_ = !!request.existingSource;
@@ -533,6 +538,9 @@ export class AiSourceAgent {
       ? { ...this.original_ } as BookSource : createEmptyBookSource();
     this.lastCheck_ = null;
     this.initializeResults_();
+    if (keyword !== rawKeyword) {
+      this.log_('  已清理测试关键词末尾标点，实际搜索关键词：' + keyword);
+    }
 
     const draft = this.draft_;
     if (!this.repairMode_) {
@@ -961,11 +969,50 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       candidates.push(item);
     };
 
+    // 模型有时能定位到书名链接，但把链接字段写成裸选择器（如 a、a.1、
+    // .list@li@a），没有显式写 @href。先从该规则本身补全属性，再用真实
+    // 搜索结果判断它是不是书名主链接；不能只依赖书名规则末尾的 @text。
+    const appendHref = (rule: string): string => {
+      const value = rule.trim();
+      if (!value || /@href\b/i.test(value)) return value;
+      const attr = value.match(/^([\s\S]+?)@(text|ownText|textNodes|html|src|title|value)$/i);
+      return (attr ? attr[1] : value) + '@href';
+    };
+    const stripFieldAttr = (rule: string): string =>
+      rule.trim().replace(/@(text|ownText|textNodes|html|src|title|value|href)$/i, '').trim();
+
+    const noteRule = originalNote.trim();
+    const noteHref = appendHref(noteRule);
+    if (noteHref) {
+      const noteSelector = stripFieldAttr(noteRule);
+      add(originalName || (noteSelector ? noteSelector + '@text' : ''), noteHref);
+      // 站群搜索卡片通常含分类、书名、作者等多个链接。对裸选择器尝试
+      // 同一节点下的前几个链接，候选必须通过详情 URL 过滤后才会保留。
+      if (noteSelector && !/\.\d+(?:@|$)/.test(noteSelector)) {
+        for (let index = 0; index < 3; index++) {
+          add(originalName || noteSelector + '.' + String(index) + '@text',
+            noteSelector + '.' + String(index) + '@href');
+        }
+      }
+    }
+
     const nameRule = originalName.trim();
     const textRule = nameRule.match(/^([\s\S]+?)@(text|ownText|textNodes)$/i);
     if (textRule) add(nameRule, textRule[1] + '@href');
     const taggedTextRule = nameRule.match(/^([\s\S]+?)@tag\.[\w-]+@(text|ownText|textNodes)$/i);
     if (taggedTextRule) add(nameRule, taggedTextRule[1] + '@href');
+
+    // 书名规则本身也可能是裸选择器；与详情规则配对尝试显式 @text/@href。
+    const bareName = stripFieldAttr(nameRule);
+    if (bareName && bareName === nameRule && !/@(?:href|src|text|html|ownText|textNodes)\b/i.test(nameRule)) {
+      add(nameRule + '@text', bareName + '@href');
+      if (!/\.\d+(?:@|$)/.test(bareName)) {
+        for (let index = 0; index < 3; index++) {
+          add(bareName + '.' + String(index) + '@text',
+            bareName + '.' + String(index) + '@href');
+        }
+      }
+    }
 
     // 站点搜索结果常见的“列表卡片 + 书名链接 + 作者链接”结构。
     // 即使模型给出了一个疑似书名规则也保留这些候选，避免模型规则语法
