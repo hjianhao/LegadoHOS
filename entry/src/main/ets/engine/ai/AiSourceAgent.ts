@@ -1371,8 +1371,10 @@ ${this.evidenceRuleHint_(evidence.html)}
     this.start_(AiStep.BOOK_INFO, '验证书籍详情');
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
+      let detailEvidenceHtml = '';
       if (attempt > 0 || this.shouldRepair_(['详情']) || !this.draft_.ruleBookInfoName) {
         const evidence = await this.fetchPage_(bookUrl, '书籍详情');
+        detailEvidenceHtml = evidence.html;
         const prompt = `分析小说详情页或详情 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
@@ -1417,6 +1419,25 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         continue;
       }
       const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
+      this.log_('  详情规则实际结果：name="' + previewAiValue_(info.name) +
+        '" author="' + previewAiValue_(info.author) +
+        '" cover=' + (info.coverUrl ? '有' : '无') +
+        ' toc=' + (info.tocUrl ? '有' : '无'));
+      // 部分老式站点的详情页没有 h1/title 专用节点，书名放在面包屑最后
+      // 一个链接或内容区首个 span 中。模型容易沿用搜索页规则而返回空值；
+      // 从当前详情证据中验证明确 CSS 规则后再写回草稿，不做运行时文本清洗。
+      if ((!info.name || !isAiBookNameConsistent(info.name, expectedName)) && detailEvidenceHtml) {
+        const correctedInfo = await this.tryCorrectBookInfoRules_(
+          bookUrl, expectedName, detailEvidenceHtml);
+        if (correctedInfo) {
+          this.done_(AiStep.BOOK_INFO, '详情解析通过（已修正详情字段规则）', {
+            name: correctedInfo.name || '',
+            author: correctedInfo.author || '',
+            tocUrl: correctedInfo.tocUrl || bookUrl,
+          });
+          return correctedInfo;
+        }
+      }
       if (isPlausibleAiBookInfo(info, expectedName)) {
         this.done_(AiStep.BOOK_INFO, '详情解析通过', {
           name: info.name || '',
@@ -1449,6 +1470,71 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
     }
     this.error_(AiStep.BOOK_INFO, lastError);
     throw new Error(lastError);
+  }
+
+  /**
+   * 兼容没有 h1 的传统详情页。候选规则来自页面真实结构：
+   * #content .readinfo 的最后一个链接是书名，#content 的第一个 span 是标题，
+   * 元数据表格第 6 个 td 是作者，内容区第一个图片是封面。
+   */
+  private async tryCorrectBookInfoRules_(bookUrl: string, expectedName: string,
+    evidenceHtml: string): Promise<BookSourceBookInfo | null> {
+    if (!this.draft_ || !evidenceHtml || !expectedName) return null;
+    if (!/<(?:div|td)\b[^>]*\bid\s*=\s*["']content["']/i.test(evidenceHtml) ||
+      !evidenceHtml.includes(expectedName)) return null;
+
+    const originalName = this.draft_.ruleBookInfoName || '';
+    const originalAuthor = this.draft_.ruleBookInfoAuthor || '';
+    const originalCover = this.draft_.ruleBookInfoCover || '';
+    const originalToc = this.draft_.ruleBookInfoTocUrl || '';
+    const candidates: string[] = [
+      '#content .readinfo a.-1@text',
+      '#content span.0@text',
+      '#content .readinfo a.1@text',
+    ];
+    const addCandidate = (rule: string): void => {
+      if (rule && !candidates.includes(rule)) candidates.push(rule);
+    };
+    // 页面结构变化时，仍保留少量通用候选，但必须通过真实详情页校验。
+    if (/<h1\b/i.test(evidenceHtml)) addCandidate('#content h1@text');
+    if (/<meta\b[^>]*(?:property|name)\s*=\s*["']og:title["']/i.test(evidenceHtml)) {
+      addCandidate('meta[property="og:title"]@content');
+    }
+
+    for (const candidate of candidates) {
+      this.draft_.ruleBookInfoName = candidate;
+      // 只有站点详情页明确包含对应元数据表时才替换作者/封面，避免覆盖
+      // 模型已经验证通过的专用规则。
+      if (/<td\b[^>]*>[\s\S]{0,120}作[\s\S]{0,80}者\s*[：:]/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoAuthor = '#content td.5@text##.*作.*者[：:]';
+      } else {
+        this.draft_.ruleBookInfoAuthor = originalAuthor;
+      }
+      if (/<img\b[^>]*\bsrc\s*=\s*["'][^"']+\.(?:jpg|jpeg|png|webp)/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoCover = '#content img.0@src';
+      } else {
+        this.draft_.ruleBookInfoCover = originalCover;
+      }
+      if (/<ul\b[^>]*\bclass\s*=\s*["'][^"']*\bulrow\b/i.test(evidenceHtml)) {
+        this.draft_.ruleBookInfoTocUrl = '.ulrow@a.0@href';
+      } else {
+        this.draft_.ruleBookInfoTocUrl = originalToc;
+      }
+      try {
+        const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
+        if (isPlausibleAiBookInfo(info, expectedName)) {
+          this.log_('  已验证详情字段规则：' + candidate);
+          return info;
+        }
+      } catch (_e) {
+        // 继续尝试下一个真实结构候选。
+      }
+    }
+    this.draft_.ruleBookInfoName = originalName;
+    this.draft_.ruleBookInfoAuthor = originalAuthor;
+    this.draft_.ruleBookInfoCover = originalCover;
+    this.draft_.ruleBookInfoTocUrl = originalToc;
+    return null;
   }
 
   private async prepareToc_(tocUrl: string): Promise<BookSourceChapter[]> {
