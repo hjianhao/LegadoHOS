@@ -818,6 +818,7 @@ ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li
 ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能取分类/作者链接或文本；JSON 中必须取能唯一定位当前书籍的 URL/ID 字段，必要时使用 {{字段}} 拼出详情 URL。
 如果卡片文本包含更新日期、作者、状态、大小、最新章节、开始阅读等元数据，ruleSearchName 只能定位书名子元素，不能取整张卡片文本；ruleSearchAuthor 必须定位作者字段，不能取“连载中/完结”等状态。
 如果书名链接的可见文本因页面排版被截短，而 title 属性包含完整书名，ruleSearchName 必须取同一链接的 @title。
+表格型搜索结果优先按同一行的单元格/链接索引定位字段（如 .odd.0@text、.odd.1@text、a.0@href 或 td.odd.0@text），不要用 td a@text 读取整列多个链接。
 优先稳定 id/class，避免 nth-child/nth-of-type。
 测试关键词：${keyword}
 上次验证错误：${lastError || '无'}
@@ -977,6 +978,17 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     if (descendantLink) {
       addCandidate(descendantLink[1] + '@' + descendantLink[2]);
       addCandidate(descendantLink[1] + '@ownText');
+      // 表格卡片常在同一个 td/容器中放置多个链接；不带索引时，
+      // HtmlParser 会取到第一个不稳定链接或整段卡片文本。优先试同一容器内
+      // 的前几个 a，再用真实详情 URL 和书名污染检测确认。
+      for (let index = 0; index < 3; index++) {
+        addCandidate(descendantLink[1] + ' a.' + String(index) + '@' + descendantLink[2]);
+      }
+      if (/\btd\.odd\b/i.test(descendantLink[1])) {
+        // 常见小说站表格：.odd.0 是书名，.odd.1 是作者；兼容带 td 前缀写法。
+        addCandidate('.odd.0@' + descendantLink[2]);
+        addCandidate('td.odd.0@' + descendantLink[2]);
+      }
     }
     // 同类规则可能使用 @tag.a 语法。
     const taggedLink = original.match(/^([\s\S]+?)@tag\.a@(text|ownText)$/i);
@@ -1145,18 +1157,46 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
   private async tryCorrectSearchAuthorRule_(keyword: string): Promise<boolean> {
     if (!this.draft_) return false;
     const rule = (this.draft_.ruleSearchAuthor || '').trim();
-    const match = rule.match(/^(\w[\w-]*)\.(\d+)@text$/i);
-    if (!match || parseInt(match[2]) <= 0) return false;
+    const candidates: string[] = [];
+    const addCandidate = (value: string): void => {
+      const candidate = value.trim();
+      if (candidate && candidate !== rule && !candidates.includes(candidate)) candidates.push(candidate);
+    };
+    const indexed = rule.match(/^([\s\S]+?)\.(\d+)@text$/i);
+    if (indexed) {
+      const index = parseInt(indexed[2]);
+      if (index > 0) addCandidate(indexed[1] + '.' + String(index - 1) + '@text');
+    }
+    const eq = rule.match(/^([\s\S]+?):eq\((\d+)\)@text$/i);
+    if (eq) {
+      const index = parseInt(eq[2]);
+      if (index > 0) addCandidate(eq[1] + ':eq(' + String(index - 1) + ')@text');
+      // 同一规则的 Legado 位置索引写法，适配 Android 书源常见 .odd.1@text。
+      addCandidate(eq[1] + '.' + String(index) + '@text');
+      if (index > 0) addCandidate(eq[1] + '.' + String(index - 1) + '@text');
+    }
+    if (/td\.odd/i.test(rule)) {
+      addCandidate('td.odd.1@text');
+      addCandidate('.odd.1@text');
+      addCandidate('td.odd.0@text');
+      addCandidate('.odd.0@text');
+    }
+    if (candidates.length === 0) return false;
     const oldRule = this.draft_.ruleSearchAuthor;
-    this.draft_.ruleSearchAuthor = match[1] + '.' + String(parseInt(match[2]) - 1) + '@text';
-    try {
-      const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
-      const hasAuthor = retried.some((item: SearchResult): boolean =>
-        !!(item.author || '').trim() && !/^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i
-          .test((item.author || '').trim()));
-      if (hasAuthor) return true;
-    } catch (_e) {
-      // 恢复原规则，搜索结果仍可由执行层的卡片作者兜底提取。
+    for (const candidate of candidates) {
+      this.draft_.ruleSearchAuthor = candidate;
+      try {
+        const retried = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+        const hasAuthor = retried.some((item: SearchResult): boolean =>
+          !!(item.author || '').trim() && !/^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i
+            .test((item.author || '').trim()));
+        if (hasAuthor) {
+          this.log_('  已验证作者候选规则：' + candidate);
+          return true;
+        }
+      } catch (_e) {
+        // 继续尝试其他索引候选。
+      }
     }
     this.draft_.ruleSearchAuthor = oldRule;
     return false;
