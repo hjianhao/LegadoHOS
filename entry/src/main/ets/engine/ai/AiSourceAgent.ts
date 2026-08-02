@@ -536,10 +536,11 @@ export class AiSourceAgent {
     this.log_('✅ ' + result.label + '：' + summary);
   }
 
-  private error_(step: AiStep, message: string): void {
+  private error_(step: AiStep, message: string, data: Record<string, string> = {}): void {
     const result = this.results_[step];
     result.status = 'error';
     result.summary = message;
+    result.data = data;
     this.callback_.onStepUpdate?.(result);
     this.log_('⚠️ ' + result.label + '：' + message);
   }
@@ -1207,15 +1208,26 @@ ${this.evidenceRuleHint_(evidence.html)}
       checkContent: true,
       concurrency: 1,
     });
-    const result = await checker.checkSource(this.draft_);
+    let result = await checker.checkSource(this.draft_);
+    // 搜索站点可能在前一轮取证后短暂限流或切换连接；全链路校验的搜索失败
+    // 先重试一次，避免把网络瞬态误判成规则错误。第二次仍失败才终止 Agent。
+    if (result.status !== 'success' && result.invalidGroups.some((group: string): boolean =>
+      group.includes('搜索'))) {
+      this.log_('  全链路搜索第一次失败，重新执行一次搜索校验');
+      result = await checker.checkSource(this.draft_);
+    }
     this.lastCheck_ = result;
     const data: Record<string, string> = {};
     result.details.forEach((detail): void => {
       data[detail.name] = detail.message;
     });
     if (result.status !== 'success') {
-      this.error_(AiStep.VALIDATE, result.invalidGroups.join('、') || result.errorMessage || '全链路失败');
-      throw new Error('全链路校验失败：' + (result.invalidGroups.join('、') || result.errorMessage));
+      const reason = result.invalidGroups.join('、') || result.errorMessage || '全链路失败';
+      Object.keys(data).forEach((name: string): void => {
+        this.log_('  全链路 ' + name + '：' + data[name]);
+      });
+      this.error_(AiStep.VALIDATE, reason, data);
+      throw new Error('全链路校验失败：' + reason);
     }
     this.done_(AiStep.VALIDATE,
       '通过 ' + result.passedChecks + '/' + result.totalChecks + ' 项真实检查', data);
