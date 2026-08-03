@@ -967,7 +967,21 @@ export class AiSourceAgent {
     const evidenceBaseUrl = evidence.finalUrl || evidence.url;
     const currentSearchEndpoint = searchRequestSignature_(this.draft_.ruleSearchUrl, evidenceBaseUrl);
     const inferredSearchEndpoint = inferred ? searchRequestSignature_(inferred.ruleSearchUrl, evidenceBaseUrl) : '';
-    const searchEndpointChanged = this.repairMode_ && (
+    // 旧书源常把同一个搜索 action 配置为 POST，而移动首页的普通 HTML 表单
+    // 只暴露 GET。域名迁移时不能把这个已验证的 POST 降级成 GET：老站的 GET
+    // 通常只返回登录/空搜索壳（本次必去小说即为 1373 字节空页），模型没有
+    // 书籍卡片证据便无法生成 ruleSearchList。仅在 action 路径相同且确实是
+    // POST→GET 的降级时保留旧请求，其他请求语义变化仍交给表单候选修复。
+    const currentSearchParts = currentSearchEndpoint.split('|');
+    const inferredSearchParts = inferredSearchEndpoint.split('|');
+    const preserveExistingPostSearch = this.repairMode_ && this.siteOriginChanged_ &&
+      currentSearchParts.length >= 2 && inferredSearchParts.length >= 2 &&
+      currentSearchParts[0] === 'POST' && inferredSearchParts[0] === 'GET' &&
+      currentSearchParts[1] === inferredSearchParts[1];
+    if (preserveExistingPostSearch) {
+      this.log_('  站点迁移检测到同路径的既有 POST 搜索规则，保留请求体并仅迁移域名');
+    }
+    const searchEndpointChanged = this.repairMode_ && !preserveExistingPostSearch && (
       this.siteOriginChanged_ || (!!inferredSearchEndpoint && !!currentSearchEndpoint &&
         currentSearchEndpoint !== inferredSearchEndpoint));
     const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl || searchEndpointChanged;
@@ -982,7 +996,7 @@ export class AiSourceAgent {
     // 普通 HTML 搜索表单的 action、method、关键词字段和固定参数均可由程序可靠推导。
     // 修复模式下如果只需要搜索规则，不再让一次额外的模型调用决定成败，避免模型超时
     // 覆盖掉已经验证过的表单候选。新建书源仍需模型补充名称、发现和登录入口。
-    const useInferredSearch = !!inferred?.ruleSearchUrl && repairSearch;
+    const useInferredSearch = !!inferred?.ruleSearchUrl && repairSearch && !preserveExistingPostSearch;
     if (useInferredSearch) {
       this.draft_.ruleSearchUrl = inferred!.ruleSearchUrl;
       this.anchorSearchRuleToCanonicalOrigin_();
@@ -990,7 +1004,8 @@ export class AiSourceAgent {
       this.results_[AiStep.HOMEPAGE].data['searchProbeUrl'] = inferred!.probeUrl || '';
       this.log_('  已直接采用程序识别的搜索表单规则：' + this.draft_.ruleSearchUrl);
     }
-    const needsEntryModel = needsEntryRepair && (!useInferredSearch || repairDiscovery || !this.repairMode_);
+    const needsEntryModel = needsEntryRepair &&
+      (repairDiscovery || !this.repairMode_ || (!useInferredSearch && !preserveExistingPostSearch));
     if (needsEntryModel) {
       const candidateText = inferred ? JSON.stringify(inferred) : '未检测到标准 HTML form';
       const prompt = `分析小说网站首页或搜索接口响应，识别站点名称、搜索请求、发现分类和登录入口。
@@ -1016,7 +1031,7 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
       if (!this.repairMode_ && parsed['sourceName']) {
         this.draft_.sourceName = parsed['sourceName'] + '(AI)';
       }
-      if (repairSearch && !useInferredSearch) {
+      if (repairSearch && !useInferredSearch && !preserveExistingPostSearch) {
         this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
         this.anchorSearchRuleToCanonicalOrigin_();
         this.ensureSearchWebViewOption_();
