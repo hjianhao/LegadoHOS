@@ -435,6 +435,11 @@ function isPlausibleAiDetailValue_(value: string, maxLength: number): boolean {
   return normalized.length <= maxLength && !hasAiPageArtifact_(normalized);
 }
 
+/** 目录/详情字段不能把请求选项拼进 URL；否则逗号和 JSON 会被当成路径。 */
+function hasAiRequestOptionSuffix_(value: string): boolean {
+  return /,\s*(?:\{[^}]*\}|%7B[^%]*%7D)\s*$/i.test((value || '').trim());
+}
+
 /**
  * 作者字段不能只按长度判断。传统站点经常把书名、管理按钮和元数据表
  * 拼成一个短字符串，长度仍可能小于 160；这些标记必须视为字段污染。
@@ -545,7 +550,8 @@ export function isPlausibleAiBookInfo(info: BookSourceBookInfo, expectedName: st
   if (!isPlausibleAiDetailValue_(info.wordCount, 100)) return false;
   if (!isPlausibleAiDetailValue_(info.lastUpdateTime, 100)) return false;
   if (!isPlausibleAiDetailValue_(info.coverUrl, 2048)) return false;
-  if (!isPlausibleAiDetailValue_(info.tocUrl || '', 2048)) return false;
+  if (!isPlausibleAiDetailValue_(info.tocUrl || '', 2048) ||
+    hasAiRequestOptionSuffix_(info.tocUrl || '')) return false;
   if (info.author && normalizeAiBookName_(info.author) === normalizeAiBookName_(info.name)) return false;
   return !!info.author || !!info.coverUrl || !!info.introduce || !!info.tocUrl;
 }
@@ -1532,7 +1538,8 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         !isAiBookNameConsistent(info.name, expectedName) ||
         !isPlausibleAiAuthor_(info.author) ||
         (!info.coverUrl && /<img\b[^>]*\bsrc\s*=/i.test(detailEvidenceHtml)) ||
-        (!info.tocUrl && /\bulrow\b/i.test(detailEvidenceHtml));
+        (!info.tocUrl && /\bulrow\b/i.test(detailEvidenceHtml)) ||
+        hasAiRequestOptionSuffix_(info.tocUrl || '');
       if (detailNeedsCorrection && detailEvidenceHtml) {
         const correctedInfo = await this.tryCorrectBookInfoRules_(
           bookUrl, expectedName, detailEvidenceHtml);
@@ -1567,6 +1574,8 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         lastError = '作者解析结果与书名完全相同，作者规则疑似复用了书名元素';
       } else if (!isPlausibleAiDetailValue_(info.introduce, 12000)) {
         lastError = '简介规则命中了整页内容或页面外壳';
+      } else if (hasAiRequestOptionSuffix_(info.tocUrl || '')) {
+        lastError = '目录链接把 webView/请求选项拼进了 URL，必须只提取当前书籍的纯 href';
       } else if (!isPlausibleAiDetailValue_(info.kind, 300) ||
         !isPlausibleAiDetailValue_(info.wordCount, 100) ||
         !isPlausibleAiDetailValue_(info.lastUpdateTime, 100)) {
