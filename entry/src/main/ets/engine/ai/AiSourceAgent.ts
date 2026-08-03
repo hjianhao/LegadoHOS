@@ -140,8 +140,8 @@ function urlOrigin_(url: string): string {
 /**
  * 移动站点或旧域名经常永久跳转到规范域名。HTTP POST 跟随 301 时很多
  * 客户端会把请求改成 GET，搜索表单因此变成“空关键词”。除了 m/mip 等
- * 移动别名，也识别页面反复暴露的同站旧域名（例如站点把一个字母顺序
- * 写错的旧域名迁移到新域名），避免把空搜索页交给模型反复猜选择器。
+ * 移动别名，也识别 canonical/og:url 明确声明的域名迁移（即使新旧注册域名
+ * 完全不同），避免把空搜索页交给模型反复猜选择器。
  */
 function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   const sourceOrigin = urlOrigin_(pageUrl);
@@ -178,8 +178,8 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
       editDistanceAtMostTwo_(sourceParts.name, candidateParts.name);
   };
 
-  const candidates: Array<{ origin: string; count: number; exact: boolean }> = [];
-  const add = (raw: string): void => {
+  const candidates: Array<{ origin: string; count: number; exact: boolean; explicit: boolean }> = [];
+  const add = (raw: string, explicit: boolean = false): void => {
     const value = (raw || '').trim();
     if (!value) return;
     const resolved = absoluteUrl_(value, pageUrl);
@@ -193,40 +193,46 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     const exact = host === 'mip.' + baseHost || host === 'www.' + baseHost ||
       host === 'wap.' + baseHost || host === baseHost;
     const sameSiteAlias = exact || isLikelySameSiteAlias_(host);
-    if (!sameSiteAlias) return;
-    const existing = candidates.find((item: { origin: string; count: number; exact: boolean }): boolean =>
+    // canonical/og:url 是站点明确声明的规范地址。域名迁移时新域名可能与旧域名
+    // 完全无关（例如 zwduxs.com -> wangshuwx.com），不能再用“同站别名”规则
+    // 把这类迁移过滤掉；普通页脚链接仍必须满足同站别名条件，避免误把 CDN/广告
+    // 域名当成书源地址。
+    if (!sameSiteAlias && !explicit) return;
+    const existing = candidates.find((item: { origin: string; count: number; exact: boolean; explicit: boolean }): boolean =>
       item.origin.toLowerCase() === origin.toLowerCase());
     if (existing) {
       existing.count++;
       existing.exact = existing.exact || exact;
+      existing.explicit = existing.explicit || explicit;
     } else {
-      candidates.push({ origin, count: 1, exact });
+      candidates.push({ origin, count: 1, exact, explicit });
     }
   };
 
   const canonicalPattern = /<link\b[^>]*\brel\s*=\s*(["'])[^"']*canonical[^"']*\1[^>]*>/gi;
   let match: RegExpExecArray | null = null;
   while ((match = canonicalPattern.exec(html || '')) !== null) {
-    add(htmlAttribute_(match[0], 'href'));
+    add(htmlAttribute_(match[0], 'href'), true);
   }
   const metaPattern = /<meta\b[^>]*(?:property|name)\s*=\s*(["'])(?:og:url|twitter:url)\1[^>]*>/gi;
   while ((match = metaPattern.exec(html || '')) !== null) {
-    add(htmlAttribute_(match[0], 'content'));
+    add(htmlAttribute_(match[0], 'content'), true);
   }
   // 部分老站没有 canonical，只在页脚提供规范首页链接；仍限制为同一站点移动域名变体。
   const hrefPattern = /<a\b[^>]*\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>/gi;
   while ((match = hrefPattern.exec(html || '')) !== null) {
     add(match[2]);
   }
-  candidates.sort((left: { origin: string; count: number; exact: boolean },
-    right: { origin: string; count: number; exact: boolean }): number => {
+  candidates.sort((left: { origin: string; count: number; exact: boolean; explicit: boolean },
+    right: { origin: string; count: number; exact: boolean; explicit: boolean }): number => {
     if (left.exact !== right.exact) return left.exact ? -1 : 1;
+    if (left.explicit !== right.explicit) return left.explicit ? -1 : 1;
     return right.count - left.count;
   });
   // 移动别名有明确语义，出现一次即可；模糊旧域名必须在页面中重复出现，
   // 以免某个偶然的站内链接被当成规范域名。
-  const selected = candidates.find((item: { origin: string; count: number; exact: boolean }): boolean =>
-    item.exact || item.count >= 2);
+  const selected = candidates.find((item: { origin: string; count: number; exact: boolean; explicit: boolean }): boolean =>
+    item.exact || item.explicit || item.count >= 2);
   return selected ? selected.origin : '';
 }
 
@@ -340,12 +346,17 @@ export function materializeAgentRequest(template: string, keyword: string,
   return { url: value, method, body, charset, webView };
 }
 
-function searchEndpoint_(template: string, baseUrl: string): string {
+/** 比较搜索请求的完整语义，不能只比较 action URL。
+ * 许多老站保持同一个 search.php 地址，但把 POST 字段、搜索类型或编码改掉；
+ * 只比较 URL 会导致修复模式继续沿用已经失效的请求体。
+ */
+function searchRequestSignature_(template: string, baseUrl: string): string {
   const raw = (template || '').trim();
   if (!raw || /^@js:/i.test(raw) || /^data:/i.test(raw)) return '';
   try {
     const spec = materializeAgentRequest(raw, 'probe', 1, baseUrl);
-    return spec.url.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    const url = spec.url.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    return [spec.method || 'GET', url, spec.body || '', spec.charset || ''].join('|');
   } catch (_e) {
     return '';
   }
@@ -578,6 +589,10 @@ export class AiSourceAgent {
   private repairMode_: boolean = false;
   private invalidGroups_: string[] = [];
   private requiresWebView_: boolean = false;
+  /** 首页明确声明了规范域名后，修复模式仍保留 sourceUrl 身份，但后续请求要走新站点。 */
+  private canonicalOrigin_: string = '';
+  private legacyOrigin_: string = '';
+  private siteOriginChanged_: boolean = false;
 
   constructor(callback: AiAgentCallback) {
     this.callback_ = callback;
@@ -650,6 +665,9 @@ export class AiSourceAgent {
     this.repairMode_ = !!request.existingSource;
     this.invalidGroups_ = request.invalidGroups || [];
     this.requiresWebView_ = false;
+    this.canonicalOrigin_ = '';
+    this.legacyOrigin_ = '';
+    this.siteOriginChanged_ = false;
     this.original_ = request.existingSource
       ? { ...request.existingSource } as BookSource : null;
     this.draft_ = this.original_
@@ -711,6 +729,9 @@ export class AiSourceAgent {
     const oldOrigin = urlOrigin_(pageUrl);
     const canonicalOrigin = inferMobileCanonicalOrigin_(evidence.html, pageUrl);
     if (!oldOrigin || !canonicalOrigin || oldOrigin.toLowerCase() === canonicalOrigin.toLowerCase()) return;
+    this.canonicalOrigin_ = canonicalOrigin;
+    this.legacyOrigin_ = oldOrigin;
+    this.siteOriginChanged_ = true;
     const replaceOrigin = (value: string): string => {
       if (!value) return value;
       return value.split(oldOrigin).join(canonicalOrigin)
@@ -732,7 +753,7 @@ export class AiSourceAgent {
     this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
     this.draft_.loginUrl = replaceOrigin(this.draft_.loginUrl);
     evidence.finalUrl = replaceOrigin(evidence.finalUrl || pageUrl);
-    this.log_('  首页已跳转到同站规范域名：' + canonicalOrigin);
+    this.log_('  首页已跳转到站点规范域名：' + canonicalOrigin);
   }
 
   private initializeResults_(): void {
@@ -820,13 +841,16 @@ export class AiSourceAgent {
     // 如果首页表单 action 已经变更，旧规则即使存在也不能继续沿用；典型老站会
     // 从 /e/search/index.php 改成 /e/search/indexsearch.php，而旧地址只返回提示页。
     const evidenceBaseUrl = evidence.finalUrl || evidence.url;
-    const currentSearchEndpoint = searchEndpoint_(this.draft_.ruleSearchUrl, evidenceBaseUrl);
-    const inferredSearchEndpoint = inferred ? searchEndpoint_(inferred.ruleSearchUrl, evidenceBaseUrl) : '';
-    const searchEndpointChanged = this.repairMode_ && !!inferredSearchEndpoint &&
-      !!currentSearchEndpoint && currentSearchEndpoint !== inferredSearchEndpoint;
+    const currentSearchEndpoint = searchRequestSignature_(this.draft_.ruleSearchUrl, evidenceBaseUrl);
+    const inferredSearchEndpoint = inferred ? searchRequestSignature_(inferred.ruleSearchUrl, evidenceBaseUrl) : '';
+    const searchEndpointChanged = this.repairMode_ && (
+      this.siteOriginChanged_ || (!!inferredSearchEndpoint && !!currentSearchEndpoint &&
+        currentSearchEndpoint !== inferredSearchEndpoint));
     const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl || searchEndpointChanged;
     if (searchEndpointChanged) {
-      this.log_('  首页检测到搜索表单地址已变化，将采用新 action：' + inferred!.ruleSearchUrl);
+      this.log_(this.siteOriginChanged_
+        ? '  首页检测到站点已迁移，将重新验证搜索请求：' + (inferred?.ruleSearchUrl || '交给模型重新识别')
+        : '  首页检测到搜索表单请求已变化，将采用新 action：' + inferred!.ruleSearchUrl);
     }
     const repairDiscovery = this.shouldRepair_(['发现']) || (!this.repairMode_ &&
       !this.draft_.exploreUrl && !this.draft_.ruleExplores);
@@ -837,6 +861,7 @@ export class AiSourceAgent {
     const useInferredSearch = !!inferred?.ruleSearchUrl && repairSearch;
     if (useInferredSearch) {
       this.draft_.ruleSearchUrl = inferred!.ruleSearchUrl;
+      this.anchorSearchRuleToCanonicalOrigin_();
       this.ensureSearchWebViewOption_();
       this.results_[AiStep.HOMEPAGE].data['searchProbeUrl'] = inferred!.probeUrl || '';
       this.log_('  已直接采用程序识别的搜索表单规则：' + this.draft_.ruleSearchUrl);
@@ -869,6 +894,7 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
       }
       if (repairSearch && !useInferredSearch) {
         this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
+        this.anchorSearchRuleToCanonicalOrigin_();
         this.ensureSearchWebViewOption_();
       }
       if (repairDiscovery) {
@@ -2158,6 +2184,24 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
   private ensureSearchWebViewOption_(): void {
     if (!this.requiresWebView_ || !this.draft_?.ruleSearchUrl) return;
     this.draft_.ruleSearchUrl = this.withWebViewOption_(this.draft_.ruleSearchUrl);
+  }
+
+  /**
+   * 修复旧域名迁移时，模型可能返回相对 search action。sourceUrl 要保留原书源
+   * 身份，但相对 URL 若继续按 sourceUrl 解析会再次请求旧域名，因此只把搜索
+   * action 锚定到已确认的新规范域名。
+   */
+  private anchorSearchRuleToCanonicalOrigin_(): void {
+    if (!this.canonicalOrigin_ || !this.draft_?.ruleSearchUrl) return;
+    let rule = this.draft_.ruleSearchUrl.trim();
+    if (this.legacyOrigin_) {
+      rule = rule.split(this.legacyOrigin_).join(this.canonicalOrigin_)
+        .split(this.legacyOrigin_.toLowerCase()).join(this.canonicalOrigin_);
+    }
+    if (/^\/(?!\/)/.test(rule)) {
+      rule = this.canonicalOrigin_ + rule;
+    }
+    this.draft_.ruleSearchUrl = rule;
   }
 
   private withWebViewOption_(rawTemplate: string): string {
