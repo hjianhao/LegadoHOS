@@ -45,10 +45,12 @@ function hostAndPath_(url: string): { host: string; path: string } {
 export function isOnlineSearchEngineHost(url: string): boolean {
   const parsed = hostAndPath_(url);
   const host = parsed.host.replace(/^www\./, '');
-  return host === 'bing.com' || host === 'cn.bing.com' ||
-    host === 'baidu.com' || host === 'm.baidu.com' ||
-    host === 'sogou.com' || host === 'm.sogou.com' ||
-    host === 'sm.cn' || host === 'm.sm.cn' ||
+  // 搜索结果中的跳转、招聘、帮助和推广链接可能使用搜索引擎自己的
+  // 子域名（例如 talent.baidu.com），不能只匹配搜索首页的主机名。
+  return host === 'bing.com' || host.endsWith('.bing.com') ||
+    host === 'baidu.com' || host.endsWith('.baidu.com') ||
+    host === 'sogou.com' || host.endsWith('.sogou.com') ||
+    host === 'sm.cn' || host.endsWith('.sm.cn') ||
     host === 'google.com' || host.endsWith('.google.com') ||
     host.endsWith('.google.co.uk') || host.endsWith('.google.co.jp');
 }

@@ -104,6 +104,48 @@ function shortText_(value: string): string {
   return (value || '').replace(/\s+/g, ' ').trim().substring(0, 500);
 }
 
+/** 用于相关性判断的轻量文本归一化，不改变界面上展示的原文。 */
+function normalizedSearchText_(value: string): string {
+  return (value || '').toLowerCase()
+    .replace(/[\s《》「」『』【】\[\]（）(){}<>“”‘’'"`~～!！?？,，。；;：:、·・…—–_\-|｜/\\]+/g, '');
+}
+
+function isGenericNavigationText_(value: string): boolean {
+  const text = normalizedSearchText_(value);
+  if (!text) return true;
+  return /^(?:首页|主页|登录|注册|退出|设置|帮助|反馈|招聘|校园招聘|广告|推广|更多|详情|下一页|上一页|翻页|图片|视频|新闻|地图|收藏|分享|下载|快照|翻译)$/.test(text);
+}
+
+function hasBookMetadataText_(value: string): boolean {
+  return /作者|小说|章节|目录|连载|完结|阅读|字数|简介|书名|更新时间|最新章节/.test(value || '');
+}
+
+/** 仅保留带有明确站内跳转形态的 opaque 搜索链接。 */
+function isOpaqueSearchRedirect_(url: string): boolean {
+  const parsed = parseHttpUrl_(url);
+  if (!parsed) return /^(?:\/|\?|#)?(?:link|url|redirect|jump|goto|ck|aclick)(?:[/?#]|$)/i.test(url || '');
+  if (!isOnlineSearchEngineHost(url)) return false;
+  if (/(?:^|\/)(?:search|s|web)(?:\/|$)/i.test(parsed.path)) return false;
+  return /(?:^|\/)(?:link|url|redirect|jump|goto|ck|aclick)(?:\/|$)/i.test(parsed.path) ||
+    /[?&](?:url|target|u|dest|destination)=/i.test(url);
+}
+
+function isRelevantSearchLink_(link: AiSearchPageLink, keyword: string,
+  landingUrl: string, direct: boolean): boolean {
+  const expected = normalizedSearchText_(keyword);
+  if (!expected) return true;
+  const text = normalizedSearchText_((link.text || '') + ' ' + (link.title || ''));
+  if (text.includes(expected)) return true;
+
+  // 结果卡片的辅助链接（“阅读”“详情”等）可能没有重复书名；只在同一
+  // 卡片确实包含书名、且链接是外站直达的小说路径时保留，避免把页脚导航
+  // 或广告卡片归并成候选网站。
+  const context = shortText_(link.context || '');
+  if (!normalizedSearchText_(context).includes(expected) || !direct) return false;
+  if (isGenericNavigationText_(link.text || link.title || '')) return false;
+  return isLikelyBookPath_(landingUrl) || hasBookMetadataText_(context);
+}
+
 function isLikelyBookPath_(url: string): boolean {
   const parsed = parseHttpUrl_(url);
   if (!parsed) return false;
@@ -118,8 +160,9 @@ function displayName_(link: AiSearchPageLink, host: string, keyword: string): st
   return (exact || values.sort((a: string, b: string): number => a.length - b.length)[0] || host).substring(0, 120);
 }
 
-function candidateKey_(key: string, index: number): string {
-  return key ? key : 'pending-' + index.toString();
+function candidateKey_(key: string, index: number, landingUrl: string): string {
+  if (key) return key;
+  return landingUrl ? 'pending-' + landingUrl : 'pending-' + index.toString();
 }
 
 export class AiSourceDiscoveryService {
@@ -210,13 +253,19 @@ export class AiSourceDiscoveryService {
       const homepage = this.homepageFromLanding_(landing.url);
       const siteKey = this.normalizedSiteKey(homepage);
       const safe = !!homepage && this.isCandidateUrl(landing.url);
-      if (!safe && !landing.url) continue;
+      if (!landing.url || !isRelevantSearchLink_(link, normalizedKeyword, landing.url, landing.direct)) continue;
+      // 已知的非安全直达地址不能降级为“待确认”；只有符合常见跳转形态
+      // 的 opaque 链接才保留，且它们默认不会被选中。
+      if (landing.direct && !safe) continue;
+      if (!safe && !landing.direct && !isOpaqueSearchRedirect_(landing.url)) continue;
       // Opaque search redirects are retained as address-pending rows, but are
       // never selected automatically and cannot be sent to the Agent directly.
-      const key = candidateKey_(siteKey, pendingIndex++);
+      const key = candidateKey_(siteKey, pendingIndex++, landing.url);
       if (merged.has(key)) {
         const current = merged.get(key)!;
         current.hitCount++;
+        if (landing.direct) current.directCount++;
+        else current.pendingCount++;
         current.confidence = Math.max(current.confidence,
           this.confidence_(link, normalizedKeyword, current.hitCount, landing.direct, landing.url));
         current.samples = this.mergeSample_(current.samples, {
@@ -297,6 +346,13 @@ export class AiSourceDiscoveryService {
       if (right.hitCount !== left.hitCount) return right.hitCount - left.hitCount;
       return left.host.localeCompare(right.host);
     });
+    const usedIds = new Map<string, number>();
+    for (const candidate of candidates) {
+      const base = candidate.id;
+      const count = usedIds.get(base) || 0;
+      usedIds.set(base, count + 1);
+      candidate.id = count === 0 ? base : base + '#' + count.toString();
+    }
     return candidates.slice(0, 50);
   }
 }

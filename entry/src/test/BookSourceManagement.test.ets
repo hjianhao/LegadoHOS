@@ -75,6 +75,7 @@ export default function bookSourceManagementTest() {
     it('filtersUnsafeUrlsAndDecodesSearchRedirects', 0, () => {
       expect(AiSourceDiscoveryService.isCandidateUrl('file:///tmp/a')).assertFalse();
       expect(AiSourceDiscoveryService.isCandidateUrl('http://127.0.0.1/book')).assertFalse();
+      expect(AiSourceDiscoveryService.isCandidateUrl('https://talent.baidu.com/jobs/list')).assertFalse();
       const encoded = encodeURIComponent('https://example.com/book/1?key=1');
       const link: AiSearchPageLink = {
         href: 'https://cn.bing.com/ck?u=' + encoded,
@@ -86,6 +87,30 @@ export default function bookSourceManagementTest() {
         .assertEqual('example.com');
       expect(AiSourceDiscoveryService.normalizedSiteKey('https://m.example.com/book/1'))
         .assertEqual('m.example.com');
+    });
+
+    it('keepsOnlyRelevantSearchSitesAndStableCandidateIds', 0, () => {
+      const links: AiSearchPageLink[] = [
+        { href: 'https://talent.baidu.com/jobs/list', text: '校园招聘', title: '',
+          context: '斗罗大陆 校园招聘', dataUrl: '' },
+        { href: 'https://www.baidu.com/s?wd=斗罗大陆', text: '斗罗大陆', title: '',
+          context: '搜索导航', dataUrl: '' },
+        { href: 'https://reader.example.com/book/1', text: '斗罗大陆', title: '斗罗大陆',
+          context: '斗罗大陆 作者甲 小说目录', dataUrl: '' },
+        { href: 'https://reader.example.com/book/1?from=copy', text: '斗罗大陆', title: '',
+          context: '斗罗大陆 作者甲', dataUrl: '' },
+        { href: 'https://www.baidu.com/link?url=opaque-a', text: '斗罗大陆', title: '',
+          context: '斗罗大陆', dataUrl: '' },
+        { href: 'https://www.baidu.com/link?url=opaque-b', text: '斗罗大陆', title: '',
+          context: '斗罗大陆', dataUrl: '' },
+      ];
+      const candidates = AiSourceDiscoveryService.buildCandidates(
+        'baidu', '斗罗大陆', 'https://www.baidu.com/s?wd=斗罗大陆', links, []);
+      expect(candidates.find((item) => item.host === 'talent.baidu.com') === undefined).assertTrue();
+      expect(candidates.find((item) => item.normalizedSiteKey === 'reader.example.com')?.hitCount || 0)
+        .assertEqual(2);
+      const ids: string[] = candidates.map((item) => item.id);
+      expect(new Set(ids).size).assertEqual(ids.length);
     });
 
     it('infersGetAndPostSearchFormsWithoutLlmGuessing', 0, () => {

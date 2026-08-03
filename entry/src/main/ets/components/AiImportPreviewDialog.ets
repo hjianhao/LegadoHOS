@@ -18,15 +18,24 @@ export interface AiImportPreviewResult {
 /**
  * 只读取当前 DOM 中的链接和有限上下文，不拼接用户输入，避免脚本注入。
  * 搜索结果页的链接可能把真实地址放在结果容器的 data-* 属性中，因此同时
- * 检查锚点自身和最近的常见结果容器。
+ * 检查锚点自身和最近的常见结果容器。只从已知结果卡片中读取，避免把页眉、
+ * 页脚、招聘和推广导航误当成书站。
  */
 const COLLECT_SEARCH_LINKS_SCRIPT: string = `(() => {
   const clip = (value, max) => String(value || '').replace(/\\s+/g, ' ').trim().substring(0, max);
-  const selectors = 'li,article,.result,.c-container,.g,[data-sokoban-container]';
+  const selectors = 'article,.result,.c-container,.g,.b_algo,.algo,.MjjYud,' +
+    '[data-sokoban-container],[data-testid*="result"],[role="article"]';
   const attrs = ['data-url','data-landurl','data-href','data-mu','mu'];
-  const rows = Array.from(document.querySelectorAll('a[href]')).slice(0, 300);
+  const anchors = Array.from(document.querySelectorAll('a[href]'));
+  const resultAnchors = anchors.filter((anchor) => !!anchor.closest(selectors));
+  // 自定义搜索页可能没有标准 class；只有在完全找不到标准结果卡片时才
+  // 退回 main/content 下的链接，后续仍会由本地关键词和安全规则二次过滤。
+  const rows = (resultAnchors.length > 0 ? resultAnchors : anchors.filter((anchor) => {
+    return !!anchor.closest('main,[role="main"],#content,.content');
+  })).slice(0, 300);
+  const seen = new Set();
   return JSON.stringify(rows.map((anchor) => {
-    let container = anchor.closest(selectors);
+    const container = anchor.closest(selectors) || anchor.closest('main,[role="main"],#content,.content');
     let dataUrl = '';
     for (const attr of attrs) {
       const own = anchor.getAttribute(attr);
@@ -40,6 +49,11 @@ const COLLECT_SEARCH_LINKS_SCRIPT: string = `(() => {
     const title = clip(anchor.getAttribute('title') || '', 200);
     const context = clip(container ? (container.innerText || container.textContent) : text, 500);
     return { href: anchor.href || anchor.getAttribute('href') || '', text, title, context, dataUrl };
+  }).filter((item) => {
+    const key = item.href + '\\n' + item.text + '\\n' + item.dataUrl;
+    if (!item.href || seen.has(key)) return false;
+    seen.add(key);
+    return true;
   }));
 })()`;
 
