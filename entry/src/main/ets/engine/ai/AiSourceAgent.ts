@@ -137,6 +137,28 @@ function urlOrigin_(url: string): string {
   return match ? match[1] : '';
 }
 
+/** 仅把 m/mip/wap/www 与同一注册域名之间的切换视为移动别名迁移。 */
+function isMobileAliasOriginMigration_(legacyOrigin: string, canonicalOrigin: string): boolean {
+  const hostOf = (origin: string): string => {
+    const match = (origin || '').match(/^https?:\/\/([^/:]+)/i);
+    return match ? match[1].toLowerCase() : '';
+  };
+  const legacyHost = hostOf(legacyOrigin);
+  const canonicalHost = hostOf(canonicalOrigin);
+  if (!legacyHost || !canonicalHost) return false;
+  const stripAlias = (host: string): string => host.replace(/^(?:www|m|mip|wap|mobile)\./i, '');
+  if (stripAlias(legacyHost) !== stripAlias(canonicalHost)) return false;
+  return /^(?:www|m|mip|wap|mobile)\./i.test(legacyHost) ||
+    /^(?:www|m|mip|wap|mobile)\./i.test(canonicalHost) ||
+    legacyHost === stripAlias(legacyHost) || canonicalHost === stripAlias(canonicalHost);
+}
+
+/** 从页面脚本读取站点自己声明的业务根域名，供搜索表单解析复用。 */
+function declaredBaseOrigin_(html: string, pageUrl: string): string {
+  const match = (html || '').match(/\b(?:var|let|const)\s+baseurl\s*=\s*(["'])(https?:\/\/[^"']+)\1/i);
+  return match && match.length > 2 ? urlOrigin_(absoluteUrl_(match[2], pageUrl)) : '';
+}
+
 /**
  * 移动站点或旧域名经常永久跳转到规范域名。HTTP POST 跟随 301 时很多
  * 客户端会把请求改成 GET，搜索表单因此变成“空关键词”。除了 m/mip 等
@@ -150,8 +172,10 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   const sourceHost = sourceMatch[1].toLowerCase();
   const baseHost = sourceHost.replace(/^(?:m|mip|wap|mobile)\./i, '');
 
-  const candidates: Array<{ origin: string; count: number; exact: boolean; explicit: boolean }> = [];
-  const add = (raw: string, explicit: boolean = false): void => {
+  const candidates: Array<{
+    origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+  }> = [];
+  const add = (raw: string, explicit: boolean = false, declaredBase: boolean = false): void => {
     const value = (raw || '').trim();
     if (!value) return;
     const resolved = absoluteUrl_(value, pageUrl);
@@ -173,14 +197,17 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     // 把这类迁移过滤掉；普通页脚链接仍必须满足同站别名条件，避免误把 CDN/广告
     // 域名当成书源地址。
     if (!sameSiteAlias && !explicit) return;
-    const existing = candidates.find((item: { origin: string; count: number; exact: boolean; explicit: boolean }): boolean =>
+    const existing = candidates.find((item: {
+      origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+    }): boolean =>
       item.origin.toLowerCase() === origin.toLowerCase());
     if (existing) {
       existing.count++;
       existing.exact = existing.exact || exact;
       existing.explicit = existing.explicit || explicit;
+      existing.declaredBase = existing.declaredBase || declaredBase;
     } else {
-      candidates.push({ origin, count: 1, exact, explicit });
+      candidates.push({ origin, count: 1, exact, explicit, declaredBase });
     }
   };
 
@@ -193,19 +220,32 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   while ((match = metaPattern.exec(html || '')) !== null) {
     add(htmlAttribute_(match[0], 'content'), true);
   }
+  // 一些站点没有 canonical，而是把真正的业务域名写在页面脚本的 baseurl
+  // 变量中。它比页脚链接更接近搜索请求实际使用的域名（必去小说就是这种
+  // 情况：入口域名是 ibiquw.info，脚本请求域名为 biquw.com）。
+  const baseUrlPattern = /\b(?:var|let|const)\s+baseurl\s*=\s*(["'])(https?:\/\/[^"']+)\1/gi;
+  while ((match = baseUrlPattern.exec(html || '')) !== null) {
+    add(match[2], true, true);
+  }
   // 部分老站没有 canonical，只在页脚提供规范首页链接；仅接受明确的移动域名变体。
   const hrefPattern = /<a\b[^>]*\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>/gi;
   while ((match = hrefPattern.exec(html || '')) !== null) {
     add(match[2]);
   }
-  candidates.sort((left: { origin: string; count: number; exact: boolean; explicit: boolean },
-    right: { origin: string; count: number; exact: boolean; explicit: boolean }): number => {
+  candidates.sort((left: {
+    origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+  }, right: {
+    origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+  }): number => {
+    if (left.declaredBase !== right.declaredBase) return left.declaredBase ? -1 : 1;
     if (left.exact !== right.exact) return left.exact ? -1 : 1;
     if (left.explicit !== right.explicit) return left.explicit ? -1 : 1;
     return right.count - left.count;
   });
   // 移动别名和 canonical/og:url 都有明确语义，出现一次即可。
-  const selected = candidates.find((item: { origin: string; count: number; exact: boolean; explicit: boolean }): boolean =>
+  const selected = candidates.find((item: {
+    origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+  }): boolean =>
     item.exact || item.explicit);
   return selected ? selected.origin : '';
 }
@@ -975,6 +1015,7 @@ export class AiSourceAgent {
     const currentSearchParts = currentSearchEndpoint.split('|');
     const inferredSearchParts = inferredSearchEndpoint.split('|');
     const preserveExistingPostSearch = this.repairMode_ && this.siteOriginChanged_ &&
+      isMobileAliasOriginMigration_(this.legacyOrigin_, this.canonicalOrigin_) &&
       currentSearchParts.length >= 2 && inferredSearchParts.length >= 2 &&
       currentSearchParts[0] === 'POST' && inferredSearchParts[0] === 'GET' &&
       currentSearchParts[1] === inferredSearchParts[1];

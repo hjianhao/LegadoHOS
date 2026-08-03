@@ -144,6 +144,15 @@ export default function bookSourceManagementTest() {
       expect(spec.body).assertContain('type=articlename');
     });
 
+    it('usesDeclaredBaseUrlForMigratedSearchForm', 0, () => {
+      const html = '<script>var baseurl = "https://new.example.com";</script>' +
+        '<form action="https://old.example.com/search" method="get">' +
+        '<input name="q" placeholder="搜索小说"><button>搜索</button></form>';
+      const request = inferSearchRequest(html, 'https://old.example.com/', '三体');
+      expect(request?.ruleSearchUrl || '').assertEqual(
+        'https://new.example.com/search?q={{key}}');
+    });
+
     it('redactsCredentialValuesButKeepsSelectorDom', 0, () => {
       const html = '<html><head><script>ignore()</script></head><body>' +
         '<input type="password" name="password" value="secret">' +
