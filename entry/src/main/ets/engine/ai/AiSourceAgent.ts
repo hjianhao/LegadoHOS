@@ -393,9 +393,18 @@ function hasAiSearchCardMetadata_(value: string): boolean {
     .test(value || '') || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test((value || '').trim());
 }
 
+/** 搜索卡片的字段规则可能命中“立即阅读/加入书架”等操作按钮。 */
+function isLikelyAiSearchActionText_(value: string): boolean {
+  const compact = (value || '').replace(/[\s\u3000:：|·•]+/g, '').trim();
+  if (!compact) return false;
+  return /^(?:立即阅读|开始阅读|在线阅读|继续阅读|全文阅读|阅读本书|点击阅读|进入阅读|查看详情|书籍详情|详情|加入书架|收藏本书|推荐此书|TXT下载|下载全文|下载本书|章节目录|目录)$/i
+    .test(compact);
+}
+
 function isInvalidAiSearchAuthor_(value: string): boolean {
   const author = (value || '').trim();
-  return !author || /^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i.test(author);
+  return !author || isLikelyAiSearchActionText_(author) ||
+    /^(?:连载中|连载|完结|完本|已完结|暂停|停更|状态|大小|字数|未知作者|未知)$/i.test(author);
 }
 
 function isInvalidAiSearchAuthorForItem_(item: SearchResult): boolean {
@@ -898,7 +907,7 @@ ${this.promptKnowledge_('search', lastError, evidence.html)}
 ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li、li 等会命中页头菜单的宽泛规则；
 必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
 ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能取分类/作者链接或文本；JSON 中必须取能唯一定位当前书籍的 URL/ID 字段，必要时使用 {{字段}} 拼出详情 URL。
-如果卡片文本包含更新日期、作者、状态、大小、最新章节、开始阅读等元数据，ruleSearchName 只能定位书名子元素，不能取整张卡片文本；ruleSearchAuthor 必须定位作者字段，不能取“连载中/完结”等状态。
+如果卡片文本包含更新日期、作者、状态、大小、最新章节、开始阅读等元数据，ruleSearchName 只能定位书名子元素，不能取整张卡片文本；ruleSearchAuthor 必须定位作者字段，不能取“连载中/完结”等状态，也不能取“立即阅读/加入书架”等操作按钮。
 如果书名链接的可见文本因页面排版被截短，而 title 属性包含完整书名，ruleSearchName 必须取同一链接的 @title。
 表格型搜索结果优先按同一行的单元格/链接索引定位字段（如 .odd.0@text、.odd.1@text、a.0@href 或 td.odd.0@text），不要用 td a@text 读取整列多个链接。
 优先稳定 id/class，避免 nth-child/nth-of-type。
@@ -934,10 +943,13 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
       const pollutedNames = extracted.filter((item: SearchResult): boolean =>
         hasAiSearchCardMetadata_(item.name));
+      const actionNames = extracted.filter((item: SearchResult): boolean =>
+        isLikelyAiSearchActionText_(item.name));
       const invalidAuthors = extracted.filter((item: SearchResult): boolean =>
         isInvalidAiSearchAuthorForItem_(item));
       const shouldValidateAuthors = !!(this.draft_.ruleSearchAuthor || '').trim();
-      if (pollutedNames.length > 0 || (shouldValidateAuthors && invalidAuthors.length > 0)) {
+      if (pollutedNames.length > 0 || actionNames.length > 0 ||
+        (shouldValidateAuthors && invalidAuthors.length > 0)) {
         // 旧式小说站经常把搜索结果放在 table.grid 中。模型若生成
         // `td.odd a@text`，执行器会在同一单元格内取到多个链接的整段文本；
         // 该结构有一个确定的 Legado 写法：第 0 个 odd 单元格为书名，
@@ -963,7 +975,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         // 某些站点的 h3 位于外层 a 内，模型会生成 dd h3 a@text，
         // 但执行器找不到该节点后只能回退到整张卡片文本。先尝试同一标题节点
         // 的直接文本，成功后把修正后的规则保留在草稿中，不依赖运行时清洗。
-        if (pollutedNames.length > 0) {
+        if (pollutedNames.length > 0 || actionNames.length > 0) {
           const correctedNameResults = await this.tryCorrectSearchNameRule_(keyword);
           if (correctedNameResults.length > 0) {
             const correctedExtracted = correctedNameResults.filter((item: SearchResult): boolean =>
@@ -971,7 +983,8 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
             const correctedInvalidAuthors = correctedExtracted.filter((item: SearchResult): boolean =>
               isInvalidAiSearchAuthorForItem_(item));
             if (correctedExtracted.length > 0 &&
-              correctedExtracted.every((item: SearchResult): boolean => !hasAiSearchCardMetadata_(item.name)) &&
+              correctedExtracted.every((item: SearchResult): boolean =>
+                !hasAiSearchCardMetadata_(item.name) && !isLikelyAiSearchActionText_(item.name)) &&
               (!shouldValidateAuthors || correctedInvalidAuthors.length === 0)) {
               correctedExtracted.sort((left: SearchResult, right: SearchResult): number =>
                 aiSearchRelevance_(right, keyword) - aiSearchRelevance_(left, keyword));
@@ -990,6 +1003,8 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         }
         const reason = pollutedNames.length > 0
           ? 'ruleSearchName 命中了更新日期/作者/状态等整段卡片文本'
+          : actionNames.length > 0
+            ? 'ruleSearchName 命中了“立即阅读/加入书架”等操作按钮，必须定位书名或 title 属性'
           : 'ruleSearchAuthor 没有提取到作者字段或命中了状态字段';
         lastError = reason + '；必须重新定位书名和作者子元素，不能依赖运行时清洗';
         this.log_('  搜索验证失败：' + lastError +
@@ -1079,6 +1094,17 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       const value = rule.trim();
       if (value && value !== original && !candidates.includes(value)) candidates.push(value);
     };
+    const fieldSelector = (rule: string): string => {
+      const match = rule.trim().match(/^([\s\S]+?)@(text|ownText|textNodes|title|href)$/i);
+      return match ? match[1].trim() : '';
+    };
+    // 站点常把完整书名放在书名主链接或封面链接的 title 属性，链接可见文本
+    // 却是“立即阅读”。优先从详情 URL 规则对应的同一节点读取 title，避免
+    // 把运行时清洗按钮文本当成最终书名。
+    const noteSelector = fieldSelector(originalNote);
+    if (noteSelector) addCandidate(noteSelector + '@title');
+    const nameSelector = fieldSelector(original);
+    if (nameSelector) addCandidate(nameSelector + '@title');
     // dd h3 a@text → dd h3@text / dd h3@ownText；保留 @tag 之前的 CSS 层级。
     const descendantLink = original.match(/^([\s\S]+?)\s+a@(text|ownText)$/i);
     if (descendantLink) {
@@ -1126,7 +1152,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
           !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
           isLikelyAiBookDetailUrl(item.noteUrl));
         if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
-          !hasAiSearchCardMetadata_(item.name))) {
+          !hasAiSearchCardMetadata_(item.name) && !isLikelyAiSearchActionText_(item.name))) {
           this.log_('  已验证书名候选规则：' + candidate);
           return usable;
         }
