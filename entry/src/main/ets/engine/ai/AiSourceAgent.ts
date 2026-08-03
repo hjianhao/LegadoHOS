@@ -138,9 +138,10 @@ function urlOrigin_(url: string): string {
 }
 
 /**
- * 移动站点经常把 m.example.com 永久跳转到 mip.example.com。HTTP POST
- * 跟随 301 时很多客户端会把请求改成 GET，搜索表单因此变成“空关键词”。
- * 只接受同一站点的移动域名变体，避免把页面中的第三方链接误当成规范域名。
+ * 移动站点或旧域名经常永久跳转到规范域名。HTTP POST 跟随 301 时很多
+ * 客户端会把请求改成 GET，搜索表单因此变成“空关键词”。除了 m/mip 等
+ * 移动别名，也识别页面反复暴露的同站旧域名（例如站点把一个字母顺序
+ * 写错的旧域名迁移到新域名），避免把空搜索页交给模型反复猜选择器。
  */
 function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   const sourceOrigin = urlOrigin_(pageUrl);
@@ -148,22 +149,58 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   if (!sourceMatch) return '';
   const sourceHost = sourceMatch[1].toLowerCase();
   const baseHost = sourceHost.replace(/^(?:m|mip|wap|mobile)\./i, '');
-  if (baseHost === sourceHost) return '';
 
-  const candidates: string[] = [];
+  // 旧域名与规范域名有时只存在一两个字符差异。仅比较相同顶级域和
+  // 相近的注册域名标签，不接受 libs.baidu.com 这类页面第三方资源域名。
+  const hostNameAndSuffix_ = (host: string): { name: string; suffix: string } => {
+    const labels = host.replace(/^www\./i, '').split('.').filter((item: string): boolean => !!item);
+    if (labels.length === 0) return { name: '', suffix: '' };
+    return {
+      name: labels.length > 1 ? labels[labels.length - 2] : labels[0],
+      suffix: labels.length > 1 ? labels[labels.length - 1] : '',
+    };
+  };
+  const editDistanceAtMostTwo_ = (left: string, right: string): boolean => {
+    if (!left || !right || Math.abs(left.length - right.length) > 2) return false;
+    let differences = 0;
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index++) {
+      if (left.charAt(index) !== right.charAt(index)) differences++;
+    }
+    differences += Math.abs(left.length - right.length);
+    return differences <= 2;
+  };
+  const sourceParts = hostNameAndSuffix_(sourceHost);
+  const isLikelySameSiteAlias_ = (candidateHost: string): boolean => {
+    const candidateParts = hostNameAndSuffix_(candidateHost);
+    return !!sourceParts.name && !!candidateParts.name &&
+      sourceParts.suffix === candidateParts.suffix &&
+      editDistanceAtMostTwo_(sourceParts.name, candidateParts.name);
+  };
+
+  const candidates: Array<{ origin: string; count: number; exact: boolean }> = [];
   const add = (raw: string): void => {
     const value = (raw || '').trim();
     if (!value) return;
     const resolved = absoluteUrl_(value, pageUrl);
     const origin = urlOrigin_(resolved);
-    if (!origin || candidates.includes(origin)) return;
+    if (!origin) return;
     const hostMatch = origin.match(/^https?:\/\/([^/:]+)(?::\d+)?$/i);
     if (!hostMatch) return;
     const host = hostMatch[1].toLowerCase();
     if (host === sourceHost) return;
     // 站点常见的移动域名别名：m -> mip、m -> www、m -> 根域名。
-    if (host === 'mip.' + baseHost || host === 'www.' + baseHost || host === baseHost) {
-      candidates.push(origin);
+    const exact = host === 'mip.' + baseHost || host === 'www.' + baseHost ||
+      host === 'wap.' + baseHost || host === baseHost;
+    const sameSiteAlias = exact || isLikelySameSiteAlias_(host);
+    if (!sameSiteAlias) return;
+    const existing = candidates.find((item: { origin: string; count: number; exact: boolean }): boolean =>
+      item.origin.toLowerCase() === origin.toLowerCase());
+    if (existing) {
+      existing.count++;
+      existing.exact = existing.exact || exact;
+    } else {
+      candidates.push({ origin, count: 1, exact });
     }
   };
 
@@ -181,7 +218,16 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   while ((match = hrefPattern.exec(html || '')) !== null) {
     add(match[2]);
   }
-  return candidates[0] || '';
+  candidates.sort((left: { origin: string; count: number; exact: boolean },
+    right: { origin: string; count: number; exact: boolean }): number => {
+    if (left.exact !== right.exact) return left.exact ? -1 : 1;
+    return right.count - left.count;
+  });
+  // 移动别名有明确语义，出现一次即可；模糊旧域名必须在页面中重复出现，
+  // 以免某个偶然的站内链接被当成规范域名。
+  const selected = candidates.find((item: { origin: string; count: number; exact: boolean }): boolean =>
+    item.exact || item.count >= 2);
+  return selected ? selected.origin : '';
 }
 
 function appendQuery_(url: string, params: string[]): string {
@@ -662,7 +708,11 @@ export class AiSourceAgent {
     if (!this.repairMode_) {
       this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
     }
-    this.draft_.ruleSearchUrl = replaceOrigin(this.draft_.ruleSearchUrl);
+    const searchRule = replaceOrigin(this.draft_.ruleSearchUrl);
+    // 修复模式要保留 sourceUrl 身份，但相对搜索 action 不能再由旧域名
+    // 解析，否则 SourceExecutor 会再次 POST 到会丢请求体的 301 旧地址。
+    this.draft_.ruleSearchUrl = this.repairMode_ && /^\/(?!\/)/.test(searchRule)
+      ? canonicalOrigin + searchRule : searchRule;
     this.draft_.exploreUrl = replaceOrigin(this.draft_.exploreUrl);
     this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
     this.draft_.loginUrl = replaceOrigin(this.draft_.loginUrl);
@@ -1948,7 +1998,9 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
   private async fetchRulePage_(template: string, keyword: string, label: string): Promise<PageEvidence> {
     const spec = materializeAgentRequest(template, keyword, 1, this.draft_?.sourceUrl || '');
     if (!isSafeAiImportUrl(spec.url)) throw new Error(label + ' URL 无效');
-    if (spec.webView) return await this.fetchPage_(spec.url, label, true);
+    // WebViewFetcher 目前只能 GET。即使规则带有 webView 标记，POST 也必须
+    // 先保留原始请求体；如遇 WAF，下面的 POST 分支会先完成 WebView 验证再重试。
+    if (spec.webView && spec.method !== 'POST') return await this.fetchPage_(spec.url, label, true);
     if (spec.method === 'POST') {
       const requestBody = spec.charset
         ? NetUtil.encodeFormBody(spec.body, spec.charset) : spec.body;
