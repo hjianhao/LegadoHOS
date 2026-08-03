@@ -250,6 +250,10 @@ export class SourceChecker {
     } finally {
       this.runId_ = '';
       this.onStage_ = undefined;
+      // 批量校验会依次执行所有书源的 jsLib，QuickJS 引擎全局对象被大量
+      // 函数定义填充、SharedHeap 随 postMessage 增长；结束后销毁 Worker
+      // 回收内存（下次求值时按需重建），避免设备上持续累积导致 OOM。
+      JsExpressionEvaluator.releaseWorker();
     }
   }
 
@@ -268,6 +272,7 @@ export class SourceChecker {
     } finally {
       this.runId_ = '';
       this.onStage_ = undefined;
+      JsExpressionEvaluator.releaseWorker();
     }
   }
 
@@ -449,12 +454,17 @@ export class SourceChecker {
     const tocStart = Date.now();
     try {
       const tocUrl = state.info?.tocUrl || result.noteUrl;
-      const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(source, tocUrl), deadline,
+      // 校验只需要确认目录规则和正文入口可用，不应因某本书有几十个分页而
+      // 把整源校验耗尽。正常阅读仍由 getToc 默认抓取全部分页。
+      const checkTocPageLimit = 3;
+      const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(
+        source, tocUrl, undefined, checkTocPageLimit), deadline,
         source.checkRequestGroup || '');
       state.chapters = selectReadableChapters(toc, 2);
       const passed = state.chapters.length > 0;
       this.addDetail_(source, details, { name: tocName, passed: passed,
-        message: passed ? '共 ' + toc.length + ' 章' : '目录为空', duration: Date.now() - tocStart });
+        message: passed ? '读取前 ' + checkTocPageLimit + ' 页，共解析 ' + toc.length + ' 章' : '目录为空',
+        duration: Date.now() - tocStart });
       if (!passed) invalidGroups.push(channel + '目录失效');
     } catch (error) {
       if (error instanceof SourceCheckCancelledError) throw error;

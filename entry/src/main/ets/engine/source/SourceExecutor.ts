@@ -47,6 +47,41 @@ export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean 
   return !!(name || '').trim() && !!(noteUrl || '').trim();
 }
 
+/** 站点迁移/异常时可能用 200 返回错误 HTML，不能再从页内导航链接伪造搜索结果。 */
+function isServerErrorHtml_(html: string): boolean {
+  const value = (html || '').replace(/\s+/g, ' ');
+  return !!value && /\{?__NOLAYOUT__\}?/i.test(value) &&
+    /(?:系统发生错误|系统错误|internal server error|server error|page not found)/i.test(value);
+}
+
+/** 部分 API 在 WebView 中会被浏览器渲染为 html > pre > JSON。 */
+function unwrapPreJsonResponse_(body: string): string {
+  const value = body || '';
+  const match = value.match(/<pre\b[^>]*>([\s\S]*?)<\/pre>/i);
+  if (!match || match.length < 2) return value;
+  let candidate = match[1].trim();
+  // WebView 可能把 JSON 字符转成 HTML 实体；只在候选看起来像 JSON 时解码，
+  // 避免影响正常 HTML 的 <pre> 内容。
+  candidate = candidate
+    .replace(/&quot;|&#34;|&#x22;/gi, '"')
+    .replace(/&#39;|&#x27;/gi, "'")
+    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&');
+  return /^[\[{]/.test(candidate) ? candidate : value;
+}
+
+/** 判断响应是否为成功的 JSON API；错误码响应不能覆盖浏览器会话结果。 */
+function isUsableJsonApiResponse_(body: string): boolean {
+  const candidate = unwrapPreJsonResponse_(body).replace(/^\uFEFF/, '').trim();
+  if (!/^[\[{]/.test(candidate)) return false;
+  try {
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
+    const code = parsed && parsed['code'];
+    return code === undefined || code === 0 || code === 200 || code === '0' || code === '200';
+  } catch (_e) {
+    return false;
+  }
+}
+
 /** 对齐 Android BookHelp.formatBookName：只移除明确的作者尾注，不截断合法书名标点。 */
 export function formatLegadoBookName(raw: string): string {
   return (raw || '').replace(/\s+作\s*者.*|\s+\S+\s+著/g, '').trim();
@@ -132,6 +167,21 @@ export function resolveContentPageUrl(url: string, currentUrl: string): string {
   if (nextUrl.startsWith('/')) return origin + nextUrl.replace(/#.*$/, '');
   const base = currentUrl.replace(/[#?].*$/, '').replace(/\/[^\/]*$/, '/');
   return (base + nextUrl).replace(/#.*$/, '');
+}
+
+/**
+ * 规范化书源提取的图片地址。
+ *
+ * 详情页封面规则有时读取的是 style 属性，返回值会是
+ * `background-image: url('https://...')`，而不是图片 URL 本身。
+ * 只取 CSS url() 中的地址，避免把整段 CSS 当成相对路径解析。
+ */
+export function normalizeMediaUrlValue(rawUrl: string): string {
+  const value = (rawUrl || '').trim();
+  if (!value) return '';
+  const cssUrl = value.match(/url\(\s*(?:"([^"]+)"|'([^']+)'|([^'")\s]+))\s*\)/i);
+  if (!cssUrl) return value;
+  return (cssUrl[1] || cssUrl[2] || cssUrl[3] || '').trim();
 }
 
 function collectLikelyTocLinks_(html: string, pageUrl: string): Set<string> {
@@ -274,8 +324,9 @@ export function isLoginDocument(html: string, url: string = ''): boolean {
   const titleOrHeading = text.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
   const formMarker = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(text);
   const loginMarker = titleOrHeading ? /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]) : false;
-  const bookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(text);
-  return (loginMarker || formMarker) && !bookMarkup;
+  const loginText = /登录|注册|sign\s*in|log\s*in/i.test(text);
+  const bookMarkup = WebViewFetcher.isLikelyBookDocumentHtml(text);
+  return (loginMarker || formMarker || loginText) && !bookMarkup;
 }
 
 /**
@@ -1046,7 +1097,11 @@ export class SourceExecutor {
       if (WebViewFetcher.isReady()) {
         console.info('[SrcEx] WebView request (source config) for', source.sourceName);
         try {
-          const wvResult = await WebViewFetcher.fetch(finalUrl, requestTimeout, headers);
+          // 校验时隐藏 WebView 若卡在 WAF 探针页，不能占满整个校验期限；
+          // 及时回到 HTTP 分支后才能识别探针并弹出人工验证窗口。正常阅读
+          // 仍使用书源网络超时，避免影响慢站点正文加载。
+          const webViewTimeout = throwOnFailure ? Math.min(requestTimeout, 15000) : requestTimeout;
+          const wvResult = await WebViewFetcher.fetch(finalUrl, webViewTimeout, headers);
           let bodyText = wvResult.html;
           if (WebViewFetcher.isInteractiveChallengeHtml(bodyText) &&
             WebViewFetcher.interactiveFetcher) {
@@ -1056,7 +1111,13 @@ export class SourceExecutor {
           }
           if (bodyText && bodyText.length > 100) {
             console.info('[SrcEx] WebView got', bodyText.length, 'bytes from', source.sourceName);
-            return await this.parseResponse(bodyText, source, baseUrl, 0, finalUrl);
+            const webViewResults = await this.parseResponse(bodyText, source, baseUrl, 0, finalUrl);
+            if (webViewResults.length === 0 && WebViewFetcher.isInteractiveChallengeHtml(bodyText)) {
+              const challengeMessage = '搜索页仍是验证码/人工验证页面，未完成验证或书源缺少验证码提交规则';
+              console.warn('[SrcEx] ' + challengeMessage + ':', source.sourceName);
+              if (throwOnFailure) throw new Error(challengeMessage);
+            }
+            return webViewResults;
           }
         } catch (_wv) { /* WebView failed, try direct */ }
       } else {
@@ -1115,6 +1176,30 @@ export class SourceExecutor {
       const parsedBody = hexDecoded || bodyText;
 
       const httpResults = await this.parseResponse(parsedBody, source, baseUrl, 0, finalUrl);
+
+      if (httpResults.length === 0 && WebViewFetcher.isInteractiveChallengeHtml(parsedBody)) {
+        const challengeMessage = '搜索页返回验证码/人工验证页面，未完成验证或书源缺少验证码提交规则';
+        console.warn('[SrcEx] ' + challengeMessage + ':', source.sourceName);
+        if (WebViewFetcher.interactiveFetcher) {
+          try {
+            console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge');
+            if (interactiveHtml && interactiveHtml.length > 200) {
+              const interactiveResults = await this.parseResponse(
+                this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl, 0, finalUrl);
+              if (interactiveResults.length > 0) {
+                console.info('[SrcEx] Interactive WebView got', interactiveResults.length,
+                  'results for', source.sourceName);
+                return interactiveResults;
+              }
+            }
+          } catch (interactiveError) {
+            console.warn('[SrcEx] Interactive WebView failed for', source.sourceName, ':',
+              (interactiveError as Error).message);
+          }
+        }
+        if (throwOnFailure) throw new Error(challengeMessage);
+      }
 
       // HTTP 返回 200 但 CSS 提取 0 条且响应不是 JSON → WebView 兜底（JS 动态渲染的站点）
       if (httpResults.length === 0 && !parsedBody.trim().startsWith('{') && !parsedBody.trim().startsWith('[')
@@ -1295,19 +1380,28 @@ export class SourceExecutor {
   private async parseResponse(
     bodyText: string, source: BookSource, baseUrl: string, duration: number, ruleUrl: string = baseUrl
   ): Promise<SearchResult[]> {
+    if (isServerErrorHtml_(bodyText)) {
+      console.warn('[SrcEx] Search response is a server error page for', source.sourceName,
+        '- refusing generic link fallback');
+      return [];
+    }
+    const jsonBody = unwrapPreJsonResponse_(bodyText);
+    if (jsonBody !== bodyText) {
+      console.info('[SrcEx] Unwrapped JSON from HTML <pre> for', source.sourceName);
+    }
     // JSON 直接解析（API 类书源）
     try {
-      const jsonObj = JSON.parse(bodyText) as Record<string, unknown>;
+      const jsonObj = JSON.parse(jsonBody) as Record<string, unknown>;
       const results = this.parseJsonResults(jsonObj, source, baseUrl, duration);
       if (results.length > 0) {
         console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
         return results;
       } else {
         const stripped = (source.ruleSearchList || '').replace(/<js>[\s\S]*?<\/js>/g, '').trim();
-        console.info('[SrcEx] JSON parsed but 0 results, ruleSearchList stripped=', stripped, 'first100=', bodyText.substring(0, 200));
+        console.info('[SrcEx] JSON parsed but 0 results, ruleSearchList stripped=', stripped, 'first100=', jsonBody.substring(0, 200));
       }
     } catch (_e) {
-      console.info('[SrcEx] JSON parse failed, first200=' + bodyText.substring(0, 200));
+      console.info('[SrcEx] JSON parse failed, first200=' + jsonBody.substring(0, 200));
       /* not JSON */ }
 
     // HtmlParser + CSS 选择器
@@ -1548,7 +1642,12 @@ export class SourceExecutor {
     await SourceNetworkPolicy.wait(source);
     const requestHeaders = SourceNetworkPolicy.headers(source, headers);
     const requestTimeout = timeout || SourceNetworkPolicy.timeout(source);
-    console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method + ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) + ' headers=' + JSON.stringify(requestHeaders).substring(0, 200));
+    const hasAuthorization = Object.keys(requestHeaders).some((key: string): boolean =>
+      key.toLowerCase() === 'authorization' && !!requestHeaders[key]);
+    console.info('[SrcEx] fetchWithOpts url=' + url.substring(0, 80) + ' method=' + method +
+      ' bodyLen=' + body.length + ' body=' + body.substring(0, 300) +
+      ' hasAuthorization=' + hasAuthorization +
+      ' headers=' + JSON.stringify(requestHeaders).substring(0, 200));
 
     const getLoginWebViewUrl = (): string => {
       const configured = (source.loginUrl || '').trim();
@@ -1587,7 +1686,27 @@ export class SourceExecutor {
 
     if (forceWebView && method !== 'POST') {
       const rendered = await fetchByWebView('source option');
-      if (rendered && !needsWebViewDocument(rendered, '')) return rendered;
+      if (rendered && !needsWebViewDocument(rendered, '')) {
+        // WebView 会把 JSON API 渲染成 <html><pre>...</pre>。浏览器请求
+        // 可能丢失 Authorization 等自定义请求头；此时用同一组书源请求头
+        // 再直连一次，并且只接受成功 JSON，不能让 4005 等错误响应覆盖它。
+        const renderedJson = unwrapPreJsonResponse_(rendered);
+        if (renderedJson !== rendered || /^[\[{]/.test(renderedJson.trim())) {
+          try {
+            const direct = await NetUtil.httpGet(url, requestHeaders, requestTimeout);
+            if (isUsableJsonApiResponse_(direct)) {
+              console.info('[SrcEx] WebView JSON envelope replaced by direct API response for', source.sourceName);
+              return direct;
+            }
+            console.warn('[SrcEx] Direct API retry returned an error/non-JSON response for',
+              source.sourceName, ':', unwrapPreJsonResponse_(direct).substring(0, 180));
+          } catch (directError) {
+            console.warn('[SrcEx] Direct API retry after WebView failed for', source.sourceName,
+              ':', (directError as Error).message);
+          }
+        }
+        return rendered;
+      }
     }
 
     try {
@@ -1798,8 +1917,8 @@ export class SourceExecutor {
       return {
         name: infoName,
         author: this.cleanAuthorName(extractField(source.ruleBookInfoAuthor) || ''),
-        // 详情规则常提取到 /images/cover.jpg 或 //cdn...；统一相对当前详情页解析，
-        // 否则 BookInfoPage 会用相对地址覆盖搜索阶段的绝对封面并回退为占位图。
+        // 详情规则常提取到 /images/cover.jpg、//cdn... 或 style 中的 CSS url()；
+        // 统一相对当前详情页解析，否则 BookInfoPage 会用错误地址覆盖搜索阶段的封面。
         coverUrl: this.resolveMediaUrl_(rawCoverUrl, noteUrl),
         // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
         introduce: HtmlUtil.toPlainText(extractField(source.ruleBookInfoIntroduce) || ''),
@@ -1817,7 +1936,14 @@ export class SourceExecutor {
 
   private parseJsonBookInfo(body: string, source: BookSource, noteUrl: string): BookSourceBookInfo | null {
     try {
-      const jsonObj = JSON.parse(body) as Record<string, unknown>;
+      const jsonObj = JSON.parse(unwrapPreJsonResponse_(body)) as Record<string, unknown>;
+      const apiCode = jsonObj['code'];
+      if (apiCode !== undefined && apiCode !== 0 && apiCode !== 200 &&
+        apiCode !== '0' && apiCode !== '200') {
+        console.warn('[SrcEx] BookInfo API error: code=' + String(apiCode) +
+          ' msg=' + String(jsonObj['msg'] || ''));
+        return null;
+      }
       let root: Record<string, unknown> = jsonObj;
       if (source.ruleBookInfoInit) {
         const initValue = this.getPath(jsonObj, source.ruleBookInfoInit);
@@ -1837,7 +1963,10 @@ export class SourceExecutor {
         tocUrl: this.resolveRuleTemplate(source.ruleBookInfoTocUrl, root, noteUrl),
         chapters: [],
       };
-      if (info.name || info.author || info.coverUrl || info.introduce || info.kind || info.wordCount || info.lastUpdateTime || info.tocUrl) {
+      // 详情规则必须至少得到书名；仅有模板生成的 tocUrl 不能算解析成功，
+      // 否则认证错误/空数据会被误报成 BookInfo JSON OK。
+      if (info.name && (info.author || info.coverUrl || info.introduce || info.kind ||
+        info.wordCount || info.lastUpdateTime || info.tocUrl)) {
         console.info('[SrcEx] BookInfo JSON OK tocUrl=', (info.tocUrl || '').substring(0, 100));
         return info;
       }
@@ -2514,9 +2643,11 @@ export class SourceExecutor {
    * 获取目录（章节列表）
    * @param source 书源
    * @param tocUrl 书籍详情页 URL（即 search 返回的 noteUrl）
+   * @param maxPages 校验等场景可限制目录分页数；0 表示按正常阅读流程抓取全部分页
    * @returns 章节列表
    */
-  async getToc(source: BookSource, tocUrl: string, onProgress?: (loaded: number) => void): Promise<BookSourceChapter[]> {
+  async getToc(source: BookSource, tocUrl: string, onProgress?: (loaded: number) => void,
+    maxPages: number = 0): Promise<BookSourceChapter[]> {
     // 初始化书源变量（loginUrl）
     await this.ensureSourceVariables(source, tocUrl);
     // 用 ruleTocUrl 解析目录页 URL（如果书源有配置）
@@ -2645,6 +2776,7 @@ export class SourceExecutor {
         }
       };
 
+      const tocPageLimit = maxPages > 0 ? Math.max(1, Math.floor(maxPages)) : 60;
       const tocBodies: string[] = [resp];
       const tocBodyUrls: string[] = [tocUrl];
       const visitedToc = new Set<string>();
@@ -2657,7 +2789,7 @@ export class SourceExecutor {
         try {
           let currentBody = resp;
           let currentUrl = tocUrl;
-          while (tocBodies.length < 60) {
+          while (tocBodies.length < tocPageLimit) {
             const nextUrls = this.extractTocPageUrls(currentBody, nextRule, currentUrl);
             const newUrls: string[] = [];
             for (const url of nextUrls) {
@@ -2672,7 +2804,7 @@ export class SourceExecutor {
             if (newUrls.length > 1) {
               const pageUrls: string[] = [];
               for (const url of newUrls) {
-                if (tocBodies.length + pageUrls.length >= 60) {
+                if (tocBodies.length + pageUrls.length >= tocPageLimit) {
                   break;
                 }
                 visitedToc.add(url);
@@ -4140,7 +4272,7 @@ export class SourceExecutor {
 
   /** 解析详情页提取的封面/图片地址，保留 data/blob URI。 */
   private resolveMediaUrl_(url: string, currentUrl: string): string {
-    const value = (url || '').trim();
+    const value = normalizeMediaUrlValue(url);
     if (!value || /^(?:data|blob):/i.test(value)) return value;
     return this.resolvePageUrl(value, currentUrl);
   }
@@ -4231,7 +4363,7 @@ export class SourceExecutor {
   /** 安全解析 JSON 正文；失败返回 null。支持根数组。 */
   private tryParseJsonBody_(body: string): Object | null {
     try {
-      const trimmed = (body || '').replace(/^\uFEFF/, '').trim();
+      const trimmed = unwrapPreJsonResponse_(body).replace(/^\uFEFF/, '').trim();
       if (!trimmed) return null;
       return JSON.parse(trimmed) as Object;
     } catch (_e) {

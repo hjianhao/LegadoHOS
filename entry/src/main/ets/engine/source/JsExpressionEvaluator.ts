@@ -112,6 +112,8 @@ export class JsExpressionEvaluator {
   // QuickJS 的同步网络/验证码桥会占住 Worker。串行派发可让超时从真正执行时
   // 开始计算，也避免一个慢请求把已经排队的脚本全部误判为超时。
   private static workerEvalQueue: Promise<void> = Promise.resolve();
+  /** Worker 端已缓存的 jsLib 所属书源 key（sourceUrl），切换书源时重新传输。 */
+  private static lastWorkerJsLibKey_: string = '';
 
   /**
    * 获取或创建 Worker 实例
@@ -220,8 +222,9 @@ export class JsExpressionEvaluator {
 
       this.workerInstance = workerInstance;
 
-      // 发送 init 消息触发 Worker 初始化
-      workerInstance.postMessage({ type: 'init' });
+      // 发送 init 消息触发 Worker 初始化；polyfill 随初始化一次性下发，
+      // 之后每次 eval 不再全量传输（SharedHeap 传输是批量校验 OOM 主因之一）。
+      workerInstance.postMessage({ type: 'init', polyfill: getPolyfillForWorker() });
 
       // 等待初始化完成或超时
       const timeoutPromise = new Promise<boolean>((resolve) => {
@@ -255,7 +258,8 @@ export class JsExpressionEvaluator {
   /**
    * 向 Worker 发送消息并等待响应
    */
-  private static sendToWorker(type: string, timeoutMs: number = 30000, code?: string): Promise<string> {
+  private static sendToWorker(type: string, timeoutMs: number = 30000, code?: string,
+    jsLibKey: string = '', jsLib?: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout((): void => {
@@ -275,7 +279,7 @@ export class JsExpressionEvaluator {
       });
 
       try {
-        this.workerInstance!.postMessage({ type, id, code });
+        this.workerInstance!.postMessage({ type, id, code, jsLibKey, jsLib });
       } catch (e) {
         clearTimeout(timer);
         this.workerPromise.delete(id);
@@ -288,14 +292,15 @@ export class JsExpressionEvaluator {
    * 串行执行必须走 Worker 的脚本。
    * Worker 的创建也放进队列，前一个任务超时并销毁 Worker 后，后一个任务能重新初始化。
    */
-  private static enqueueWorkerEvaluation(timeoutMs: number, code: string): Promise<string> {
+  private static enqueueWorkerEvaluation(timeoutMs: number, code: string,
+    jsLibKey: string = '', jsLib?: string): Promise<string> {
     const task = this.workerEvalQueue
       .catch((): void => {})
       .then(async (): Promise<string> => {
         const workerInstance = await this.getWorker();
         if (!workerInstance) throw new Error('Worker unavailable');
         try {
-          return await this.sendToWorker('eval', timeoutMs, code);
+          return await this.sendToWorker('eval', timeoutMs, code, jsLibKey, jsLib);
         } catch (err) {
           this.terminateWorker();
           throw err;
@@ -315,6 +320,21 @@ export class JsExpressionEvaluator {
       } catch (_e) { /* ignore */ }
       this.workerInstance = null;
       this.workerReady = false;
+    }
+    // 新 Worker 没有 jsLib/polyfill 缓存，必须重新传输
+    this.lastWorkerJsLibKey_ = '';
+  }
+
+  /**
+   * 释放 Worker 及其 QuickJS 引擎（批量校验等重负载结束后调用）。
+   * 引擎全局对象会被所有书源的 jsLib 反复填充（50 个源批量校验后函数定义
+   * 堆积数十 KB~MB 级），且 shared heap 随每次 postMessage 增长；主动销毁
+   * 可回收这些内存，下次求值时按需重建。
+   */
+  static releaseWorker(): void {
+    if (this.workerInstance || this.workerInitPromise) {
+      this.terminateWorker();
+      this.workerInitPromise = null;
     }
   }
 
@@ -365,10 +385,28 @@ export class JsExpressionEvaluator {
 
     // 同步网络/验证码脚本必须在 Worker 执行；非原生环境的普通脚本也在这里降级。
     try {
-      const workerScript = getPolyfillForWorker() + '\n' + fullScript;
+      // polyfill（console shim + 通用脚本 + ajax mock）已在 Worker 初始化时
+      // 一次性注入并执行；jsLib 按源在 Worker 端缓存，仅在切换书源时传输。
+      // 之前每次求值都全量传输 36KB 级 polyfill + jsLib，批量校验时
+      // SharedHeap 反复分配导致 OOM。
+      const workerScript = JsExpressionEvaluator.buildContextScript(ctx, false) + '\n' + safeCode;
+      // 提取 jsLib（与 buildContextScript 相同的取值逻辑），只在变化时随消息传输
+      let jsLibStr = ctx.jsLib || '';
+      if (!jsLibStr && ctx.source) {
+        const src = ctx.source as Record<string, unknown>;
+        jsLibStr = (src.jsLib as string) || '';
+      }
+      const srcObj = ctx.source as Record<string, unknown> | undefined;
+      const jsLibKey = jsLibStr && jsLibStr.trim()
+        ? String(srcObj?.['sourceUrl'] || srcObj?.['bookSourceUrl'] || ctx.baseUrl || '') : '';
+      const jsLibChanged = jsLibKey !== JsExpressionEvaluator.lastWorkerJsLibKey_;
+      if (jsLibChanged) {
+        JsExpressionEvaluator.lastWorkerJsLibKey_ = jsLibKey;
+      }
       // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
       const evalTimeout = /getVerificationCode|__captchaOp/.test(fullScript) ? 125000 : 65000;
-      const result = await this.enqueueWorkerEvaluation(evalTimeout, workerScript);
+      const result = await this.enqueueWorkerEvaluation(evalTimeout, workerScript,
+        jsLibKey, jsLibChanged ? (jsLibStr || '') : undefined);
       return unwrapJsResult(result);
     } catch (e) {
       console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));
@@ -536,16 +574,18 @@ export class JsExpressionEvaluator {
    * 构建上下文脚本——将变量注入到 JS 全局作用域
    * 使用 var 声明而非 globalThis 赋值，使变量在 eval 中可直接访问
    */
-  static buildContextScript(ctx: JsEvalContext): string {
+  static buildContextScript(ctx: JsEvalContext, includeJsLib: boolean = true): string {
     const parts: string[] = [];
 
     // 书源 jsLib — 最先加载，定义 hosts、getCloudSettings 等核心函数
+    // includeJsLib=false 时由调用方单独提取 jsLib（Worker 端按源缓存，避免
+    // 每次求值全量传输大段 jsLib 文本造成 SharedHeap 压力）。
     let jsLibStr = ctx.jsLib || '';
     if (!jsLibStr && ctx.source) {
       const src = ctx.source as Record<string, unknown>;
       jsLibStr = (src.jsLib as string) || '';
     }
-    if (jsLibStr && jsLibStr.trim()) {
+    if (includeJsLib && jsLibStr && jsLibStr.trim()) {
       parts.push(jsLibStr.trim());
     }
 

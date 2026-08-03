@@ -19,7 +19,7 @@ import {
   inferAiContentRule, isSafeAiImportUrl, isUsableAiExtractedContent,
   parseAiRulesJson, prepareHtmlForAi
 } from './AiBookImporter';
-import { AiPromptStage, selectAiPromptHints } from './AiPromptKnowledge';
+import { AiPromptStage, selectAiPromptHints, supportedAiRuleContract } from './AiPromptKnowledge';
 
 const PAGE_EVIDENCE_LIMIT = 48000;
 // 模型规则请求不需要携带整页几十万字符；保留头尾及 DOM 结构即可定位常见卡片。
@@ -150,34 +150,6 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   const sourceHost = sourceMatch[1].toLowerCase();
   const baseHost = sourceHost.replace(/^(?:m|mip|wap|mobile)\./i, '');
 
-  // 旧域名与规范域名有时只存在一两个字符差异。仅比较相同顶级域和
-  // 相近的注册域名标签，不接受 libs.baidu.com 这类页面第三方资源域名。
-  const hostNameAndSuffix_ = (host: string): { name: string; suffix: string } => {
-    const labels = host.replace(/^www\./i, '').split('.').filter((item: string): boolean => !!item);
-    if (labels.length === 0) return { name: '', suffix: '' };
-    return {
-      name: labels.length > 1 ? labels[labels.length - 2] : labels[0],
-      suffix: labels.length > 1 ? labels[labels.length - 1] : '',
-    };
-  };
-  const editDistanceAtMostTwo_ = (left: string, right: string): boolean => {
-    if (!left || !right || Math.abs(left.length - right.length) > 2) return false;
-    let differences = 0;
-    const length = Math.min(left.length, right.length);
-    for (let index = 0; index < length; index++) {
-      if (left.charAt(index) !== right.charAt(index)) differences++;
-    }
-    differences += Math.abs(left.length - right.length);
-    return differences <= 2;
-  };
-  const sourceParts = hostNameAndSuffix_(sourceHost);
-  const isLikelySameSiteAlias_ = (candidateHost: string): boolean => {
-    const candidateParts = hostNameAndSuffix_(candidateHost);
-    return !!sourceParts.name && !!candidateParts.name &&
-      sourceParts.suffix === candidateParts.suffix &&
-      editDistanceAtMostTwo_(sourceParts.name, candidateParts.name);
-  };
-
   const candidates: Array<{ origin: string; count: number; exact: boolean; explicit: boolean }> = [];
   const add = (raw: string, explicit: boolean = false): void => {
     const value = (raw || '').trim();
@@ -192,7 +164,10 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     // 站点常见的移动域名别名：m -> mip、m -> www、m -> 根域名。
     const exact = host === 'mip.' + baseHost || host === 'www.' + baseHost ||
       host === 'wap.' + baseHost || host === baseHost;
-    const sameSiteAlias = exact || isLikelySameSiteAlias_(host);
+    // 普通页脚/导航链接不能证明站点迁移。尤其是 qidian.com 页面中的
+    // game.qidian.com 等业务子域，虽然注册域相同，也不是小说站规范首页。
+    // 非移动子域只允许由 canonical/og:url 这类站点明确声明的来源进入候选。
+    const sameSiteAlias = exact;
     // canonical/og:url 是站点明确声明的规范地址。域名迁移时新域名可能与旧域名
     // 完全无关（例如 zwduxs.com -> wangshuwx.com），不能再用“同站别名”规则
     // 把这类迁移过滤掉；普通页脚链接仍必须满足同站别名条件，避免误把 CDN/广告
@@ -218,7 +193,7 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   while ((match = metaPattern.exec(html || '')) !== null) {
     add(htmlAttribute_(match[0], 'content'), true);
   }
-  // 部分老站没有 canonical，只在页脚提供规范首页链接；仍限制为同一站点移动域名变体。
+  // 部分老站没有 canonical，只在页脚提供规范首页链接；仅接受明确的移动域名变体。
   const hrefPattern = /<a\b[^>]*\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>/gi;
   while ((match = hrefPattern.exec(html || '')) !== null) {
     add(match[2]);
@@ -229,10 +204,9 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     if (left.explicit !== right.explicit) return left.explicit ? -1 : 1;
     return right.count - left.count;
   });
-  // 移动别名有明确语义，出现一次即可；模糊旧域名必须在页面中重复出现，
-  // 以免某个偶然的站内链接被当成规范域名。
+  // 移动别名和 canonical/og:url 都有明确语义，出现一次即可。
   const selected = candidates.find((item: { origin: string; count: number; exact: boolean; explicit: boolean }): boolean =>
-    item.exact || item.explicit || item.count >= 2);
+    item.exact || item.explicit);
   return selected ? selected.origin : '';
 }
 
@@ -408,7 +382,7 @@ function hasAiSearchCardMetadata_(value: string): boolean {
 function isLikelyAiSearchActionText_(value: string): boolean {
   const compact = (value || '').replace(/[\s\u3000:：|·•]+/g, '').trim();
   if (!compact) return false;
-  return /^(?:立即阅读|开始阅读|在线阅读|继续阅读|全文阅读|阅读本书|点击阅读|进入阅读|查看详情|书籍详情|详情|加入书架|收藏本书|推荐此书|TXT下载|下载全文|下载本书|章节目录|目录)$/i
+  return /^(?:立即阅读|开始阅读|在线阅读|继续阅读|全文阅读|阅读本书|点击阅读|进入阅读|查看详情|书籍详情|详情|加入书架|加入书签|收藏本书|推荐此书|TXT下载|下载全文|下载本书|章节目录|目录)$/i
     .test(compact);
 }
 
@@ -444,6 +418,135 @@ function isPlausibleAiDetailValue_(value: string, maxLength: number): boolean {
   if (!value) return true;
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length <= maxLength && !hasAiPageArtifact_(normalized);
+}
+
+/** 封面字段必须是图片/URL 属性，不能把 style 或 CSS 声明交给执行器。 */
+export function isUsableAiCoverRule(rule: string): boolean {
+  const value = (rule || '').trim();
+  if (!value) return true;
+  if (/background(?:-image)?\s*:|@style\b|\bstyle\s*=/i.test(value)) return false;
+  if (/(?:^|@)(?:html|all|text|ownText|textNodes)\b/i.test(value)) return false;
+  return true;
+}
+
+function isLikelyAiCoverImageTag_(tag: string): boolean {
+  return /(?:class|id|alt|title|data-[\w-]+)\s*=\s*["'][^"']*(?:cover|封面|book|novel|poster|thumb|pic)[^"']*["']/i
+    .test(tag);
+}
+
+function aiCoverImageAttribute_(tag: string): string {
+  const src = htmlAttribute_(tag, 'src');
+  // src 是首选；只有明确是 data:image 占位图时才回退到懒加载属性。
+  if (src && !/^data:image(?:\/|;)/i.test(src)) return 'src';
+  if (htmlAttribute_(tag, 'data-original')) return 'data-original';
+  if (htmlAttribute_(tag, 'data-src')) return 'data-src';
+  return src ? 'src' : '';
+}
+
+/**
+ * 将模型返回的非法封面规则修正为页面中可执行的图片属性规则。
+ * 返回 null 表示页面有图片但无法安全定位，返回空字符串表示页面没有图片证据，
+ * 此时封面字段应明确置空，不能保留 background-image/style。
+ */
+export function correctAiCoverRuleFromHtml(rule: string, html: string): string | null {
+  if (isUsableAiCoverRule(rule)) return (rule || '').trim();
+  const value = html || '';
+  const metaImage = /<meta\b[^>]*(?:property|name)\s*=\s*(["'])og:image\1[^>]*>/i.test(value);
+  if (metaImage) return 'meta[property="og:image"]@content';
+
+  const tags = value.match(/<img\b[^>]*>/gi) || [];
+  const candidates = tags.filter((tag: string): boolean => !!aiCoverImageAttribute_(tag));
+  const likely = candidates.find((tag: string): boolean => isLikelyAiCoverImageTag_(tag));
+  const contextMatch = (rule || '').match(/^\s*(?:@css:)?([\s\S]*?)@(?:style|html|all|text(?:Nodes)?)\b/i);
+  const context = contextMatch && contextMatch.length > 1 ? contextMatch[1].trim() : '';
+  if (context && likely) {
+    const attribute = aiCoverImageAttribute_(likely);
+    const normalizedContext = context.replace(/\s+$/, '');
+    if (/(?:^|\s)img(?:[.#][\w-]+)?$/i.test(normalizedContext)) {
+      return normalizedContext + '@' + attribute;
+    }
+    return normalizedContext + ' img@' + attribute;
+  }
+  if (likely) return 'img@' + aiCoverImageAttribute_(likely);
+  // 没有任何图片元素时，合法修复就是删除封面规则；不能把 CSS 背景声明继续保存。
+  if (candidates.length === 0) return '';
+  return null;
+}
+
+/** 当前 HTML 取证是否是图片验证码门禁，而不是正常的搜索结果页。 */
+export function isLikelyImageCaptchaPage(html: string): boolean {
+  const value = html || '';
+  if (!/(?:searchcode\.php|__17mb_(?:code|input)|请输入验证码|验证码图片|captcha)/i.test(value)) {
+    return false;
+  }
+  // 正常搜索页可能把验证码表单隐藏在页面外壳中；有书籍详情链接/结果卡片时
+  // 不把它判成搜索门禁，避免复现详情页误弹验证的问题。
+  const hasBookResult = /<(?:article|li|tr|div)\b[^>]*(?:book[-_ ]?(?:item|card|row|list)|novel[-_ ]?(?:item|card|row|list)|search[-_ ]?(?:item|result|row)|result[-_ ]?(?:item|row)|book-coverlist|novel-row)[^>]*>/i.test(value) ||
+    /<a\b[^>]*href=["'][^"']*(?:\/(?:book|books|novel|read)\/|\/\d+\/[A-Za-z0-9])/i.test(value);
+  return !hasBookResult;
+}
+
+/**
+ * 站点迁移或接口异常时，搜索 URL 可能返回带有 200/202 状态的错误 HTML。
+ * 这类页面不能交给模型猜选择器，也不能被通用链接兜底当成一本书。
+ * 目前只匹配明确的错误页标记，避免误伤正文中包含“错误”字样的正常页面。
+ */
+export function isLikelyAiServerErrorPage(html: string): boolean {
+  const value = (html || '').replace(/\s+/g, ' ');
+  if (!value) return false;
+  return /\{?__NOLAYOUT__\}?/i.test(value) &&
+    /(?:系统发生错误|系统错误|internal server error|server error|page not found)/i.test(value);
+}
+
+/** 网络异常消息可能携带整段 HTML 响应体（如 404 页面正文），只保留摘要。 */
+function conciseAiFetchError_(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const singleLine = (message || '').replace(/[\r\n]+/g, ' ').trim();
+  if (singleLine.length <= 200) return singleLine;
+  const stripped = singleLine.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return (stripped.length > 0 ? stripped : singleLine).substring(0, 200);
+}
+
+/**
+ * 判断页面是否为“JS 渲染搜索框”页面：部分站点静态 HTML 没有 form，
+ * 搜索框由脚本动态生成（如 `<div class="search"><script>search();</script></div>`）
+ * 或通过 uaredirect 跳转到移动版。这类页面普通 HTTP 无法识别搜索接口，
+ * 必须用 WebView 渲染后取证；已经包含 form 的页面不受影响。
+ */
+function isLikelyJsSearchPage_(html: string): boolean {
+  const value = html || '';
+  if (/<form\b/i.test(value)) return false;
+  const hasSearchArea = /<div\b[^>]*(?:class|id)=["'][^"']*search[^"']*["'][^>]*>\s*<script\b/i.test(value) ||
+    /\bsearch\(\)\s*;/i.test(value) || /\bwapsite\b|\buaredirect\s*\(/i.test(value);
+  return hasSearchArea;
+}
+
+/**
+ * 判断普通 HTTP 响应是否为“客户端渲染空壳页”：Vue/Nuxt/React 站点把主体
+ * 内容放在服务端渲染的空壳里，由客户端 JS 填充（如七猫搜索页只返回
+ * `<!---->` 占位符和 __NUXT__ 状态标记）。这类页面必须用 WebView 渲染后
+ * 取证，否则模型只能看到空容器，无法推导客户端渲染卡片的类名。
+ * 特征：框架状态标记 + 大量 Vue 占位注释，且页面几乎没有书籍详情链接；
+ * 服务端已渲染完整内容的页面（如七猫首页）会带大量书籍链接，不满足条件。
+ */
+function isLikelyClientRenderedShellHtml_(html: string): boolean {
+  const value = html || '';
+  if (!/__NUXT__|window\.__INITIAL_STATE__|__NEXT_DATA__/i.test(value)) return false;
+  const placeholderCount = (value.match(/<!---->/g) || []).length;
+  if (placeholderCount < 3) return false;
+  const bookLinks = (value
+    .match(/<a\b[^>]*href=["'][^"']*(?:\/(?:book|books|novel|read|fiction|story|shuku|chapter)\/|book_id=)[^"']*["']/gi) || []).length;
+  return bookLinks <= 2;
+}
+
+/** 详情/目录 API 返回认证错误时，不应继续让模型重写选择器。 */
+function isLikelyAiApiAuthErrorPage_(html: string): boolean {
+  const value = (html || '').replace(/\s+/g, ' ');
+  if (!value) return false;
+  // WebView 返回的 JSON 可能被转成 HTML 实体或纯文本，不能依赖完整的
+  // `"code":4005` 格式；错误码和认证关键词分开判断更稳妥。
+  return /\b(?:4005|401|403)\b/i.test(value) &&
+    /(?:认证失败|认证错误|未认证|未授权|token|authorization|登录|auth)/i.test(value);
 }
 
 /** 目录/详情字段不能把请求选项拼进 URL；否则逗号和 JSON 会被当成路径。 */
@@ -517,7 +620,7 @@ export function isLikelyAiBookDetailUrl(url: string): boolean {
   if (isLikelyAiChapterUrl(url)) return false;
   const pathMatch = url.trim().match(/^https?:\/\/[^/?#]+([^?#]*)/i);
   const path = pathMatch && pathMatch.length > 1 ? pathMatch[1].toLowerCase() : '';
-  return !/(^|\/)(?:bookcat|category|categories|genre|genres|tag|tags|author|authors|rank|ranking|sort|classify|search)(?:\/|$)/i
+  return !/(^|\/)(?:bookcat|category|categories|genre|genres|tag|tags|author|authors|rank|ranking|sort|classify|search|mybook(?:\.html)?|bookcase|bookshelf|bookmark|login|signin|register|signup|account)(?:\/|$)/i
     .test(path);
 }
 
@@ -829,11 +932,32 @@ export class AiSourceAgent {
     if (selection.ids.length > 0) {
       this.log_('  注入经验提示：' + selection.ids.join(', '));
     }
-    return selection.text;
+    return '当前执行器支持的书源规则契约：\n' + supportedAiRuleContract(stage) +
+      (selection.text ? '\n' + selection.text : '');
   }
 
   private async analyzeHomepage_(evidence: PageEvidence, keyword: string): Promise<void> {
     if (!this.draft_) return;
+    // 站点迁移到规范移动域名后（normalizeMobileSiteOrigin_ 已设置
+    // canonicalOrigin_），当前证据可能仍是旧域名的桌面版页面：桌面版搜索框
+    // 常由 JS 动态渲染且接口已降级，只有移动版包含可识别的静态表单。
+    // 改用规范域名重新取证首页，在其上识别真实搜索接口。
+    if (this.canonicalOrigin_ && this.siteOriginChanged_) {
+      const evidenceOrigin = urlOrigin_(evidence.finalUrl || evidence.url);
+      if (!evidenceOrigin || !evidenceOrigin.toLowerCase().startsWith(this.canonicalOrigin_.toLowerCase())) {
+        try {
+          const canonicalEvidence = await this.fetchPage_(this.canonicalOrigin_, '规范域名首页');
+          if (canonicalEvidence.html.length >= 300 &&
+            (canonicalEvidence.html.length > evidence.html.length ||
+              /<form\b/i.test(canonicalEvidence.html))) {
+            evidence = canonicalEvidence;
+            this.log_('  已改用站点规范移动域名重新取证：' + this.canonicalOrigin_);
+          }
+        } catch (e) {
+          this.log_('  规范域名首页取证失败，继续使用原页面：' + conciseAiFetchError_(e));
+        }
+      }
+    }
     this.start_(AiStep.HOMEPAGE, evidence.usedWebView ? '分析渲染后的 DOM' : '分析页面和表单');
     const inferred = inferSearchRequest(evidence.html, evidence.finalUrl || evidence.url, keyword);
     // 首页同时包含搜索入口和发现入口，但修复必须按失败阶段隔离字段。
@@ -929,8 +1053,26 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
     for (let attempt = 0; attempt < MAX_SEARCH_STAGE_ATTEMPTS; attempt++) {
       this.log_('  搜索规则第 ' + (attempt + 1) + '/' + MAX_SEARCH_STAGE_ATTEMPTS +
         ' 轮：' + (attempt === 0 ? '验证现有配置' : '根据上次错误重新生成'));
+      let searchEvidenceHtml = '';
       if (attempt > 0 || this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchList) {
-        const evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
+        let evidence: PageEvidence;
+        try {
+          evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
+        } catch (e) {
+          // 搜索请求异常（404/接口变更/网络错误）不能终止 Agent：记录错误并
+          // 进入下一轮，由模型基于重新取证的页面重写搜索入口和规则。
+          lastError = '搜索请求失败：' + conciseAiFetchError_(e);
+          this.log_('  搜索取证失败：' + lastError);
+          continue;
+        }
+        searchEvidenceHtml = evidence.html;
+        if (isLikelyAiServerErrorPage(searchEvidenceHtml)) {
+          lastError = '搜索请求返回站点错误页（最终地址：' +
+            (evidence.finalUrl || evidence.url).substring(0, 120) +
+            '），不是搜索结果；请确认站点域名或搜索接口仍可用';
+          this.log_('  搜索取证失败：' + lastError);
+          continue;
+        }
         this.ensureSearchWebViewOption_();
         this.log_('  搜索规则第 ' + (attempt + 1) + ' 轮：请求模型定位书名、作者和详情链接');
         const prompt = `分析小说网站搜索结果页或搜索 API 响应，生成 Legado 规则。只返回 JSON。
@@ -959,7 +1101,29 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, SEARCH_FIELDS);
+        if (!(this.draft_.ruleSearchList || '').trim()) {
+          lastError = '模型未返回 ruleSearchList，不能使用整页链接兜底；请重新定位书籍结果列表';
+          this.log_('  搜索验证失败：' + lastError);
+          continue;
+        }
         this.log_('  搜索规则第 ' + (attempt + 1) + ' 轮：模型规则已返回，开始真实验证');
+      }
+      if (!isUsableAiCoverRule(this.draft_.ruleSearchCover || '')) {
+        if (!searchEvidenceHtml) {
+          lastError = 'ruleSearchCover 不符合图片属性规则，需重新取证后修正为 img@src';
+          this.log_('  搜索验证失败：' + lastError);
+          continue;
+        }
+        const originalCoverRule = this.draft_.ruleSearchCover;
+        const correctedCoverRule = correctAiCoverRuleFromHtml(originalCoverRule, searchEvidenceHtml);
+        if (correctedCoverRule === null) {
+          lastError = 'ruleSearchCover 不符合图片属性规则，当前页面无法安全定位对应 img，需重新生成';
+          this.log_('  搜索验证失败：' + lastError);
+          continue;
+        }
+        this.draft_.ruleSearchCover = correctedCoverRule;
+        this.log_('  已将搜索封面规则从“' + originalCoverRule + '”修正为“' +
+          (correctedCoverRule || '（页面无图片，留空）') + '”');
       }
       if (!isAiLinkExtractionRule(this.draft_.ruleSearchNoteUrl || '')) {
         const correctedNote = await this.tryCorrectSearchNoteUrlRule_(keyword);
@@ -970,7 +1134,16 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         }
         this.log_('  搜索规则已从书名节点补全详情链接 @href');
       }
-      const results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+      let results: SearchResult[];
+      try {
+        results = await globalSourceExecutor.searchForCheck(keyword, this.draft_);
+      } catch (e) {
+        // 真实搜索执行异常（404/接口变更）同样进入下一轮重新生成，
+        // 避免修复模式在验证现有配置时被单个异常直接终止。
+        lastError = '搜索执行失败：' + conciseAiFetchError_(e);
+        this.log_('  搜索验证失败：' + lastError);
+        continue;
+      }
       const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
       const pollutedNames = extracted.filter((item: SearchResult): boolean =>
@@ -1183,8 +1356,11 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         const usable = retried.filter((item: SearchResult): boolean =>
           !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
           isLikelyAiBookDetailUrl(item.noteUrl));
+        const invalidAuthors = usable.filter((item: SearchResult): boolean =>
+          isInvalidAiSearchAuthorForItem_(item));
         if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
-          !hasAiSearchCardMetadata_(item.name) && !isLikelyAiSearchActionText_(item.name))) {
+          !hasAiSearchCardMetadata_(item.name) && !isLikelyAiSearchActionText_(item.name)) &&
+          (!(originalAuthor || '').trim() || invalidAuthors.length === 0)) {
           this.log_('  已验证书名候选规则：' + candidate);
           return usable;
         }
@@ -1236,6 +1412,51 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     this.draft_.ruleSearchName = originalName;
     this.draft_.ruleSearchAuthor = originalAuthor;
     this.draft_.ruleSearchNoteUrl = originalNote;
+    return [];
+  }
+
+  /**
+   * 修复发现页把最新章节/操作按钮当成书名或详情链接的表格规则。
+   * 发现页与搜索页共用传统 table 结构时，书名通常是带 title 的主链接，
+   * 而“加入书签”位于同一行的操作链接，不能只用 td.N a@href 区分。
+   */
+  private async tryCorrectTableDiscoveryRules_(firstUrl: string, keyword: string): Promise<SearchResult[]> {
+    if (!this.draft_) return [];
+    const hint = (this.draft_.ruleExploreList || '') + ' ' +
+      (this.draft_.ruleExploreName || '') + ' ' + (this.draft_.ruleExploreNoteUrl || '');
+    if (!/table\b|td\.|tr\b/i.test(hint)) return [];
+
+    const originalList = this.draft_.ruleExploreList || '';
+    const originalName = this.draft_.ruleExploreName || '';
+    const originalNote = this.draft_.ruleExploreNoteUrl || '';
+    try {
+      const probe = { ...this.draft_ } as BookSource;
+      probe.isExploreRequest = true;
+      probe.ruleSearchUrl = this.requiresWebView_
+        ? this.withWebViewOption_(firstUrl) : firstUrl;
+      probe.ruleSearchList = 'table.table tr!0';
+      probe.ruleSearchName = 'a[title]@title';
+      probe.ruleSearchNoteUrl = 'a[title]@href';
+      const retried = await globalSourceExecutor.searchForCheck(keyword, probe);
+      const usable = retried.filter((item: SearchResult): boolean =>
+        !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
+        isLikelyAiBookDetailUrl(item.noteUrl) && !isLikelyAiSearchActionText_(item.name));
+      const polluted = retried.some((item: SearchResult): boolean =>
+        !item.name || !item.noteUrl || !isSafeAiImportUrl(item.noteUrl) ||
+        !isLikelyAiBookDetailUrl(item.noteUrl) || isLikelyAiSearchActionText_(item.name));
+      if (usable.length > 0 && !polluted) {
+        this.draft_.ruleExploreList = probe.ruleSearchList;
+        this.draft_.ruleExploreName = probe.ruleSearchName;
+        this.draft_.ruleExploreNoteUrl = probe.ruleSearchNoteUrl;
+        this.log_('  已修正发现表格字段：table.table tr!0 / a[title]@title / a[title]@href');
+        return usable;
+      }
+    } catch (_e) {
+      // 候选规则验证失败时恢复原配置，交给模型下一轮处理。
+    }
+    this.draft_.ruleExploreList = originalList;
+    this.draft_.ruleExploreName = originalName;
+    this.draft_.ruleExploreNoteUrl = originalNote;
     return [];
   }
 
@@ -1322,8 +1543,11 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         const usable = retried.filter((item: SearchResult): boolean =>
           !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
           isLikelyAiBookDetailUrl(item.noteUrl));
+        const invalidAuthors = usable.filter((item: SearchResult): boolean =>
+          isInvalidAiSearchAuthorForItem_(item));
         if (usable.length > 0 && usable.every((item: SearchResult): boolean =>
-          !hasAiSearchCardMetadata_(item.name))) {
+          !hasAiSearchCardMetadata_(item.name)) &&
+          (!(originalAuthor || '').trim() || invalidAuthors.length === 0)) {
           this.log_('  已验证书名/详情链接候选规则：' + candidate.name + ' / ' + candidate.note);
           return true;
         }
@@ -1441,12 +1665,18 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
       try {
+        let discoveryEvidenceHtml = '';
         if (attempt > 0 || this.shouldRepair_(['发现']) || !this.draft_.ruleExploreList) {
           const evidence = await this.fetchPage_(firstUrl, '发现分类');
+          discoveryEvidenceHtml = evidence.html;
           const prompt = `分析小说网站发现/分类列表页或分类 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 ${this.promptKnowledge_('discovery', lastError, evidence.html)}
 列表字段相对于每个列表项；与搜索结果规则语义相同。
+发现表格中可能同时有书名、最新章节、作者和“加入书签/阅读”等操作链接；ruleExploreName
+只能定位书名（优先使用带完整 title 的书名主链接），ruleExploreNoteUrl 必须提取同一书名主链接
+的 @href，禁止使用最新章节或操作按钮链接。若列表是 table，优先使用 table.table tr!0 与
+a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取同一单元格中的任意链接。
 上次验证错误：${lastError || '无'}
 返回：
 {
@@ -1463,6 +1693,19 @@ ${this.promptKnowledge_('discovery', lastError, evidence.html)}
           const parsed = await this.askRules_(prompt, evidence.html);
           this.applyStringFields_(this.draft_, parsed, EXPLORE_FIELDS);
         }
+        if (!isUsableAiCoverRule(this.draft_.ruleExploreCover || '')) {
+          if (!discoveryEvidenceHtml) {
+            throw new Error('ruleExploreCover 不符合图片属性规则，需重新取证后修正为 img@src');
+          }
+          const originalCoverRule = this.draft_.ruleExploreCover;
+          const correctedCoverRule = correctAiCoverRuleFromHtml(originalCoverRule, discoveryEvidenceHtml);
+          if (correctedCoverRule === null) {
+            throw new Error('ruleExploreCover 不符合图片属性规则，当前页面无法安全定位对应 img，需重新生成');
+          }
+          this.draft_.ruleExploreCover = correctedCoverRule;
+          this.log_('  已将发现封面规则从“' + originalCoverRule + '”修正为“' +
+            (correctedCoverRule || '（页面无图片，留空）') + '”');
+        }
         const probe = { ...this.draft_ } as BookSource;
         probe.isExploreRequest = true;
         probe.ruleSearchUrl = this.requiresWebView_
@@ -1478,7 +1721,25 @@ ${this.promptKnowledge_('discovery', lastError, evidence.html)}
         probe.ruleSearchIntroduce = probe.ruleExploreIntroduce;
         const results = await globalSourceExecutor.searchForCheck(keyword, probe);
         if (results.length === 0) throw new Error('发现规则执行后没有书籍');
-        this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + results.length + ' 本书', {
+        const invalidItems = results.filter((item: SearchResult): boolean =>
+          !item.name || !item.noteUrl || !isSafeAiImportUrl(item.noteUrl) ||
+          !isLikelyAiBookDetailUrl(item.noteUrl) || isLikelyAiSearchActionText_(item.name));
+        if (invalidItems.length > 0) {
+          const correctedResults = await this.tryCorrectTableDiscoveryRules_(firstUrl, keyword);
+          if (correctedResults.length > 0) {
+            this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + correctedResults.length +
+              ' 本书（已修正表格字段规则）', { firstExploreUrl: firstUrl });
+            return;
+          }
+          const sample = invalidItems[0];
+          throw new Error('发现规则混入操作项/导航链接（' + sample.name + ' → ' + sample.noteUrl +
+            '），必须让 ruleExploreName 定位书名、ruleExploreNoteUrl 定位书名主链接@href');
+        }
+        const usable = results.filter((item: SearchResult): boolean =>
+          !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl) &&
+          isLikelyAiBookDetailUrl(item.noteUrl));
+        if (usable.length === 0) throw new Error('发现规则没有有效的书籍详情链接');
+        this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + usable.length + ' 本书', {
           firstExploreUrl: firstUrl,
         });
         return;
@@ -1508,11 +1769,14 @@ ${this.promptKnowledge_('discovery', lastError, evidence.html)}
       if (attempt > 0 || this.shouldRepair_(['详情']) || !this.draft_.ruleBookInfoName) {
         const evidence = await this.fetchPage_(bookUrl, '书籍详情');
         detailEvidenceHtml = evidence.html;
+        if (isLikelyAiApiAuthErrorPage_(detailEvidenceHtml)) {
+          throw new Error('详情 API 返回认证失败（需要有效 Authorization/token），不是书籍详情规则问题');
+        }
         const prompt = `分析小说详情页或详情 API 响应，生成 Legado 规则。只返回 JSON。
 ${this.evidenceRuleHint_(evidence.html)}
 ${this.promptKnowledge_('detail', lastError, evidence.html)}
 当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
-HTML 文本字段必须使用具体容器的 CSS 选择器并显式提取 @text，封面提取 @src，目录入口提取 @href；JSON 字段使用对象路径，封面使用 URL 字段，目录入口使用 URL/ID 字段或 {{字段}} 模板。
+HTML 文本字段必须使用具体容器的 CSS 选择器并显式提取 @text，封面必须定位 img 或明确的图片 meta 并提取 @src/@data-src/@data-original/@content，严禁使用 @style 或 background-image；目录入口提取 @href。JSON 字段使用对象路径，封面使用 URL 字段，目录入口使用 URL/ID 字段或 {{字段}} 模板。
 如果书名元素的可见文本被截短而 title/content 属性包含完整书名，应提取完整属性，禁止保存省略后的书名。
 禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
@@ -1552,11 +1816,23 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         this.log_('  详情验证失败：' + lastError);
         continue;
       }
+      if (!isUsableAiCoverRule(this.draft_.ruleBookInfoCover || '') && detailEvidenceHtml) {
+        const originalCoverRule = this.draft_.ruleBookInfoCover;
+        const correctedCoverRule = correctAiCoverRuleFromHtml(originalCoverRule, detailEvidenceHtml);
+        if (correctedCoverRule !== null) {
+          this.draft_.ruleBookInfoCover = correctedCoverRule;
+          this.log_('  已将详情封面规则从“' + originalCoverRule + '”修正为“' +
+            (correctedCoverRule || '（页面无图片，留空）') + '”');
+        }
+      }
       const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
       this.log_('  详情规则实际结果：name="' + previewAiValue_(info.name) +
         '" author="' + previewAiValue_(info.author) +
         '" cover=' + (info.coverUrl ? '有' : '无') +
         ' toc=' + (info.tocUrl ? '有' : '无'));
+      const coverRuleError = isUsableAiCoverRule(this.draft_.ruleBookInfoCover || '')
+        ? ''
+        : '封面规则读取了 style/background-image 或文本内容，必须改为图片元素的 @src（懒加载才用 @data-src/@data-original）';
       // 部分老式站点的详情页没有 h1/title 专用节点，书名放在面包屑最后
       // 一个链接或内容区首个 span 中。模型容易沿用搜索页规则而返回空值；
       // 从当前详情证据中验证明确 CSS 规则后再写回草稿，不做运行时文本清洗。
@@ -1564,6 +1840,7 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         !isAiBookNameConsistent(info.name, expectedName) ||
         !isPlausibleAiAuthor_(info.author) ||
         (!info.coverUrl && /<img\b[^>]*\bsrc\s*=/i.test(detailEvidenceHtml)) ||
+        !!coverRuleError ||
         (!info.tocUrl && /\bulrow\b/i.test(detailEvidenceHtml)) ||
         hasAiRequestOptionSuffix_(info.tocUrl || '');
       if (detailNeedsCorrection && detailEvidenceHtml) {
@@ -1577,6 +1854,11 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
           });
           return correctedInfo;
         }
+      }
+      if (coverRuleError) {
+        lastError = coverRuleError;
+        this.log_('  详情验证失败：' + lastError);
+        continue;
       }
       if (isPlausibleAiBookInfo(info, expectedName)) {
         this.done_(AiStep.BOOK_INFO, '详情解析通过', {
@@ -1686,7 +1968,8 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
       }
       try {
         const info = await globalSourceExecutor.getBookInfo(this.draft_, bookUrl);
-        if (isPlausibleAiBookInfo(info, expectedName)) {
+        if (isPlausibleAiBookInfo(info, expectedName) &&
+          isUsableAiCoverRule(this.draft_.ruleBookInfoCover || '')) {
           this.log_('  已验证详情字段规则：' + candidate);
           return info;
         }
@@ -2119,8 +2402,24 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       }
     }
     const challenge = this.isChallengePage_(html);
+    // Vue/Nuxt/React 站点把主体内容放在 SSR 空壳里，由客户端 JS 填充。
+    // 普通 HTTP 只能拿到空结果容器，模型据此无法推导真实卡片类名；
+    // 这类页面必须用 WebView 渲染后取证，与后续规则验证的 DOM 保持一致。
+    const clientRenderedShell = !forceWebView && !challenge && html.length >= 500 &&
+      isLikelyClientRenderedShellHtml_(html);
+    if (clientRenderedShell) {
+      this.log_('  页面主体由客户端 JS 渲染，改用 WebView 获取完整 DOM');
+    }
+    // 搜索框由 JS 动态渲染的页面（无静态 form）同样必须 WebView 取证，
+    // 否则程序与模型都无法识别搜索接口。
+    const jsSearchPage = !forceWebView && !challenge && html.length >= 500 &&
+      !clientRenderedShell && isLikelyJsSearchPage_(html);
+    if (jsSearchPage) {
+      this.log_('  搜索框由页面脚本动态生成，改用 WebView 获取渲染后的表单');
+    }
     const needsWebView = forceWebView || challenge || html.length < 500 ||
-      /<div[^>]+id=[\"'](?:app|root)[\"'][^>]*>\s*<\/div>/i.test(html);
+      /<div[^>]+id=[\"'](?:app|root)[\"'][^>]*>\s*<\/div>/i.test(html) || clientRenderedShell ||
+      jsSearchPage;
     if (needsWebView) {
       const ready = await WebViewFetcher.waitForReady(3000);
       if (ready) {
@@ -2136,9 +2435,17 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         }
       }
     }
-    if ((this.isChallengePage_(html) || this.isLoginPage_(html, finalUrl)) &&
+    // 已有 Java 验证码规则由 SourceExecutor 直接弹出 CaptchaDialog；新源尚未
+    // 生成这段规则时，交给交互 WebView 让用户完成站点页面自己的验证码脚本。
+    // 只有用户完成后页面出现真实结果，后续搜索验证才会通过。
+    const imageCaptchaPage = /搜索/i.test(label) && isLikelyImageCaptchaPage(html);
+    const imageCaptchaHandled = imageCaptchaPage && this.hasImageCaptchaRule_();
+    const challengeForInteraction = (this.isChallengePage_(html) || imageCaptchaPage) && !imageCaptchaHandled;
+    if ((challengeForInteraction || this.isLoginPage_(html, finalUrl)) &&
       this.callback_.onRequestWebView) {
-      const reason = this.isLoginPage_(html, finalUrl) ? '页面需要登录' : '页面需要人工验证';
+      const reason = this.isLoginPage_(html, finalUrl)
+        ? '页面需要登录'
+        : imageCaptchaPage ? '搜索页面需要输入图片验证码' : '页面需要人工验证';
       const interactive = WebViewFetcher.interactiveFetcher
         ? await WebViewFetcher.fetchInteractive(finalUrl)
         : await this.callback_.onRequestWebView(finalUrl, reason);
@@ -2168,11 +2475,13 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     }
     const stillLogin = interactiveCompleted
       ? this.isLoginPage_(html, '') : this.isLoginPage_(html, finalUrl);
-    if (this.isChallengePage_(html) || stillLogin) {
-      throw new Error(label + '仍被登录或人工验证拦截，请完成操作后再继续');
+    if ((this.isChallengePage_(html) && !imageCaptchaHandled) || stillLogin) {
+      throw new Error(label + (imageCaptchaPage
+        ? '仍停留在图片验证码页，请输入验证码并等待真实搜索结果出现后再点击完成'
+        : '仍被登录或人工验证拦截，请完成操作后再继续'));
     }
     if (!html || html.length < 300) throw new Error(label + '页面内容过短，可能被反爬或登录拦截');
-    if (usedWebView) {
+    if (usedWebView && !imageCaptchaHandled) {
       // 取证阶段如果只能通过浏览器拿到完整 DOM，后续正文/目录验证及最终书源
       // 也必须沿用 WebView 会话，否则会再次退回无 Cookie 的短占位页。
       this.requiresWebView_ = true;
@@ -2223,6 +2532,11 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
 
   private isChallengePage_(html: string): boolean {
     return WebViewFetcher.isInteractiveChallengeHtml(html);
+  }
+
+  private hasImageCaptchaRule_(): boolean {
+    const rules = [this.draft_?.ruleSearchList || '', this.draft_?.ruleSearchUrl || ''].join('\n');
+    return /getVerificationCode/i.test(rules) && /java\.(?:ajax|post)\s*\(/i.test(rules);
   }
 
   private isLoginPage_(html: string, url: string): boolean {

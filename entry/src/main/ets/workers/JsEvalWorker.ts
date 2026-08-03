@@ -201,6 +201,11 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
 
 let engineId: number = -1;
 let initialized: boolean = false;
+/** 初始化时一次性注入的 polyfill（console shim + 通用脚本 + ajax mock）。 */
+let cachedPolyfill_: string = '';
+/** 当前缓存的 jsLib 及其所属书源 key（仅 key 变化时主线程才会重新传输）。 */
+let cachedJsLib_: string = '';
+let cachedJsLibKey_: string = '';
 
 async function initEngine(): Promise<boolean> {
   if (initialized) return true;
@@ -242,6 +247,17 @@ async function initEngine(): Promise<boolean> {
         }
       }
     );
+
+    // 一次性注入 polyfill：之前每次 eval 都在主线程拼接 36KB 级 polyfill
+    // 全量传输，批量校验时 SharedHeap 反复分配导致 OOM。polyfill 顶层没有
+    // let/const（仅 var/function/IIFE），在引擎全局对象上执行一次即可复用。
+    if (cachedPolyfill_) {
+      try {
+        quickjsBridge.executeScript(engineId, cachedPolyfill_);
+      } catch (polyfillError) {
+        console.warn('[JsWorker] Polyfill execute failed:', String(polyfillError).substring(0, 120));
+      }
+    }
 
     return true;
   } catch (e) {
@@ -323,7 +339,14 @@ try {
     if (!msg || !msg.type) return;
 
     if (msg.type === 'eval') {
-      executeJs(msg.code || '')
+      // jsLib 只在书源切换时随消息传输；同源的后续求值复用缓存，避免
+      // SharedHeap 反复传输大段 jsLib 文本。key 变化时即使 jsLib 为空也要
+      // 清掉旧缓存，防止无 jsLib 的书源误用上一个源的脚本。
+      if (String(msg.jsLibKey || '') !== cachedJsLibKey_) {
+        cachedJsLib_ = String(msg.jsLib || '');
+        cachedJsLibKey_ = String(msg.jsLibKey || '');
+      }
+      executeJs((cachedJsLib_ ? cachedJsLib_ + '\n' : '') + String(msg.code || ''))
         .then((value: string): void => {
           parentPort.postMessage({ type: 'result', id: msg.id, value });
         })
@@ -331,6 +354,7 @@ try {
           parentPort.postMessage({ type: 'error', id: msg.id, error: String(e) });
         });
     } else if (msg.type === 'init') {
+      cachedPolyfill_ = String(msg.polyfill || '');
       initEngine().then((ok: boolean): void => {
         parentPort.postMessage({ type: 'init_done', ok });
       });

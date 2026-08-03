@@ -30,6 +30,13 @@ export struct WebViewEngine {
     WebViewFetcher.register(this.controller);
   }
 
+  aboutToDisappear(): void {
+    // 页面销毁时结算仍挂在本控制器上的 fetch 并释放全局引用；否则遗留的
+    // pending 请求会一直占用 WebView 队列，后续页面（如书源校验）的请求
+    // 只能排队等待，甚至 loadUrl 到已销毁的控制器上没有任何页面事件。
+    WebViewFetcher.release(this.controller);
+  }
+
   build() {
     Column() {
       Web({ src: '', controller: this.controller })

@@ -23,6 +23,37 @@ export interface AiPromptHintSelection {
   text: string;
 }
 
+/**
+ * AI 书源生成时使用的 LegadoHOS 规则契约。
+ *
+ * 这部分描述的是当前执行器已经实现并验证过的规则子集，不是某个站点的
+ * 经验规则。每次生成规则都注入，避免模型只记住 Android Legado 的宽泛写法，
+ * 却生成 ArkTS 执行器无法稳定解析的规则。
+ */
+export function supportedAiRuleContract(stage: AiPromptStage): string {
+  const common = 'LegadoHOS 当前支持：HTML 使用 Default/CSS 选择器并显式提取 @text、@href、@src 或 @textNodes；JSON/API 使用 $.path、[*] 数组路径；规则可用稳定的标签/class/id、后代/子元素、属性选择器、位置索引 .0/.1 和 ##regex##replacement。不要使用 body/html 整页文本或样本书固定 URL/数字 ID。';
+  const captcha = '如果搜索响应是图片验证码页（如 searchcode.php、__17mb_input、验证码图片/输入框），不能把它当成普通列表。已有可执行的 java.getVerificationCode + java.ajax/java.post 规则应走验证码对话框；只有页面内置脚本、可由用户在交互 WebView 中完成验证码并出现真实搜索结果时，才允许保留 webView 搜索能力。验证未完成或无法得到真实结果时必须拒绝生成搜索规则，不能把空验证码页当成功。';
+  if (stage === 'homepage') {
+    return common + '\n' + captcha;
+  }
+  if (stage === 'search') {
+    return common + '\n' + captcha + '\n封面规则：HTML 优先定位 img 元素并提取 @src；只有页面明确使用懒加载时才用 @data-src/@data-original，OpenGraph 可用 meta[property="og:image"]@content；禁止 @style、background-image、@html、@text 作为封面规则。';
+  }
+  if (stage === 'detail' || stage === 'discovery') {
+    const list = stage === 'discovery'
+      ? '发现/分类表格中可能同时存在最新章节和“加入书签/阅读”等操作链接；ruleExploreName 必须定位书名主链接，ruleExploreNoteUrl 必须提取同一书名主链接的 @href。table 列表优先使用 table.table tr!0 与 a[title]@title/a[title]@href，不能使用 td.N a@href 读取任意链接。'
+      : '';
+    return common + '\n' + list + '封面规则：HTML 优先定位 img 元素并提取 @src；只有页面明确使用懒加载时才用 @data-src/@data-original，OpenGraph 可用 meta[property="og:image"]@content；禁止 @style、background-image、@html、@text 作为封面规则，禁止把 CSS 声明或整段 HTML 当图片地址。目录链接必须提取当前页面真实的 @href。';
+  }
+  if (stage === 'toc') {
+    return common + '\n目录规则：ruleToc 命中章节列表，ruleTocTitle 与 ruleTocUrlItem 分别提取标题和同一章节链接的 @href；ruleTocNextTocUrl 只能是目录分页下一页。';
+  }
+  if (stage === 'content') {
+    return common + '\n正文规则：命中正文容器或段落节点，优先使用 @textNodes 保留段落边界；不要用 body/html 或把登录、验证、导航区域当正文。';
+  }
+  return common;
+}
+
 const HINTS: AiPromptHint[] = [
   {
     id: 'homepage.form-and-canonical',
@@ -36,7 +67,14 @@ const HINTS: AiPromptHint[] = [
     stages: ['homepage'],
     priority: 45,
     signals: [/登录|验证码|人工验证|challenge|password|captcha/i],
-    instruction: '区分登录页、验证码/人工验证页和普通首页；loginUrl 只有在页面明确提供登录入口时填写，验证码不要伪造 CSS 规则，交给 WebView 完成后重新取证。',
+    instruction: '区分登录页、Cloudflare/WAF 人工验证页、图片验证码页和普通首页；loginUrl 只有在页面明确提供登录入口时填写。图片验证码优先复用 java.getVerificationCode 配合 java.ajax/java.post；若只能由站点页面脚本弹窗处理，则请求交互 WebView，让用户完成后确认页面已出现真实结果，不能把空验证码页当普通首页。',
+  },
+  {
+    id: 'search.image-captcha',
+    stages: ['search'],
+    priority: 115,
+    signals: [/searchcode|__17mb|请输入验证码|验证码图片|captcha|图片验证码/i],
+    instruction: '搜索响应若只有验证码表单或表头而没有书籍行，判定为图片验证码门禁；已有 java.getVerificationCode + java.ajax/java.post 时走验证码对话框，页面内置脚本则在交互 WebView 中完成后重新取证，必须确认真实书籍行出现后才可继续，不得把空验证码页或未完成的 ##webView 当成功。',
   },
   {
     id: 'search.card-local-fields',
@@ -85,7 +123,7 @@ const HINTS: AiPromptHint[] = [
     stages: ['detail'],
     priority: 90,
     signals: [/封面|cover|目录|toc|固定 URL|数字 ID|href|src/i],
-    instruction: '封面规则必须提取图片 @src 并保留相对地址解析；目录规则必须从当前详情页动态提取完整目录入口 @href，不能硬编码本次样本的 URL 或数字 ID。',
+    instruction: '封面规则必须定位 img 并提取 @src（懒加载才用 @data-src/@data-original），保留相对地址解析；禁止 @style、background-image、@html 或 @text。目录规则必须从当前详情页动态提取完整目录入口 @href，不能硬编码本次样本的 URL 或数字 ID。',
   },
   {
     id: 'toc.explicit-title-href',

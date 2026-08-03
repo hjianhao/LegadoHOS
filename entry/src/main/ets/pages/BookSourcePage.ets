@@ -20,6 +20,8 @@ import { AppBackButton } from '../components/common/AppTitleBar';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { CaptchaDialog } from '../components/reader/CaptchaDialog';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
+import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { image } from '@kit.ImageKit';
 
 @Entry
@@ -68,6 +70,8 @@ export struct BookSourcePage {
   private lastCheckError_: string = '';
   private checkConfigOpening_: boolean = false;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
+  private challengeDlg?: CustomDialogController;
   private checkListener_: (snapshot: SourceCheckSnapshot) => void = (snapshot: SourceCheckSnapshot): void => {
     this.applyCheckSnapshot_(snapshot);
   };
@@ -75,6 +79,7 @@ export struct BookSourcePage {
   aboutToAppear(): void {
     this.isActive_ = true;
     this.registerCaptchaHandler_();
+    this.registerInteractiveFetcher_();
     this.checkService_.subscribe(this.checkListener_);
     this.importDlg = new CustomDialogController({
       builder: ImportSourceDialog({
@@ -95,6 +100,7 @@ export struct BookSourcePage {
   onPageShow(): void {
     this.isActive_ = true;
     this.registerCaptchaHandler_();
+    this.registerInteractiveFetcher_();
     this.checkService_.subscribe(this.checkListener_);
     // 首次进入由 aboutToAppear 负责加载，避免两个生命周期并发查询后旧结果覆盖新结果。
     if (!this.isLoading || this.sources.length > 0) void this.load();
@@ -107,6 +113,14 @@ export struct BookSourcePage {
     if (JsExpressionEvaluator.captchaHandler === this.captchaHandler_) {
       JsExpressionEvaluator.captchaHandler = null;
     }
+    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+      WebViewFetcher.interactiveFetcher = null;
+    }
+    if (WebViewFetcher.interactiveResolve) {
+      WebViewFetcher.interactiveResolve('');
+      WebViewFetcher.interactiveResolve = null;
+    }
+    WebViewFetcher.cancelPending();
   }
 
   private registerCaptchaHandler_(): void {
@@ -128,6 +142,33 @@ export struct BookSourcePage {
       };
     }
     JsExpressionEvaluator.captchaHandler = this.captchaHandler_;
+  }
+
+  /**
+   * 书源管理页的批量校验也可能遇到图片验证码/Cloudflare 挑战。
+   * Agent、搜索页使用的是同一套交互 WebView；如果这里不注册，
+   * SourceExecutor 只能把验证码页面当作普通 HTTP 失败处理。
+   */
+  private registerInteractiveFetcher_(): void {
+    if (!this.interactiveFetcher_) {
+      this.interactiveFetcher_ = (url: string): Promise<string> =>
+        this.openInteractiveWebView_(url);
+    }
+    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
+  }
+
+  private openInteractiveWebView_(url: string): Promise<string> {
+    return new Promise<string>((resolve: (html: string) => void) => {
+      this.checkCurrentMessage = '等待完成网站验证…';
+      WebViewFetcher.interactiveResolve = resolve;
+      this.challengeDlg = new CustomDialogController({
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        autoCancel: false,
+        customStyle: true,
+        alignment: DialogAlignment.Center,
+      });
+      this.challengeDlg.open();
+    });
   }
 
   private async load(): Promise<void> {

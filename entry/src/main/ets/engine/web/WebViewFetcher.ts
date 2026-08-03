@@ -24,6 +24,10 @@ export class WebViewFetcher {
   private static controller: web_webview.WebviewController | null = null;
   private static pendingResolve: ((result: WebViewFetchResult) => void) | null = null;
   private static pendingReject: ((err: Error) => void) | null = null;
+  /** 当前 fetch 使用的 controller；页面销毁后据此识别遗留的挂起请求。 */
+  private static pendingController: web_webview.WebviewController | null = null;
+  /** startFetch 发起时刻；onPageEnd 缺失时兜底提取的计时基准。 */
+  private static fetchStartedAt: number = 0;
   private static pendingUrl: string = '';
   private static timeoutId: number = -1;
   // 追踪页面加载次数（处理重定向场景）
@@ -34,6 +38,8 @@ export class WebViewFetcher {
   private static activeNavigationUrls: Set<string> = new Set();
   // 轮询定时器
   private static pollIntervalId: number = -1;
+  /** 排队等待的最长时间；上游 WebView 卡住时不能让后续请求无限排队。 */
+  private static readonly QUEUE_WAIT_TIMEOUT_MS: number = 8000;
   // 请求队列：排队等待的 fetch（WebView 同时只能处理一个）
   private static requestQueue: Array<{
     url: string;
@@ -247,7 +253,16 @@ export class WebViewFetcher {
     if (WebViewFetcher.pendingReject) {
       console.info('[WebViewFetcher] Previous fetch still pending, queueing request');
       return new Promise((resolve, reject) => {
-        WebViewFetcher.requestQueue.push({ url, timeoutMs, headers, resolve, reject });
+        const entry = { url, timeoutMs, headers, resolve, reject };
+        WebViewFetcher.requestQueue.push(entry);
+        // 排队请求必须有自己的等待上限：上游 fetch 若因页面销毁/控制器失效
+        // 卡住，后续请求不能无限排队，应及时失败让调用方走 HTTP 兜底。
+        setTimeout(() => {
+          const index = WebViewFetcher.requestQueue.indexOf(entry);
+          if (index < 0) return; // 已被队列处理
+          WebViewFetcher.requestQueue.splice(index, 1);
+          reject(new Error('WebView queue wait timeout'));
+        }, WebViewFetcher.QUEUE_WAIT_TIMEOUT_MS);
       });
     }
 
@@ -258,9 +273,19 @@ export class WebViewFetcher {
   private static startFetch(url: string, timeoutMs: number,
     headers: Record<string, string>): Promise<WebViewFetchResult> {
     return new Promise((resolve: (result: WebViewFetchResult) => void, reject: (err: Error) => void) => {
+      const controller = WebViewFetcher.controller;
+      if (!controller) {
+        // 没有可用的 WebView（页面销毁后尚未重新注册）：立即失败并继续处理队列，
+        // 而不是让后续请求全部挂到超时。
+        reject(new Error('WebView not registered'));
+        WebViewFetcher.processNext();
+        return;
+      }
       WebViewFetcher.pendingResolve = resolve;
       WebViewFetcher.pendingReject = reject;
+      WebViewFetcher.pendingController = controller;
       WebViewFetcher.pendingUrl = url;
+      WebViewFetcher.fetchStartedAt = Date.now();
       WebViewFetcher.loadCount = 0;
       WebViewFetcher.lastPageEndAt = 0;
       WebViewFetcher.initialRequestUrl = url;
@@ -272,6 +297,7 @@ export class WebViewFetcher {
         WebViewFetcher.clearTimers();
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
         reject(new Error('WebView load timeout'));
         WebViewFetcher.processNext();
       }, timeoutMs);
@@ -287,8 +313,19 @@ export class WebViewFetcher {
           webHeaders.push({ headerKey: key, headerValue: headers[key] });
         }
       });
-      WebViewFetcher.controller!.setCustomUserAgent(userAgent);
-      WebViewFetcher.controller!.loadUrl(url, webHeaders);
+      try {
+        controller.setCustomUserAgent(userAgent);
+        controller.loadUrl(url, webHeaders);
+      } catch (e) {
+        // controller 已失效（组件销毁）时 loadUrl 会抛异常：清理状态并继续队列，
+        // 避免 promise 永不结算导致调用方挂死。
+        WebViewFetcher.clearTimers();
+        WebViewFetcher.pendingResolve = null;
+        WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
+        reject(new Error('WebView load failed: ' + ((e as Error).message || String(e))));
+        WebViewFetcher.processNext();
+      }
     });
   }
 
@@ -320,7 +357,9 @@ export class WebViewFetcher {
       const reject = WebViewFetcher.pendingReject;
       WebViewFetcher.pendingResolve = null;
       WebViewFetcher.pendingReject = null;
+      WebViewFetcher.pendingController = null;
       if (reject) reject(new Error('Too many redirects: ' + WebViewFetcher.redirectCount));
+      WebViewFetcher.processNext();
       return true; // 阻止加载
     }
 
@@ -483,26 +522,76 @@ export class WebViewFetcher {
   }
 
   /**
+   * 判断 HTML 是否已经包含小说详情/目录内容。
+   *
+   * 许多老站会把登录、注册和验证码表单隐藏在每个详情页里。仅凭
+   * `searchcode.php`、`__17mb_input` 或 password input 会把这种正常页面
+   * 错判为验证页。优先识别这些站点常见的详情容器，再决定是否需要交互。
+   */
+  static isLikelyBookDocumentHtml(html: string): boolean {
+    if (!html) return false;
+    const detailContainer = /<(?:article|main|section|div)\b[^>]*(?:id|class)=["'][^"']*(?:r_cons|r_tools|lastrecord|novel[_-]?list|book(?:info|[_-]?detail|[_-]?content)|chapter[_-]?list|catalog)[^"']*["']/i;
+    if (detailContainer.test(html)) return true;
+
+    // 兜底覆盖没有统一 class 命名的老站：页面同时有书籍标题、作者/简介/目录
+    // 文案和书籍链接时，视为详情页，而不是独立登录页。
+    const hasHeading = /<h[1-3]\b[^>]*>[\s\S]{1,300}<\/h[1-3]>/i.test(html);
+    const hasBookLabel = /作者|简介|目录|最新章节|book\s*detail|novel\s*info/i.test(html);
+    const hasBookLink = /href=["'][^"']*(?:bookbook|\/book(?:\/|[_-])|chapter|\/\d+\/\d+)[^"']*["']/i.test(html);
+    return hasHeading && hasBookLabel && hasBookLink;
+  }
+
+  /**
    * 判断当前 DOM 是否仍停留在验证码/WAF 输入页。
    * 不能仅凭 challenge-platform/cloudflare 字样判断：很多正常页面也会加载 Cloudflare 统计脚本。
    */
   static isInteractiveChallengeHtml(html: string): boolean {
     if (!html) return true;
-    // 这些标记属于真正的 Cloudflare/WAF 或已知验证码挑战页。
-    if (/_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证|searchcode\.php|__17mb_input/i
-      .test(html)) return true;
+    // 图片验证码成功后，页面脚本甚至可能保留 Cloudflare/验证码相关脚本，
+    // 但真实搜索结果已经出现；先识别结果，避免被脚本标记误判为未完成验证。
+    const hasSearchResultMarkup = /<table\b[^>]*class=["'][^"']*\btable\b[^"']*["'][\s\S]*<tr\b[\s\S]*<td\b[\s\S]*<a\b[^>]*href=/i.test(html) ||
+      /(?:book-coverlist|novel-row(?:-main)?|search[-_ ]?(?:item|result|row))/i.test(html);
+    // 这些标记属于真正的 Cloudflare/WAF 挑战页。
+    const hasStrongChallengeMarker = /_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证/i
+      .test(html);
+    if (hasStrongChallengeMarker && !hasSearchResultMarkup) return true;
+
+    // 起点等站点的 WAF 会先返回一个很短的 probe.js 探针页，页面没有
+    // Cloudflare 文案，也没有 onPageEnd 后的真实结果。若不识别它，校验会
+    // 把探针页当成普通空搜索页，随后一直等待隐藏 WebView 超时。
+    const hasProbeChallengeMarker = /(?:^|["'\/])(?:[A-Za-z0-9_-]+\/)?probe\.js(?:[?"'])/i.test(html) &&
+      /\bbuid\s*=\s*["']f{8,}["']/i.test(html);
+    if (hasProbeChallengeMarker && !hasSearchResultMarkup) return true;
+
+    // searchcode.php 和 __17mb_input 也是一些老站隐藏登录/注册表单的字段，
+    // 不能脱离页面上下文直接触发验证弹窗。详情页优先按普通页面处理；真正
+    // 的挑战页通常没有书籍详情 DOM，或会带 challenge/captcha/verification 容器。
+    const hasLegacyCaptchaMarker = /searchcode\.php|__17mb_input/i.test(html);
+    const hasBookMarkup = WebViewFetcher.isLikelyBookDocumentHtml(html);
+    // 图片验证码成功后，页面脚本可能仍保留 searchcode.php 和验证码代码，
+    // 但搜索结果表格已经出现。此时应视为验证完成，否则“验证完成”按钮
+    // 会永远把已成功的搜索页拦截掉。
+    const hasChallengeContainer = /(?:id|class)=["'][^"']*(?:challenge|captcha|verification)[^"']*["']/i.test(html);
+    if (hasLegacyCaptchaMarker && hasSearchResultMarkup) return false;
+    if (hasLegacyCaptchaMarker && hasBookMarkup && !hasChallengeContainer) return false;
+    if (hasLegacyCaptchaMarker && !hasBookMarkup) return true;
 
     // 不能仅凭“请输入验证码”判断挑战页：搬山人等站点会把注册表单
     // 隐藏在每个正常详情页中，注册表单也带有验证码占位文字。
     // 只有验证码输入控件/验证码图片与挑战表单同时出现时，才按普通
     // 验证码页处理；隐藏的登录/注册弹窗不触发交互验证。
-    const hasCaptchaText = /请输入验证码|验证码|captcha|verification\s*code/i.test(html);
+    // 不能把脚本变量（如 smcaptchaStatus）或普通英文属性误当作页面文案。
+    // 许多首页会预渲染登录二维码，HTML 中同时出现 captcha/code 字样，
+    // 但页面并没有要求用户验证。真正的验证码页应有明确的提示文案，或
+    // 配合下面严格的验证码控件标记出现。
+    // 不使用裸 `code`：qrcode-img、code 属性等正常元素会造成误判。
+    const hasCaptchaControl = /<(?:input|img|canvas)\b[^>]*(?:captcha|verification|verify|验证码|img[_-]?code)[^>]*>/i.test(html);
+    const hasCaptchaText = /请输入验证码|验证码|verification\s*code/i.test(html) ||
+      (/\bcaptcha\b/i.test(html) && hasCaptchaControl);
     if (!hasCaptchaText) return false;
-    const hasCaptchaControl = /<(?:input|img|canvas)\b[^>]*(?:captcha|verification|verify|验证码|code)[^>]*>/i.test(html);
     if (!hasCaptchaControl) return false;
     const hasHiddenLoginDialog = /<(?:form|div)\b[^>]*(?:login[_-]?regist|register_form|login_form)[^>]*>/i.test(html);
-    const hasBookMarkup = /<(?:article|main|section|div)\b[^>]*(?:novel|chapter|catalog|book)[_-]/i.test(html);
-    if (hasHiddenLoginDialog && hasBookMarkup && !/class=["'][^"']*(?:challenge|captcha|verification)[^"']*["']/i.test(html)) {
+    if (hasHiddenLoginDialog && hasBookMarkup && !hasChallengeContainer) {
       return false;
     }
     return true;
@@ -527,8 +616,13 @@ export class WebViewFetcher {
         const state = JSON.parse(decoded) as { readyState: string; title: string };
         // readyState complete 可能只是 WAF 探针页，探针随后会触发重载。
         // 页面结束后稳定 1.5 秒再提取；若发生 onPageEnd，稳定窗口会重新计时。
-        if (state.readyState === 'complete' &&
-          WebViewFetcher.lastPageEndAt > 0 && Date.now() - WebViewFetcher.lastPageEndAt >= 1500) {
+        // onPageEnd 从未触发（lastPageEndAt === 0）时，页面加载满 3 秒且
+        // readyState complete 也直接提取，避免控制器异常时挂到总超时。
+        if (state.readyState === 'complete' && (
+          (WebViewFetcher.lastPageEndAt > 0 &&
+            Date.now() - WebViewFetcher.lastPageEndAt >= 1500) ||
+          (WebViewFetcher.lastPageEndAt === 0 &&
+            Date.now() - WebViewFetcher.fetchStartedAt >= 3000))) {
           console.info('[WebViewFetcher] readyState=complete, extracting');
           WebViewFetcher.clearTimers();
           WebViewFetcher.extractAndResolve();
@@ -538,11 +632,27 @@ export class WebViewFetcher {
         }
       }).catch((_e: Error) => {
         console.warn('[WebViewFetcher] poll JS error (page probably closed)', _e.message);
+        // 轮询 JS 失败说明页面/控制器已不可用：立即结算当前请求并处理队列，
+        // 而不是挂到 startFetch 的总超时。
         WebViewFetcher.stopPolling();
+        WebViewFetcher.clearTimers();
+        const reject = WebViewFetcher.pendingReject;
+        WebViewFetcher.pendingResolve = null;
+        WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
+        if (reject) reject(new Error('WebView page closed: ' + _e.message));
+        WebViewFetcher.processNext();
       });
       } catch (_e) {
         console.warn('[WebViewFetcher] poll runJS error (page closed)', (_e as Error).message);
         WebViewFetcher.stopPolling();
+        WebViewFetcher.clearTimers();
+        const reject = WebViewFetcher.pendingReject;
+        WebViewFetcher.pendingResolve = null;
+        WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
+        if (reject) reject(new Error('WebView page closed: ' + ((_e as Error).message || String(_e))));
+        WebViewFetcher.processNext();
       }
     }, 500);
   }
@@ -558,11 +668,18 @@ export class WebViewFetcher {
   /** 取消所有待处理的 WebView 请求（页面退出时调用） */
   static cancelPending(): void {
     WebViewFetcher.stopPolling();
-    WebViewFetcher.controller = null;
+    WebViewFetcher.clearTimers();
+    // 挂起的请求必须结算，否则调用方会一直等待一个永远不会 resolve 的 Promise。
+    const reject = WebViewFetcher.pendingReject;
     WebViewFetcher.pendingResolve = null;
     WebViewFetcher.pendingReject = null;
+    WebViewFetcher.pendingController = null;
+    WebViewFetcher.controller = null;
+    if (reject) reject(new Error('WebView cancelled'));
     // 清除等待注册的回调
     WebViewFetcher.readyWaiters = [];
+    // 队列请求仍用新页面注册的控制器继续，这里不清理。
+    WebViewFetcher.processNext();
   }
 
   /** 清除所有定时器 */
@@ -603,6 +720,7 @@ export class WebViewFetcher {
         const resolve = WebViewFetcher.pendingResolve;
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
         if (resolve) {
           console.info('[WebViewFetcher] Extracted', decodedHtml.length, 'chars from', finalUrl.substring(0, 60));
           resolve({ html: decodedHtml, finalUrl });
@@ -614,9 +732,35 @@ export class WebViewFetcher {
         const reject = WebViewFetcher.pendingReject;
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
+        WebViewFetcher.pendingController = null;
         if (reject) reject(err);
         WebViewFetcher.processNext();
       });
+  }
+
+  /**
+   * WebView 组件销毁时调用：结算仍挂在旧控制器上的请求并清理全局状态，
+   * 避免页面切换后遗留的 pending fetch 一直占用 WebView，导致后续请求
+   * 排队等待甚至加载到已销毁的控制器上（表现为 loadUrl 后没有任何页面
+   * 事件，直到总超时）。
+   */
+  static release(controller: web_webview.WebviewController): void {
+    // 先结算属于该控制器的挂起请求（无论当前注册的是谁），让队列立即继续。
+    if (WebViewFetcher.pendingController === controller && WebViewFetcher.pendingReject) {
+      console.info('[WebViewFetcher] Releasing pending fetch for destroyed WebView');
+      WebViewFetcher.clearTimers();
+      const reject = WebViewFetcher.pendingReject;
+      WebViewFetcher.pendingResolve = null;
+      WebViewFetcher.pendingReject = null;
+      WebViewFetcher.pendingController = null;
+      if (reject) reject(new Error('WebView page destroyed'));
+      WebViewFetcher.processNext();
+    }
+    // 该控制器仍是当前注册的（新页面尚未注册）：置空让后续请求快速失败，
+    // 而不是继续向已销毁的组件 loadUrl。
+    if (WebViewFetcher.controller === controller) {
+      WebViewFetcher.controller = null;
+    }
   }
 
   /** 清理所有状态（页面销毁时调用） */
@@ -624,6 +768,7 @@ export class WebViewFetcher {
     WebViewFetcher.clearTimers();
     WebViewFetcher.pendingResolve = null;
     WebViewFetcher.pendingReject = null;
+    WebViewFetcher.pendingController = null;
     WebViewFetcher.pendingUrl = '';
     WebViewFetcher.activeNavigationUrls.clear();
     WebViewFetcher.requestQueue = [];

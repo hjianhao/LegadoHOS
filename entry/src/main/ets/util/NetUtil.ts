@@ -562,7 +562,11 @@ export class NetUtil {
     return {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/json,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Encoding': 'identity',
+      // 部分站点会按 Accept-Encoding 协商返回不同版本：只支持 identity 时返回
+      // 降级页面（例如必去小说网的桌面版不含搜索表单，浏览器版才返回完整
+      // 移动页）。声明 gzip 让服务器返回完整内容，decodeBody 已有解压兜底；
+      // 若 RCP 已自动解压，looksCompressed 不会命中，行为不变。
+      'Accept-Encoding': 'gzip, deflate',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       ...(headers || {}),
     };

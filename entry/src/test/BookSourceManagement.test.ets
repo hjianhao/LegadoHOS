@@ -11,7 +11,7 @@ import {
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
-  preferCompleteBookName
+  preferCompleteBookName, normalizeMediaUrlValue
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -19,9 +19,10 @@ import {
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
 import {
   inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
-  isLikelyAiBookDetailUrl, isPlausibleAiBookInfo, materializeAgentRequest,
-  prepareSourceAgentHtml
+  isLikelyAiBookDetailUrl, isLikelyImageCaptchaPage, isPlausibleAiBookInfo,
+  isUsableAiCoverRule, correctAiCoverRuleFromHtml, materializeAgentRequest, prepareSourceAgentHtml
 } from '../main/ets/engine/ai/AiSourceAgent';
+import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 import { WebViewFetcher } from '../main/ets/engine/web/WebViewFetcher';
 
@@ -94,6 +95,75 @@ export default function bookSourceManagementTest() {
       const normalPage = '<table class="table"><tr><td><a href="/book/1">书名</a></td></tr></table>' +
         '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>';
       expect(WebViewFetcher.isInteractiveChallengeHtml(normalPage)).assertFalse();
+      // 七猫首页会预渲染登录二维码，并在脚本中保留 smcaptchaStatus；这些只是
+      // 登录/统计元数据，不代表当前页面要求用户完成验证码验证。
+      const normalHomepage = '<img class="qrcode-img" src="/login-code.png">' +
+        '<script>var smcaptchaStatus = false;</script><h1>七猫小说</h1>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(normalHomepage)).assertFalse();
+      const completedSearch = '<script>var url_search="/searchcode.php?t=1"</script>' +
+        '<table class="table"><tr><td><a href="/0/book1/">四合院</a></td></tr></table>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(completedSearch)).assertFalse();
+      expect(WebViewFetcher.isInteractiveChallengeHtml(
+        completedSearch + '<script>var _cf_chl_opt = {};</script>')).assertFalse();
+    });
+
+    it('doesNotTreatBookDetailHiddenLoginAsVerification', 0, () => {
+      // 九五书包等老站会在每个详情页中嵌入隐藏登录/注册表单，表单同时带有
+      // searchcode.php、__17mb_input 和“验证码”字段，但页面本身是可解析的书籍主页。
+      const detail = '<div class="info"><h1>从四合院开始的影视穿越</h1>' +
+        '<div class="author">作者：测试作者</div></div>' +
+        '<div class="r_cons">作品简介：这是一本小说</div>' +
+        '<div class="r_tools"><a href="/167/167031/">目录</a></div>' +
+        '<div id="login_regist"><form class="login_form" action="/login.php">' +
+        '<input type="password"><input id="__17mb_input" title="请输入验证码">' +
+        '<script src="/searchcode.php?t=1"></script></form></div>';
+      expect(WebViewFetcher.isLikelyBookDocumentHtml(detail)).assertTrue();
+      expect(WebViewFetcher.isInteractiveChallengeHtml(detail)).assertFalse();
+      expect(needsWebViewDocument(detail, 'https://example.com/bookbook/167031.html')).assertFalse();
+    });
+
+    it('normalizesCssBackgroundImageForBookCover', 0, () => {
+      expect(normalizeMediaUrlValue(
+        "background-image: url('https://www.pinshuzhai.com/wp-content/uploads/cover.jpg')"))
+        .assertEqual('https://www.pinshuzhai.com/wp-content/uploads/cover.jpg');
+      expect(normalizeMediaUrlValue('url("/images/cover.webp")'))
+        .assertEqual('/images/cover.webp');
+      expect(normalizeMediaUrlValue('https://example.com/cover.jpg'))
+        .assertEqual('https://example.com/cover.jpg');
+    });
+
+    it('requiresAiCoverRulesToExtractImageUrls', 0, () => {
+      expect(isUsableAiCoverRule('div.cover@img@src')).assertTrue();
+      expect(isUsableAiCoverRule('img@data-original')).assertTrue();
+      expect(isUsableAiCoverRule('meta[property="og:image"]@content')).assertTrue();
+      expect(isUsableAiCoverRule('div.cover@style')).assertFalse();
+      expect(isUsableAiCoverRule('div.cover@html')).assertFalse();
+      expect(isUsableAiCoverRule('background-image: url(cover.jpg)')).assertFalse();
+      expect(supportedAiRuleContract('detail')).assertContain('禁止 @style');
+    });
+
+    it('repairsInvalidAiCoverRulesFromPageEvidence', 0, () => {
+      const html = '<div class="book-cover"><img data-original="/cover.jpg" ' +
+        'alt="封面"></div>';
+      expect(correctAiCoverRuleFromHtml('div.book-cover@style', html))
+        .assertEqual('div.book-cover img@data-original');
+      expect(correctAiCoverRuleFromHtml('background-image: url(cover.jpg)',
+        '<table class="table"><tr><td>书名</td></tr></table>')).assertEqual('');
+      expect(correctAiCoverRuleFromHtml('div.cover@style',
+        '<img src="/logo.png" alt="站点 Logo">')).assertEqual(null);
+    });
+
+    it('rejectsImageCaptchaWithoutSubmitFlowAndUnsupportedSelectors', 0, () => {
+      const captchaPage = '<script>var url_search="/searchcode.php?t=1"</script>' +
+        '<input id="__17mb_input" title="请输入验证码">' +
+        '<table class="table"><tr><th>类型</th><th>书名</th></tr></table>';
+      expect(isLikelyImageCaptchaPage(captchaPage)).assertTrue();
+      expect(isLikelyImageCaptchaPage(
+        '<li class="dba_bookcase"><a href="/mybook.html">书架</a></li>' + captchaPage)).assertTrue();
+      expect(isLikelyImageCaptchaPage(
+        '<table class="table"><tr><td><a href="/book/1">四合院</a></td></tr></table>' +
+        '<input id="__17mb_input" title="请输入验证码">')).assertFalse();
+      expect(supportedAiRuleContract('search')).assertContain('java.getVerificationCode');
     });
 
     it('rejectsNavigationPagesAndTextRulesFromAiSourceSamples', 0, () => {
@@ -101,6 +171,8 @@ export default function bookSourceManagementTest() {
         'https://www.pinshuzhai.com/bookcat/shuxiangwenku')).assertFalse();
       expect(isLikelyAiBookDetailUrl(
         'https://www.pinshuzhai.com/book/1648.html')).assertTrue();
+      expect(isLikelyAiBookDetailUrl(
+        'https://www.ghjun.com/mybook.html')).assertFalse();
       expect(isAiLinkExtractionRule('div.bookinfo h4 a')).assertFalse();
       expect(isAiLinkExtractionRule('div.bookinfo h4 a@text')).assertFalse();
       expect(isAiLinkExtractionRule('div.bookinfo h4 a@href')).assertTrue();

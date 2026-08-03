@@ -493,16 +493,37 @@ searchAuthor: td.1@text%%td.2@text
 - `content[i - 1]` — 修复引用 `jsonStr` 而非 `content` 的 bug
 - 手动解析器支持单引号、body 值含逗号的情况
 
-### 10.3 未实现的功能
+### 10.3 AI 生成书源的字段约束
+
+AI 生成器使用本节约束生成规则，并在真实页面上再次执行验证：
+
+| 字段 | 推荐规则 | 禁止规则 |
+|------|----------|----------|
+| HTML 封面 | `img@src`；懒加载使用 `img@data-src` 或 `img@data-original` | `@style`、`background-image`、`@html`、`@text` |
+| OpenGraph 封面 | `meta[property="og:image"]@content` | 整个 `meta`/`head` 的文本或 HTML |
+| 详情目录入口 | 当前详情页中的 `a@href` | 样本书固定 URL 或数字 ID |
+| JSON 封面 | `$.cover`、`$.cover_url` 等 URL 字段 | CSS 选择器或整段 JSON 文本 |
+
+搜索页如果只返回验证码表单/表头（例如 `searchcode.php`、`__17mb_input`），必须有
+真实可执行的 `java.getVerificationCode` 配合 `java.ajax`/`java.post` 提交流程；
+或者必须在交互 WebView 中由用户完成站点页面自己的验证码脚本，并确认真实书籍行
+已经出现。不能把尚未完成的验证码页当成搜索结果；两种方式都失败时，Agent 必须
+拒绝生成该搜索规则，并提示改用已验证书源或人工补写 JS。
+
+`@style` 只返回原始 CSS 属性值，例如
+`background-image: url('...')`，不是图片 URL；即使执行器会做兼容提取，AI
+规则仍必须优先选择实际图片元素的 `@src`。
+
+### 10.4 未实现的功能
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | `:nth-of-type()` | ❌ | CSS 伪类未实现 |
 | `:eq()` | ❌ | jQuery 式位置选择器 |
 | `:first` / `:last` | ❌ | CSS 伪类 |
-| CSS 逗号分组 | ❌ | `.s1,.s7` 不支持 |
+| CSS 逗号分组 | ✅ | 由 HtmlParser 分组后按首个有结果的选择器返回 |
 | XPath 引擎 | ❌ | `//` 转 CSS 可能失败 |
-| `@textNodes` | ❌ | 非标准属性后缀未识别 |
+| `@textNodes` | ✅ | 保留元素直接文本节点 |
 | `@put` / `@get` 变量 | ❌ | 跨段变量引用 |
 
 ---
