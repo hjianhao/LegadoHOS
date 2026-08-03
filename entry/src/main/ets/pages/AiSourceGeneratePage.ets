@@ -14,6 +14,21 @@ import { BookSource } from '../model/BookSource';
 import { changedSourceFields, SourceRevisionService } from '../service/SourceRevisionService';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import pasteboard from '@ohos.pasteboard';
+import { SettingsStore } from '../data/preferences/SettingsStore';
+import { AiImportPreviewDialog, AiImportPreviewResult } from '../components/AiImportPreviewDialog';
+import {
+  ONLINE_SEARCH_ENGINES, OnlineSearchEngine, buildOnlineSearchUrl, getOnlineSearchEngineName,
+  isOnlineSearchResultPage, normalizeOnlineSearchEngine
+} from '../service/OnlineSearchEngineService';
+import { AiSourceDiscoveryService } from '../service/AiSourceDiscoveryService';
+import { AiSourceBatchGenerateService } from '../service/AiSourceBatchGenerateService';
+import { AiGeneratedSourceSaveService } from '../service/AiGeneratedSourceSaveService';
+import {
+  AiSourceBatchSummary, AiSourceCandidate, createAiSourceBatchSummary
+} from '../model/AiSourceDiscovery';
+
+const AI_DISCOVERY_SEARCH_OPTIONS: SelectOption[] = ONLINE_SEARCH_ENGINES.map(
+  (item: OnlineSearchEngine): SelectOption => ({ value: item.name }));
 
 @CustomDialog
 struct AiSourceSaveDialog {
@@ -84,8 +99,22 @@ struct AiSourceGeneratePage {
   @State invalidGroups: string[] = [];
   @State repairLoadError: string = '';
   @State isSaving: boolean = false;
+  @State createTab_: number = 0;
+  @State discoveryKeyword_: string = '';
+  @State discoveryEngine_: string = 'bing';
+  @State showDiscoveryBrowser_: boolean = false;
+  @State discoveryBrowserUrl_: string = '';
+  @State discoveryCandidates_: AiSourceCandidate[] = [];
+  @State discoveryPhase_: string = 'idle';
+  @State discoveryError_: string = '';
+  @State allowUpdateExisting_: boolean = false;
+  @State batchRunning_: boolean = false;
+  @State batchStopRequested_: boolean = false;
+  @State batchSummary_: AiSourceBatchSummary = createAiSourceBatchSummary();
 
   private agent_: AiSourceAgent | null = null;
+  private batchService_: AiSourceBatchGenerateService | null = null;
+  private pageActive_: boolean = false;
   private repairSource_: BookSource | null = null;
   private repairSourceUrl_: string = '';
   private challengeDlg?: CustomDialogController;
@@ -94,6 +123,8 @@ struct AiSourceGeneratePage {
   private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
 
   aboutToAppear(): void {
+    this.pageActive_ = true;
+    void this.loadDiscoveryPrefs_();
     this.registerCaptchaHandler_();
     if (!this.interactiveFetcher_) {
       this.interactiveFetcher_ = (url: string): Promise<string> =>
@@ -134,6 +165,8 @@ struct AiSourceGeneratePage {
   }
 
   aboutToDisappear(): void {
+    this.pageActive_ = false;
+    if (this.batchRunning_) this.batchService_?.requestStop();
     if (JsExpressionEvaluator.captchaHandler === this.captchaHandler_) {
       JsExpressionEvaluator.captchaHandler = null;
     }
@@ -144,6 +177,29 @@ struct AiSourceGeneratePage {
       WebViewFetcher.interactiveResolve('');
       WebViewFetcher.interactiveResolve = null;
     }
+  }
+
+  private async loadDiscoveryPrefs_(): Promise<void> {
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      this.discoveryEngine_ = normalizeOnlineSearchEngine(
+        await settings.get<string>('online_search_engine', 'bing'));
+      this.createTab_ = await settings.get<number>('ai_source_create_tab', 0) === 1 ? 1 : 0;
+    } catch (_e) {
+      this.discoveryEngine_ = 'bing';
+      this.createTab_ = 0;
+    }
+    if (this.repairMode) this.createTab_ = 0;
+  }
+
+  private async persistDiscoveryPrefs_(): Promise<void> {
+    try {
+      const settings = SettingsStore.getInstance();
+      await settings.init(UiUtil.getHostContext(this.getUIContext()));
+      await settings.put('online_search_engine', this.discoveryEngine_);
+      await settings.put('ai_source_create_tab', this.createTab_);
+    } catch (_e) { /* 偏好写入失败不影响本次任务 */ }
   }
 
   private registerCaptchaHandler_(): void {
@@ -260,6 +316,264 @@ struct AiSourceGeneratePage {
     }
   }
 
+  private isAnyTaskRunning_(): boolean {
+    return this.isAnalyzing || this.batchRunning_ || this.discoveryPhase_ === 'extracting';
+  }
+
+  private switchCreateTab_(tab: number): void {
+    if (this.repairMode || this.isAnyTaskRunning_() || tab === this.createTab_) return;
+    this.createTab_ = tab;
+    this.discoveryError_ = '';
+    void this.persistDiscoveryPrefs_();
+  }
+
+  private normalizedDiscoveryKeyword_(): string {
+    return this.discoveryKeyword_.replace(/[\s\u3000,:：;；。！？!?]+$/g, '').trim();
+  }
+
+  private async openDiscoveryBrowser_(): Promise<void> {
+    const keyword = this.normalizedDiscoveryKeyword_().trim();
+    if (!keyword) {
+      UiUtil.showToast(this.getUIContext(), { message: '请输入书名', duration: 1500 });
+      return;
+    }
+    if (this.isAnyTaskRunning_()) return;
+    this.discoveryKeyword_ = keyword;
+    this.discoveryBrowserUrl_ = buildOnlineSearchUrl(this.discoveryEngine_, keyword);
+    this.discoveryPhase_ = 'browser';
+    this.discoveryError_ = '';
+    this.showDiscoveryBrowser_ = true;
+    await this.persistDiscoveryPrefs_();
+  }
+
+  private closeDiscoveryBrowser_(): void {
+    this.showDiscoveryBrowser_ = false;
+    this.discoveryPhase_ = this.discoveryCandidates_.length > 0 ? 'candidates' : 'idle';
+  }
+
+  private async handleDiscoveryPreview_(result: AiImportPreviewResult): Promise<void> {
+    if (!isOnlineSearchResultPage(result.url)) {
+      this.discoveryError_ = '请返回搜索结果页后再提取网站';
+      return;
+    }
+    if (!result.links || result.links.length === 0) {
+      this.discoveryError_ = '当前搜索结果页没有可用链接，请刷新后重试';
+      return;
+    }
+    this.discoveryPhase_ = 'extracting';
+    this.discoveryError_ = '';
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const sources = await new BookSourceTable(AppDatabase.getInstance().rdbStore).getAllSources();
+      const candidates = AiSourceDiscoveryService.buildCandidates(
+        this.discoveryEngine_, this.normalizedDiscoveryKeyword_(), result.url, result.links, sources);
+      if (candidates.length === 0) {
+        this.discoveryError_ = '未发现可用公网网站，请换一个搜索引擎或搜索词';
+        this.discoveryPhase_ = 'error';
+        return;
+      }
+      this.discoveryCandidates_ = candidates;
+      this.discoveryPhase_ = 'candidates';
+      this.showDiscoveryBrowser_ = false;
+    } catch (e) {
+      this.discoveryError_ = '提取网站失败：' + ((e as Error).message || String(e));
+      this.discoveryPhase_ = 'error';
+    }
+  }
+
+  private selectionCount_(): number {
+    return this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean => item.selected).length;
+  }
+
+  private cloneCandidate_(item: AiSourceCandidate, selected?: boolean,
+    homepageUrl?: string, safe?: boolean, duplicate?: 'none' | 'exact' | 'same_host'): AiSourceCandidate {
+    return {
+      id: item.id,
+      engineId: item.engineId,
+      keyword: item.keyword,
+      resultPageUrl: item.resultPageUrl,
+      displayName: item.displayName,
+      landingUrl: item.landingUrl,
+      homepageUrl: homepageUrl === undefined ? item.homepageUrl : homepageUrl,
+      normalizedSiteKey: item.normalizedSiteKey,
+      host: item.host,
+      hitCount: item.hitCount,
+      samples: item.samples.slice(),
+      confidence: item.confidence,
+      selected: selected === undefined ? item.selected : selected,
+      safe: safe === undefined ? item.safe : safe,
+      duplicate: duplicate === undefined ? item.duplicate : duplicate,
+      existingSourceId: item.existingSourceId,
+      existingSourceName: item.existingSourceName,
+      status: item.status,
+      currentStep: item.currentStep,
+      stepSummary: item.stepSummary,
+      logs: item.logs.slice(),
+      savedSourceId: item.savedSourceId,
+      error: item.error,
+    };
+  }
+
+  private toggleCandidate_(id: string, selected: boolean): void {
+    if (selected && this.selectionCount_() >= 10) {
+      UiUtil.showToast(this.getUIContext(), { message: '一次最多选择 10 个网站', duration: 1800 });
+      return;
+    }
+    this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
+      item.id === id ? this.cloneCandidate_(item, selected) : item);
+  }
+
+  private updateCandidateHomepage_(id: string, value: string): void {
+    const homepage = value.trim();
+    const normalized = AiSourceDiscoveryService.normalizeHomepageUrl(homepage);
+    const safe = !!normalized && AiSourceDiscoveryService.isCandidateUrl(homepage);
+    this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate => {
+      if (item.id !== id) return item;
+      const next = this.cloneCandidate_(item, safe ? item.selected : false, homepage, safe,
+        safe ? item.duplicate : 'none');
+      next.normalizedSiteKey = AiSourceDiscoveryService.normalizedSiteKey(homepage);
+      return next;
+    });
+  }
+
+  private selectAllNewCandidates_(): void {
+    let count = 0;
+    this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate => {
+      if (!item.safe || item.duplicate !== 'none') return this.cloneCandidate_(item, false);
+      if (count >= 10) return this.cloneCandidate_(item, false);
+      count++;
+      return this.cloneCandidate_(item, true);
+    });
+    if (this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean =>
+      item.safe && item.duplicate === 'none').length > 10) {
+      UiUtil.showToast(this.getUIContext(), { message: '已选择前 10 个新网站', duration: 1600 });
+    }
+  }
+
+  private clearCandidateSelection_(): void {
+    this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
+      this.cloneCandidate_(item, false));
+  }
+
+  private async startBatchGenerate_(): Promise<void> {
+    if (this.batchRunning_) return;
+    const selected = this.selectionCount_();
+    if (selected <= 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '请先选择至少一个网站', duration: 1600 });
+      return;
+    }
+    if (selected > 10) {
+      UiUtil.showToast(this.getUIContext(), { message: '一次最多选择 10 个网站', duration: 1800 });
+      return;
+    }
+    const result = await UiUtil.showDialog(this.getUIContext(), {
+      title: '开始批量生成？',
+      message: '即将依次分析 ' + selected.toString() + ' 个网站。每个网站都会真实执行搜索、详情、目录和正文验证，可能耗时较长并消耗多次 AI 请求。\n\n生成成功的书源会立即保存为“未启用”。',
+      buttons: [
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '开始生成', color: ThemeColors.primary(this.isDark) },
+      ],
+    });
+    if (result.index !== 1) return;
+    this.batchRunning_ = true;
+    this.batchStopRequested_ = false;
+    this.discoveryPhase_ = 'running';
+    this.batchSummary_ = createAiSourceBatchSummary();
+    this.batchService_ = new AiSourceBatchGenerateService();
+    try {
+      const summary = await this.batchService_.run(
+        UiUtil.getHostContext(this.getUIContext()), this.normalizedDiscoveryKeyword_(),
+        this.discoveryCandidates_, this.allowUpdateExisting_, {
+          onCandidateChanged: (candidate: AiSourceCandidate): void => {
+            if (!this.pageActive_) return;
+            this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
+              item.id === candidate.id ? candidate : item);
+          },
+          onSummaryChanged: (next: AiSourceBatchSummary): void => {
+            if (this.pageActive_) this.batchSummary_ = next;
+          },
+          onRequestWebView: (url: string, reason: string): Promise<string> =>
+            this.pageActive_ ? this.openInteractiveWebView_(url, reason) : Promise.resolve(''),
+          onBatchError: (message: string): void => {
+            if (this.pageActive_) UiUtil.showToast(this.getUIContext(), { message: message, duration: 2200 });
+          },
+        });
+      if (this.pageActive_) this.batchSummary_ = summary;
+      this.discoveryPhase_ = 'completed';
+    } catch (e) {
+      this.discoveryError_ = '批量任务失败：' + ((e as Error).message || String(e));
+      this.discoveryPhase_ = 'error';
+    } finally {
+      this.batchRunning_ = false;
+      this.batchService_ = null;
+    }
+  }
+
+  private requestBatchStop_(): void {
+    if (!this.batchRunning_) return;
+    this.batchStopRequested_ = true;
+    this.batchService_?.requestStop();
+  }
+
+  private async enableBatchCreated_(): Promise<void> {
+    if (this.batchSummary_.createdSourceIds.length === 0) return;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      for (const id of this.batchSummary_.createdSourceIds) await dao.toggleEnabled(id, true);
+      BookSourceChangeNotifier.notify();
+      UiUtil.showToast(this.getUIContext(), { message: '已启用本次新增书源', duration: 1800 });
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '启用失败：' + ((e as Error).message || String(e)), duration: 2200 });
+    }
+  }
+
+  private candidateDuplicateText_(candidate: AiSourceCandidate): string {
+    if (!candidate.safe) return '地址待确认';
+    if (candidate.duplicate === 'exact') return '已有书源';
+    if (candidate.duplicate === 'same_host') return '疑似重复';
+    return '新网站';
+  }
+
+  private candidateStatusText_(candidate: AiSourceCandidate): string {
+    if (candidate.status === 'created') return '已新增（未启用）';
+    if (candidate.status === 'updated') return '已更新';
+    if (candidate.status === 'unchanged') return '配置无变化';
+    if (candidate.status === 'skipped') return '已跳过';
+    if (candidate.status === 'failed') return '生成失败';
+    if (candidate.status === 'cancelled') return '未执行';
+    if (candidate.status === 'waiting_user') return '等待人工验证';
+    if (candidate.status === 'running') return '生成中';
+    return '等待中';
+  }
+
+  private batchProgressText_(): string {
+    const selected = this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean => item.selected);
+    const finished = selected.filter((item: AiSourceCandidate): boolean =>
+      item.status === 'created' || item.status === 'updated' || item.status === 'unchanged' ||
+      item.status === 'failed' || item.status === 'skipped' || item.status === 'cancelled').length;
+    const current = selected.find((item: AiSourceCandidate): boolean =>
+      item.status === 'running' || item.status === 'waiting_user');
+    if (!current) return finished.toString() + ' / ' + selected.length.toString();
+    return finished.toString() + ' / ' + selected.length.toString() + ' · 当前：' + (current.host || current.displayName) +
+      (current.stepSummary ? ' · ' + current.stepSummary : '');
+  }
+
+  private async copyBatchSummary_(): Promise<void> {
+    const lines: string[] = ['AI 搜书发现批量结果', '书名：' + this.discoveryKeyword_, ''];
+    for (const candidate of this.discoveryCandidates_) {
+      lines.push((candidate.host || candidate.displayName) + '：' + this.candidateStatusText_(candidate) +
+        (candidate.error || candidate.stepSummary ? '，' + (candidate.error || candidate.stepSummary) : ''));
+    }
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, lines.join('\n'));
+      await pasteboard.getSystemPasteboard().setData(data);
+      UiUtil.showToast(this.getUIContext(), { message: '结果摘要已复制', duration: 1500 });
+    } catch (_e) {
+      UiUtil.showToast(this.getUIContext(), { message: '复制结果摘要失败', duration: 1800 });
+    }
+  }
+
   private canUseResult_(): boolean {
     return !this.isAnalyzing && this.steps.length > AiStep.COMPILE &&
       this.steps[AiStep.COMPILE].status === 'done';
@@ -301,18 +615,11 @@ struct AiSourceGeneratePage {
     this.isSaving = true;
     try {
       await AppDatabase.getInstance().waitForInit();
-      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      const existing = await dao.getSourceByUrl(candidate.sourceUrl);
+      const existing = await AiGeneratedSourceSaveService.findExistingByNormalizedUrl(candidate.sourceUrl);
       if (!existing) {
-        const now = Date.now();
-        candidate.id = 0;
-        candidate.enabled = true;
-        candidate.createTime = candidate.createTime || now;
-        candidate.updateTime = now;
-        candidate.id = await dao.insertSource(candidate);
-        BookSourceChangeNotifier.notify();
+        const result = await AiGeneratedSourceSaveService.createGeneratedSource(candidate, true);
         UiUtil.showToast(this.getUIContext(), {
-          message: '书源已新增并启用', duration: 1800
+          message: result.message, duration: 1800
         });
         UiUtil.back(this.getUIContext());
         return;
@@ -340,10 +647,10 @@ struct AiSourceGeneratePage {
       });
       if (result.index !== 1) return;
 
-      const applied = await SourceRevisionService.applyRepair(
+      const applied = await AiGeneratedSourceSaveService.updateGeneratedSource(
         existing, candidate, 'AI 生成书源：更新已有同网址书源', false);
       UiUtil.showToast(this.getUIContext(), {
-        message: '书源已更新，修改 ' + applied.length + ' 个字段', duration: 2000
+        message: applied.message, duration: 2000
       });
       UiUtil.back(this.getUIContext());
     } catch (e) {
@@ -460,6 +767,176 @@ struct AiSourceGeneratePage {
     }
   }
 
+  @Builder
+  private buildDiscoveryPanel_() {
+    Column({ space: 10 }) {
+      if (this.discoveryCandidates_.length === 0) {
+        Text('书名').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+        TextInput({ text: this.discoveryKeyword_, placeholder: '输入要发现网站的书名' })
+          .width('100%').height(46).fontSize(15)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .placeholderColor(ThemeColors.secondaryText(this.isDark))
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(12)
+          .onChange((value: string): void => { this.discoveryKeyword_ = value; })
+        Row() {
+          Text('搜索引擎').fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
+          Select(AI_DISCOVERY_SEARCH_OPTIONS)
+            .selected(ONLINE_SEARCH_ENGINES.findIndex((item): boolean => item.id === this.discoveryEngine_))
+            .value(getOnlineSearchEngineName(this.discoveryEngine_))
+            .height(40).fontColor(ThemeColors.primary(this.isDark))
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .onSelect((index: number): void => {
+              if (index < 0 || index >= ONLINE_SEARCH_ENGINES.length) return;
+              this.discoveryEngine_ = ONLINE_SEARCH_ENGINES[index].id;
+              void this.persistDiscoveryPrefs_();
+            })
+        }.width('100%')
+        Button('打开搜索结果并发现网站').width('100%').height(48).borderRadius(24)
+          .fontSize(15).fontColor(ThemeColors.onPrimary(this.isDark))
+          .backgroundColor(ThemeColors.primary(this.isDark))
+          .enabled(!this.isAnyTaskRunning_())
+          .onClick((): void => { void this.openDiscoveryBrowser_(); })
+        Text('这里只发现并生成书源，不会把搜索到的书加入书架。')
+          .fontSize(12).lineHeight(18).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+        if (this.discoveryError_) {
+          Text(this.discoveryError_).fontSize(12).lineHeight(18)
+            .fontColor(ThemeColors.error(this.isDark)).width('100%')
+        }
+      } else {
+        this.buildDiscoveryCandidates_()
+      }
+    }.width('100%').layoutWeight(1).padding({ left: 16, right: 16, top: 10, bottom: 10 })
+  }
+
+  @Builder
+  private buildDiscoveryCandidates_() {
+    Column({ space: 8 }) {
+      if (this.discoveryError_) {
+        Text(this.discoveryError_).fontSize(12).lineHeight(18)
+          .fontColor(ThemeColors.error(this.isDark)).width('100%')
+      }
+      if (this.batchRunning_ || this.discoveryPhase_ === 'completed') {
+        Column({ space: 4 }) {
+          Text(this.batchRunning_ ? '批量生成进行中' : '批量生成完成')
+            .fontSize(16).fontWeight(FontWeight.Medium)
+            .fontColor(ThemeColors.onSurface(this.isDark)).width('100%')
+          Text('新增 ' + this.batchSummary_.created.toString() + ' · 更新 ' +
+            this.batchSummary_.updated.toString() + ' · 无变化 ' + this.batchSummary_.unchanged.toString() +
+            ' · 失败 ' + this.batchSummary_.failed.toString() + ' · 跳过 ' +
+            this.batchSummary_.skipped.toString() + ' · 未执行 ' + this.batchSummary_.cancelled.toString())
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+          if (this.batchRunning_) {
+            Text(this.batchProgressText_()).fontSize(12)
+              .fontColor(ThemeColors.primary(this.isDark)).width('100%').maxLines(2)
+          }
+          if (this.batchRunning_) {
+            Text(this.batchStopRequested_ ? '当前网站结束后将停止后续任务' : '网站按顺序执行，当前项完成后才会开始下一项')
+              .fontSize(12).fontColor(ThemeColors.primary(this.isDark)).width('100%')
+            Button('完成当前网站后停止').height(36).borderRadius(18)
+              .fontSize(12).fontColor(ThemeColors.onPrimary(this.isDark))
+              .backgroundColor(ThemeColors.primary(this.isDark))
+              .enabled(!this.batchStopRequested_)
+              .onClick((): void => { this.requestBatchStop_(); })
+          }
+        }.width('100%').padding(12).backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(12)
+      }
+
+      Row() {
+        Text('发现 ' + this.discoveryCandidates_.length.toString() + ' 个候选网站 · 已选择 ' +
+          this.selectionCount_().toString()).fontSize(13)
+          .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+        Button('选择新网站').height(32).fontSize(11).borderRadius(16)
+          .backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.primary(this.isDark))
+          .enabled(!this.isAnyTaskRunning_()).onClick((): void => { this.selectAllNewCandidates_(); })
+        Button('清空').height(32).fontSize(11).borderRadius(16)
+          .backgroundColor(ThemeColors.transparent()).fontColor(ThemeColors.secondaryText(this.isDark))
+          .enabled(!this.isAnyTaskRunning_()).onClick((): void => { this.clearCandidateSelection_(); })
+      }.width('100%')
+
+      List({ space: 8 }) {
+        ForEach(this.discoveryCandidates_, (candidate: AiSourceCandidate) => {
+          ListItem() {
+            Column({ space: 6 }) {
+              Row({ space: 8 }) {
+                Toggle({ type: ToggleType.Checkbox, isOn: candidate.selected })
+                  .width(26).height(26)
+                  .enabled(candidate.safe && !this.isAnyTaskRunning_())
+                  .accessibilityText('选择 ' + candidate.displayName)
+                  .onChange((value: boolean): void => { this.toggleCandidate_(candidate.id, value); })
+                Column({ space: 2 }) {
+                  Text(candidate.displayName).fontSize(14).fontWeight(FontWeight.Medium)
+                    .fontColor(ThemeColors.onSurface(this.isDark)).maxLines(1)
+                  Text(candidate.host || '地址待确认').fontSize(11)
+                    .fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
+                }.layoutWeight(1)
+                Text(this.candidateDuplicateText_(candidate)).fontSize(11)
+                  .fontColor(candidate.duplicate === 'exact' ? ThemeColors.warning(this.isDark) :
+                    candidate.safe ? ThemeColors.primary(this.isDark) : ThemeColors.error(this.isDark))
+              }.width('100%')
+              TextInput({ text: candidate.homepageUrl, placeholder: '编辑首页地址（例如 https://example.com）' })
+                .width('100%').height(38).fontSize(12)
+                .fontColor(ThemeColors.onSurface(this.isDark))
+                .placeholderColor(ThemeColors.secondaryText(this.isDark))
+                .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(9)
+                .enabled(!this.isAnyTaskRunning_())
+                .onChange((value: string): void => { this.updateCandidateHomepage_(candidate.id, value); })
+              Text('搜索结果中命中 ' + candidate.hitCount.toString() + ' 个页面 · 置信度 ' +
+                candidate.confidence.toString())
+                .fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+              if (candidate.samples.length > 0) {
+                Text(candidate.samples.map((sample): string => sample.title || sample.url).join(' · '))
+                  .fontSize(11).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+              }
+              if (candidate.status !== 'candidate') {
+                Text(this.candidateStatusText_(candidate) + (candidate.stepSummary ? '：' + candidate.stepSummary : ''))
+                  .fontSize(11).lineHeight(16)
+                  .fontColor(candidate.status === 'failed' ? ThemeColors.error(this.isDark) :
+                    candidate.status === 'created' ? ThemeColors.success(this.isDark) : ThemeColors.secondaryText(this.isDark))
+                  .width('100%').maxLines(3)
+              }
+              if (candidate.logs.length > 0 && (candidate.status === 'running' || candidate.status === 'waiting_user')) {
+                Text(candidate.logs[candidate.logs.length - 1]).fontSize(10).lineHeight(15)
+                  .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').maxLines(2)
+              }
+            }.padding(10).backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(12)
+          }
+        }, (candidate: AiSourceCandidate): string => candidate.id)
+      }.layoutWeight(1).width('100%')
+
+      if (!this.batchRunning_ && this.discoveryPhase_ !== 'completed') {
+        Row() {
+          Toggle({ type: ToggleType.Switch, isOn: this.allowUpdateExisting_ })
+            .onChange((value: boolean): void => { this.allowUpdateExisting_ = value; })
+          Text('允许重新生成并更新已有书源').fontSize(12)
+            .fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1).margin({ left: 8 })
+        }.width('100%')
+        Button('批量生成选中的 ' + this.selectionCount_().toString() + ' 个书源')
+          .width('100%').height(48).borderRadius(24).fontSize(15)
+          .fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(ThemeColors.primary(this.isDark))
+          .enabled(this.selectionCount_() > 0 && !this.isAnyTaskRunning_())
+          .onClick((): void => { void this.startBatchGenerate_(); })
+      } else if (!this.batchRunning_ && this.discoveryPhase_ === 'completed') {
+        Row({ space: 8 }) {
+          Button('重新搜索').layoutWeight(1).height(42).borderRadius(21)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
+            .onClick((): void => {
+              this.discoveryCandidates_ = [];
+              this.discoveryPhase_ = 'idle';
+              this.discoveryError_ = '';
+            })
+          Button('启用本次新增').layoutWeight(1).height(42).borderRadius(21)
+            .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
+            .enabled(this.batchSummary_.createdSourceIds.length > 0)
+            .onClick((): void => { void this.enableBatchCreated_(); })
+          Button('复制摘要').layoutWeight(1).height(42).borderRadius(21)
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
+            .onClick((): void => { void this.copyBatchSummary_(); })
+        }.width('100%')
+      }
+    }.width('100%').layoutWeight(1)
+  }
+
   build() {
     Column() {
       Row() {
@@ -468,7 +945,7 @@ struct AiSourceGeneratePage {
           .backgroundColor(ThemeColors.transparent())
           .accessibilityText($r('app.string.common_back'))
           .onClick(() => { UiUtil.back(this.getUIContext()); })
-        Text(this.repairMode ? 'AI 修复书源' : 'AI 生成书源')
+        Text(this.repairMode ? 'AI 修复书源' : 'AI 书源')
           .fontColor(ThemeColors.onSurface(this.isDark)).fontSize(18)
           .fontWeight(FontWeight.Bold).layoutWeight(1)
         Button('AI 设置').fontSize(13).height(40).backgroundColor(ThemeColors.transparent())
@@ -477,7 +954,26 @@ struct AiSourceGeneratePage {
       }.padding({ left: 12, right: 12 }).width('100%')
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
-      if (!this.isAnalyzing && this.steps.length === 0) {
+      if (!this.repairMode) {
+        Row({ space: 0 }) {
+          Button('网址建源').layoutWeight(1).height(42).fontSize(14)
+            .fontColor(this.createTab_ === 0 ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+            .backgroundColor(this.createTab_ === 0 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.surface(this.isDark))
+            .enabled(!this.isAnyTaskRunning_())
+            .accessibilityText('网址建源')
+            .onClick((): void => { this.switchCreateTab_(0); })
+          Button('搜书发现').layoutWeight(1).height(42).fontSize(14)
+            .fontColor(this.createTab_ === 1 ? ThemeColors.primary(this.isDark) : ThemeColors.secondaryText(this.isDark))
+            .backgroundColor(this.createTab_ === 1 ? ThemeColors.primaryContainer(this.isDark) : ThemeColors.surface(this.isDark))
+            .enabled(!this.isAnyTaskRunning_())
+            .accessibilityText('搜书发现')
+            .onClick((): void => { this.switchCreateTab_(1); })
+        }.width('100%').padding({ left: 12, right: 12, top: 4, bottom: 4 })
+      }
+
+      if (!this.repairMode && this.createTab_ === 1) {
+        this.buildDiscoveryPanel_()
+      } else if (!this.isAnalyzing && this.steps.length === 0) {
         Column() {
           if (this.repairMode) {
             Text('待修复：' + (this.repairSourceName || '加载中…')).fontSize(15)
@@ -609,6 +1105,21 @@ struct AiSourceGeneratePage {
             }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%')
           }
         }.width('100%').layoutWeight(1)
+      }
+      if (this.showDiscoveryBrowser_) {
+        Stack({ alignContent: Alignment.Center }) {
+          Column().width('100%').height('100%').backgroundColor(ThemeColors.scrim(this.isDark))
+          AiImportPreviewDialog({
+            initialUrl: this.discoveryBrowserUrl_,
+            titleText: getOnlineSearchEngineName(this.discoveryEngine_) + ' · ' + this.discoveryKeyword_,
+            confirmText: '提取当前页网站',
+            helperText: '停留在搜索结果页，无需进入具体小说。加载完成后提取当前页中的网站。',
+            dismissBeforeConfirm: false,
+            collectLinks: true,
+            onCancel: (): void => { this.closeDiscoveryBrowser_(); },
+            onConfirm: (result: AiImportPreviewResult): void => { void this.handleDiscoveryPreview_(result); },
+          })
+        }.width('100%').height('100%')
       }
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))

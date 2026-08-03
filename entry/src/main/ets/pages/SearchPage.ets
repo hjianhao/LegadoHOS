@@ -28,19 +28,10 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookChapter } from '../model/BookChapter';
-
-interface OnlineSearchEngine {
-  id: string;
-  name: string;
-}
-
-const ONLINE_SEARCH_ENGINES: OnlineSearchEngine[] = [
-  { id: 'bing', name: '必应' },
-  { id: 'baidu', name: '百度' },
-  { id: 'sogou', name: '搜狗' },
-  { id: 'shenma', name: '神马' },
-  { id: 'google', name: 'Google' },
-];
+import {
+  ONLINE_SEARCH_ENGINES, OnlineSearchEngine, buildOnlineSearchUrl,
+  getOnlineSearchEngineName, isOnlineSearchResultPage, normalizeOnlineSearchEngine
+} from '../service/OnlineSearchEngineService';
 
 const ONLINE_SEARCH_OPTIONS: SelectOption[] = ONLINE_SEARCH_ENGINES.map((item: OnlineSearchEngine): SelectOption => ({
   value: item.name,
@@ -250,7 +241,7 @@ export struct SearchPage {
   }
 
   private normalizeOnlineEngine_(value: string): string {
-    return ONLINE_SEARCH_ENGINES.some((item: OnlineSearchEngine): boolean => item.id === value) ? value : 'bing';
+    return normalizeOnlineSearchEngine(value);
   }
 
   private onlineEngineIndex_(): number {
@@ -259,8 +250,7 @@ export struct SearchPage {
   }
 
   private onlineEngineName_(): string {
-    const index = this.onlineEngineIndex_();
-    return ONLINE_SEARCH_ENGINES[index].name;
+    return getOnlineSearchEngineName(this.onlineEngine);
   }
 
   private async selectOnlineEngine_(index: number): Promise<void> {
@@ -298,15 +288,7 @@ export struct SearchPage {
 
   private onlineSearchUrl_(keyword: string): string {
     // 直接使用用户输入的原始关键词：附加引号/排除词会导致必应等引擎搜不到结果
-    const encoded = encodeURIComponent(keyword);
-    switch (this.onlineEngine) {
-      case 'baidu': return 'https://www.baidu.com/s?wd=' + encoded;
-      case 'sogou': return 'https://www.sogou.com/web?query=' + encoded;
-      case 'shenma': return 'https://m.sm.cn/s?q=' + encoded;
-      case 'google': return 'https://www.google.com/search?q=' + encoded;
-      case 'bing':
-      default: return 'https://cn.bing.com/search?q=' + encoded;
-    }
+    return buildOnlineSearchUrl(this.onlineEngine, keyword);
   }
 
   private async openOnlineSearch_(rawKeyword?: string): Promise<void> {
@@ -343,12 +325,7 @@ export struct SearchPage {
   }
 
   private isOnlineSearchPage_(url: string): boolean {
-    const lower = url.toLowerCase();
-    return (lower.includes('bing.com/search'))
-      || (lower.includes('baidu.com/s'))
-      || (lower.includes('sogou.com/web') || lower.includes('m.sogou.com/web'))
-      || (lower.includes('sm.cn/s'))
-      || (lower.includes('google.') && lower.includes('/search'));
+    return isOnlineSearchResultPage(url);
   }
 
   private confirmOnlinePage_(result: AiImportPreviewResult): void {

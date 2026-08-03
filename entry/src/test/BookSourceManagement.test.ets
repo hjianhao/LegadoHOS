@@ -25,6 +25,11 @@ import {
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 import { WebViewFetcher } from '../main/ets/engine/web/WebViewFetcher';
+import { AiSearchPageLink } from '../main/ets/model/AiSourceDiscovery';
+import { AiSourceDiscoveryService } from '../main/ets/service/AiSourceDiscoveryService';
+import {
+  buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
+} from '../main/ets/service/OnlineSearchEngineService';
 
 export default function bookSourceManagementTest() {
   describe('bookSourceManagement', () => {
@@ -35,6 +40,52 @@ export default function bookSourceManagementTest() {
       expect(source.concurrentRate).assertEqual('2/1000');
       expect(source.enabledCookieJar).assertTrue();
       expect(createEmptyBookSource().respondTime).assertEqual(180000);
+    });
+
+    it('sharesOnlineSearchEngineSemantics', 0, () => {
+      expect(normalizeOnlineSearchEngine('unknown')).assertEqual('bing');
+      expect(buildOnlineSearchUrl('baidu', '斗罗大陆'))
+        .assertEqual('https://www.baidu.com/s?wd=%E6%96%97%E7%BD%97%E5%A4%A7%E9%99%86');
+      expect(isOnlineSearchResultPage('https://cn.bing.com/search?q=斗罗大陆')).assertTrue();
+      expect(isOnlineSearchResultPage('https://example.com/search?q=斗罗大陆')).assertFalse();
+    });
+
+    it('normalizesAndDeduplicatesDiscoveredSites', 0, () => {
+      const existing = createEmptyBookSource();
+      existing.id = 7;
+      existing.sourceName = '已有站点';
+      existing.sourceUrl = 'https://site-b.com/';
+      const links: AiSearchPageLink[] = [
+        { href: 'https://www.site-a.com/book/1?from=bing#top', text: '斗罗大陆', title: '斗罗大陆', context: '斗罗大陆 作者甲', dataUrl: '' },
+        { href: 'https://site-a.com/chapter/1/1', text: '斗罗大陆 第一章', title: '', context: '斗罗大陆', dataUrl: '' },
+        { href: 'https://site-b.com/novel/2', text: '斗罗大陆', title: '斗罗大陆', context: '已有站点', dataUrl: '' },
+      ];
+      const candidates = AiSourceDiscoveryService.buildCandidates(
+        'bing', '斗罗大陆', 'https://cn.bing.com/search?q=斗罗大陆', links, [existing]);
+      const siteA = candidates.find((item) => item.normalizedSiteKey === 'site-a.com');
+      const siteB = candidates.find((item) => item.normalizedSiteKey === 'site-b.com');
+      expect(siteA?.hitCount || 0).assertEqual(2);
+      expect(siteA?.homepageUrl || '').assertEqual('https://site-a.com');
+      expect(siteA?.samples.length || 0).assertEqual(2);
+      expect(siteA?.selected || false).assertTrue();
+      expect(siteB?.duplicate || 'none').assertEqual('exact');
+      expect(siteB?.selected || false).assertFalse();
+    });
+
+    it('filtersUnsafeUrlsAndDecodesSearchRedirects', 0, () => {
+      expect(AiSourceDiscoveryService.isCandidateUrl('file:///tmp/a')).assertFalse();
+      expect(AiSourceDiscoveryService.isCandidateUrl('http://127.0.0.1/book')).assertFalse();
+      const encoded = encodeURIComponent('https://example.com/book/1?key=1');
+      const link: AiSearchPageLink = {
+        href: 'https://cn.bing.com/ck?u=' + encoded,
+        text: '斗罗大陆', title: '', context: '', dataUrl: ''
+      };
+      expect(AiSourceDiscoveryService.decodeKnownSearchRedirect('bing', link))
+        .assertEqual('https://example.com/book/1?key=1');
+      expect(AiSourceDiscoveryService.normalizedSiteKey('https://www.example.com/book/1'))
+        .assertEqual('example.com');
+      expect(AiSourceDiscoveryService.normalizedSiteKey('https://m.example.com/book/1'))
+        .assertEqual('m.example.com');
     });
 
     it('infersGetAndPostSearchFormsWithoutLlmGuessing', 0, () => {

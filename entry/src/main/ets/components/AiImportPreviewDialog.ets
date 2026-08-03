@@ -1,5 +1,6 @@
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../theme/ThemeColors';
+import { AiSearchPageLink } from '../model/AiSourceDiscovery';
 
 const AI_WEB_DESKTOP_MODE_KEY = 'ai_import_web_desktop_mode';
 const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
@@ -11,7 +12,36 @@ PersistentStorage.persistProp(AI_WEB_DESKTOP_MODE_KEY, true);
 export interface AiImportPreviewResult {
   url: string;
   html: string;
+  links?: AiSearchPageLink[];
 }
+
+/**
+ * 只读取当前 DOM 中的链接和有限上下文，不拼接用户输入，避免脚本注入。
+ * 搜索结果页的链接可能把真实地址放在结果容器的 data-* 属性中，因此同时
+ * 检查锚点自身和最近的常见结果容器。
+ */
+const COLLECT_SEARCH_LINKS_SCRIPT: string = `(() => {
+  const clip = (value, max) => String(value || '').replace(/\\s+/g, ' ').trim().substring(0, max);
+  const selectors = 'li,article,.result,.c-container,.g,[data-sokoban-container]';
+  const attrs = ['data-url','data-landurl','data-href','data-mu','mu'];
+  const rows = Array.from(document.querySelectorAll('a[href]')).slice(0, 300);
+  return JSON.stringify(rows.map((anchor) => {
+    let container = anchor.closest(selectors);
+    let dataUrl = '';
+    for (const attr of attrs) {
+      const own = anchor.getAttribute(attr);
+      if (own) { dataUrl = own; break; }
+      if (container) {
+        const value = container.getAttribute(attr);
+        if (value) { dataUrl = value; break; }
+      }
+    }
+    const text = clip(anchor.innerText || anchor.textContent, 200);
+    const title = clip(anchor.getAttribute('title') || '', 200);
+    const context = clip(container ? (container.innerText || container.textContent) : text, 500);
+    return { href: anchor.href || anchor.getAttribute('href') || '', text, title, context, dataUrl };
+  }));
+})()`;
 
 @Component
 export struct AiImportPreviewDialog {
@@ -26,6 +56,8 @@ export struct AiImportPreviewDialog {
   /** 搜索站主页无法访问时使用的透明降级地址。 */
   fallbackUrl: string = '';
   fallbackMessage: string = '';
+  /** 读取当前搜索结果页的结构化链接；默认 false 保持原单本导入行为。 */
+  collectLinks: boolean = false;
   onConfirm?: (result: AiImportPreviewResult) => void;
   onCancel?: () => void;
 
@@ -67,6 +99,29 @@ export struct AiImportPreviewDialog {
     }
   }
 
+  private parseLinks_(raw: string): AiSearchPageLink[] {
+    const decoded = this.decodeJsString_(raw);
+    try {
+      const parsed = JSON.parse(decoded) as Object;
+      if (!Array.isArray(parsed)) return [];
+      const links: AiSearchPageLink[] = [];
+      for (const item of parsed as Array<Record<string, Object>>) {
+        const href = typeof item['href'] === 'string' ? item['href'] as string : '';
+        if (!href) continue;
+        links.push({
+          href: href.substring(0, 4096),
+          text: (typeof item['text'] === 'string' ? item['text'] as string : '').substring(0, 200),
+          title: (typeof item['title'] === 'string' ? item['title'] as string : '').substring(0, 200),
+          context: (typeof item['context'] === 'string' ? item['context'] as string : '').substring(0, 500),
+          dataUrl: (typeof item['dataUrl'] === 'string' ? item['dataUrl'] as string : '').substring(0, 4096),
+        });
+      }
+      return links.slice(0, 300);
+    } catch (_e) {
+      return [];
+    }
+  }
+
   private async confirm_(): Promise<void> {
     if (!this.controllerAttached_ || this.isExtracting) return;
     this.isExtracting = true;
@@ -77,7 +132,20 @@ export struct AiImportPreviewDialog {
         this.errorText = '未能读取页面内容，请等待加载完成';
         return;
       }
-      const result: AiImportPreviewResult = { url: this.currentUrl || this.initialUrl, html: html };
+      let links: AiSearchPageLink[] = [];
+      if (this.collectLinks) {
+        const rawLinks = await this.webController_.runJavaScript(COLLECT_SEARCH_LINKS_SCRIPT);
+        links = this.parseLinks_(rawLinks);
+        if (links.length === 0) {
+          this.errorText = '当前页面没有可提取的网页链接，请确认仍停留在搜索结果页后重试';
+          return;
+        }
+      }
+      const result: AiImportPreviewResult = {
+        url: this.currentUrl || this.initialUrl,
+        html: html,
+        links: this.collectLinks ? links : undefined,
+      };
       if (this.dismissBeforeConfirm) this.onCancel?.();
       this.onConfirm?.(result);
     } catch (e) {
