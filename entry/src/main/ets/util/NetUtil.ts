@@ -484,6 +484,74 @@ export class NetUtil {
   }
 
   /**
+   * POST 带 body 的请求手动逐跳跟随重定向。
+   *
+   * RCP 自动跟随时把 301 也按浏览器语义转成 GET 并丢弃 body，但很多站点
+   * （如帝国 CMS 的 /e/search/index.php 搜索接口）的 301 是 http→https
+   * 或域名迁移，关键词全在 POST body 里，一丢就返回"没有搜索到相关的
+   * 内容"。因此带 body 的 POST 一律关闭自动重定向逐跳跟随：301/307/308
+   * 保留 method+body，302/303 转 GET（提交成功后关键词已进 URL）。
+   * 循环场景抛 1007900047，由上层 manualRedirectWithCookieGate_ 兜底
+   * （与 GET 循环同一路径）。
+   */
+  private static async manualFollowPost_(
+    method: string, url: string, body: string, headers: Record<string, string>,
+    timeout: number, requestGroup: string, cookieEnabled: boolean
+  ): Promise<string> {
+    const session = NetUtil.createSession_(timeout, false);
+    let curMethod: string = method.toUpperCase();
+    let curUrl: string = url;
+    let curBody: string = body;
+    const visited: string[] = [normalizeVisitedUrl_(url)];
+    try {
+      for (let hop = 0; hop < 10; hop++) {
+        const group = requestGroup ? NetUtil.requestGroups_.get(requestGroup) : undefined;
+        if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
+        const h = { ...headers };
+        if (cookieEnabled) NetUtil.injectCookie_(curUrl, h);
+        const request = new rcp.Request(curUrl, curMethod as rcp.HttpMethod, h as rcp.RequestHeaders, curBody || '');
+        const response = await session.fetch(request);
+        const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+        // 中间跳的 Set-Cookie 必须立刻进 CookieStore，下一跳才能带上。
+        if (cookieEnabled) {
+          await CookieStore.getInstance().setCookiesFromResponse(curUrl, respHeaders['set-cookie']);
+        }
+        console.info('[NetUtil] manual-post hop' + hop, curMethod, curUrl, '→', response.statusCode);
+        const status: number = response.statusCode;
+        if (status >= 300 && status < 400) {
+          const locationRaw = respHeaders['location'];
+          const location: string = Array.isArray(locationRaw) ? (locationRaw[0] || '') : (locationRaw || '');
+          if (!location) {
+            throw new Error('重定向响应缺少 Location: ' + status);
+          }
+          const next = resolveRelativeUrl_(curUrl, location);
+          if (visited.indexOf(normalizeVisitedUrl_(next)) >= 0) {
+            // 循环闭合：交给上层 cookie 门兜底（与 GET 循环同一路径）。
+            throw new Error('Number of redirects hit maximum amount (manual POST follow)');
+          }
+          visited.push(normalizeVisitedUrl_(next));
+          curUrl = next;
+          if (!shouldKeepPostBodyOnRedirect_(status)) {
+            // 302/303 转 GET 丢 body（提交成功后关键词已进 URL）；
+            // 301/307/308 保留 POST（域名迁移场景 body 必须带过去）。
+            curMethod = 'GET';
+            curBody = '';
+          }
+          continue;
+        }
+        if (status >= 200 && status < 300) {
+          if (response.body === undefined || response.body === null) return '';
+          return await NetUtil.decodeBody(new Uint8Array(response.body), curUrl);
+        }
+        throw new Error('手动跟随重定向遇到 HTTP ' + status);
+      }
+      throw new Error('Number of redirects hit maximum amount (manual POST follow)');
+    } finally {
+      try { session.close(); } catch (_error) { /* ignore */ }
+    }
+  }
+
+  /**
    * RCP 不会像 OkHttp HttpUrl 一样自动编码 URL 中的非 ASCII 字符。
    * 使用标准 URL 规范化，编码中文查询参数并保留已有的百分号编码。
    */
@@ -558,6 +626,11 @@ export class NetUtil {
     // 注意不删除 baseHeaders 中的禁用标记——fallback 的 systemHttpRequest
     // 需要靠它决定是否注入 cookie。
     const cookieEnabled = baseHeaders[DISABLE_COOKIE_HEADER] !== '1';
+    // 带 body 的 POST 关闭自动重定向逐跳跟随：RCP 自动跟随会按浏览器语义
+    // 把 301/302 转 GET 并丢弃 body，而 OkHttp（Android Legado）保留 POST
+    // body 继续跳转，帝国 CMS 等站点的搜索接口依赖该行为——body 一丢就
+    // 返回"没有搜索到"空结果页。
+    const followPostManually: boolean = method.toUpperCase() === 'POST' && (body || '') !== '';
     let lastError: string = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       let sessionEntry: PooledSession | null = null;
@@ -565,6 +638,10 @@ export class NetUtil {
       const group = requestGroup ? NetUtil.requestGroups_.get(requestGroup) : undefined;
       try {
         if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
+        if (followPostManually) {
+          return await NetUtil.manualFollowPost_(
+            method, requestUrl, body || '', baseHeaders, timeout, requestGroup, cookieEnabled);
+        }
         const h = { ...baseHeaders };
         NetUtil.prepareCookiePolicy_(h);
         if (cookieEnabled) NetUtil.injectCookie_(requestUrl, h);
@@ -809,6 +886,20 @@ export class NetUtil {
 /** RCP 自动跟随重定向次数耗尽（默认 50 跳）时报错 1007900047。 */
 export function isRedirectLoopError(message: string): boolean {
   return message.includes('Number of redirects hit maximum amount') || message.includes('1007900047');
+}
+
+/**
+ * 重定向跳转时是否保留 POST method+body。
+ * - 301/307/308 保留：301 常是 http→https / 域名迁移（如爱久久网
+ *   jjjxsw.com → ijjxsxzw.com），body 必须带过去；307/308 语义本就要求保留。
+ * - 302/303 转 GET 丢 body：302 是"提交成功请跳转"（帝国 CMS 搜索返回
+ *   result/?searchid=xxx），关键词已由服务器转成 searchid 放进 URL，
+ *   body 无用且 result 页不接受 POST。
+ * RCP 自动跟随把所有 3xx 都按浏览器语义处理（301 也丢 body），这是
+ * manualFollowPost_ 逐跳跟随要修正的行为。
+ */
+export function shouldKeepPostBodyOnRedirect_(status: number): boolean {
+  return status !== 302 && status !== 303;
 }
 
 /** 解析重定向 Location（绝对 URL / 协议相对 / 根相对 / 路径相对）。 */

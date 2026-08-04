@@ -36,7 +36,7 @@ import {
   buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
 } from '../main/ets/service/OnlineSearchEngineService';
 import {
-  isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_
+  isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_, shouldKeepPostBodyOnRedirect_
 } from '../main/ets/util/NetUtil';
 
 export default function bookSourceManagementTest() {
@@ -453,6 +453,19 @@ export default function bookSourceManagementTest() {
       expect(isRedirectLoopError('businessError: 1007900047 redirect')).assertTrue();
       expect(isRedirectLoopError('HTTP 302: 服务器拒绝')).assertFalse();
       expect(isRedirectLoopError('')).assertFalse();
+    });
+
+    it('keepsPostBodyOnDomainMigrationRedirects', 0, () => {
+      // 301/307/308 保留 POST method+body：301 常是 http→https / 域名迁移
+      // （爱久久网 jjjxsw.com → ijjxsxzw.com，关键词全在 body 里，RCP 自动
+      // 跟随会丢 body 返回"没有搜索到"）；307/308 语义本就要求保留。
+      // 302/303 转 GET：302 是"提交成功请跳转"（帝国 CMS 搜索返回
+      // result/?searchid=xxx），关键词已进 URL 且 result 页不接受 POST。
+      expect(shouldKeepPostBodyOnRedirect_(301)).assertTrue();
+      expect(shouldKeepPostBodyOnRedirect_(307)).assertTrue();
+      expect(shouldKeepPostBodyOnRedirect_(308)).assertTrue();
+      expect(shouldKeepPostBodyOnRedirect_(302)).assertFalse();
+      expect(shouldKeepPostBodyOnRedirect_(303)).assertFalse();
     });
 
     it('resolvesRedirectLocation', 0, () => {
