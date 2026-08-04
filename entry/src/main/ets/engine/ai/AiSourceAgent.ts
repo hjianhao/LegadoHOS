@@ -721,12 +721,41 @@ export interface SearchAlertInfo {
 }
 
 /**
+ * 检测无 alert 脚本的普通 HTML 频率限制页。帝国 CMS 系统（爱久久网等）在
+ * 两次搜索间隔不足时返回 200 状态、约 2KB 的普通页面，文案为"系统限制的
+ * 搜索时间间隔为 15 秒,请稍后再搜索"（同时出现在 <title> 与正文），没有
+ * alert/window.history 脚本，超出 alert 页 500 字节的检测范围，只能按文案
+ * 识别。返回需要等待的毫秒数，0 表示不是限频页。
+ */
+export function plainRateLimitWaitMs_(html: string): number {
+  if (!html || html.length > 8000) return 0;
+  const intervalMatch = html.match(/搜索时间间隔(?:为|：|:)\s*(\d+)\s*秒/);
+  if (!intervalMatch) return 0;
+  // 防误判：正常搜索结果页不应命中该文案；限频页只有返回/导航链接
+  // （如 <a id="jump" href="javascript:history.go(-1)">），不含任何
+  // .html 内容链接。命中内容链接则视为真实结果页。
+  if (/href\s*=\s*["'][^"']+\.(?:html?|shtml)["']/i.test(html)) return 0;
+  return Math.min(parseInt(intervalMatch[1], 10) * 1000, 35000);
+}
+
+/**
  * 从搜索拦截 alert 页提取文案并分类。频率限制复用 SourceExecutor 的
  * searchRateLimitWaitMs_ 语义（"搜索间隔：30 秒"/"请30秒后再试"/"操作频繁"），
  * 与真实搜索链路的等待时长保持一致；避免把频率限制页误报成"关键词太短"。
  */
 export function extractSearchAlertInfo_(html: string): SearchAlertInfo | null {
-  if (!html || html.length > 500) return null;
+  if (!html) return null;
+  // 普通 HTML 限频页（帝国 CMS 等）没有 alert 脚本，长度可到 2KB 以上，
+  // 先于 alert 页分支检测，避免被 500 字节上限挡掉。
+  const plainWaitMs = plainRateLimitWaitMs_(html);
+  if (plainWaitMs > 0) {
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,80})<\/title>/i);
+    const text = titleMatch
+      ? titleMatch[1].trim()
+      : html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 80);
+    return { kind: 'rateLimit', text, waitMs: plainWaitMs };
+  }
+  if (html.length > 500) return null;
   const match = html.match(/alert\s*\(\s*["']([^"']{1,80})["']\s*\)/i);
   if (!match) return null;
   const text = match[1].replace(/\\n/g, ' ');

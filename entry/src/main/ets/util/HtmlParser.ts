@@ -318,16 +318,28 @@ export class HtmlParser {
       }
     }
 
+	    // Legado 相对字段规则：text / ownText / textNodes / html 作为完整规则
+	    // （无选择器前缀）时表示取当前元素自身，例如列表卡片规则
+	    // `text##作者：(.*)`。若按 CSS 标签查找会得到 0 元素（HTML 中没有
+	    // <text> 标签），导致字段提取为空。Android Legado 对此类规则直接调用
+	    // element.text() / ownText() / textNodes() / html()，这里对齐该语义。
+	    const pureKeyword = cleanSelector.toLowerCase();
+	    const isElementSelfRule = pureKeyword === 'text' || pureKeyword === 'owntext' ||
+	      pureKeyword === 'textnodes' || pureKeyword === 'html';
+
 	    let elements: HtmlElement[];
-	    if (!cssSel) {
-	      // Legado @attrName 独立使用（如 @href、@data-title）—— 以 root 自身为目标元素
+	    if (!cssSel || isElementSelfRule) {
+	      // @attrName 独立使用（如 @href、@data-title）或纯关键字规则——以 root 自身为目标元素
 	      elements = root ? [root] : [];
+	      if (pureKeyword === 'owntext') attrSuffix = 'owntext';
+	      else if (pureKeyword === 'textnodes') attrSuffix = 'textnodes';
+	      else if (pureKeyword === 'html') attrSuffix = 'html';
 	    } else {
 	      elements = this.findElements(root, cssSel);
 	    }
 	    if (elements.length === 0) return '';
 
-    const el = elements[0];
+	    const el = elements[0];
 
     let result = '';
     switch (attrSuffix) {
@@ -407,9 +419,13 @@ export class HtmlParser {
   extractAttrAll(root: HtmlElement, selector: string): string[] {
     const s = selector.trim();
 
+    // 与 extractAttr 一致：先剥离 ## 后缀（如 `text##作者：(.*)`），保留后处理
+    let postProcessors: string[] = [];
     let cleanSelector = s;
     if (s.includes('##')) {
-      cleanSelector = s.split('##')[0];
+      const parts = s.split('##');
+      cleanSelector = parts[0];
+      postProcessors = parts.slice(1);
     }
 
     let attrSuffix = 'text';
@@ -433,32 +449,85 @@ export class HtmlParser {
       }
     }
 
+    // 与 extractAttr 相同的纯关键字规则语义（text / ownText / textNodes / html）。
+    const pureKeyword = cleanSelector.toLowerCase();
+    const isElementSelfRule = pureKeyword === 'text' || pureKeyword === 'owntext' ||
+      pureKeyword === 'textnodes' || pureKeyword === 'html';
+
     let elements: HtmlElement[];
-    if (!cssSel) {
+    if (!cssSel || isElementSelfRule) {
       elements = root ? [root] : [];
+      if (pureKeyword === 'owntext') attrSuffix = 'owntext';
+      else if (pureKeyword === 'textnodes') attrSuffix = 'textnodes';
+      else if (pureKeyword === 'html') attrSuffix = 'html';
     } else {
       elements = this.findElements(root, cssSel);
     }
     if (elements.length === 0) return [];
 
+    // ## 后缀 post-processing 与 extractAttr 相同：净化（循环替换）或
+    // OnlyOne（### 结尾，只取第一个匹配），对每个元素的值独立应用。
+    const isOnlyOne = postProcessors.length > 0 && postProcessors[postProcessors.length - 1] === '#';
+    const pairs = isOnlyOne ? postProcessors.slice(0, -1) : postProcessors;
+
     return elements.map((el: HtmlElement): string => {
+      let result = '';
       switch (attrSuffix) {
         case 'text':
-          return this.cleanText(el.text);
+          result = this.cleanText(el.text);
+          break;
         case 'ownText':
-          return this.cleanText(el.ownText);
+          result = this.cleanText(el.ownText);
+          break;
         case 'textNodes':
-          return this.collectTextNodes(el);
+          result = this.collectTextNodes(el);
+          break;
         case 'href':
         case 'src':
-          return el.attributes[attrSuffix] || '';
+          result = el.attributes[attrSuffix] || '';
+          break;
         case 'html':
-          return el.innerHtml;
+          result = el.innerHtml;
+          break;
         case 'value':
-          return el.attributes['value'] || '';
+          result = el.attributes['value'] || '';
+          break;
         default:
-          return el.attributes[attrSuffix] || this.cleanText(el.text);
+          result = el.attributes[attrSuffix] || this.cleanText(el.text);
+          break;
       }
+      if (isOnlyOne) {
+        for (let i = 0; i < pairs.length; i += 2) {
+          const pattern = pairs[i];
+          const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
+          if (!pattern) continue;
+          try {
+            const regex = new RegExp(pattern);
+            const match = regex.exec(result);
+            if (match) {
+              result = replacement.replace(/\$(\d+)/g,
+                (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
+            } else {
+              result = '';
+            }
+          } catch (e) {
+            console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
+          }
+          break; // OnlyOne 只处理第一对
+        }
+      } else {
+        for (let i = 0; i < pairs.length; i += 2) {
+          const pattern = pairs[i];
+          const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
+          if (!pattern) continue;
+          try {
+            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
+          } catch (e) {
+            console.warn('[HtmlParser] Invalid ## regex pair:', pattern, replacement);
+          }
+        }
+      }
+      return result;
     }).filter((v: string): boolean => !!v);
   }
 

@@ -25,13 +25,14 @@ import {
   prepareSourceAgentHtml, isLikelyAiLoginPage, isLikelyAiLoginResultPage,
   hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
-  patchSearchRuleCharset_
+  plainRateLimitWaitMs_, patchSearchRuleCharset_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
 import { WebViewFetcher } from '../main/ets/engine/web/WebViewFetcher';
 import { AiSearchPageLink } from '../main/ets/model/AiSourceDiscovery';
 import { AiSourceDiscoveryService } from '../main/ets/service/AiSourceDiscoveryService';
+import { getHtmlParser } from '../main/ets/util/HtmlParser';
 import {
   buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
 } from '../main/ets/service/OnlineSearchEngineService';
@@ -443,6 +444,52 @@ export default function bookSourceManagementTest() {
       expect(extractSearchAlertInfo_(normal)).assertNull();
       // 空页面不触发。
       expect(extractSearchAlertInfo_('')).assertNull();
+    });
+
+    it('detectsPlainRateLimitHtmlPage', 0, () => {
+      // 帝国 CMS（爱久久网等）的限频页是普通 HTML：200 状态、约 2KB、
+      // 无 alert 脚本，文案同时出现在 <title> 与正文。此前只识别 ≤500 字节
+      // 的 alert 页，防刷页被当成"内容过短"，3 轮快速重试连环被拒。
+      const plainLimit = '<!DOCTYPE html><html><head><title>系统限制的搜索时间间隔为 15 秒,请稍后再搜索</title></head>' +
+        '<body><div class="layout error layui-anim"><a id="jump" href="javascript:history.go(-1)">返回</a>' +
+        '<p>系统限制的搜索时间间隔为 15 秒,请稍后再搜索</p></div></body></html>';
+      expect(plainRateLimitWaitMs_(plainLimit)).assertEqual(15000);
+      const info = extractSearchAlertInfo_(plainLimit);
+      expect(info !== null).assertTrue();
+      expect(info!.kind).assertEqual('rateLimit');
+      expect(info!.waitMs).assertEqual(15000);
+      expect(info!.text).assertEqual('系统限制的搜索时间间隔为 15 秒,请稍后再搜索');
+      // 真实搜索结果页含 .html 内容链接，不应误判。
+      const resultPage = '<html><head><title>四合院 搜索结果</title></head>' +
+        '<body><div class="searchTopic">1、<a href="/txt/56491.html" class="searchtitle">七零四合院里欢乐多</a></div></body></html>';
+      expect(plainRateLimitWaitMs_(resultPage)).assertEqual(0);
+      expect(extractSearchAlertInfo_(resultPage)).assertNull();
+      // 空页面不触发。
+      expect(plainRateLimitWaitMs_('')).assertEqual(0);
+    });
+
+    it('extractsElementSelfTextKeywordRules', 0, () => {
+      // Android Legado 相对字段规则：text / ownText / textNodes / html 作为
+      // 完整规则（无选择器前缀）时取元素自身，如卡片规则 `text##作者：(.*)`。
+      // 此前 text 被当 CSS 标签查找（HTML 中没有 <text> 标签）导致 author
+      // 字段提取为空。验证修复 A 的真实语义。
+      const parser = getHtmlParser();
+      const doc = parser.parse('<div class="searchTopic"> 1 、<a href="/txt/56491.html" ' +
+        'class="searchtitle">七零四合院里欢乐多</a>&nbsp;&nbsp;作者：傅延年</div>');
+      const cards = parser.querySelectorAll(doc, '.searchTopic');
+      expect(cards.length).assertEqual(1);
+      // text##.*： 净化替换：贪婪删除最后一个冒号前内容 → 作者名
+      expect(parser.extractAttr(cards[0], 'text##.*：')).assertEqual('傅延年');
+      // 纯 text 关键字 → 卡片全文
+      expect(parser.extractAttr(cards[0], 'text').includes('七零四合院里欢乐多')).assertTrue();
+      // 带选择器的规则不受影响
+      expect(parser.extractAttr(cards[0], 'a@text')).assertEqual('七零四合院里欢乐多');
+      // extractAttrAll 同样支持纯关键字与 ## 后处理
+      const authors = parser.extractAttrAll(cards[0], 'text##.*：');
+      expect(authors.length).assertEqual(1);
+      expect(authors[0]).assertEqual('傅延年');
+      // 带 @ 的规则仍按 CSS 查找（text@text 不应取 root 自身）
+      expect(parser.extractAttr(cards[0], 'text@text')).assertEqual('');
     });
 
     it('detectsRedirectLoopError', 0, () => {
