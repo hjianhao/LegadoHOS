@@ -471,8 +471,12 @@ function resolveFieldRule(rule: string, fn: (subRule: string) => string): string
   return values[0] || '';
 }
 
-function replaceSearchTemplateVars(template: string, keyword: string, page: number): string {
-  const encoded = encodeURIComponent(keyword);
+function replaceSearchTemplateVars(template: string, keyword: string, page: number,
+  charset: string = ''): string {
+  // URL 中的 {{key}} 按书源 charset 编码：GBK 站点按 UTF-8 编码的关键词会
+  // 被站点按 GBK 解码成乱码并返回空结果页。POST body 由调用方传空串保持
+  // UTF-8 百分号形式，提交时由 NetUtil.encodeFormBody 按 charset 转换。
+  const encoded = NetUtil.encodeUrlComponent(keyword, charset);
   return template
     .replace(/\{\{\s*(page|pageNum)\s*([+-])\s*(\d+)\s*\}\}/g,
       (_match: string, name: string, op: string, rawNum: string): string => {
@@ -486,19 +490,16 @@ function replaceSearchTemplateVars(template: string, keyword: string, page: numb
     .replace(/\{\{\s*pageNum\s*\}\}/g, String(page + 1));
 }
 
-function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
-  let url = replaceSearchTemplateVars(template, keyword, page);
-  // 移除剩余未处理的 {{}} JS 表达式
-  url = url.replace(/\{\{[^}]*\}\}/g, '');
+export function buildUrl(template: string, keyword: string, page: number, baseUrl: string): { url: string; method?: string; body?: string; charset?: string; webView?: boolean } {
+  // {{key}} 必须按书源 charset 编码：GBK 站点按 UTF-8 编码的关键词会被站点
+  // 按 GBK 解码成乱码并返回空结果页（如 yqk.net 按 gb2312 解码）。charset
+  // 声明在模板尾部的 JSON 选项中，先提取出来供 URL 的 {{key}} 替换使用。
+  const charsetHintMatch = (template || '').match(/["']charset["']\s*:\s*["']([^"']*)["']/i);
+  const templateCharset = charsetHintMatch && charsetHintMatch.length > 1 ? charsetHintMatch[1] : '';
+  let url = template || '';
 
-  // 处理 <js>...</js> 和 @js: — 提醒调用方应预先评估
-  if (/<js>[\s\S]*?<\/js>/i.test(url)) {
-    console.warn('[buildUrl] Un-evaluated <js> block found in URL, stripping. Caller should evaluate via JsExpressionEvaluator first.');
-    url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
-  }
-  url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
-
-  // 处理页码分组 <选项1,选项2,...>
+  // 处理页码分组 <选项1,选项2,...>（必须在 JSON 选项拆分之前，避免分组内
+  // 的逗号干扰 URL 与选项的切分）
   const pageGroupMatch = url.match(/<([^<>]+)>/);
   if (pageGroupMatch) {
     const items = pageGroupMatch[1].split(',');
@@ -506,7 +507,7 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     url = url.replace(pageGroupMatch[0], items[idx].trim());
   }
 
-  // 相对路径处理 — 必须在 JSON 选项提取之前，保证 URL 以 http(s):// 开头
+  // 相对路径补全 — 保证 URL 以 http(s):// 开头，JSON 选项才能被拆分。
   // data: URI 是内部格式（聚合书源），不拼接 baseUrl
   if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:') && baseUrl) {
     const base = baseUrl.replace(/\/+$/, '');
@@ -514,6 +515,9 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
   }
 
   // 处理 URL 末尾的 JSON 选项: url,{"method":"POST","body":"..."} 或 url{"method":"POST",...}
+  // 必须先拆出选项再替换模板变量：URL 中的 {{key}} 按 charset 编码，POST body
+  // 中的 {{key}} 保持 UTF-8 百分号（提交前由 encodeFormBody 转换），两者不同，
+  // 不能混用同一编码整体替换。
   let method = 'GET';
   let body = '';
   let charset = '';
@@ -521,12 +525,14 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
 
   // 先尝试匹配带逗号的: url,{...}
   let jsonOptMatch = url.match(/^(https?:\/\/[^,]+),(\{[\s\S]*\})$/);
-  if (!jsonOptMatch) {
-    // 再尝试不用逗号的: url{...}（某些源省略了逗号）
+  if (!jsonOptMatch && !url.includes('{{')) {
+    // 再尝试不用逗号的: url{...}（某些源省略了逗号）。模板变量（如 {{key}}）
+    // 尚未替换时不能尝试：贪婪的 [^#]+ 会把 {{key}} 的首个 { 吞掉，把 {key}
+    // 误判为 JSON 选项导致 URL 被截断。此时选项只能通过带逗号模式拆出。
     jsonOptMatch = url.match(/^(https?:\/\/[^#]+)(\{[\s\S]*\})$/);
   }
-  if (!jsonOptMatch) {
-    // 最后尝试: url#xxx{...} (有 # 选择器后跟 JSON)
+  if (!jsonOptMatch && !url.includes('{{')) {
+    // 最后尝试: url#xxx{...} (有 # 选择器后跟 JSON)，同样排除 {{ 模板变量
     jsonOptMatch = url.match(/^(https?:\/\/[^#]+)#[^,]*?,?(\{[\s\S]*\})$/);
   }
   // data: URI 的 JSON 选项（聚合书源常用，如 data:;base64,xxx,{"type":"gysearch"}）
@@ -546,6 +552,8 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
     try {
       const opts = JSON.parse(jsonOptMatch[2]);
       if (opts.method) method = opts.method.toUpperCase();
+      // body 中的 {{key}} 保持 UTF-8 百分号形式（不按 charset 编码），
+      // 提交前由下面的 encodeFormBody 统一按 charset 转换。
       if (opts.body) body = replaceSearchTemplateVars(opts.body, keyword, page);
       if (opts.charset) charset = opts.charset;
       if (opts.webView !== undefined) webView = !!opts.webView;
@@ -565,6 +573,18 @@ function buildUrl(template: string, keyword: string, page: number, baseUrl: stri
       }
     }
   }
+
+  // 替换模板变量：URL 中的 {{key}} 按 charset 编码
+  url = replaceSearchTemplateVars(url, keyword, page, templateCharset);
+  // 移除剩余未处理的 {{}} JS 表达式
+  url = url.replace(/\{\{[^}]*\}\}/g, '');
+
+  // 处理 <js>...</js> 和 @js: — 提醒调用方应预先评估
+  if (/<js>[\s\S]*?<\/js>/i.test(url)) {
+    console.warn('[buildUrl] Un-evaluated <js> block found in URL, stripping. Caller should evaluate via JsExpressionEvaluator first.');
+    url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
+  }
+  url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
 
   // 检查是否有第二层 ,{"webView": true} — 去掉它
   const secondJsonMatch = url.match(/^(https?:\/\/[^#]+?),(\{[\s\S]*\})$/);

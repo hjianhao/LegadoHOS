@@ -222,6 +222,22 @@ export class NetUtil {
     }).join('&');
   }
 
+  /**
+   * 按书源 charset 编码单个 URL 查询组件（如搜索 URL 中的 {{key}}）。
+   *
+   * GBK/GB2312/GB18030 站点按自身编码解释 URL 参数，UTF-8 百分号字节会被
+   * 解码成乱码并返回空结果页（如 yqk.net 按 gb2312 解码 UTF-8 的"穿越"）。
+   * 复用上面的 GBK 映射输出正确字节；其余 charset（含未声明）保持 UTF-8。
+   */
+  static encodeUrlComponent(value: string, charset: string): string {
+    const normalized = (charset || '').toLowerCase().replace(/[_-]/g, '');
+    if (!value) return '';
+    if (normalized === 'gbk' || normalized === 'gb2312' || normalized === 'gb18030') {
+      return NetUtil.encodeFormComponent_(value, false);
+    }
+    return encodeURIComponent(value);
+  }
+
   private static encodeFormComponent_(value: string, _isName: boolean): string {
     if (!value) return '';
     const map = NetUtil.getGbkEncodeMap_();

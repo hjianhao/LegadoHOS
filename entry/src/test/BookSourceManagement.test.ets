@@ -12,7 +12,7 @@ import {
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
   preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
-  unwrapJsCallUrlValue_
+  unwrapJsCallUrlValue_, buildUrl
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -679,6 +679,42 @@ export default function bookSourceManagementTest() {
       // GET 规则不补全 charset。
       const getRule = 'https://example.com/search?q={{key}}';
       expect(patchSearchRuleCharset_(getRule, pageHtml)).assertEqual(getRule);
+    });
+
+    it('encodesSearchKeyBySourceCharset', 0, () => {
+      // yqk.net（言情库）按 gb2312 解释 URL 参数。此前 {{key}} 固定按 UTF-8
+      // 百分号编码（%E7%A9%BF%E8%B6%8A），站点按 GBK 解码成乱码并返回空结果页，
+      // Agent 关键词阶梯全部换词仍失败。修复后 URL 中的 {{key}} 按书源 charset
+      // 编码（穿越 → %B4%A9%D4%BD），与 Android Legado AnalyzeUrl 语义一致。
+      // buildUrl（SourceExecutor 真实执行路径）
+      const gbkGet = buildUrl('https://www.yqk.net/search.php?searchkey={{key}},{"charset":"gbk"}',
+        '穿越', 1, 'https://www.yqk.net');
+      expect(gbkGet.url).assertEqual('https://www.yqk.net/search.php?searchkey=%B4%A9%D4%BD');
+      expect(gbkGet.charset).assertEqual('gbk');
+      // 无 charset 声明时保持 UTF-8，且纯 {{key}} URL 不能被误判截断（重构前
+      // 无逗号 JSON 模式会把 {{key}} 的首 { 吞掉，URL 被截成 ?q={）。
+      const utf8Get = buildUrl('https://example.com/search?q={{key}}', '穿越', 1, 'https://example.com');
+      expect(utf8Get.url).assertEqual('https://example.com/search?q=%E7%A9%BF%E8%B6%8A');
+      // POST body：buildUrl 返回的即最终提交体，按 charset 转 GBK。
+      const gbkPost = buildUrl(
+        'https://www.example.com/search.php,{"method":"POST","body":"searchkey={{key}}","charset":"gbk"}',
+        '穿越', 1, 'https://www.example.com');
+      expect(gbkPost.url).assertEqual('https://www.example.com/search.php');
+      expect(gbkPost.method).assertEqual('POST');
+      expect(gbkPost.body).assertEqual('searchkey=%B4%A9%D4%BD');
+      // 单引号 charset 与 {{keyword}} 变量同样生效。
+      const singleQuote = buildUrl("https://www.yqk.net/search.php?searchkey={{keyword}},{'charset':'gb2312'}",
+        '穿越', 1, 'https://www.yqk.net');
+      expect(singleQuote.url).assertEqual('https://www.yqk.net/search.php?searchkey=%B4%A9%D4%BD');
+      // materializeAgentRequest（Agent 取证路径）：URL 按 charset 编码，POST
+      // body 保持 UTF-8 百分号形式，由 fetchRulePage_ 提交前 encodeFormBody 转 GBK。
+      const agent = materializeAgentRequest(
+        'https://www.example.com/search.php,{"method":"POST","body":"searchkey={{key}}","charset":"gbk"}',
+        '穿越', 1, 'https://www.example.com');
+      expect(agent.url).assertEqual('https://www.example.com/search.php');
+      expect(agent.method).assertEqual('POST');
+      expect(agent.charset).assertEqual('gbk');
+      expect(agent.body).assertEqual('searchkey=%E7%A9%BF%E8%B6%8A');
     });
 
     it('normalizesCssBackgroundImageForBookCover', 0, () => {

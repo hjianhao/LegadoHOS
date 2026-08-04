@@ -446,31 +446,43 @@ export function patchSearchRuleCharset_(ruleSearchUrl: string, pageHtml: string)
 /** 将搜索/发现 URL 模板转换成当前关键词的实际请求，供 Agent 抓取证据。 */
 export function materializeAgentRequest(template: string, keyword: string,
   page: number, baseUrl: string): AgentRequestSpec {
-  const encoded = encodeURIComponent(keyword);
-  let value = (template || '')
-    .replace(/\{\{\s*key\s*\}\}/g, encoded)
-    .replace(/\{\{\s*keyword\s*\}\}/g, encoded)
-    .replace(/\{\{\s*page\s*\}\}/g, String(page))
-    .replace(/\{\{\s*pageNum\s*\}\}/g, String(page + 1));
+  // URL 中的 {{key}} 必须按书源 charset 编码：GBK 站点按 UTF-8 编码的关键词
+  // 会被站点按 GBK 解码成乱码并返回空结果页（如 yqk.net）。POST body 中的
+  // {{key}} 则保持 UTF-8 百分号形式，由 fetchRulePage_ 提交前的 encodeFormBody
+  // 按 charset 转换。两者编码不同，必须先拆出 JSON 选项再分别替换。
+  const charsetHintMatch = (template || '').match(/["']charset["']\s*:\s*["']([^"']*)["']/i);
+  const templateCharset = charsetHintMatch && charsetHintMatch.length > 1 ? charsetHintMatch[1] : '';
+  const encoded = NetUtil.encodeUrlComponent(keyword, templateCharset);
+  const encodedBody = encodeURIComponent(keyword);
+
+  let urlPart = (template || '');
   let method = 'GET';
   let body = '';
   let charset = '';
-  let webView = /##webView/i.test(value);
-  value = value.replace(/##webView/ig, '');
-  const optionMatch = value.match(/^([\s\S]*?),(\{[\s\S]*\})$/);
+  let webView = false;
+  const optionMatch = urlPart.match(/^([\s\S]*?),(\{[\s\S]*\})$/);
   if (optionMatch) {
-    value = optionMatch[1];
+    urlPart = optionMatch[1];
     try {
       const options = JSON.parse(optionMatch[2]) as Record<string, Object>;
       method = String(options['method'] || 'GET').toUpperCase();
       charset = String(options['charset'] || '');
       body = String(options['body'] || '')
-        .replace(/\{\{\s*key\s*\}\}/g, encoded)
-        .replace(/\{\{\s*keyword\s*\}\}/g, encoded)
+        .replace(/\{\{\s*key\s*\}\}/g, encodedBody)
+        .replace(/\{\{\s*keyword\s*\}\}/g, encodedBody)
         .replace(/\{\{\s*page\s*\}\}/g, String(page));
-      webView = webView || options['webView'] === true || options['webview'] === true;
+      webView = options['webView'] === true || options['webview'] === true;
     } catch (_e) { /* SourceExecutor will report malformed options during validation. */ }
   }
+  if (/##webView/i.test(urlPart)) {
+    webView = true;
+    urlPart = urlPart.replace(/##webView/ig, '');
+  }
+  let value = urlPart
+    .replace(/\{\{\s*key\s*\}\}/g, encoded)
+    .replace(/\{\{\s*keyword\s*\}\}/g, encoded)
+    .replace(/\{\{\s*page\s*\}\}/g, String(page))
+    .replace(/\{\{\s*pageNum\s*\}\}/g, String(page + 1));
   if (!/^https?:\/\//i.test(value)) value = absoluteUrl_(value, baseUrl);
   return { url: value, method, body, charset, webView };
 }
