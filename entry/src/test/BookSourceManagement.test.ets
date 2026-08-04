@@ -393,6 +393,33 @@ export default function bookSourceManagementTest() {
       expect(searchRateLimitWaitMs_('')).assertEqual(0);
     });
 
+    it('detectsEmpireCmsPlainHtmlRateLimitPage', 0, () => {
+      // 帝国 CMS（爱久久网等）对两次搜索间隔不足时返回 200 状态、1-2KB 的
+      // 普通 HTML 提示页（title/正文"系统限制的搜索时间间隔为 15 秒"），
+      // 没有 alert 脚本，超出 alert 页 500 字节上限；页面只有返回/导航
+      // 链接，没有任何 .html 内容链接。正常搜索结果页带大量 .html 书籍
+      // 链接，不能误判成限频页。
+      const empireCms = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+        '<title>系统限制的搜索时间间隔为 15 秒,请稍后再搜索</title>' +
+        '<meta name="keywords" content="系统限制的搜索时间间隔为 15 秒,请稍后再搜索">' +
+        '</head><body><div class="layout error"><p>系统限制的搜索时间间隔为 15 秒,请稍后再搜索</p>' +
+        '<a id="jump" href="javascript:history.go(-1)"></a></div></body></html>';
+      expect(searchRateLimitWaitMs_(empireCms)).assertEqual(15000);
+      // 带正文脚本的完整限频页超过 500 字节也应识别。
+      const fullPage = empireCms +
+        '<script>$(document).ready(function(){var url=$(\'#jump\').attr(\'href\');});</script>';
+      expect(fullPage.length > 500).assertTrue();
+      expect(searchRateLimitWaitMs_(fullPage)).assertEqual(15000);
+      // 正常搜索结果页（含 .html 书籍链接）不误判。
+      const normalSearch = '<html><head><title>七零四合院里欢乐多 搜索结果_久久小说网</title></head>' +
+        '<body><div class="searchTopic"><a href="/book/12345.html">书名</a></div></body></html>';
+      expect(searchRateLimitWaitMs_(normalSearch)).assertEqual(0);
+      // 无关键字请求的"没有搜索到相关的内容"页不是限频页，不误判。
+      const emptyKeywordPage = '<html><head><title>没有搜索到相关的内容</title></head>' +
+        '<body><p>没有搜索到相关的内容</p></body></html>';
+      expect(searchRateLimitWaitMs_(emptyKeywordPage)).assertEqual(0);
+    });
+
     it('detectsSearchKeywordTooShortAlert', 0, () => {
       // shoujix.com 对短关键词返回 alert("关键字最少 10 个字符") 脚本页。
       const tooShort = '<script>alert("关键字最少 10 个字符");window.history.go(-1);</script>';

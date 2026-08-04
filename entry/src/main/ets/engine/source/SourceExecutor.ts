@@ -398,10 +398,21 @@ function isEmptyKeywordSearchResponse_(body: string): boolean {
 /**
  * 检测搜索频率限制响应。部分站点（如 5299txt.net）在两次搜索间隔不足时
  * 返回一个极短的 alert 脚本页（如 "搜索间隔: 30 秒"），而不是真实搜索结果。
- * 返回需要等待的毫秒数，0 表示不是频率限制页。
+ * 帝国 CMS 站点（爱久久网等）则返回 200 状态、1-2KB 的普通 HTML 提示页
+ * （title/正文"系统限制的搜索时间间隔为 15 秒,请稍后再搜索"），没有 alert
+ * 脚本，超出 alert 页 500 字节的检测范围。返回需要等待的毫秒数，
+ * 0 表示不是频率限制页。
  */
 export function searchRateLimitWaitMs_(body: string): number {
-  if (!body || body.length > 500) return 0;
+  if (!body || body.length > 8000) return 0;
+  // 普通 HTML 限频页（帝国 CMS 等）：无 alert 脚本、约 2KB，title/正文含
+  // "搜索时间间隔为 N 秒"。页面只有返回/导航链接（如 javascript:history.go(-1)），
+  // 没有任何 .html 内容链接——正常搜索结果页会带大量 .html 书籍链接，不会误判。
+  const plainMatch = body.match(/搜索时间间隔(?:为|：|:)\s*(\d+)\s*秒/);
+  if (plainMatch && !/<a\b[^>]*href\s*=\s*["'][^"']+\.(?:html?|shtml)["']/i.test(body)) {
+    return Math.min(parseInt(plainMatch[1], 10) * 1000, 35000);
+  }
+  if (body.length > 500) return 0;
   // alert("搜索间隔: 30 秒") / alert('请30秒后再试') / 操作频繁。
   // 中文站点文案常用全角冒号（"搜索间隔：30 秒"），两种冒号都要解析。
   const limitMatch = body.match(/(?:搜索间隔|间隔|频率|操作频繁|请\s*)(?:[:：]\s*)?(\d+)\s*秒/i);
