@@ -499,6 +499,9 @@ struct AiSourceGeneratePage {
     this.batchGeneratedSources_ = [];
     this.batchService_ = new AiSourceBatchGenerateService();
     try {
+      // 确认弹窗关闭时 ArkUI 仍可能处于列表重绘阶段。让批量服务在下一轮
+      // UI 任务中再发出候选状态更新，避免回调在渲染期间修改 @State 数组。
+      await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 0); });
       const summary = await this.batchService_.run(
         UiUtil.getHostContext(this.getUIContext()), this.normalizedDiscoveryKeyword_(),
         selectedCandidates, this.allowUpdateExisting_, {
@@ -900,7 +903,9 @@ struct AiSourceGeneratePage {
           ListItem() {
             Column({ space: 6 }) {
               Row({ space: 8 }) {
-                Toggle({ type: ToggleType.Checkbox, isOn: candidate.selected })
+                Checkbox({ name: 'ai_candidate_' + candidate.id, group: 'ai_source_candidates' })
+                  .select(candidate.selected)
+                  .selectedColor(ThemeColors.primary(this.isDark))
                   .width(26).height(26)
                   .enabled(candidate.safe && !this.isAnyTaskRunning_())
                   .accessibilityText('选择 ' + candidate.displayName)
@@ -968,7 +973,8 @@ struct AiSourceGeneratePage {
               this.discoveryPhase_ = 'idle';
               this.discoveryError_ = '';
             })
-          Button('导入分析成功的 ' + this.batchGeneratedSources_.length.toString() + ' 个书源').layoutWeight(1).height(42).borderRadius(21)
+          Button('导入成功（' + this.batchGeneratedSources_.length.toString() + '）')
+            .layoutWeight(1).height(42).borderRadius(21).fontSize(13)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
             .enabled(this.batchGeneratedSources_.length > 0)
             .onClick((): void => { this.openBatchImportDialog_(); })
