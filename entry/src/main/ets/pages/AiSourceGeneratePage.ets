@@ -1,5 +1,5 @@
 /** AI 全站书源生成与现有书源修复页面。 */
-import { AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent';
+import { AiRepairScope, AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -97,6 +97,8 @@ struct AiSourceGeneratePage {
   @State repairMode: boolean = false;
   @State repairSourceName: string = '';
   @State invalidGroups: string[] = [];
+  /** 修复链路范围：全部=搜索+发现；search=仅搜索链路；discovery=仅发现链路。 */
+  @State repairScope: AiRepairScope = 'all';
   @State repairLoadError: string = '';
   @State isSaving: boolean = false;
   @State createTab_: number = 0;
@@ -300,7 +302,8 @@ struct AiSourceGeneratePage {
         return;
       }
       const results = this.repairMode && this.repairSource_
-        ? await this.agent_.repair(this.repairSource_, this.searchKeyword, this.invalidGroups)
+        ? await this.agent_.repair(this.repairSource_, this.searchKeyword, this.invalidGroups,
+          this.repairScope)
         : await this.agent_.analyze(this.homepageUrl, this.searchKeyword);
       this.steps = results.slice();
       const compiled = results[AiStep.COMPILE];
@@ -702,7 +705,18 @@ struct AiSourceGeneratePage {
     if (status === 'running') return '进行中';
     if (status === 'done') return '✓';
     if (status === 'error') return '!';
+    if (status === 'skipped') return '○';
     return '−';
+  }
+
+  private repairScopeDesc_(): string {
+    if (this.repairScope === 'search') {
+      return '仅诊断修复搜索链路：搜索结果 → 详情 → 目录 → 正文；发现规则保持原样';
+    }
+    if (this.repairScope === 'discovery') {
+      return '仅诊断修复发现链路：发现分类 → 分类列表 → 详情 → 目录 → 正文；书源无发现规则时自动新增，搜索规则保持原样';
+    }
+    return '诊断修复完整链路：搜索与发现的列表、详情、目录、正文';
   }
 
   private compactDiagnosticValue_(value: string, limit: number = 600): string {
@@ -983,7 +997,35 @@ struct AiSourceGeneratePage {
             Text(this.invalidGroups.length > 0
               ? '待修复阶段：' + this.invalidGroups.join('、')
               : '待修复阶段：先校验现有规则，失败阶段自动修复').fontSize(12)
-              .fontColor(ThemeColors.error(this.isDark)).width('100%').margin({ bottom: 16 })
+              .fontColor(ThemeColors.error(this.isDark)).width('100%').margin({ bottom: 12 })
+            Text('修复范围').fontSize(14)
+              .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%').margin({ bottom: 6 })
+            Row({ space: 0 }) {
+              Button('全部').layoutWeight(1).height(42).fontSize(14)
+                .fontColor(this.repairScope === 'all' ? ThemeColors.primary(this.isDark) :
+                  ThemeColors.secondaryText(this.isDark))
+                .backgroundColor(this.repairScope === 'all' ? ThemeColors.primaryContainer(this.isDark) :
+                  ThemeColors.surface(this.isDark))
+                .accessibilityText('修复范围：全部')
+                .onClick((): void => { this.repairScope = 'all'; })
+              Button('搜索').layoutWeight(1).height(42).fontSize(14)
+                .fontColor(this.repairScope === 'search' ? ThemeColors.primary(this.isDark) :
+                  ThemeColors.secondaryText(this.isDark))
+                .backgroundColor(this.repairScope === 'search' ? ThemeColors.primaryContainer(this.isDark) :
+                  ThemeColors.surface(this.isDark))
+                .accessibilityText('修复范围：仅搜索链路')
+                .onClick((): void => { this.repairScope = 'search'; })
+              Button('发现').layoutWeight(1).height(42).fontSize(14)
+                .fontColor(this.repairScope === 'discovery' ? ThemeColors.primary(this.isDark) :
+                  ThemeColors.secondaryText(this.isDark))
+                .backgroundColor(this.repairScope === 'discovery' ?
+                  ThemeColors.primaryContainer(this.isDark) : ThemeColors.surface(this.isDark))
+                .accessibilityText('修复范围：仅发现链路')
+                .onClick((): void => { this.repairScope = 'discovery'; })
+            }.width('100%')
+            Text(this.repairScopeDesc_()).fontSize(11).lineHeight(16)
+              .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+              .margin({ top: 6, bottom: 16 })
           }
           if (this.repairMode && this.repairLoadError.length > 0) {
             Row() {

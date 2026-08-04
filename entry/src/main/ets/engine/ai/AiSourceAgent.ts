@@ -2902,12 +2902,16 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
 
   private async validate_(keyword: string): Promise<void> {
     if (!this.draft_) return;
-    this.start_(AiStep.VALIDATE, '运行搜索到正文完整链路');
+    const checkSearch = this.scopeIncludesSearch_();
+    const checkDiscovery = this.scopeIncludesDiscovery_() &&
+      !!(this.draft_.exploreUrl || this.draft_.ruleExplores);
+    this.start_(AiStep.VALIDATE, checkSearch && checkDiscovery ? '运行搜索到正文完整链路' :
+      checkSearch ? '运行搜索链路到正文校验' : '运行发现链路到正文校验');
     const checker = new SourceChecker({
       keyword: keyword,
       timeout: Math.max(60000, Math.min(180000, this.timeoutMs_)),
-      checkSearch: true,
-      checkDiscovery: !!(this.draft_.exploreUrl || this.draft_.ruleExplores),
+      checkSearch: checkSearch,
+      checkDiscovery: checkDiscovery,
       checkInfo: true,
       checkCategory: true,
       checkContent: true,
@@ -2916,8 +2920,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     let result = await checker.checkSource(this.draft_);
     // 搜索站点可能在前一轮取证后短暂限流或切换连接；全链路校验的搜索失败
     // 先重试一次，避免把网络瞬态误判成规则错误。第二次仍失败才终止 Agent。
-    if (result.status !== 'success' && result.invalidGroups.some((group: string): boolean =>
-      group.includes('搜索'))) {
+    if (checkSearch && result.status !== 'success' &&
+      result.invalidGroups.some((group: string): boolean => group.includes('搜索'))) {
       this.log_('  全链路搜索第一次失败，重新执行一次搜索校验');
       result = await checker.checkSource(this.draft_);
     }
