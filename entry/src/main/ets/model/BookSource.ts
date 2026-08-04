@@ -392,6 +392,7 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
   result['jsLib'] = source.jsLib;
   result['bookUrlPattern'] = source.bookUrlPattern;
   result['bookSourceComment'] = source.bookSourceComment;
+  result['isAiGenerated'] = source.isAiGenerated;
   result['variableComment'] = source.variableComment;
   result['exploreUrl'] = source.exploreUrl;
   result['exploreScreen'] = source.exploreScreen;

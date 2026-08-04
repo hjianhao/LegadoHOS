@@ -1,17 +1,14 @@
 import { AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent';
-import { AppDatabase } from '../data/database/AppDatabase';
-import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
 import {
   AiSourceBatchSummary, AiSourceCandidate, AiSourceCandidateStatus,
   createAiSourceBatchSummary
 } from '../model/AiSourceDiscovery';
-import {
-  AiGeneratedSourceSaveResult, AiGeneratedSourceSaveService
-} from './AiGeneratedSourceSaveService';
 
 export interface AiSourceBatchCallbacks {
   onCandidateChanged?: (candidate: AiSourceCandidate) => void;
+  /** 全链路完成后的内存书源；由页面交给预览式导入，而不是在这里直接入库。 */
+  onSourceReady?: (candidate: AiSourceCandidate, source: BookSource) => void;
   onSummaryChanged?: (summary: AiSourceBatchSummary) => void;
   onRequestWebView?: (url: string, reason: string) => Promise<string>;
   onBatchError?: (message: string) => void;
@@ -60,37 +57,6 @@ export class AiSourceBatchGenerateService {
 
   private markCancelled_(candidate: AiSourceCandidate, callbacks: AiSourceBatchCallbacks): void {
     this.setStatus_(candidate, 'cancelled', '未执行（已请求停止）', callbacks);
-  }
-
-  private async loadExisting_(candidate: AiSourceCandidate): Promise<BookSource | null> {
-    await AppDatabase.getInstance().waitForInit();
-    const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-    if (candidate.existingSourceId > 0) return await dao.getSourceById(candidate.existingSourceId);
-    return await AiGeneratedSourceSaveService.findExistingByNormalizedUrl(candidate.homepageUrl);
-  }
-
-  private markSaveResult_(candidate: AiSourceCandidate, result: AiGeneratedSourceSaveResult,
-    summary: AiSourceBatchSummary, callbacks: AiSourceBatchCallbacks): void {
-    candidate.savedSourceId = result.sourceId;
-    if (result.status === 'created') {
-      candidate.status = 'created';
-      summary.created++;
-      if (result.sourceId > 0 && !summary.createdSourceIds.includes(result.sourceId)) {
-        summary.createdSourceIds.push(result.sourceId);
-      }
-    } else if (result.status === 'updated') {
-      candidate.status = 'updated';
-      summary.updated++;
-    } else if (result.status === 'unchanged') {
-      candidate.status = 'unchanged';
-      summary.unchanged++;
-    } else {
-      candidate.status = 'skipped';
-      summary.skipped++;
-    }
-    candidate.stepSummary = result.message;
-    this.emit_(candidate, callbacks);
-    this.emitSummary_(summary, callbacks);
   }
 
   async run(context: Context, keyword: string, candidates: AiSourceCandidate[],
@@ -158,20 +124,24 @@ export class AiSourceBatchGenerateService {
           continue;
         }
 
-        const existing = candidate.duplicate !== 'none' ? await this.loadExisting_(candidate) :
-          await AiGeneratedSourceSaveService.findExistingByNormalizedUrl(generated.sourceUrl);
-        let saveResult: AiGeneratedSourceSaveResult;
-        if (existing && allowUpdateExisting) {
-          saveResult = await AiGeneratedSourceSaveService.updateGeneratedSource(
-            existing, generated, 'AI 搜书发现批量更新，测试书名：' + keyword, true);
-        } else if (existing) {
-          saveResult = {
-            status: 'skipped', sourceId: existing.id, changedFields: [], message: '已有书源，未允许更新'
-          };
-        } else {
-          saveResult = await AiGeneratedSourceSaveService.createGeneratedSource(generated, false);
-        }
-        this.markSaveResult_(candidate, saveResult, summary, callbacks);
+        // 批量分析只负责生成并验证书源，不在这里写入数据库。页面会把所有成功项
+        // 一次性交给与普通“导入书源”相同的预览对话框，由用户逐项勾选后再入库。
+        const readySource: BookSource = { ...generated } as BookSource;
+        const now = Date.now();
+        readySource.id = 0;
+        readySource.enabled = false;
+        readySource.group = readySource.group.trim() || 'AI生成';
+        readySource.isAiGenerated = true;
+        readySource.createTime = readySource.createTime || now;
+        // 让预览导入能把已有同 URL 书源标为“更新”，而不是把成功结果误判为“已有”。
+        readySource.updateTime = now;
+        candidate.status = 'ready';
+        candidate.stepSummary = 'AI 分析完成，等待选择导入';
+        candidate.savedSourceId = 0;
+        summary.ready++;
+        callbacks.onSourceReady?.(copyCandidate_(candidate), readySource);
+        this.emit_(candidate, callbacks);
+        this.emitSummary_(summary, callbacks);
       } catch (e) {
         const message = (e as Error).message || String(e);
         summary.failed++;

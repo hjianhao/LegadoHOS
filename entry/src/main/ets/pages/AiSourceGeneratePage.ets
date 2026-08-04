@@ -12,10 +12,11 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
 import { changedSourceFields, SourceRevisionService } from '../service/SourceRevisionService';
-import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import pasteboard from '@ohos.pasteboard';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { AiImportPreviewDialog, AiImportPreviewResult } from '../components/AiImportPreviewDialog';
+import { ImportSourceDialog } from './ImportSourceDialog';
+import { serializeBookSource } from '../model/BookSource';
 import {
   ONLINE_SEARCH_ENGINES, OnlineSearchEngine, buildOnlineSearchUrl, getOnlineSearchEngineName,
   isOnlineSearchResultPage, normalizeOnlineSearchEngine
@@ -113,6 +114,8 @@ struct AiSourceGeneratePage {
   @State batchRunning_: boolean = false;
   @State batchStopRequested_: boolean = false;
   @State batchSummary_: AiSourceBatchSummary = createAiSourceBatchSummary();
+  /** 已通过 AI 全链路、尚未交给用户确认导入的书源。 */
+  @State batchGeneratedSources_: BookSource[] = [];
 
   private agent_: AiSourceAgent | null = null;
   private batchService_: AiSourceBatchGenerateService | null = null;
@@ -121,6 +124,7 @@ struct AiSourceGeneratePage {
   private repairSourceUrl_: string = '';
   private challengeDlg?: CustomDialogController;
   private saveNameDlg?: CustomDialogController;
+  private batchImportDlg?: CustomDialogController;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
   private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
 
@@ -479,19 +483,35 @@ struct AiSourceGeneratePage {
       ],
     });
     if (result.index !== 1) return;
+    // 在确认按钮之后立即冻结本次任务的输入快照。后续分析过程中只使用这份
+    // 快照，避免 UI 刷新或候选列表状态变化把未勾选网站带入批量任务。
+    const selectedCandidates = this.discoveryCandidates_
+      .filter((item: AiSourceCandidate): boolean => item.selected)
+      .map((item: AiSourceCandidate): AiSourceCandidate => this.cloneCandidate_(item, true));
+    if (selectedCandidates.length === 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '没有可分析的已选网站', duration: 1600 });
+      return;
+    }
     this.batchRunning_ = true;
     this.batchStopRequested_ = false;
     this.discoveryPhase_ = 'running';
     this.batchSummary_ = createAiSourceBatchSummary();
+    this.batchGeneratedSources_ = [];
     this.batchService_ = new AiSourceBatchGenerateService();
     try {
       const summary = await this.batchService_.run(
         UiUtil.getHostContext(this.getUIContext()), this.normalizedDiscoveryKeyword_(),
-        this.discoveryCandidates_, this.allowUpdateExisting_, {
+        selectedCandidates, this.allowUpdateExisting_, {
           onCandidateChanged: (candidate: AiSourceCandidate): void => {
             if (!this.pageActive_) return;
             this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
               item.id === candidate.id ? candidate : item);
+          },
+          onSourceReady: (_candidate: AiSourceCandidate, source: BookSource): void => {
+            if (!this.pageActive_) return;
+            const next = this.batchGeneratedSources_.slice();
+            next.push(source);
+            this.batchGeneratedSources_ = next;
           },
           onSummaryChanged: (next: AiSourceBatchSummary): void => {
             if (this.pageActive_) this.batchSummary_ = next;
@@ -504,6 +524,9 @@ struct AiSourceGeneratePage {
         });
       if (this.pageActive_) this.batchSummary_ = summary;
       this.discoveryPhase_ = 'completed';
+      if (this.pageActive_ && this.batchGeneratedSources_.length > 0) {
+        this.openBatchImportDialog_();
+      }
     } catch (e) {
       this.discoveryError_ = '批量任务失败：' + ((e as Error).message || String(e));
       this.discoveryPhase_ = 'error';
@@ -513,23 +536,27 @@ struct AiSourceGeneratePage {
     }
   }
 
+  /** 打开与普通书源导入完全一致的预览/勾选对话框。 */
+  private openBatchImportDialog_(): void {
+    if (this.batchGeneratedSources_.length === 0) return;
+    const payload = '[' + this.batchGeneratedSources_.map((source: BookSource): string =>
+      serializeBookSource(source)).join(',') + ']';
+    this.batchImportDlg = new CustomDialogController({
+      builder: ImportSourceDialog({
+        controller: this.batchImportDlg!,
+        initialJson: payload,
+      }),
+      autoCancel: false,
+      customStyle: true,
+      alignment: DialogAlignment.Center,
+    });
+    this.batchImportDlg.open();
+  }
+
   private requestBatchStop_(): void {
     if (!this.batchRunning_) return;
     this.batchStopRequested_ = true;
     this.batchService_?.requestStop();
-  }
-
-  private async enableBatchCreated_(): Promise<void> {
-    if (this.batchSummary_.createdSourceIds.length === 0) return;
-    try {
-      await AppDatabase.getInstance().waitForInit();
-      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
-      for (const id of this.batchSummary_.createdSourceIds) await dao.toggleEnabled(id, true);
-      BookSourceChangeNotifier.notify();
-      UiUtil.showToast(this.getUIContext(), { message: '已启用本次新增书源', duration: 1800 });
-    } catch (e) {
-      UiUtil.showToast(this.getUIContext(), { message: '启用失败：' + ((e as Error).message || String(e)), duration: 2200 });
-    }
   }
 
   private candidateDuplicateText_(candidate: AiSourceCandidate): string {
@@ -540,6 +567,7 @@ struct AiSourceGeneratePage {
   }
 
   private candidateStatusText_(candidate: AiSourceCandidate): string {
+    if (candidate.status === 'ready') return '分析成功（待选择导入）';
     if (candidate.status === 'created') return '已新增（未启用）';
     if (candidate.status === 'updated') return '已更新';
     if (candidate.status === 'unchanged') return '配置无变化';
@@ -554,7 +582,7 @@ struct AiSourceGeneratePage {
   private batchProgressText_(): string {
     const selected = this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean => item.selected);
     const finished = selected.filter((item: AiSourceCandidate): boolean =>
-      item.status === 'created' || item.status === 'updated' || item.status === 'unchanged' ||
+      item.status === 'ready' || item.status === 'created' || item.status === 'updated' || item.status === 'unchanged' ||
       item.status === 'failed' || item.status === 'skipped' || item.status === 'cancelled').length;
     const current = selected.find((item: AiSourceCandidate): boolean =>
       item.status === 'running' || item.status === 'waiting_user');
@@ -835,9 +863,8 @@ struct AiSourceGeneratePage {
           Text(this.batchRunning_ ? '批量生成进行中' : '批量生成完成')
             .fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(ThemeColors.onSurface(this.isDark)).width('100%')
-          Text('新增 ' + this.batchSummary_.created.toString() + ' · 更新 ' +
-            this.batchSummary_.updated.toString() + ' · 无变化 ' + this.batchSummary_.unchanged.toString() +
-            ' · 失败 ' + this.batchSummary_.failed.toString() + ' · 跳过 ' +
+          Text('分析成功 ' + this.batchSummary_.ready.toString() + ' · 失败 ' +
+            this.batchSummary_.failed.toString() + ' · 跳过 ' +
             this.batchSummary_.skipped.toString() + ' · 未执行 ' + this.batchSummary_.cancelled.toString())
             .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
           if (this.batchRunning_) {
@@ -907,7 +934,8 @@ struct AiSourceGeneratePage {
                 Text(this.candidateStatusText_(candidate) + (candidate.stepSummary ? '：' + candidate.stepSummary : ''))
                   .fontSize(11).lineHeight(16)
                   .fontColor(candidate.status === 'failed' ? ThemeColors.error(this.isDark) :
-                    candidate.status === 'created' ? ThemeColors.success(this.isDark) : ThemeColors.secondaryText(this.isDark))
+                    candidate.status === 'ready' || candidate.status === 'created' ? ThemeColors.success(this.isDark) :
+                      ThemeColors.secondaryText(this.isDark))
                   .width('100%').maxLines(3)
               }
               if (candidate.logs.length > 0 && (candidate.status === 'running' || candidate.status === 'waiting_user')) {
@@ -940,10 +968,10 @@ struct AiSourceGeneratePage {
               this.discoveryPhase_ = 'idle';
               this.discoveryError_ = '';
             })
-          Button('启用本次新增').layoutWeight(1).height(42).borderRadius(21)
+          Button('导入分析成功的 ' + this.batchGeneratedSources_.length.toString() + ' 个书源').layoutWeight(1).height(42).borderRadius(21)
             .backgroundColor(ThemeColors.primary(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark))
-            .enabled(this.batchSummary_.createdSourceIds.length > 0)
-            .onClick((): void => { void this.enableBatchCreated_(); })
+            .enabled(this.batchGeneratedSources_.length > 0)
+            .onClick((): void => { this.openBatchImportDialog_(); })
           Button('复制摘要').layoutWeight(1).height(42).borderRadius(21)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
             .onClick((): void => { void this.copyBatchSummary_(); })

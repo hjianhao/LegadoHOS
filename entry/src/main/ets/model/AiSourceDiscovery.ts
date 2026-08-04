@@ -17,7 +17,7 @@ export interface AiSourceCandidateSample {
 export type AiSourceCandidateDuplicate = 'none' | 'exact' | 'same_host';
 
 export type AiSourceCandidateStatus =
-  'candidate' | 'queued' | 'running' | 'waiting_user' | 'created' | 'updated' |
+  'candidate' | 'queued' | 'running' | 'waiting_user' | 'ready' | 'created' | 'updated' |
   'unchanged' | 'failed' | 'skipped' | 'cancelled';
 
 export interface AiSourceCandidate {
@@ -47,6 +47,8 @@ export interface AiSourceCandidate {
 }
 
 export interface AiSourceBatchSummary {
+  /** 已完成全链路分析、等待用户在导入预览中选择的书源数量。 */
+  ready: number;
   created: number;
   updated: number;
   unchanged: number;
@@ -58,6 +60,7 @@ export interface AiSourceBatchSummary {
 
 export function createAiSourceBatchSummary(): AiSourceBatchSummary {
   return {
+    ready: 0,
     created: 0,
     updated: 0,
     unchanged: 0,

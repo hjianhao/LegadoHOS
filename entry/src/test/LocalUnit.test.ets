@@ -199,6 +199,9 @@ export default function localUnitTest() {
       expect(String(exported['bookSourceGroup'])).assertEqual('小说,测试');
       expect(String(exported['customExtension'])).assertEqual('keep-me');
       expect(Boolean(exported['enabledExplore'])).assertFalse();
+      source.isAiGenerated = true;
+      const aiExported = JSON.parse(serializeBookSource(source)) as Record<string, Object>;
+      expect(Boolean(aiExported['isAiGenerated'])).assertTrue();
     });
     it('lkongTimestampAndRecentFilter', 0, () => {
       const now = Date.now();
