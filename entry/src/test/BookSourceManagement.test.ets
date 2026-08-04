@@ -10,7 +10,7 @@ import {
   hasUsableSearchIdentity,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
-  sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
+  sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName, sanitizeAiBookName,
   preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
   unwrapJsCallUrlValue_, buildUrl
 } from '../main/ets/engine/source/SourceExecutor';
@@ -945,6 +945,16 @@ export default function bookSourceManagementTest() {
       expect(formatLegadoBookName('我，刘立东，专治四合院各种不服'))
         .assertEqual('我，刘立东，专治四合院各种不服');
       expect(formatLegadoBookName('三体 作者：刘慈欣')).assertEqual('三体');
+      expect(sanitizeAiBookName(
+        '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', '🎉 抖音小说(AI)',
+        'https://www.douyinxs.com'))
+        .assertEqual('都市 七零农村大旱，我家挖出地下暗河');
+      expect(sanitizeAiBookName(
+        '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', '其他书源(AI)',
+        'https://www.example.com'))
+        .assertEqual('都市 七零农村大旱，我家挖出地下暗河');
+      expect(sanitizeAiBookName('抖音小说家', '🎉 抖音小说(AI)'))
+        .assertEqual('抖音小说家');
     });
 
     it('normalizesCheckDependencies', 0, () => {
