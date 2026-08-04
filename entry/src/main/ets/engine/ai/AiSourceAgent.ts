@@ -927,6 +927,9 @@ export function isLikelyAiBookDetailUrl(url: string): boolean {
   if (isLikelyAiChapterUrl(url)) return false;
   const pathMatch = url.trim().match(/^https?:\/\/[^/?#]+([^?#]*)/i);
   const path = pathMatch && pathMatch.length > 1 ? pathMatch[1].toLowerCase() : '';
+  // 移动站卡片 onclick 里的 JS 调用（如 newWebView('/b/x.html', ...)）被误当 URL 时，
+  // 路径会含引号/括号/空格，不可能是真实详情地址。
+  if (/[\s()'"<>]/.test(path)) return false;
   return !/(^|\/)(?:bookcat|category|categories|genre|genres|tag|tags|author|authors|rank|ranking|sort|classify|search|mybook(?:\.html)?|bookcase|bookshelf|bookmark|login|signin|register|signup|account)(?:\/|$)/i
     .test(path);
 }

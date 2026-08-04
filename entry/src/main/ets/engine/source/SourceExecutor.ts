@@ -155,10 +155,28 @@ function contentLinkText_(html: string): string {
     .trim();
 }
 
+/**
+ * 部分移动小说站不用 <a href>，跳转写在 onclick 等 JS 属性里：
+ *   onclick="newWebView('/b/232832.html', '', '')"
+ *   onclick="window.location.href='/b/232832.html'"
+ * 提取出的值是 JS 调用而不是 URL，解开调用取第一个引号参数
+ * （须形如路径/URL，避免误取 confirm('删除') 之类的参数）。
+ */
+export function unwrapJsCallUrlValue_(raw: string): string {
+  const value = (raw || '').trim();
+  if (!value) return value;
+  const stripped = value.replace(/^javascript:\s*/i, '');
+  const assign = stripped.match(/(?:window\.)?location\.href\s*=\s*['"]([^'"]+)['"]/i);
+  if (assign) return assign[1];
+  const call = stripped.match(/^[\w$]+(?:\.\w+)*\s*\(\s*['"]([^'"]+)['"]/);
+  if (call && /[\/:]/.test(call[1])) return call[1];
+  return value;
+}
+
 /** 将正文分页链接解析为绝对 URL，供 AI 嗅探和执行器共用。 */
 export function resolveContentPageUrl(url: string, currentUrl: string): string {
   if (!url) return '';
-  const nextUrl = url.trim();
+  const nextUrl = unwrapJsCallUrlValue_(url.trim());
   if (!nextUrl || nextUrl.startsWith('#') || nextUrl.startsWith('javascript:')) return '';
   if (nextUrl.startsWith('//')) return currentUrl.startsWith('http:') ? 'http:' + nextUrl : 'https:' + nextUrl;
   if (/^https?:\/\//i.test(nextUrl)) return nextUrl.replace(/#.*$/, '');
@@ -3685,6 +3703,9 @@ export class SourceExecutor {
           noteUrl = parser.getAttr(links[0], 'href') || '';
         }
       }
+      // 移动站卡片常把跳转写在 onclick（如 newWebView('/b/x.html', '', '')），
+      // 提取出的属性值是 JS 调用而不是 URL，先解开再按相对地址拼接。
+      noteUrl = unwrapJsCallUrlValue_(noteUrl);
 
       // 相对路径转绝对
       if (coverUrl && coverUrl.startsWith('//')) {
@@ -4304,7 +4325,7 @@ export class SourceExecutor {
 
   private resolvePageUrl(url: string, currentUrl: string): string {
     if (!url) return '';
-    let nextUrl = url.trim();
+    let nextUrl = unwrapJsCallUrlValue_(url.trim());
     if (!nextUrl || nextUrl.startsWith('#') || nextUrl.startsWith('javascript:')) return '';
     if (nextUrl.startsWith('//')) return 'https:' + nextUrl;
     if (nextUrl.startsWith('http://') || nextUrl.startsWith('https://')) return nextUrl;

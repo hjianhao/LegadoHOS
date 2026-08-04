@@ -11,7 +11,8 @@ import {
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
-  preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_
+  preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
+  unwrapJsCallUrlValue_
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -783,6 +784,37 @@ export default function bookSourceManagementTest() {
       expect(resolveContentPageUrl(
         '/131/131009/48367353.html', 'http://www.xbiqugu.la/131/131009/'
       )).assertEqual('http://www.xbiqugu.la/131/131009/48367353.html');
+    });
+
+    it('unwrapsJsCallOnclickUrlsFromMobileNovelCards', 0, () => {
+      // 阅友小说等移动站卡片：onclick="newWebView('/b/232832.html', '', '')"
+      expect(unwrapJsCallUrlValue_("newWebView('/b/232832.html', '', '')"))
+        .assertEqual('/b/232832.html');
+      expect(unwrapJsCallUrlValue_('window.location.href="/b/232832.html"'))
+        .assertEqual('/b/232832.html');
+      expect(unwrapJsCallUrlValue_("location.href='/b/232832.html';"))
+        .assertEqual('/b/232832.html');
+      expect(unwrapJsCallUrlValue_("javascript:newWebView('/b/232832.html', '', '')"))
+        .assertEqual('/b/232832.html');
+      expect(unwrapJsCallUrlValue_("window.open('https://m.example.com/book/1.html')"))
+        .assertEqual('https://m.example.com/book/1.html');
+      // 普通 URL / 相对路径保持不变
+      expect(unwrapJsCallUrlValue_('https://sma.yueyouxs.com/b/232832.html'))
+        .assertEqual('https://sma.yueyouxs.com/b/232832.html');
+      expect(unwrapJsCallUrlValue_('/b/232832.html')).assertEqual('/b/232832.html');
+      // 无 URL 参数的 JS 调用（如 confirm('删除')）不误拆
+      expect(unwrapJsCallUrlValue_("confirm('删除')")).assertEqual("confirm('删除')");
+      expect(unwrapJsCallUrlValue_('')).assertEqual('');
+      // 与相对地址解析组合：搜索卡片提取值直接可用
+      expect(resolveContentPageUrl("newWebView('/b/232832.html', '', '')",
+        'https://sma.yueyouxs.com/s/1.html')).assertEqual('https://sma.yueyouxs.com/b/232832.html');
+    });
+
+    it('rejectsJsCallGarbageAsAiBookDetailUrl', 0, () => {
+      expect(isLikelyAiBookDetailUrl(
+        "https://sma.yueyouxs.com/newWebView('/b/232832.html', '', '')"
+      )).assertFalse();
+      expect(isLikelyAiBookDetailUrl('https://sma.yueyouxs.com/b/232832.html')).assertTrue();
     });
 
     it('selectsOnlyReadableChaptersForContentCheck', 0, () => {
