@@ -11,7 +11,7 @@ import {
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
-  preferCompleteBookName, normalizeMediaUrlValue
+  preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -20,7 +20,11 @@ import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/s
 import {
   inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
   isLikelyAiBookDetailUrl, isLikelyImageCaptchaPage, isPlausibleAiBookInfo,
-  isUsableAiCoverRule, correctAiCoverRuleFromHtml, materializeAgentRequest, prepareSourceAgentHtml
+  isUsableAiCoverRule, correctAiCoverRuleFromHtml, materializeAgentRequest,
+  prepareSourceAgentHtml, isLikelyAiLoginPage, isLikelyAiLoginResultPage,
+  hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
+  inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
+  patchSearchRuleCharset_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
@@ -30,6 +34,9 @@ import { AiSourceDiscoveryService } from '../main/ets/service/AiSourceDiscoveryS
 import {
   buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
 } from '../main/ets/service/OnlineSearchEngineService';
+import {
+  isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_
+} from '../main/ets/util/NetUtil';
 
 export default function bookSourceManagementTest() {
   describe('bookSourceManagement', () => {
@@ -87,6 +94,78 @@ export default function bookSourceManagementTest() {
         .assertEqual('example.com');
       expect(AiSourceDiscoveryService.normalizedSiteKey('https://m.example.com/book/1'))
         .assertEqual('m.example.com');
+    });
+
+    it('doesNotTreatHiddenHomepageLoginAsLoginGate', 0, () => {
+      const homepage = '<form class="search"><input name="keyword"></form>' +
+        '<div class="login-modal" style="display:none"><form>' +
+        '<input type="password"><span>登录</span></form></div>';
+      expect(isLikelyAiLoginPage(homepage, 'https://example.com/')).assertFalse();
+      expect(isLikelyAiLoginPage(
+        '<form action="/login"><input type="password"><button>登录</button></form>',
+        'https://example.com/login')).assertTrue();
+      expect(isLikelyAiLoginPage(
+        '<form><input type="password"><button>登录</button></form>',
+        'https://example.com/login.html')).assertTrue();
+    });
+
+    it('detectsLoginResultPageReturnedBySearch', 0, () => {
+      // 630read.com / 3qzw.org 搜索接口返回的会员登录页：
+      // 包含 <h2>会员登录</h2>、密码输入框、以及站点 chrome 的 /book/ 导航链接
+      const loginResultPage = '<!doctype html><html><head><title>会员登录</title></head><body>' +
+        '<nav><a href="/book/1">书库</a> <a href="/book/2">排行</a></nav>' +
+        '<h2>会员登录</h2>' +
+        '<div class="login_name"><form action="/login.php">' +
+        '<input id="user_name" type="text" size="20">' +
+        '<input id="password" type="password" size="20">' +
+        '<button type="submit">登录</button></form></div>' +
+        '<div class="footer">看不清？点击刷新</div></body></html>';
+      expect(isLikelyAiLoginResultPage(loginResultPage)).assertTrue();
+
+      // 正常搜索结果页不应被误判为登录页
+      const searchResultsPage = '<!doctype html><html><head><title>搜索结果</title></head><body>' +
+        '<ul class="search-result-list">' +
+        '<li class="book-item"><a href="/book/101/">斗罗大陆</a> <span>作者：唐家三少</span></li>' +
+        '<li class="book-item"><a href="/book/102/">斗破苍穹</a> <span>作者：天蚕土豆</span></li>' +
+        '</ul></body></html>';
+      expect(isLikelyAiLoginResultPage(searchResultsPage)).assertFalse();
+
+      // 无登录标题的页面不应被误判
+      expect(isLikelyAiLoginResultPage('<html><body>普通页面</body></html>')).assertFalse();
+    });
+
+    it('detectsLoginPageWithSiteChromeAsLoginGate', 0, () => {
+      // 搜索返回的登录页带有站点 chrome（/book/ 导航链接 + 全局搜索框），
+      // isLikelyAiLoginPage 应仍能识别为登录门禁
+      const loginPageWithChrome = '<!doctype html><html><head><title>会员登录</title></head><body>' +
+        '<form class="search" action="/search.html"><input name="keyword" type="search"></form>' +
+        '<nav><a href="/book/1">书库</a></nav>' +
+        '<h2>会员登录</h2>' +
+        '<form action="/login.php"><input type="password"><button>登录</button></form>' +
+        '</body></html>';
+      expect(isLikelyAiLoginPage(loginPageWithChrome, 'https://3qzw.org/search.html')).assertTrue();
+
+      // 正常首页带隐藏登录框不应被误判
+      const homepageWithSearch = '<form class="search"><input name="keyword"></form>' +
+        '<div class="book-list"><a href="/book/1">书1</a></div>';
+      expect(isLikelyAiLoginPage(homepageWithSearch, 'https://example.com/')).assertFalse();
+    });
+
+    it('hasAiSearchResultMarkupDetectsRealSearchPages', 0, () => {
+      // 有书籍结果卡片的页面
+      expect(hasAiSearchResultMarkup_(
+        '<ul><li class="book-item"><a href="/book/1">书1</a></li></ul>'
+      )).assertTrue();
+      // 有 3 条以上书籍详情链接的页面
+      expect(hasAiSearchResultMarkup_(
+        '<a href="/book/1">书1</a><a href="/book/2">书2</a><a href="/book/3">书3</a>'
+      )).assertTrue();
+      // 只有少量导航链接的登录页不算搜索结果页
+      expect(hasAiSearchResultMarkup_(
+        '<nav><a href="/book/">书库</a></nav>'
+      )).assertFalse();
+      // 空页面
+      expect(hasAiSearchResultMarkup_('')).assertFalse();
     });
 
     it('keepsOnlyRelevantSearchSitesAndStableCandidateIds', 0, () => {
@@ -153,6 +232,100 @@ export default function bookSourceManagementTest() {
         'https://new.example.com/search?q={{key}}');
     });
 
+    it('infersMobileSearchFormWithShortFieldName', 0, () => {
+      // 必去小说移动版（m.ibiquw.org）首页表单：action=/s.php、method=post、
+      // 关键词字段 name="s"（id="s_key"）。canonical 指向移动域名，但桌面版搜索
+      // 路径 /modules/article/search.php 在移动域名上 404；必须能在移动首页上
+      // 识别出 /s.php 这个真实搜索接口，否则迁移后的搜索请求会落到不存在的路径。
+      const mobileForm = '<form id="formsearch" name="articlesearch" method="post" action="/s.php">' +
+        '<input name="submit" type="submit" value="">' +
+        '<select id="searchType" name="type" hidden="true">' +
+        '<option value="articlename"></option><option value="author"></option></select>' +
+        '<input id="s_key" class="bk" name="s" type="text" value="输入搜索词"/></form>';
+      const request = inferSearchRequest(mobileForm, 'http://m.ibiquw.org/', '斗罗大陆');
+      expect(request?.method || '').assertEqual('POST');
+      expect(request?.ruleSearchUrl || '').assertContain('http://m.ibiquw.org/s.php');
+      expect(request?.ruleSearchUrl || '').assertContain('s={{key}}');
+      expect(request?.ruleSearchUrl || '').assertContain('type=articlename');
+      const spec = materializeAgentRequest(
+        request?.ruleSearchUrl || '', '斗罗大陆', 1, 'http://m.ibiquw.org');
+      expect(spec.url).assertEqual('http://m.ibiquw.org/s.php');
+      expect(spec.method).assertEqual('POST');
+      expect(spec.body).assertContain('s=%E6%96%97%E7%BD%97%E5%A4%A7%E9%99%86');
+    });
+
+    it('doesNotFlagBookNamesContainingMetadataWordsAsCardText', 0, () => {
+      // 合法书名中可能包含“作者”“状态”“大小”“字数”等字样（如“快穿我渣了
+      // 我的作者”），但这些词后面没有冒号，不是卡片元数据字段。只有带冒号
+      // 分隔（作者：xxx）或操作类标签（加入书架）才应被判为卡片噪声。
+      expect(hasAiSearchCardMetadata_('快穿我渣了我的作者')).assertFalse();
+      expect(hasAiSearchCardMetadata_('我的大小姐')).assertFalse();
+      expect(hasAiSearchCardMetadata_('字数游戏')).assertFalse();
+      // 真实卡片污染文本带冒号，仍要识别。
+      expect(hasAiSearchCardMetadata_('我门我派我江湖作者：关外大状...连载中')).assertTrue();
+      expect(hasAiSearchCardMetadata_('斗罗大陆 状态：连载中')).assertTrue();
+      expect(hasAiSearchCardMetadata_('更新时间：2024-01-01')).assertTrue();
+      expect(hasAiSearchCardMetadata_('加入书架')).assertTrue();
+      expect(hasAiSearchCardMetadata_('2024-01-01 第一章')).assertTrue();
+    });
+
+    it('detectsUnevaluableSearchTemplateWithCookieExpression', 0, () => {
+      // 当阅读网（dangyuedu.com）的旧搜索规则使用 {{cookie.removeCookie(...)}}
+      // 多行模板，本执行器没有 cookie 对象无法求值，URL 会被拼坏。
+      // 这类模板必须被识别为不可用，触发重新生成。
+      const cookieTemplate = 'https://www.dangyuedu.com/{{cookie.removeCookie(source.getKey())}}\n' +
+        'https://www.sososhu.com/?q={{key}}&site=dangyuedu&Submit=';
+      expect(isUnevaluableSearchTemplate_(cookieTemplate)).assertTrue();
+      // 标准变量模板不应被误判。
+      expect(isUnevaluableSearchTemplate_('https://example.com/search?q={{key}}')).assertFalse();
+      expect(isUnevaluableSearchTemplate_('https://example.com/search?q={{key}}&page={{page}}')).assertFalse();
+      expect(isUnevaluableSearchTemplate_('')).assertFalse();
+    });
+
+    it('infersSearchFormFromInlineDocumentWriteScript', 0, () => {
+      // dangyuedu.com 的 search() 用 document.write 输出表单，WebView 提取的
+      // outerHTML 可能不含渲染结果，但内联脚本源码仍包含完整 form HTML。
+      const html = '<html><body><div class="search"><script>' +
+        'document.write(\'<form name="t_frmsearch" method="get" action="https://www.sososhu.com/" target="_blank" class="search-form">' +
+        '<input id="searchkey" type="text" name="q" placeholder="可搜书名和作者">' +
+        '<input type="hidden" name="site" value="dangyuedu">' +
+        '<button type="submit" name="Submit" value="搜索">搜索</button></form>\');</script></div></body></html>';
+      const request = inferSearchRequest(html, 'https://www.dangyuedu.com/', '长生');
+      expect(request?.ruleSearchUrl || '').assertContain('https://www.sososhu.com/');
+      expect(request?.ruleSearchUrl || '').assertContain('q={{key}}');
+      expect(request?.ruleSearchUrl || '').assertContain('site=dangyuedu');
+      expect(request?.method || '').assertEqual('GET');
+    });
+
+    it('detectsLinkBasedLoginResultPage', 0, () => {
+      // 搜搜书（sososhu.com）的“需要登录”页用 <a href="/?action=login"> 跳转
+      // 而不是 form，旧检测只认 form/password，会漏判。
+      const loginPage = '<!DOCTYPE html><html><head><title>需要登录 - 搜搜书</title></head>' +
+        '<body><div class="login-required-box"><h2>需要登录才能搜索</h2>' +
+        '<a href="/?action=login&redirect=%2F" class="btn btn-primary">立即登录</a>' +
+        '<a href="/" class="btn btn-ghost">返回首页</a></div></body></html>';
+      expect(isLikelyAiLoginResultPage(loginPage)).assertTrue();
+      // 正常搜索结果页不应被误判。
+      const searchPage = '<html><head><title>搜索结果</title></head>' +
+        '<body><ul class="item"><li><a href="/book/1">书名</a></li></ul></body></html>';
+      expect(isLikelyAiLoginResultPage(searchPage)).assertFalse();
+    });
+
+    it('detectsCrossDomainMigrationFromHighFrequencyLinks', 0, () => {
+      // lewenge.cc 首页 301 跳转到 lewendu8.net，新域名页面没有 canonical，
+      // 但包含大量指向 lewendu8.net 的绝对链接。高频跨域链接应被识别为迁移。
+      const links = Array.from({ length: 8 }, (_, i) =>
+        `<a href="http://www.lewendu8.net/books/${i}/${i}00/6527350${i}.html">书${i}</a>`).join('');
+      const html = `<html><body>${links}` +
+        '<a href="http://www.baidu.com/s?wd=乐文">百度</a></body></html>';
+      const origin = inferMobileCanonicalOrigin_(html, 'http://www.lewenge.cc/');
+      expect(origin).assertEqual('http://www.lewendu8.net');
+      // 低频跨域链接（仅 1-2 次）不应被误判为迁移，可能是广告/CDN。
+      const lowFreq = '<html><body><a href="http://cdn.example.com/lib.js">cdn</a>' +
+        '<a href="http://ads.example.net/ad">ad</a></body></html>';
+      expect(inferMobileCanonicalOrigin_(lowFreq, 'http://www.lewenge.cc/')).assertEqual('');
+    });
+
     it('redactsCredentialValuesButKeepsSelectorDom', 0, () => {
       const html = '<html><head><script>ignore()</script></head><body>' +
         '<input type="password" name="password" value="secret">' +
@@ -192,6 +365,151 @@ export default function bookSourceManagementTest() {
         completedSearch + '<script>var _cf_chl_opt = {};</script>')).assertFalse();
     });
 
+    it('detectsGuardAutoJsChallengePage', 0, () => {
+      // zqb88.cn 等站点使用 _guard/auto.js 做 JS 挑战：首次请求只返回一个
+      // 极短的 <script src="/_guard/auto.js">，必须用 WebView 执行脚本写入
+      // Cookie 后才能访问真实内容。
+      const guardChallenge = '<script src="/_guard/auto.js"></script>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(guardChallenge)).assertTrue();
+      // 正常页面不应被误判。
+      const normalPage = '<html><body><ul class="item"><li><a href="/book/1">书名</a></li></ul>' +
+        '<script src="/static/js/main.js"></script></body></html>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(normalPage)).assertFalse();
+    });
+
+    it('detectsSearchRateLimitAlertPage', 0, () => {
+      // 5299txt.net 等站点在两次搜索间隔不足时返回极短的 alert 脚本页。
+      const rateLimit = '<script>alert("搜索间隔: 30 秒");window.history.go(-1);</script>';
+      expect(searchRateLimitWaitMs_(rateLimit)).assertEqual(30000);
+      // 不同格式的频率限制提示。
+      const rateLimit2 = '<script>alert("请30秒后再试");location.href="/";</script>';
+      expect(searchRateLimitWaitMs_(rateLimit2)).assertEqual(30000);
+      // 正常搜索结果页不应被误判。
+      const normalSearch = '<html><body><ul class="item"><li><a href="/book/1">书名</a></li></ul></body></html>';
+      expect(searchRateLimitWaitMs_(normalSearch)).assertEqual(0);
+      // 空页面不触发。
+      expect(searchRateLimitWaitMs_('')).assertEqual(0);
+    });
+
+    it('detectsSearchKeywordTooShortAlert', 0, () => {
+      // shoujix.com 对短关键词返回 alert("关键字最少 10 个字符") 脚本页。
+      const tooShort = '<script>alert("关键字最少 10 个字符");window.history.go(-1);</script>';
+      expect(isSearchKeywordTooShortAlert_(tooShort)).assertTrue();
+      const tooShort2 = '<script>alert("搜索词太短");history.back();</script>';
+      expect(isSearchKeywordTooShortAlert_(tooShort2)).assertTrue();
+      // GBK 站点返回的 alert 页没有 charset 声明，decodeBody 按 UTF-8 解码后
+      // 中文变成乱码，但 alert + window.history.go 的脚本结构仍可识别。
+      const gbkMojibake = '<script>alert("éå³å­æå° 10 ä¸ªå­ç¬¦");window.history.go(-1);</script>';
+      expect(isSearchKeywordTooShortAlert_(gbkMojibake)).assertTrue();
+      // 正常搜索结果页不误判。
+      const normal = '<html><body><ul class="item"><li><a href="/book/1">书名</a></li></ul></body></html>';
+      expect(isSearchKeywordTooShortAlert_(normal)).assertFalse();
+    });
+
+    it('classifiesSearchAlertPagesByText', 0, () => {
+      // decodeBody 修复后，GBK alert 页的文案可读，分类必须按语义区分
+      // "关键词太短"与"搜索频率限制"，不能把限频页误报成关键词过短。
+      // shoujix.com 的"搜索间隔：30 秒"限频页（此前被 UTF-8 解码成乱码，
+      // 结构分支只能猜到"关键词太短"，导致兜底关键词也失败、Agent 终止）。
+      const rateLimit = '<script>alert("搜索间隔：30 秒");window.history.go(-1);</script>';
+      const rateInfo = extractSearchAlertInfo_(rateLimit);
+      expect(rateInfo !== null).assertTrue();
+      expect(rateInfo!.kind).assertEqual('rateLimit');
+      expect(rateInfo!.waitMs).assertEqual(30000);
+      expect(rateInfo!.text).assertEqual('搜索间隔：30 秒');
+      const rateLimit2 = '<script>alert("请30秒后再试");location.href="/";</script>';
+      const rateInfo2 = extractSearchAlertInfo_(rateLimit2);
+      expect(rateInfo2 !== null).assertTrue();
+      expect(rateInfo2!.kind).assertEqual('rateLimit');
+      expect(rateInfo2!.waitMs).assertEqual(30000);
+      // 关键词太短提示页分类为 keywordTooShort，触发兜底长关键词机制。
+      const tooShort = '<script>alert("关键字最少 10 个字符");window.history.go(-1);</script>';
+      const tooShortInfo = extractSearchAlertInfo_(tooShort);
+      expect(tooShortInfo !== null).assertTrue();
+      expect(tooShortInfo!.kind).assertEqual('keywordTooShort');
+      const tooShort2 = '<script>alert("搜索词太短");history.back();</script>';
+      const tooShortInfo2 = extractSearchAlertInfo_(tooShort2);
+      expect(tooShortInfo2 !== null).assertTrue();
+      expect(tooShortInfo2!.kind).assertEqual('keywordTooShort');
+      // 可读但不属于已知拦截类型（如登录提示）：报告真实文案，由 Agent 决策。
+      const loginHint = '<script>alert("请先登录");window.history.go(-1);</script>';
+      const loginInfo = extractSearchAlertInfo_(loginHint);
+      expect(loginInfo !== null).assertTrue();
+      expect(loginInfo!.kind).assertEqual('unknown');
+      expect(loginInfo!.text).assertEqual('请先登录');
+      // 正常搜索结果页不是 alert 拦截页。
+      const normal = '<html><body><ul class="item"><li><a href="/book/1">书名</a></li></ul></body></html>';
+      expect(extractSearchAlertInfo_(normal)).assertNull();
+      // 空页面不触发。
+      expect(extractSearchAlertInfo_('')).assertNull();
+    });
+
+    it('detectsRedirectLoopError', 0, () => {
+      // yimixs.com 搜索接口被 RCP 自动重定向 50 跳后抛出此错误：
+      // POST /search → 302 /jd-fw-key?url=/search（中间跳 Set-Cookie 不被
+      // RCP 应用）→ 302 回 /search → 无 cookie 再次 302 → 无限循环。
+      expect(isRedirectLoopError('Number of redirects hit maximum amount')).assertTrue();
+      expect(isRedirectLoopError('businessError: 1007900047 redirect')).assertTrue();
+      expect(isRedirectLoopError('HTTP 302: 服务器拒绝')).assertFalse();
+      expect(isRedirectLoopError('')).assertFalse();
+    });
+
+    it('resolvesRedirectLocation', 0, () => {
+      // 绝对 URL 原样返回。
+      expect(resolveRelativeUrl_('http://a.com/x', 'http://b.com/y')).assertEqual('http://b.com/y');
+      // 根相对路径：基于 baseUrl 的 origin。
+      expect(resolveRelativeUrl_('http://m.yimixs.xyz/search', '/jd-fw-key?url=/search'))
+        .assertEqual('http://m.yimixs.xyz/jd-fw-key?url=/search');
+      // 协议相对：继承 baseUrl 的 scheme。
+      expect(resolveRelativeUrl_('https://a.com/x', '//cdn.com/y')).assertEqual('https://cdn.com/y');
+      // 路径相对：基于 baseUrl 目录（忽略 query）。
+      expect(resolveRelativeUrl_('http://a.com/dir/page?k=1', 'sibling')).assertEqual('http://a.com/dir/sibling');
+      // 根目录下的路径相对。
+      expect(resolveRelativeUrl_('http://a.com/dir/page', 'sibling')).assertEqual('http://a.com/dir/sibling');
+      // 无路径的 baseUrl。
+      expect(resolveRelativeUrl_('http://a.com', 'b')).assertEqual('http://a.com/b');
+    });
+
+    it('normalizesVisitedRedirectUrls', 0, () => {
+      // yimixs 的 /jd-fw-key 把 Location 写成 %2Fsearch（编码形式），解码后是
+      // //search（字面 / + 解码出的 /），必须压缩成 /search 才能与已访问的
+      // 原始地址 http://m.yimixs.xyz/search 对上，否则循环闭合检测失效。
+      const normalized = normalizeVisitedUrl_('http://m.yimixs.xyz/%2Fsearch');
+      expect(normalized).assertEqual('http://m.yimixs.xyz/search');
+      // fragment 不影响循环检测。
+      expect(normalizeVisitedUrl_('http://a.com/search#top')).assertEqual('http://a.com/search');
+      // 非法百分号序列不抛错，原样返回。
+      expect(normalizeVisitedUrl_('http://a.com/%zz')).assertEqual('http://a.com/%zz');
+      // 解码 + 压缩 + 去 fragment 组合。
+      expect(normalizeVisitedUrl_('http://a.com/%2Fsearch#x')).assertEqual('http://a.com/search');
+    });
+
+    it('closesRedirectLoopToOriginalUrl', 0, () => {
+      // 模拟 yimixs 防盗链 cookie 门的完整重定向链（curl 实测）：
+      // POST /search（无 cookie）→ 302 /jd-fw-key?url=/search（中间跳种
+      // token/random cookie）→ 302 %2Fsearch（回到原始地址）。手动跟随的
+      // 循环闭合检测必须把 %2Fsearch 规范化后判定为"已访问过原始 URL"，
+      // 从而跳出跟随、用种好的 cookie 重放原始 POST 请求。
+      const original = 'http://m.yimixs.xyz/search';
+      const visited: string[] = [normalizeVisitedUrl_(original)];
+      let current = original;
+      // 第一跳：POST /search → 302 /jd-fw-key?url=/search
+      const hop1 = resolveRelativeUrl_(current, '/jd-fw-key?url=/search');
+      visited.push(normalizeVisitedUrl_(hop1));
+      current = hop1;
+      // 第二跳：GET /jd-fw-key → 302 %2Fsearch（Set-Cookie: token/random）
+      const hop2 = resolveRelativeUrl_(current, '%2Fsearch');
+      const loopClosed = visited.indexOf(normalizeVisitedUrl_(hop2)) >= 0;
+      expect(loopClosed).assertTrue();
+      // 循环闭合时 cookie 已种好，重放原始 POST /search 可直接拿到结果页。
+      const replayCookie = 'token=6f1e0a62825fe4fe61639b657af52fd4; random=20882191';
+      expect(replayCookie.indexOf('token=') >= 0).assertTrue();
+      expect(replayCookie.indexOf('random=') >= 0).assertTrue();
+      // 正常 302 跳转（目标未访问过）不能误判为循环。
+      const normalTarget = resolveRelativeUrl_('http://site.com/a', '/b');
+      expect(visited.indexOf(normalizeVisitedUrl_(normalTarget)) >= 0).assertFalse();
+    });
+
     it('doesNotTreatBookDetailHiddenLoginAsVerification', 0, () => {
       // 九五书包等老站会在每个详情页中嵌入隐藏登录/注册表单，表单同时带有
       // searchcode.php、__17mb_input 和“验证码”字段，但页面本身是可解析的书籍主页。
@@ -205,6 +523,25 @@ export default function bookSourceManagementTest() {
       expect(WebViewFetcher.isLikelyBookDocumentHtml(detail)).assertTrue();
       expect(WebViewFetcher.isInteractiveChallengeHtml(detail)).assertFalse();
       expect(needsWebViewDocument(detail, 'https://example.com/bookbook/167031.html')).assertFalse();
+    });
+
+    it('patchesGbkCharsetIntoSearchRule', 0, () => {
+      // shoujix.com 是 GBK 站点：<meta charset="GBK">。从外部 JS 提取的搜索
+      // 表单没有 charset 声明，关键词按 UTF-8 提交会被 GBK 解码成乱码，
+      // 搜不到书。必须从首页 HTML 检测 charset 并补全到搜索规则。
+      const pageHtml = '<html><head><meta charset="GBK"><title>手机小说</title></head><body></body></html>';
+      const rule = 'https://www.shoujix.com/search/,{"method":"POST","body":"searchkey={{key}}"}';
+      const patched = patchSearchRuleCharset_(rule, pageHtml);
+      expect(patched).assertContain('"charset":"gbk"');
+      // 已有 charset 的规则保持不变。
+      const withCharset = 'https://example.com/s.php,{"method":"POST","body":"q={{key}}","charset":"utf-8"}';
+      expect(patchSearchRuleCharset_(withCharset, pageHtml)).assertEqual(withCharset);
+      // UTF-8 站点不补全。
+      const utf8Page = '<html><head><meta charset="utf-8"></head></html>';
+      expect(patchSearchRuleCharset_(rule, utf8Page)).assertEqual(rule);
+      // GET 规则不补全 charset。
+      const getRule = 'https://example.com/search?q={{key}}';
+      expect(patchSearchRuleCharset_(getRule, pageHtml)).assertEqual(getRule);
     });
 
     it('normalizesCssBackgroundImageForBookCover', 0, () => {

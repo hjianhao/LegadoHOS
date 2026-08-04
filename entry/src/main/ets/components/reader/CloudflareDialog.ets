@@ -14,6 +14,8 @@ import { CookieStore } from '../../util/CookieStore';
 export struct CloudflareDialog {
   controller: CustomDialogController;
   url: string = '';
+  /** 当前页面需要用户完成的具体操作，例如登录或输入图片验证码。 */
+  reason: string = '页面需要人工验证';
   @StorageLink('isDark') isDark: boolean = false;
   private webController: web_webview.WebviewController = new web_webview.WebviewController();
   @State pageTitle: string = '页面加载中...';
@@ -37,8 +39,12 @@ export struct CloudflareDialog {
     Column() {
       // 顶部栏
       Row() {
-        Text(this.pageTitle).fontSize(15).fontWeight(FontWeight.Bold)
-          .fontColor(ThemeColors.onBackground(this.isDark)).layoutWeight(1)
+        Column({ space: 1 }) {
+          Text(this.pageTitle).fontSize(15).fontWeight(FontWeight.Bold)
+            .fontColor(ThemeColors.onBackground(this.isDark)).maxLines(1)
+          Text(this.reason || '请完成页面要求的操作').fontSize(11)
+            .fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
+        }.layoutWeight(1)
         if (!this.hasError) {
           Button($r('app.string.ui_94eb3aea29')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
             .height(40).padding({ left: 12, right: 12 })
@@ -79,6 +85,8 @@ export struct CloudflareDialog {
               if (WebViewFetcher.interactivePurpose === 'login') {
                 this.pageTitle = '登录页面（登录后点击"验证完成"）';
                 void this.openLoginPanel_();
+              } else if (this.reason && this.reason.includes('图片验证码')) {
+                this.pageTitle = '请完成图片验证码后点击"验证完成"';
               } else {
                 this.pageTitle = '验证页面（验证后点击"验证完成"）';
               }

@@ -128,7 +128,8 @@ struct AiSourceGeneratePage {
     this.registerCaptchaHandler_();
     if (!this.interactiveFetcher_) {
       this.interactiveFetcher_ = (url: string): Promise<string> =>
-        this.openInteractiveWebView_(url, '页面需要登录或人工验证');
+        this.openInteractiveWebView_(url,
+          WebViewFetcher.interactiveReason || '页面需要登录或人工验证');
     }
     WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     this.agent_ = new AiSourceAgent({
@@ -229,7 +230,7 @@ struct AiSourceGeneratePage {
       this.logMessages = [...this.logMessages, '👤 ' + reason + '，请完成后点击“验证完成”'];
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
-        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url, reason: reason }),
         autoCancel: false,
         customStyle: true,
         alignment: DialogAlignment.Center,

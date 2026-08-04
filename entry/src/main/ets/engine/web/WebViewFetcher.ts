@@ -66,6 +66,8 @@ export class WebViewFetcher {
   static interactiveResolve: ((html: string) => void) | null = null;
   /** 当前交互 WebView 的用途；登录模式会在页面加载后自动打开登录面板。 */
   static interactivePurpose: 'challenge' | 'login' = 'challenge';
+  /** 当前交互 WebView 的用户提示，由页面层传入，避免所有弹窗都显示成泛化“验证”。 */
+  static interactiveReason: string = '';
   private static interactivePageCache: Map<string, InteractivePageCacheEntry> = new Map();
   private static readonly INTERACTIVE_CACHE_TTL_MS: number = 5 * 60 * 1000;
   private static readonly INTERACTIVE_CACHE_MAX_ENTRIES: number = 6;
@@ -77,7 +79,8 @@ export class WebViewFetcher {
   }
 
   /** 弹出交互式 WebView 验证 */
-  static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge'): Promise<string> {
+  static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge',
+    reason: string = ''): Promise<string> {
     WebViewFetcher.interactivePurpose = purpose;
     const cacheKey = WebViewFetcher.interactiveCacheKey(url);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
@@ -99,7 +102,13 @@ export class WebViewFetcher {
     if (!WebViewFetcher.interactiveFetcher) {
       throw new Error('Interactive fetcher not registered');
     }
-    const rawHtml = await WebViewFetcher.interactiveFetcher(url);
+    WebViewFetcher.interactiveReason = reason;
+    let rawHtml = '';
+    try {
+      rawHtml = await WebViewFetcher.interactiveFetcher(url);
+    } finally {
+      WebViewFetcher.interactiveReason = '';
+    }
     const html = WebViewFetcher.decodeJavaScriptString(rawHtml);
     if (WebViewFetcher.isReusableInteractiveHtml(html)) {
       WebViewFetcher.interactivePageCache.set(cacheKey, {
@@ -562,6 +571,14 @@ export class WebViewFetcher {
     const hasProbeChallengeMarker = /(?:^|["'\/])(?:[A-Za-z0-9_-]+\/)?probe\.js(?:[?"'])/i.test(html) &&
       /\bbuid\s*=\s*["']f{8,}["']/i.test(html);
     if (hasProbeChallengeMarker && !hasSearchResultMarkup) return true;
+
+    // 部分站点（如 zqb88.cn）使用 _guard/auto.js 做 JS 挑战：首次请求只返回
+    // 一个极短的 <script src="/_guard/auto.js">，脚本执行后写入 Cookie 才
+    // 能访问真实内容。这类页面没有书籍 DOM、没有 Cloudflare 文案，但内容
+    // 极短且只有 guard 脚本引用，必须用交互/隐藏 WebView 完成 JS 验证。
+    const hasGuardChallengeMarker = /<script\b[^>]*\bsrc\s*=\s*["'][^"']*\/_guard\/auto\.js["']/i.test(html) ||
+      (html.length < 200 && /<script\b[^>]*\bsrc\s*=\s*["'][^"']*guard[^"']*\.js["']/i.test(html));
+    if (hasGuardChallengeMarker && !hasSearchResultMarkup) return true;
 
     // searchcode.php 和 __17mb_input 也是一些老站隐藏登录/注册表单的字段，
     // 不能脱离页面上下文直接触发验证弹窗。详情页优先按普通页面处理；真正

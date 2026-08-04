@@ -12,7 +12,7 @@ import {
   serializeBookSource
 } from '../../model/BookSource';
 import { SearchResult } from '../../model/SearchResult';
-import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule } from '../source/SourceExecutor';
+import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule, searchRateLimitWaitMs_ } from '../source/SourceExecutor';
 import { CheckResult, SourceChecker } from '../../service/SourceChecker';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 import {
@@ -30,6 +30,13 @@ const MAX_STAGE_ATTEMPTS = 2;
 // 修复模式的第一轮通常只是验证旧规则，因此搜索至少需要两轮重新生成机会。
 // 搜索字段最容易出现“卡片文本兜底”的误命中，给它一次额外的错误反馈重试。
 const MAX_SEARCH_STAGE_ATTEMPTS = 3;
+// 搜索结果页至少需要这么多字符才可能包含完整的书籍卡片列表；
+// 过短的页面（如反爬占位页、渲染不完整的 WebView 输出）交给模型只会得到空规则。
+const SEARCH_EVIDENCE_MIN_LENGTH = 2000;
+// 部分站点（如 shoujix.com）要求搜索关键词至少 10 字节（约 5 个汉字）。
+// 用户输入的短关键词被站点拒绝时，用这个常见书名兜底完成搜索规则验证。
+// 搜索规则验证只关心 URL 和选择器，与具体关键词无关，不影响最终书源。
+const SEARCH_FALLBACK_KEYWORD = '斗罗大陆外传';
 
 export enum AiStep {
   HOMEPAGE = 0,
@@ -84,6 +91,11 @@ interface PageEvidence {
   finalUrl: string;
   html: string;
   usedWebView: boolean;
+  // prepareSourceAgentHtml 会移除 <script> 标签，但外部 JS 文件引用
+  // （<script src="...">）对搜索表单提取很关键（如 dangyuedu.com 的
+  // search() 定义在外部 common.js 中）。这里保留原始 HTML 中的脚本 src
+  // 列表，供 inferSearchFromExternalScripts_ 使用。
+  scriptSrcs: string[];
 }
 
 interface StageFieldSet {
@@ -165,7 +177,7 @@ function declaredBaseOrigin_(html: string, pageUrl: string): string {
  * 移动别名，也识别 canonical/og:url 明确声明的域名迁移（即使新旧注册域名
  * 完全不同），避免把空搜索页交给模型反复猜选择器。
  */
-function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
+export function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
   const sourceOrigin = urlOrigin_(pageUrl);
   const sourceMatch = sourceOrigin.match(/^https?:\/\/([^/:]+)(?::\d+)?$/i);
   if (!sourceMatch) return '';
@@ -196,7 +208,15 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     // 完全无关（例如 zwduxs.com -> wangshuwx.com），不能再用“同站别名”规则
     // 把这类迁移过滤掉；普通页脚链接仍必须满足同站别名条件，避免误把 CDN/广告
     // 域名当成书源地址。
-    if (!sameSiteAlias && !explicit) return;
+    // 但当旧域名已经 301 跳转到新域名（如 lewenge.cc -> lewendu8.net），新域名
+    // 页面中没有 canonical 声明，只有大量指向新域名的绝对链接。此时高频出现的
+    // 跨域链接也可以作为迁移证据（见下方 highFrequencyCrossDomain 逻辑）。
+    if (!sameSiteAlias && !explicit) {
+      // 跨注册域的非显式链接暂存为候选，由后续高频阈值筛选。
+      const crossDomain = host !== baseHost && !host.endsWith('.' + baseHost) &&
+        !baseHost.endsWith('.' + host);
+      if (!crossDomain) return;
+    }
     const existing = candidates.find((item: {
       origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
     }): boolean =>
@@ -247,7 +267,14 @@ function inferMobileCanonicalOrigin_(html: string, pageUrl: string): string {
     origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
   }): boolean =>
     item.exact || item.explicit);
-  return selected ? selected.origin : '';
+  if (selected) return selected.origin;
+  // 没有 canonical/移动别名时，检查是否有高频跨域链接：旧域名已 301 跳转到
+  // 新域名（如 lewenge.cc -> lewendu8.net），新域名页面中大量绝对链接指向
+  // 新域名。要求至少 5 次出现，避免误把页脚的 CDN/广告链接当成迁移目标。
+  const highFreqCrossDomain = candidates.find((item: {
+    origin: string; count: number; exact: boolean; explicit: boolean; declaredBase: boolean
+  }): boolean => !item.exact && !item.explicit && item.count >= 5);
+  return highFreqCrossDomain ? highFreqCrossDomain.origin : '';
 }
 
 function appendQuery_(url: string, params: string[]): string {
@@ -269,7 +296,17 @@ export function inferSearchRequest(html: string, pageUrl: string,
   while ((formMatch = formPattern.exec(html)) !== null) {
     const form = formMatch[0];
     const openTag = (form.match(/^<form\b[^>]*>/i) || [''])[0];
-    const action = absoluteUrl_(htmlAttribute_(openTag, 'action') || pageUrl, pageUrl);
+    let action = absoluteUrl_(htmlAttribute_(openTag, 'action') || pageUrl, pageUrl);
+    const declaredOrigin = declaredBaseOrigin_(html, pageUrl);
+    // 页面脚本声明的 baseurl 才是站点搜索接口实际使用的业务域名；渲染后的
+    // form action 可能仍保留旧域名或移动别名，优先用 baseurl 保证请求不落到
+    // 已失效的旧主机。
+    if (declaredOrigin && /^https?:\/\//i.test(action)) {
+      const actionOrigin = urlOrigin_(action);
+      if (actionOrigin && actionOrigin.toLowerCase() !== declaredOrigin.toLowerCase()) {
+        action = declaredOrigin + action.substring(actionOrigin.length);
+      }
+    }
     if (!/^https?:\/\//i.test(action)) continue;
     const method = (htmlAttribute_(openTag, 'method') || 'GET').toUpperCase();
     const inputs = form.match(/<input\b[^>]*>/gi) || [];
@@ -325,7 +362,68 @@ export function inferSearchRequest(html: string, pageUrl: string,
       best = { ruleSearchUrl, probeUrl, method, keywordField };
     }
   }
+  // 部分 JS 渲染站点（如 dangyuedu.com）的 search() 用 document.write 输出
+  // 搜索表单，但 WebView 提取的 outerHTML 可能不包含渲染结果。此时从内联
+  // 脚本中提取 document.write('<form ... action="URL" ...>') 作为搜索候选，
+  // 避免把无法求值的 {{cookie...}} 模板继续当成搜索地址。
+  if (!best) {
+    const jsForm = extractSearchFormFromInlineScript_(html, pageUrl, keyword, formCharset);
+    if (jsForm) return jsForm;
+  }
   return best;
+}
+
+/**
+ * 从内联脚本中提取 document.write('<form ...>') 渲染的搜索表单。
+ * 当 WebView 未捕获 document.write 的渲染结果时，脚本源码本身仍包含
+ * 完整的表单 HTML，可据此推导搜索请求。
+ */
+function extractSearchFormFromInlineScript_(html: string, pageUrl: string,
+  keyword: string, formCharset: string): InferredSearchRequest | null {
+  const scriptPattern = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  let scriptMatch: RegExpExecArray | null;
+  while ((scriptMatch = scriptPattern.exec(html || '')) !== null) {
+    const script = scriptMatch[1] || '';
+    // document.write('<form ... action="https://..." ...>...<input name="q" ...>...</form>')
+    const writeMatch = script.match(/document\.write\s*\(\s*['"]([\s\S]*?)['"]\s*\)/i);
+    if (!writeMatch) continue;
+    const fragment = writeMatch[1];
+    if (!/<form\b/i.test(fragment)) continue;
+    // 把片段交给主推断逻辑递归处理（它已能识别 form 结构）。
+    const request = inferSearchRequest(fragment, pageUrl, keyword);
+    if (request) return request;
+  }
+  return null;
+}
+
+/**
+ * 从页面 HTML 检测 charset，并补全到搜索规则中。
+ * 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点的搜索关键词
+ * 必须按 GBK 编码提交（否则站点按 GBK 解码 UTF-8 字节得到乱码，返回空结果，
+ * 如 shoujix.com 的 /search/ 接口）。规则中已有 charset 时保持不变。
+ */
+export function patchSearchRuleCharset_(ruleSearchUrl: string, pageHtml: string): string {
+  const rule = (ruleSearchUrl || '').trim();
+  if (!rule || !pageHtml) return rule;
+  if (/"charset"\s*:\s*["']/i.test(rule) || /'charset'\s*:\s*['"]/i.test(rule)) return rule;
+  const charsetMatch = pageHtml.match(/<meta\b[^>]*\bcharset\s*=\s*["']?\s*([\w-]+)/i) ||
+    pageHtml.match(/<meta\b[^>]*\bcontent\s*=\s*["'][^"']*charset\s*=\s*([\w-]+)/i);
+  const rawCharset = charsetMatch && charsetMatch.length > 1 ? charsetMatch[1] : '';
+  const normalized = rawCharset.toLowerCase().replace(/[_-]/g, '');
+  if (normalized !== 'gbk' && normalized !== 'gb2312' && normalized !== 'gb18030' &&
+    normalized !== 'big5') return rule;
+  const charset = normalized === 'gb2312' ? 'gbk' : normalized;
+  const optionMatch = rule.match(/^(.*?),(\{[\s\S]*\})$/);
+  if (optionMatch) {
+    try {
+      const options = JSON.parse(optionMatch[2]) as Record<string, Object>;
+      options['charset'] = charset;
+      return optionMatch[1] + ',' + JSON.stringify(options);
+    } catch (_e) {
+      return rule;
+    }
+  }
+  return rule + ',' + JSON.stringify({ charset: charset });
 }
 
 /** 将搜索/发现 URL 模板转换成当前关键词的实际请求，供 Agent 抓取证据。 */
@@ -376,6 +474,22 @@ function searchRequestSignature_(template: string, baseUrl: string): string {
   }
 }
 
+/**
+ * 检测搜索 URL 模板是否包含本执行器无法求值的 {{...}} 表达式。
+ * materializeAgentRequest 只替换 key/keyword/page 等标准变量；像
+ * {{cookie.removeCookie(source.getKey())}} 这类依赖 Android 运行时对象的
+ * 表达式会原样残留在最终 URL 中，导致请求地址拼坏（如 dangyuedu.com 的
+ * 搜索规则把 sososhu.com 的地址当成路径拼接）。这类模板必须重新生成。
+ */
+export function isUnevaluableSearchTemplate_(template: string): boolean {
+  const raw = (template || '').trim();
+  if (!raw) return false;
+  // 去掉标准变量后再看是否还有 {{...}} 残留。
+  const stripped = raw
+    .replace(/\{\{\s*(?:key|keyword|page|pageNum)\s*(?:[+-]\s*\d+)?\s*\}\}/gi, '');
+  return /\{\{[^}]+\}\}/.test(stripped);
+}
+
 /** 保留 DOM 结构，同时移除认证值、脚本和提示注入常见载体。 */
 export function prepareSourceAgentHtml(html: string): string {
   return prepareHtmlForAi(html, PAGE_EVIDENCE_LIMIT)
@@ -413,9 +527,15 @@ function cleanAiSearchBookName_(value: string): string {
   return cleaned.trim() || raw;
 }
 
-function hasAiSearchCardMetadata_(value: string): boolean {
-  return /(?:作者|作\s*者|状态|连载状态|大小|字数|最新章节|更新时间|更新日期|开始阅读|TXT下载|加入书架|推荐此书)\s*[:：]?/i
-    .test(value || '') || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test((value || '').trim());
+export function hasAiSearchCardMetadata_(value: string): boolean {
+  if (!value) return false;
+  // 字段型元数据（作者：、状态：、字数：等）必须带冒号，避免把合法书名中
+  // 恰好包含“作者”“状态”“大小”等字样的标题误判为卡片元数据（如“快穿我
+  // 渣了我的作者”）。真实卡片污染文本总是带冒号分隔字段值。
+  if (/(?:作者|作\s*者|状态|连载状态|大小|字数|最新章节|更新时间|更新日期)\s*[:：]/i.test(value)) return true;
+  // 操作类标签本身就代表卡片噪声，不需要冒号。
+  if (/(?:开始阅读|TXT下载|加入书架|推荐此书)/i.test(value)) return true;
+  return /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(value.trim());
 }
 
 /** 搜索卡片的字段规则可能命中“立即阅读/加入书架”等操作按钮。 */
@@ -526,6 +646,57 @@ export function isLikelyImageCaptchaPage(html: string): boolean {
   return !hasBookResult;
 }
 
+function hasHiddenAiLoginContainer_(html: string): boolean {
+  const tags = (html || '').match(/<(?:form|div|section|aside)\b[^>]*>/gi) || [];
+  return tags.some((tag: string): boolean => {
+    const loginContainer = /(?:class|id)\s*=\s*["'][^"']*(?:login|signin|register|passport)[^"']*["']/i.test(tag);
+    if (!loginContainer) return false;
+    return /display\s*:\s*none|visibility\s*:\s*hidden|aria-hidden\s*=\s*["']?true\b|\bhidden(?:\s*=|\s|>)/i.test(tag) ||
+      /(?:class|id)\s*=\s*["'][^"']*(?:modal|dialog|popup|hidden|hide|none)[^"']*["']/i.test(tag);
+  });
+}
+
+function hasAiSearchOrBookMarkup_(html: string): boolean {
+  const value = html || '';
+  const hasSearchForm = /<form\b[^>]*(?:id|class|action)\s*=\s*["'][^"']*search[^"']*["'][^>]*>/i.test(value) ||
+    /<input\b[^>]*(?:type\s*=\s*["']?search\b|(?:name|id)\s*=\s*["'][^"']*(?:search|keyword|query)[^"']*["'])/i.test(value);
+  const hasBookLink = /<a\b[^>]*href\s*=\s*["'][^"']*(?:\/(?:book|books|novel|read|fiction|story|chapter)(?:[\/?.#]|$)|book(?:_|-)?id=)[^"']*["']/i.test(value);
+  return hasSearchForm || hasBookLink;
+}
+
+/**
+ * 识别真正的登录门禁，而不是首页里预渲染的隐藏登录框。
+ * 很多小说站首页同时包含 password input 和“登录”文案，不能据此阻断
+ * AI 取证；只有登录 URL，或页面没有搜索/书籍内容且确实只剩登录表单时，
+ * 才需要弹出交互 WebView。
+ */
+export function isLikelyAiLoginPage(html: string, url: string): boolean {
+  if (/(?:^|\/)(?:login|signin|passport|auth)(?:[./?#]|$)/i.test(url || '') ||
+    /[?&](?:login|signin)=/i.test(url || '')) return true;
+  const value = html || '';
+  if (!value || !/<input\b[^>]*type\s*=\s*["']?password\b/i.test(value) ||
+    !/登录|sign\s*in|log\s*in/i.test(value)) return false;
+  if (hasHiddenAiLoginContainer_(value)) return false;
+  // 先计算强登录信号（登录标题 + 登录表单），再决定是否检查书籍/搜索标记。
+  // 带站点 chrome 的登录页（如 3qzw.org/search.html 返回的会员登录页）会含有
+  // 全局导航的 /book/ 链接，hasAiSearchOrBookMarkup_ 会误判为书籍页；只有当
+  // 页面没有强登录信号时才用书籍标记排除首页里的预渲染登录框。
+  const titleOrHeading = value.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
+  const strongLoginHeading = !!titleOrHeading && /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]);
+  const loginForm = /<form\b[^>]*(?:id|class|action)\s*=\s*["'][^"']*(?:login|signin|passport)[^"']*["'][^>]*>/i.test(value);
+  const hasStrongLoginSignal = strongLoginHeading || loginForm;
+  if (!hasStrongLoginSignal &&
+    (WebViewFetcher.isLikelyBookDocumentHtml(value) || hasAiSearchOrBookMarkup_(value))) return false;
+  if (!strongLoginHeading && !loginForm) return false;
+  // 有真实书籍结果卡片时不是登录门禁（登录页可能带站点 chrome 导航链接）。
+  if (hasStrongLoginSignal && hasAiSearchResultMarkup_(value)) return false;
+  // 正常首页往往带有一个登录表单，但同时包含完整导航、书籍和脚本；
+  // 这类长页面不是登录门禁。真正的登录页通常有明确标题/主标题，或 URL
+  // 已在上面命中 /login 等路径。
+  if (value.length > 4000 && !strongLoginHeading) return false;
+  return true;
+}
+
 /**
  * 站点迁移或接口异常时，搜索 URL 可能返回带有 200/202 状态的错误 HTML。
  * 这类页面不能交给模型猜选择器，也不能被通用链接兜底当成一本书。
@@ -536,6 +707,102 @@ export function isLikelyAiServerErrorPage(html: string): boolean {
   if (!value) return false;
   return /\{?__NOLAYOUT__\}?/i.test(value) &&
     /(?:系统发生错误|系统错误|internal server error|server error|page not found)/i.test(value);
+}
+
+/**
+ * 搜索拦截 alert 页的分类结果。站点可能返回 alert("关键字最少 10 个字符")
+ * 或 alert("搜索间隔：30 秒") 等纯脚本页；decodeBody 已对无 charset 声明的
+ * GBK 页面做回退解码，这里拿到的文案是真实可读的，按语义分类而不是靠猜。
+ */
+export interface SearchAlertInfo {
+  kind: 'keywordTooShort' | 'rateLimit' | 'unknown';
+  text: string;
+  waitMs: number;
+}
+
+/**
+ * 从搜索拦截 alert 页提取文案并分类。频率限制复用 SourceExecutor 的
+ * searchRateLimitWaitMs_ 语义（"搜索间隔：30 秒"/"请30秒后再试"/"操作频繁"），
+ * 与真实搜索链路的等待时长保持一致；避免把频率限制页误报成"关键词太短"。
+ */
+export function extractSearchAlertInfo_(html: string): SearchAlertInfo | null {
+  if (!html || html.length > 500) return null;
+  const match = html.match(/alert\s*\(\s*["']([^"']{1,80})["']\s*\)/i);
+  if (!match) return null;
+  const text = match[1].replace(/\\n/g, ' ');
+  const waitMs = searchRateLimitWaitMs_(html);
+  if (waitMs > 0) return { kind: 'rateLimit', text, waitMs };
+  if (/关键字|关键词|搜索词|searchkey|字符|太短|过短|最短|最少|至少|must be at least/i.test(text)) {
+    return { kind: 'keywordTooShort', text, waitMs: 0 };
+  }
+  return { kind: 'unknown', text, waitMs: 0 };
+}
+
+/** 模块级延时，等待频率限制窗口或重试间隔。 */
+function sleepMs_(ms: number): Promise<void> {
+  return new Promise<void>((resolve: () => void): void => {
+    setTimeout((): void => resolve(), ms);
+  });
+}
+
+/**
+ * 检测搜索响应是否是"关键字太短"提示页。
+ * 部分站点（如 shoujix.com）对短关键词返回 alert("关键字最少 10 个字符")
+ * 脚本页，prepareHtmlForAi 会移除 <script> 导致内容变空。在清理前检测，
+ * 让 Agent 报告明确的关键字太短错误，而非"内容过短"。
+ */
+export function isSearchKeywordTooShortAlert_(html: string): boolean {
+  if (!html || html.length > 500) return false;
+  // 匹配 UTF-8 解码的中文文案。
+  if (/alert\s*\([^)]*(?:关键字|关键词|搜索词|searchkey).{0,20}(?:最少|太短|过短|至少|must be at least)/i
+    .test(html) ||
+    /alert\s*\([^)]*(?:最少|太短|过短|至少).{0,20}(?:字符|字|character)/i.test(html)) return true;
+  // GBK 站点返回的 alert 页没有 charset 声明，decodeBody 按 UTF-8 解码后
+  // 中文变成乱码。但 alert + window.history.go 的脚本结构仍然可识别，
+  // 且页面极短、无任何书籍内容。这类"alert 拦截页"代表站点拒绝了搜索
+  // （关键词太短、频率限制等），不应当成正常空搜索结果。
+  if (html.length < 300 && /<script\b[^>]*>\s*alert\s*\(/i.test(html) &&
+    /window\.history\.go|window\.history\.back|location\.href/i.test(html) &&
+    !/<form\b|<table\b|<ul\b|\/book\//i.test(html)) return true;
+  return false;
+}
+
+/**
+ * 检测搜索请求返回的页面是否实际是登录门禁。
+ * 与 isLikelyAiLoginPage 不同，此函数不依赖 URL 路径（搜索 URL 本身不是 /login），
+ * 只看响应体：必须同时存在登录标题 + 登录表单/密码输入框，且没有真实书籍结果卡片。
+ * 用于拦截搜索接口返回 200 但内容是登录页的情况（如 3qzw.org/search.html）。
+ */
+export function isLikelyAiLoginResultPage(html: string): boolean {
+  const value = (html || '').replace(/\s+/g, ' ');
+  if (!value) return false;
+  // 必须同时存在登录标题/文案 + 登录表单/密码输入框/登录跳转链接
+  const hasLoginHeading = /<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i.test(value) &&
+    /登录|会员登录|用户登录|sign\s*in|log\s*in/i.test(value);
+  if (!hasLoginHeading) return false;
+  // 登录表单（含 password input 或 login class/action）或跳转到登录页的链接
+  // （如搜搜书的“需要登录”页用 <a href="/?action=login"> 而不是 form）。
+  const hasLoginForm = /<form\b[^>]*(?:id|class|action)\s*=\s*["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(value) ||
+    /<input\b[^>]*type\s*=\s*["']?password\b/i.test(value) ||
+    /<a\b[^>]*\bhref\s*=\s*["'][^"']*(?:action=login|\/login|\/signin|\/passport)[^"']*["']/i.test(value);
+  if (!hasLoginForm) return false;
+  // 有真实书籍结果卡片时不算登录门禁（登录页可能带站点 chrome 导航链接）
+  return !hasAiSearchResultMarkup_(value);
+}
+
+/**
+ * 判断页面是否包含真实的书籍搜索结果标记：书籍结果卡片容器或多条书籍详情链接。
+ * 用于区分真实搜索结果页与登录页/错误页/反爬占位页。
+ */
+export function hasAiSearchResultMarkup_(html: string): boolean {
+  const value = html || '';
+  // 书籍结果卡片容器
+  if (/<(?:article|li|tr|div)\b[^>]*(?:book[-_ ]?(?:item|card|row|list)|novel[-_ ]?(?:item|card|row|list)|search[-_ ]?(?:item|result|row)|result[-_ ]?(?:item|row)|book-coverlist|novel-row)[^>]*>/i.test(value)) {
+    return true;
+  }
+  // 3 条以上书籍详情链接，说明是真实搜索结果页而非登录页的导航 chrome
+  const bookLinks = value.match(/<a\b[^>]*href=["'][^"']*(?:\/(?:book|books|novel|read)\/|\/\d+\/[A-Za-z0-9])/gi) || [];
+  return bookLinks.length >= 3;
 }
 
 /** 网络异常消息可能携带整段 HTML 响应体（如 404 页面正文），只保留摘要。 */
@@ -736,6 +1003,12 @@ export class AiSourceAgent {
   private canonicalOrigin_: string = '';
   private legacyOrigin_: string = '';
   private siteOriginChanged_: boolean = false;
+  /** 域名迁移后搜索 URL 连续失败时，从规范域名首页重新推断搜索入口（只回退一次）。 */
+  private searchReinferred_: boolean = false;
+  /** 搜索接口要求登录时，已弹出交互式 WebView 让用户登录（只尝试一次）。 */
+  private searchLoginAttempted_: boolean = false;
+  /** 测试关键词过短时，已切换到兜底长关键词验证搜索规则（只切换一次）。 */
+  private searchFallbackKeyword_: boolean = false;
 
   constructor(callback: AiAgentCallback) {
     this.callback_ = callback;
@@ -811,6 +1084,9 @@ export class AiSourceAgent {
     this.canonicalOrigin_ = '';
     this.legacyOrigin_ = '';
     this.siteOriginChanged_ = false;
+    this.searchReinferred_ = false;
+    this.searchLoginAttempted_ = false;
+    this.searchFallbackKeyword_ = false;
     this.original_ = request.existingSource
       ? { ...request.existingSource } as BookSource : null;
     this.draft_ = this.original_
@@ -895,7 +1171,12 @@ export class AiSourceAgent {
     this.draft_.exploreUrl = replaceOrigin(this.draft_.exploreUrl);
     this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
     this.draft_.loginUrl = replaceOrigin(this.draft_.loginUrl);
-    evidence.finalUrl = replaceOrigin(evidence.finalUrl || pageUrl);
+    // 注意：不要改写 evidence.finalUrl。取证 HTML 实际来自旧域名（桌面版），
+    // 把 finalUrl 伪造成规范域名会让 analyzeHomepage_ 误以为已经拿到移动版
+    // 页面而跳过重新取证；桌面版页面的 JS 渲染搜索框（如必去小说的
+    // /modules/article/search.php）在移动域名上往往并不存在，继续沿用就会
+    // 让搜索请求 404。保留真实 finalUrl，让 analyzeHomepage_ 自行抓取规范域名
+    // 首页、识别移动版真实搜索表单。
     this.log_('  首页已跳转到站点规范域名：' + canonicalOrigin);
   }
 
@@ -999,7 +1280,21 @@ export class AiSourceAgent {
       }
     }
     this.start_(AiStep.HOMEPAGE, evidence.usedWebView ? '分析渲染后的 DOM' : '分析页面和表单');
-    const inferred = inferSearchRequest(evidence.html, evidence.finalUrl || evidence.url, keyword);
+    let inferred = inferSearchRequest(evidence.html, evidence.finalUrl || evidence.url, keyword);
+    // 渲染后的 DOM 可能不含 document.write 输出的搜索表单（外部 JS 中的
+    // search() 函数在内联调用时尚未加载）。既有搜索 URL 不可求值时，尝试从
+    // 页面引用的同站外部 JS 中提取搜索表单，避免把失效模板继续当成搜索地址。
+    if (!inferred?.ruleSearchUrl && this.repairMode_ &&
+      isUnevaluableSearchTemplate_(this.draft_?.ruleSearchUrl || '')) {
+      inferred = await this.inferSearchFromExternalScripts_(
+        evidence.scriptSrcs || [], evidence.finalUrl || evidence.url, keyword);
+      // 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点（如
+      // shoujix.com）的搜索关键词必须按 GBK 编码提交，否则站点解码出乱码
+      // 返回空结果。从首页 HTML 检测 charset 并补全到搜索规则。
+      if (inferred?.ruleSearchUrl) {
+        inferred.ruleSearchUrl = patchSearchRuleCharset_(inferred.ruleSearchUrl, evidence.html);
+      }
+    }
     // 首页同时包含搜索入口和发现入口，但修复必须按失败阶段隔离字段。
     // 例如只修复“发现”时，不能因为重新分析首页而覆盖原本可用的搜索 URL。
     // 如果首页表单 action 已经变更，旧规则即使存在也不能继续沿用；典型老站会
@@ -1020,16 +1315,45 @@ export class AiSourceAgent {
       currentSearchParts[0] === 'POST' && inferredSearchParts[0] === 'GET' &&
       currentSearchParts[1] === inferredSearchParts[1];
     if (preserveExistingPostSearch) {
-      this.log_('  站点迁移检测到同路径的既有 POST 搜索规则，保留请求体并仅迁移域名');
+      // 保留旧 POST 请求体时，搜索 URL 仍可能已被 normalizeMobileSiteOrigin_
+      // 改写到移动规范域名。但推断出的同路径表单是在旧（桌面）域名取证页面上
+      // 识别到的，说明该路径在桌面域名可用，移动域名却未必（如必去小说的
+      // /modules/article/search.php 在 m.ibiquw.org 上 404）。把搜索请求锚定回
+      // 推断表单所在的旧域名，避免 POST 到移动域名上不存在的路径。
+      if (inferred && this.canonicalOrigin_ && this.legacyOrigin_ &&
+        this.draft_.ruleSearchUrl.toLowerCase().includes(this.canonicalOrigin_.toLowerCase())) {
+        const inferredOrigin = urlOrigin_(inferred.ruleSearchUrl);
+        if (inferredOrigin && inferredOrigin.toLowerCase() === this.legacyOrigin_.toLowerCase()) {
+          this.draft_.ruleSearchUrl = this.draft_.ruleSearchUrl
+            .split(this.canonicalOrigin_).join(this.legacyOrigin_)
+            .split(this.canonicalOrigin_.toLowerCase()).join(this.legacyOrigin_);
+          this.log_('  站点迁移检测到同路径的既有 POST 搜索规则，保留请求体并沿用桌面域名搜索接口');
+        } else {
+          this.log_('  站点迁移检测到同路径的既有 POST 搜索规则，保留请求体并仅迁移域名');
+        }
+      } else {
+        this.log_('  站点迁移检测到同路径的既有 POST 搜索规则，保留请求体并仅迁移域名');
+      }
     }
     const searchEndpointChanged = this.repairMode_ && !preserveExistingPostSearch && (
       this.siteOriginChanged_ || (!!inferredSearchEndpoint && !!currentSearchEndpoint &&
         currentSearchEndpoint !== inferredSearchEndpoint));
-    const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl || searchEndpointChanged;
-    if (searchEndpointChanged) {
-      this.log_(this.siteOriginChanged_
+    // 旧书源的搜索 URL 可能使用 {{cookie.removeCookie(...)}} 等依赖 Android
+    // 运行时对象的表达式，本执行器无法求值，materializeAgentRequest 会把
+    // {{...}} 原样留在 URL 中，请求地址被拼坏（如 dangyuedu.com 把 sososhu.com
+    // 的搜索地址当成路径）。这类模板必须重新生成，即使用户没有标记搜索失败。
+    const unevaluableSearchTemplate = this.repairMode_ &&
+      isUnevaluableSearchTemplate_(this.draft_.ruleSearchUrl);
+    if (unevaluableSearchTemplate) {
+      this.log_('  检测到既有搜索 URL 包含无法求值的表达式，将重新生成搜索入口：' +
+        this.draft_.ruleSearchUrl.substring(0, 80));
+    }
+    const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl ||
+      searchEndpointChanged || unevaluableSearchTemplate;
+    if (searchEndpointChanged || unevaluableSearchTemplate) {
+      this.log_(this.siteOriginChanged_ && !unevaluableSearchTemplate
         ? '  首页检测到站点已迁移，将重新验证搜索请求：' + (inferred?.ruleSearchUrl || '交给模型重新识别')
-        : '  首页检测到搜索表单请求已变化，将采用新 action：' + inferred!.ruleSearchUrl);
+        : '  首页检测到搜索表单请求已变化，将采用新 action：' + (inferred?.ruleSearchUrl || '交给模型重新识别'));
     }
     const repairDiscovery = this.shouldRepair_(['发现']) || (!this.repairMode_ &&
       !this.draft_.exploreUrl && !this.draft_.ruleExplores);
@@ -1039,6 +1363,8 @@ export class AiSourceAgent {
     // 覆盖掉已经验证过的表单候选。新建书源仍需模型补充名称、发现和登录入口。
     const useInferredSearch = !!inferred?.ruleSearchUrl && repairSearch && !preserveExistingPostSearch;
     if (useInferredSearch) {
+      // 外部 JS 提取的表单可能缺少 charset；GBK 站点关键词必须按 GBK 提交。
+      inferred!.ruleSearchUrl = patchSearchRuleCharset_(inferred!.ruleSearchUrl, evidence.html);
       this.draft_.ruleSearchUrl = inferred!.ruleSearchUrl;
       this.anchorSearchRuleToCanonicalOrigin_();
       this.ensureSearchWebViewOption_();
@@ -1106,7 +1432,9 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
     if (!this.draft_) return [];
     this.start_(AiStep.SEARCH, '抓取搜索结果并验证选择器');
     let lastError = '';
-    for (let attempt = 0; attempt < MAX_SEARCH_STAGE_ATTEMPTS; attempt++) {
+    // 关键词过短时切换到兜底长关键词后，额外给一次搜索机会。
+    const maxAttempts = MAX_SEARCH_STAGE_ATTEMPTS + 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.log_('  搜索规则第 ' + (attempt + 1) + '/' + MAX_SEARCH_STAGE_ATTEMPTS +
         ' 轮：' + (attempt === 0 ? '验证现有配置' : '根据上次错误重新生成'));
       let searchEvidenceHtml = '';
@@ -1119,6 +1447,31 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
           // 进入下一轮，由模型基于重新取证的页面重写搜索入口和规则。
           lastError = '搜索请求失败：' + conciseAiFetchError_(e);
           this.log_('  搜索取证失败：' + lastError);
+          // 部分站点（如 shoujix.com）要求搜索关键词至少 10 字节（约 5 个汉字）。
+          // 用户输入的短关键词（如"四合院"3 字）会被站点拒绝。搜索规则验证
+          // 只关心 URL 和选择器，与具体关键词无关——自动改用更长的兜底关键词
+          // 重试，让 Agent 能继续完成书源生成。
+          if (/测试关键词太短/.test(lastError) && !this.searchFallbackKeyword_ &&
+            keyword !== SEARCH_FALLBACK_KEYWORD) {
+            this.searchFallbackKeyword_ = true;
+            this.log_('  测试关键词过短，改用兜底关键词验证搜索规则：' + SEARCH_FALLBACK_KEYWORD);
+            // 更新草稿的搜索校验关键词，让后续 fetchRulePage_/searchForCheck 用长关键词。
+            this.draft_.ruleSearchCheckKeyWord = SEARCH_FALLBACK_KEYWORD;
+            keyword = SEARCH_FALLBACK_KEYWORD;
+            continue;
+          }
+          // 域名迁移后搜索 URL 可能在新域名下不存在；既有搜索 URL 包含无法
+          // 求值的 {{...}} 表达式时也会拼坏地址。搜索请求返回 404/连接错误时
+          // 也说明既有搜索 URL 已失效（如 m.shoujix.com/s.php 在移动域名上 404）。
+          // 连续失败时从规范域名或书源首页重新推断搜索入口。
+          const searchUrlLikelyBroken = this.siteOriginChanged_ ||
+            isUnevaluableSearchTemplate_(this.draft_?.ruleSearchUrl || '') ||
+            /404|not found|connection/i.test(lastError);
+          if (!this.searchReinferred_ && searchUrlLikelyBroken &&
+            await this.retryInferSearchFromCanonical_(keyword)) {
+            this.searchReinferred_ = true;
+            this.log_('  已从规范域名首页重新推断搜索入口：' + this.draft_!.ruleSearchUrl);
+          }
           continue;
         }
         searchEvidenceHtml = evidence.html;
@@ -1126,6 +1479,41 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
           lastError = '搜索请求返回站点错误页（最终地址：' +
             (evidence.finalUrl || evidence.url).substring(0, 120) +
             '），不是搜索结果；请确认站点域名或搜索接口仍可用';
+          this.log_('  搜索取证失败：' + lastError);
+          continue;
+        }
+        if (isLikelyAiLoginResultPage(searchEvidenceHtml)) {
+          lastError = '搜索请求返回了登录页面，搜索接口可能需要登录认证';
+          this.log_('  搜索取证失败：' + lastError);
+          // 搜索接口要求登录时，弹出交互式 WebView 让用户完成登录，登录后
+          // Cookie 会同步到 CookieStore，下一轮重试搜索即可拿到真实结果。
+          // 只尝试一次，避免登录失败时反复弹窗。
+          if (!this.searchLoginAttempted_ &&
+            (this.callback_.onRequestWebView || WebViewFetcher.interactiveFetcher)) {
+            this.searchLoginAttempted_ = true;
+            const loginUrl = this.extractLoginUrlFromPage_(searchEvidenceHtml, evidence.finalUrl || evidence.url);
+            this.log_('  搜索接口需要登录，转交交互 WebView 完成登录：' +
+              (loginUrl || evidence.url).substring(0, 100));
+            try {
+              const interactive = this.callback_.onRequestWebView
+                ? (WebViewFetcher.interactivePurpose = 'login',
+                  await this.callback_.onRequestWebView(loginUrl || evidence.url, '搜索接口需要登录'))
+                : await WebViewFetcher.fetchInteractive(loginUrl || evidence.url, 'login', '搜索接口需要登录');
+              if (interactive && interactive.length > 300) {
+                this.requiresWebView_ = true;
+                this.ensureSearchWebViewOption_();
+              }
+            } catch (loginError) {
+              this.log_('  交互登录失败：' +
+                ((loginError as Error).message || String(loginError)).substring(0, 120));
+            }
+          }
+          continue;
+        }
+        if (searchEvidenceHtml.length < SEARCH_EVIDENCE_MIN_LENGTH &&
+          !hasAiSearchResultMarkup_(searchEvidenceHtml)) {
+          lastError = '搜索结果页内容过短（' + searchEvidenceHtml.length +
+            ' 字符），可能被反爬或渲染不完整';
           this.log_('  搜索取证失败：' + lastError);
           continue;
         }
@@ -1198,6 +1586,11 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         // 避免修复模式在验证现有配置时被单个异常直接终止。
         lastError = '搜索执行失败：' + conciseAiFetchError_(e);
         this.log_('  搜索验证失败：' + lastError);
+        if (this.siteOriginChanged_ && !this.searchReinferred_ &&
+          await this.retryInferSearchFromCanonical_(keyword)) {
+          this.searchReinferred_ = true;
+          this.log_('  已从规范域名首页重新推断搜索入口：' + this.draft_!.ruleSearchUrl);
+        }
         continue;
       }
       const extracted = results.filter((item: SearchResult): boolean =>
@@ -2433,11 +2826,74 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
             retryMessage.substring(0, 180));
         }
       }
+      // POST 返回 200 但内容是 WAF JS 挑战页（如 _guard/auto.js）：站点要求
+      // 先执行 JS 写入 Cookie 才放行真实内容。WebView 可以执行挑战脚本并同步
+      // Cookie，随后重试 POST 拿到真实搜索结果。
+      if (WebViewFetcher.isInteractiveChallengeHtml(html)) {
+        this.log_('  POST 返回 WAF 挑战页，转交 WebView 完成 JS 验证');
+        this.requiresWebView_ = true;
+        this.ensureSearchWebViewOption_();
+        try {
+          await this.fetchPage_(spec.url, label + '（WebView 验证）', true);
+        } catch (_webViewError) {
+          // WebView 验证失败时仍用原结果继续，由后续短页面检测处理。
+        }
+        try {
+          const retried = await NetUtil.httpPost(spec.url, requestBody, headers, 30000);
+          if (retried && !WebViewFetcher.isInteractiveChallengeHtml(retried)) {
+            html = retried;
+            this.log_('  WebView 验证后的 POST 重试成功');
+          }
+        } catch (_retryError) {
+          // 重试失败时保留原始挑战页内容，由 prepareSearch_ 报告内容过短。
+        }
+      }
+      // 检测搜索拦截 alert 页：站点返回 alert("关键字最少 10 个字符") 或
+      // alert("搜索间隔：30 秒") 等纯脚本页，prepareHtmlForAi 移除 <script>
+      // 后会变成空页面。在清理前按文案分类处理：
+      //  - 关键词太短 → 抛出明确错误，触发 prepareSearch_ 的兜底长关键词重试；
+      //  - 搜索频率限制 → 等待站点要求的间隔后自动重试，避免把限频误报成
+      //    "关键词太短"（设备 IP 刚搜过书时，兜底关键词也会被限频拒绝）；
+      //  - 其它可读文案 → 报告真实文案，让 Agent 决策。
+      if (label.includes('搜索')) {
+        const alertInfo = extractSearchAlertInfo_(html);
+        if (alertInfo && alertInfo.kind === 'rateLimit') {
+          this.log_('  搜索被频率限制：' + alertInfo.text + '，等待 ' +
+            Math.round(alertInfo.waitMs / 1000) + ' 秒后重试');
+          await sleepMs_(alertInfo.waitMs);
+          try {
+            html = await NetUtil.httpPost(spec.url, requestBody, headers, 30000);
+          } catch (retryError) {
+            const retryMessage = (retryError as Error).message || String(retryError);
+            throw new Error(label + ' 频率限制重试失败：' + retryMessage.substring(0, 160));
+          }
+          // 重试结果可能仍是限频页或其它 alert 页，再走一次分类。
+          const retriedAlert = extractSearchAlertInfo_(html);
+          if (retriedAlert) {
+            if (retriedAlert.kind === 'rateLimit') {
+              throw new Error('搜索被频率限制：' + retriedAlert.text + '（等待后仍受限，建议稍后再试）');
+            }
+            if (retriedAlert.kind === 'keywordTooShort') {
+              throw new Error('测试关键词太短，该站点要求更长的搜索关键词');
+            }
+            throw new Error('搜索被站点拦截：' + retriedAlert.text);
+          }
+        } else if (alertInfo && alertInfo.kind === 'keywordTooShort') {
+          throw new Error('测试关键词太短，该站点要求更长的搜索关键词');
+        } else if (alertInfo) {
+          throw new Error('搜索被站点拦截：' + alertInfo.text);
+        } else if (isSearchKeywordTooShortAlert_(html)) {
+          // 读不出可读 alert 文案的短脚本页（乱码/极简结构）：按历史行为
+          // 视为关键词过短，保持兜底关键词机制可用。
+          throw new Error('测试关键词太短，该站点要求更长的搜索关键词');
+        }
+      }
       return {
         url: spec.url,
         finalUrl: spec.url,
         html: prepareSourceAgentHtml(html),
-        usedWebView: false
+        usedWebView: false,
+        scriptSrcs: []
       };
     }
     return await this.fetchPage_(spec.url, label);
@@ -2497,14 +2953,23 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     const imageCaptchaPage = /搜索/i.test(label) && isLikelyImageCaptchaPage(html);
     const imageCaptchaHandled = imageCaptchaPage && this.hasImageCaptchaRule_();
     const challengeForInteraction = (this.isChallengePage_(html) || imageCaptchaPage) && !imageCaptchaHandled;
-    if ((challengeForInteraction || this.isLoginPage_(html, finalUrl)) &&
-      this.callback_.onRequestWebView) {
-      const reason = this.isLoginPage_(html, finalUrl)
+    const loginRequired = this.isLoginPage_(html, finalUrl);
+    if ((challengeForInteraction || loginRequired) &&
+      (this.callback_.onRequestWebView || WebViewFetcher.interactiveFetcher)) {
+      const reason = loginRequired
         ? '页面需要登录'
         : imageCaptchaPage ? '搜索页面需要输入图片验证码' : '页面需要人工验证';
-      const interactive = WebViewFetcher.interactiveFetcher
-        ? await WebViewFetcher.fetchInteractive(finalUrl)
-        : await this.callback_.onRequestWebView(finalUrl, reason);
+      const purpose = loginRequired ? 'login' : 'challenge';
+      let interactive = '';
+      // Agent 有页面级回调时优先走回调：批量编排器需要据此把候选标记为
+      // waiting_user，并把具体原因传给弹窗。没有回调的普通执行路径才使用
+      // WebViewFetcher 注册的全局交互处理器。
+      if (this.callback_.onRequestWebView) {
+        WebViewFetcher.interactivePurpose = purpose;
+        interactive = await this.callback_.onRequestWebView(finalUrl, reason);
+      } else if (WebViewFetcher.interactiveFetcher) {
+        interactive = await WebViewFetcher.fetchInteractive(finalUrl, purpose, reason);
+      }
       if (interactive && interactive.length > 300) {
         html = WebViewFetcher.decodeJavaScriptString(interactive);
         usedWebView = true;
@@ -2536,6 +3001,12 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         ? '仍停留在图片验证码页，请输入验证码并等待真实搜索结果出现后再点击完成'
         : '仍被登录或人工验证拦截，请完成操作后再继续'));
     }
+    // 检测"关键字太短"提示页：站点返回 alert("关键字最少 10 个字符")，
+    // prepareHtmlForAi 移除 <script> 后会变成空页面。在清理前检测并抛出
+    // 明确错误，避免 Agent 把它当成"内容过短"反复重试。
+    if (label.includes('搜索') && isSearchKeywordTooShortAlert_(html)) {
+      throw new Error('测试关键词太短，该站点要求更长的搜索关键词');
+    }
     if (!html || html.length < 300) throw new Error(label + '页面内容过短，可能被反爬或登录拦截');
     if (usedWebView && !imageCaptchaHandled) {
       // 取证阶段如果只能通过浏览器拿到完整 DOM，后续正文/目录验证及最终书源
@@ -2543,7 +3014,16 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       this.requiresWebView_ = true;
       this.ensureSearchWebViewOption_();
     }
-    return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView };
+    // prepareSourceAgentHtml 会移除 <script> 标签，但外部 JS 引用对搜索
+    // 表单提取很关键（如 dangyuedu.com 的 search() 定义在外部 common.js 中）。
+    // 在清理前从原始 HTML 中提取脚本 src 列表。
+    const scriptSrcs: string[] = [];
+    const scriptSrcPattern = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+    let srcMatch: RegExpExecArray | null;
+    while ((srcMatch = scriptSrcPattern.exec(html || '')) !== null) {
+      if (srcMatch[1]) scriptSrcs.push(srcMatch[1]);
+    }
+    return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView, scriptSrcs };
   }
 
   private ensureSearchWebViewOption_(): void {
@@ -2567,6 +3047,97 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       rule = this.canonicalOrigin_ + rule;
     }
     this.draft_.ruleSearchUrl = rule;
+  }
+
+  /**
+   * 域名迁移后搜索 URL 在新域名下可能不存在（路径变更或 404）。
+   * 从规范域名首页重新抓取并用 inferSearchRequest 推断搜索表单，
+   * 覆盖已失效的迁移规则。只允许执行一次，避免无限循环。
+   */
+  private async retryInferSearchFromCanonical_(keyword: string): Promise<boolean> {
+    if (!this.draft_) return false;
+    // 优先用站点迁移检测到的规范域名；没有迁移时回退到书源首页域名，
+    // 重新抓取首页并推断搜索表单（适用于既有搜索 URL 包含无法求值表达式
+    // 的情况，如 {{cookie.removeCookie(...)}}）。
+    const homeOrigin = this.canonicalOrigin_ ||
+      (this.draft_.sourceUrl ? urlOrigin_(this.draft_.sourceUrl) : '');
+    if (!homeOrigin) return false;
+    try {
+      const evidence = await this.fetchPage_(homeOrigin, '规范域名首页（搜索回退）');
+      if (evidence.html.length < 300) return false;
+      const pageUrl = evidence.finalUrl || evidence.url;
+      let inferred = inferSearchRequest(evidence.html, pageUrl, keyword);
+      // 渲染后的 DOM 可能不含 document.write 输出的搜索表单（如 dangyuedu.com
+      // 的 search() 函数定义在外部 common.js 中，内联调用时函数尚未加载）。
+      // 此时尝试获取页面引用的同站外部 JS，从其源码中提取 document.write
+      // 渲染的表单。
+      if (!inferred?.ruleSearchUrl) {
+        inferred = await this.inferSearchFromExternalScripts_(evidence.scriptSrcs || [], pageUrl, keyword);
+      }
+      if (!inferred?.ruleSearchUrl) return false;
+      // 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点的搜索
+      // 关键词必须按 GBK 编码提交（否则站点解码出乱码，返回空结果）。
+      // 从首页 HTML 检测 charset 并补全到搜索规则。
+      inferred.ruleSearchUrl = patchSearchRuleCharset_(inferred.ruleSearchUrl, evidence.html);
+      const oldUrl = this.draft_.ruleSearchUrl || '';
+      // 推断出的搜索表单 action 已基于规范域名，不需要再锚定
+      if (inferred.ruleSearchUrl === oldUrl) return false;
+      this.draft_.ruleSearchUrl = inferred.ruleSearchUrl;
+      this.ensureSearchWebViewOption_();
+      return true;
+    } catch (e) {
+      this.log_('  搜索回退：规范域名首页取证失败：' + conciseAiFetchError_(e));
+      return false;
+    }
+  }
+
+  /**
+   * 从页面引用的同站外部 JS 文件中提取 document.write 渲染的搜索表单。
+   * 部分 JS 渲染站点（如 dangyuedu.com）的 search() 函数定义在外部 common.js
+   * 中，内联调用时函数尚未加载，渲染后的 DOM 不含表单。此时直接读取外部
+   * JS 源码，从中提取 document.write('<form ... action="URL" ...>')。
+   */
+  private async inferSearchFromExternalScripts_(scriptSrcs: string[], pageUrl: string,
+    keyword: string): Promise<InferredSearchRequest | null> {
+    const pageOrigin = urlOrigin_(pageUrl);
+    for (const src of scriptSrcs) {
+      if (!src) continue;
+      // 协议相对 //cdn... 或绝对 URL；只获取同站 JS，避免抓取 CDN 公共库。
+      const resolved = absoluteUrl_(src, pageUrl);
+      if (!resolved) continue;
+      const resolvedOrigin = urlOrigin_(resolved);
+      if (!resolvedOrigin || !pageOrigin ||
+        resolvedOrigin.toLowerCase() !== pageOrigin.toLowerCase()) continue;
+      try {
+        const jsText = await NetUtil.httpGet(resolved, this.headerMap_(this.draft_?.header || ''), 15000);
+        if (!jsText) continue;
+        const inferred = inferSearchRequest(jsText, pageUrl, keyword);
+        if (inferred?.ruleSearchUrl) {
+          this.log_('  已从外部脚本提取搜索表单：' + resolved.substring(0, 80));
+          return inferred;
+        }
+      } catch (_e) {
+        // 外部 JS 获取失败时继续尝试下一个脚本。
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 从“需要登录”提示页中提取登录 URL。部分搜索引擎（如搜搜书）的搜索结果
+   * 直接返回一个“需要登录”提示页，其中带有跳转到登录页的链接
+   * （<a href="/?action=login">），而不是表单。提取该链接作为交互式 WebView
+   * 的目标，让用户在登录页完成认证。
+   */
+  private extractLoginUrlFromPage_(html: string, pageUrl: string): string {
+    const value = html || '';
+    // 优先匹配 action=login 或 /login、/signin 路径的链接。
+    const linkMatch = value.match(
+      /<a\b[^>]*\bhref\s*=\s*["']([^"']*(?:action=login|\/login|\/signin|\/passport)[^"']*)["']/i);
+    if (linkMatch && linkMatch[1]) {
+      return absoluteUrl_(linkMatch[1], pageUrl);
+    }
+    return '';
   }
 
   private withWebViewOption_(rawTemplate: string): string {
@@ -2596,10 +3167,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
   }
 
   private isLoginPage_(html: string, url: string): boolean {
-    if (/\/(?:login|signin|passport)(?:[/?#]|$)/i.test(url)) return true;
-    if (!html) return false;
-    return /<input\b[^>]*type=[\"']?password/i.test(html) &&
-      /登录|sign\s*in|log\s*in/i.test(html);
+    return isLikelyAiLoginPage(html, url);
   }
 
   private async askRules_(instruction: string, html: string): Promise<StageFieldSet> {

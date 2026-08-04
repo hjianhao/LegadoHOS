@@ -377,6 +377,26 @@ function isEmptyKeywordSearchResponse_(body: string): boolean {
     /搜索\s*[“"]\s*(?:<[^>]+>\s*)*[“"]?\s*(?:无结果|结果为空)/i.test(body);
 }
 
+/**
+ * 检测搜索频率限制响应。部分站点（如 5299txt.net）在两次搜索间隔不足时
+ * 返回一个极短的 alert 脚本页（如 "搜索间隔: 30 秒"），而不是真实搜索结果。
+ * 返回需要等待的毫秒数，0 表示不是频率限制页。
+ */
+export function searchRateLimitWaitMs_(body: string): number {
+  if (!body || body.length > 500) return 0;
+  // alert("搜索间隔: 30 秒") / alert('请30秒后再试') / 操作频繁。
+  // 中文站点文案常用全角冒号（"搜索间隔：30 秒"），两种冒号都要解析。
+  const limitMatch = body.match(/(?:搜索间隔|间隔|频率|操作频繁|请\s*)(?:[:：]\s*)?(\d+)\s*秒/i);
+  if (limitMatch && /alert\s*\(|window\.history\.go|location\.href/i.test(body)) {
+    return Math.min(parseInt(limitMatch[1], 10) * 1000, 35000);
+  }
+  if (/(?:搜索间隔|操作频繁|稍后|too many requests|rate limit)/i.test(body) &&
+    /alert\s*\(|window\.history|location/i.test(body)) {
+    return 31000; // 默认等待 31 秒
+  }
+  return 0;
+}
+
 /** @put / @get 变量存储（跨段变量引用） */
 let putGetStore: Record<string, string> = {};
 
@@ -1170,6 +1190,30 @@ export class SourceExecutor {
         return [];
       }
       console.info('[SrcEx] Got', bodyText.length, 'bytes from', source.sourceName);
+
+      // 搜索频率限制：部分站点在两次搜索间隔不足时返回 alert("搜索间隔: 30 秒")
+      // 脚本页。校验和 Agent 刚执行过搜索时容易触发。检测到后等待指定时间再
+      // 重试一次，避免把频率限制误判为"搜索无结果"。
+      const rateLimitWait = searchRateLimitWaitMs_(bodyText);
+      if (rateLimitWait > 0 && !finalUrl.includes('__rateLimitRetried')) {
+        console.info('[SrcEx] Search rate-limited, waiting', rateLimitWait,
+          'ms before retry for', source.sourceName);
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout((): void => resolve(), rateLimitWait);
+        });
+        try {
+          const retriedBody = finalMethod === 'POST'
+            ? await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout)
+            : await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
+          if (retriedBody && searchRateLimitWaitMs_(retriedBody) === 0) {
+            bodyText = retriedBody;
+            console.info('[SrcEx] Rate-limit retry succeeded,', retriedBody.length,
+              'bytes from', source.sourceName);
+          }
+        } catch (_retryError) {
+          // 重试失败时用原频率限制页继续，由后续 0 结果逻辑处理。
+        }
+      }
 
       // 尝试 hex 解码（聚合书源的 API 返回 hex 编码的 JSON）
       const hexDecoded = this.tryHexDecode_(bodyText);

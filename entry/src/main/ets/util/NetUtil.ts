@@ -398,6 +398,92 @@ export class NetUtil {
   }
 
   /**
+   * 手动跟随重定向链，处理"中间跳 Set-Cookie 后才放行"的防盗链站点。
+   *
+   * 典型场景（如 yimixs 的 /jd-fw-key）：POST /search → 302 /jd-fw-key?url=/search
+   * → 302 回 /search，且 /jd-fw-key 的 302 响应里带 token/random Set-Cookie。
+   * RCP 自动跟随时不把中间跳的 Set-Cookie 存进 CookieStore，导致带 cookie
+   * 才能通过的 /search 无限循环。这里关闭自动重定向，逐跳保存 Set-Cookie，
+   * 一旦 Location 回到已访问地址（循环闭合，cookie 已种好），用原始请求
+   * （method/body/cookie 全保留）重放一次，得到真实响应。
+   */
+  private static async manualRedirectWithCookieGate_(
+    method: string, url: string, body: string, headers: Record<string, string>,
+    timeout: number, requestGroup: string, cookieEnabled: boolean
+  ): Promise<string> {
+    const session = NetUtil.createSession_(timeout, false);
+    let curMethod: string = method.toUpperCase();
+    let curUrl: string = url;
+    let curBody: string = body;
+    const visited: string[] = [normalizeVisitedUrl_(url)];
+    try {
+      for (let hop = 0; hop < 6; hop++) {
+        const group = requestGroup ? NetUtil.requestGroups_.get(requestGroup) : undefined;
+        if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
+        const h = { ...headers };
+        if (cookieEnabled) NetUtil.injectCookie_(curUrl, h);
+        const request = new rcp.Request(curUrl, curMethod as rcp.HttpMethod, h as rcp.RequestHeaders, curBody || '');
+        const response = await session.fetch(request);
+        const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+        // 中间跳的 Set-Cookie 必须立刻进 CookieStore，下一跳才能带上。
+        if (cookieEnabled) {
+          await CookieStore.getInstance().setCookiesFromResponse(curUrl, respHeaders['set-cookie']);
+        }
+        console.info('[NetUtil] manual-redirect hop' + hop, curMethod, curUrl, '→', response.statusCode);
+        const status: number = response.statusCode;
+        if (status >= 300 && status < 400) {
+          const locationRaw = respHeaders['location'];
+          const location: string = Array.isArray(locationRaw) ? (locationRaw[0] || '') : (locationRaw || '');
+          if (!location) {
+            throw new Error('重定向响应缺少 Location: ' + status);
+          }
+          const next = resolveRelativeUrl_(curUrl, location);
+          if (visited.indexOf(normalizeVisitedUrl_(next)) >= 0) {
+            // 循环闭合：cookie 已种好，跳出跟随，重放原始请求。
+            console.info('[NetUtil] redirect loop closed at', next.substring(0, 100) + ', replaying original ' + method);
+            break;
+          }
+          visited.push(normalizeVisitedUrl_(next));
+          curUrl = next;
+          if (status === 302 || status === 303) {
+            // 浏览器语义：302/303 转 GET 并丢弃 body（307/308 保留）。
+            curMethod = 'GET';
+            curBody = '';
+          }
+          continue;
+        }
+        if (status >= 200 && status < 300) {
+          if (response.body === undefined || response.body === null) return '';
+          return await NetUtil.decodeBody(new Uint8Array(response.body), curUrl);
+        }
+        throw new Error('手动跟随重定向遇到 HTTP ' + status);
+      }
+    } finally {
+      try { session.close(); } catch (_error) { /* ignore */ }
+    }
+    // 循环闭合或跳数耗尽：带已种好的 cookie 重放原始请求。
+    const replay = NetUtil.createSession_(timeout, false);
+    try {
+      const h = { ...headers };
+      if (cookieEnabled) NetUtil.injectCookie_(url, h);
+      const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, h as rcp.RequestHeaders, body || '');
+      const response = await replay.fetch(request);
+      const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+      if (cookieEnabled) {
+        await CookieStore.getInstance().setCookiesFromResponse(url, respHeaders['set-cookie']);
+      }
+      console.info('[NetUtil] manual-redirect replay', method, url, '→', response.statusCode);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw new Error('防盗链重放仍返回 HTTP ' + response.statusCode);
+      }
+      if (response.body === undefined || response.body === null) return '';
+      return await NetUtil.decodeBody(new Uint8Array(response.body), url);
+    } finally {
+      try { replay.close(); } catch (_error) { /* ignore */ }
+    }
+  }
+
+  /**
    * RCP 不会像 OkHttp HttpUrl 一样自动编码 URL 中的非 ASCII 字符。
    * 使用标准 URL 规范化，编码中文查询参数并保留已有的百分号编码。
    */
@@ -468,6 +554,10 @@ export class NetUtil {
     const baseHeaders = NetUtil.buildHeaders(headers);
     const requestGroup = baseHeaders[REQUEST_GROUP_HEADER] || '';
     delete baseHeaders[REQUEST_GROUP_HEADER];
+    // cookie 开关：重定向手动跟随流程也要遵守同一策略。
+    // 注意不删除 baseHeaders 中的禁用标记——fallback 的 systemHttpRequest
+    // 需要靠它决定是否注入 cookie。
+    const cookieEnabled = baseHeaders[DISABLE_COOKIE_HEADER] !== '1';
     let lastError: string = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       let sessionEntry: PooledSession | null = null;
@@ -476,7 +566,7 @@ export class NetUtil {
       try {
         if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
         const h = { ...baseHeaders };
-        const cookieEnabled = NetUtil.prepareCookiePolicy_(h);
+        NetUtil.prepareCookiePolicy_(h);
         if (cookieEnabled) NetUtil.injectCookie_(requestUrl, h);
         const reqHeaders = h as rcp.RequestHeaders;
         const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
@@ -508,6 +598,19 @@ export class NetUtil {
         return await NetUtil.decodeBody(uint8, requestUrl);
       } catch (e) {
         lastError = (e as Error).message || String(e);
+        if (attempt === 0 && isRedirectLoopError(lastError)) {
+          try {
+            // 重定向链在某处循环：多半是中间跳才种下防盗链 cookie。
+            // 手动逐跳跟随并保存 Set-Cookie，循环回到原地址后重放原始请求。
+            return await NetUtil.manualRedirectWithCookieGate_(
+              method, requestUrl, body || '', baseHeaders, timeout, requestGroup, cookieEnabled);
+          } catch (redirectError) {
+            lastError = (redirectError as Error).message || String(redirectError);
+            // 手动跟随失败：中间跳的 cookie 已种入 CookieStore，
+            // 下一轮普通请求（cookie 已就位）可能直接成功。
+            continue;
+          }
+        }
         if (attempt === 0 && NetUtil.isTransientConnectionError(lastError)) {
           console.warn('[NetUtil] Transient connection error, rebuilding session and retrying:', lastError);
           if (sessionEntry) NetUtil.retireSession(timeout, sessionEntry);
@@ -536,13 +639,16 @@ export class NetUtil {
     throw new Error(lastError);
   }
 
-  private static createSession_(timeout: number): rcp.Session {
+  private static createSession_(timeout: number, autoRedirect: boolean = true): rcp.Session {
     const security: rcp.SecurityConfiguration = {
       remoteValidation: 'system',
       tlsRange: { min: 'TlsV1.0' as rcp.TlsVersion, max: 'TlsV1.3' as rcp.TlsVersion }
     };
     const configuration: rcp.Configuration = {
-      transfer: { timeout: { connectMs: timeout, transferMs: timeout } },
+      // autoRedirect=false 用于手动跟随重定向链：防盗链站点（如 yimixs 的
+      // /jd-fw-key）在中间跳 Set-Cookie 后才放行原地址，RCP 自动跟随会丢失
+      // 中间跳 cookie 导致循环，需要逐跳保存后再重放原始请求。
+      transfer: { timeout: { connectMs: timeout, transferMs: timeout }, autoRedirect: autoRedirect },
       security: security,
     };
     if (NetUtil.dnsEnabled && NetUtil.dnsServers) {
@@ -594,8 +700,28 @@ export class NetUtil {
     // 目录/登录页面。响应头在 RCP 层不向调用方暴露，因此从 HTML 前缀读取
     // meta charset；JSON/API 没有声明时继续使用 UTF-8。
     const declared = NetUtil.detectHtmlCharset_(bodyBytes);
-    const decoder = util.TextDecoder.create(declared || 'utf-8', { fatal: false } as Record<string, Object>);
-    return decoder.decodeToString(bodyBytes);
+    if (declared) {
+      const decoder = util.TextDecoder.create(declared, { fatal: false } as Record<string, Object>);
+      return decoder.decodeToString(bodyBytes);
+    }
+    // 没有 charset 声明的短响应（如搜索拦截 alert 脚本页）常是纯 GBK 页面：
+    // 按 UTF-8 解码会出现 U+FFFD 乱码，导致 alert 文案不可读、只能靠猜。
+    // 此时同时用 gb18030 解码，取替换字符更少的一方——真 UTF-8 文本一个
+    // 替换字符都不会有，不会被误切。
+    const utf8Text = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>)
+      .decodeToString(bodyBytes);
+    if (NetUtil.countReplacementChar_(utf8Text) === 0) return utf8Text;
+    const gbkText = util.TextDecoder.create('gb18030', { fatal: false } as Record<string, Object>)
+      .decodeToString(bodyBytes);
+    return NetUtil.countReplacementChar_(gbkText) < NetUtil.countReplacementChar_(utf8Text) ? gbkText : utf8Text;
+  }
+
+  private static countReplacementChar_(text: string): number {
+    let count = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 0xFFFD) count++;
+    }
+    return count;
   }
 
   private static detectHtmlCharset_(bytes: Uint8Array): string {
@@ -677,5 +803,51 @@ export class NetUtil {
       throw new Error('gzip/zlib inflate status=' + status + ' totalOut=' + (strm.totalOut || 0));
     }
     throw new Error('gzip/zlib inflate output buffer too small');
+  }
+}
+
+/** RCP 自动跟随重定向次数耗尽（默认 50 跳）时报错 1007900047。 */
+export function isRedirectLoopError(message: string): boolean {
+  return message.includes('Number of redirects hit maximum amount') || message.includes('1007900047');
+}
+
+/** 解析重定向 Location（绝对 URL / 协议相对 / 根相对 / 路径相对）。 */
+export function resolveRelativeUrl_(baseUrl: string, location: string): string {
+  const loc = location.trim();
+  if (/^https?:\/\//i.test(loc)) return loc;
+  const schemeEnd = baseUrl.indexOf('://');
+  if (schemeEnd < 0) return loc;
+  const slashAfterHost = baseUrl.indexOf('/', schemeEnd + 3);
+  const origin = slashAfterHost < 0 ? baseUrl : baseUrl.substring(0, slashAfterHost);
+  if (loc.startsWith('//')) return baseUrl.substring(0, schemeEnd + 3) + loc.substring(2);
+  if (loc.startsWith('/')) return origin + loc;
+  // 相对路径：基于 baseUrl 目录（不含 query）。
+  if (slashAfterHost < 0) return origin + '/' + loc;
+  const qIndex = baseUrl.indexOf('?', slashAfterHost);
+  const path = (qIndex >= 0 ? baseUrl.substring(0, qIndex) : baseUrl);
+  const lastSlash = path.lastIndexOf('/');
+  return (lastSlash > schemeEnd + 3 ? path.substring(0, lastSlash + 1) : path + '/') + loc;
+}
+
+/**
+ * visited 集合用的规范化 URL：解码百分号、去掉 fragment、压缩路径重复斜杠。
+ * 防盗链站点常把 Location 写成 %2Fsearch 之类的编码形式，解码后是
+ * //search（前面的字面 / 加上解码出的 /），压缩后才能真正与
+ * 已访问的 /search 地址对上，否则循环闭合检测失效。
+ */
+export function normalizeVisitedUrl_(url: string): string {
+  try {
+    const decoded = decodeURIComponent(url);
+    const hashIndex = decoded.indexOf('#');
+    const clean = hashIndex >= 0 ? decoded.substring(0, hashIndex) : decoded;
+    const schemeEnd = clean.indexOf('://');
+    if (schemeEnd < 0) return clean;
+    const slashAfterHost = clean.indexOf('/', schemeEnd + 3);
+    if (slashAfterHost < 0) return clean;
+    const origin = clean.substring(0, schemeEnd + 3) + clean.substring(schemeEnd + 3, slashAfterHost);
+    const path = clean.substring(slashAfterHost).replace(/\/{2,}/g, '/');
+    return origin + path;
+  } catch (_e) {
+    return url;
   }
 }
