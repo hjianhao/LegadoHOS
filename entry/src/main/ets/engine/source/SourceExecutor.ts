@@ -87,50 +87,6 @@ export function formatLegadoBookName(raw: string): string {
   return (raw || '').replace(/\s+作\s*者.*|\s+\S+\s+著/g, '').trim();
 }
 
-/**
- * AI 书源的搜索/详情页面有时会把站点品牌拼进书名 title，
- * 例如“抖音小说-笔趣阁 都市 七零农村大旱……”。
- *
- * 这不是 Android 通用的作者尾注格式化能处理的内容。净化只接受
- * 明确包含常见站点品牌标记的前缀，因此可用于 AI 修复过的旧书源，
- * 即使该书源没有保留 isAiGenerated 标记，也不会误删合法书名。
- */
-export function sanitizeAiBookName(raw: string, sourceName: string = '', sourceUrl: string = ''): string {
-  const name = formatLegadoBookName(raw);
-  if (!name) return '';
-
-  // 只匹配出现在品牌前缀末尾的站点标记；后面必须有空白和实际书名，
-  // 这样不会把“笔趣阁”出现在合法书名中间的情况误判为前缀。
-  const siteMarker = '(?:笔趣阁|顶点小说网?|小说网|小说之家|小说屋|书库|阅读网|文学网|全文阅读|起点中文网|纵横中文网|晋江文学城|潇湘书院)';
-  const escapeRegexValue = (value: string): string =>
-    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sourceLabel = (sourceName || '')
-    .replace(/\s*\(AI\)\s*$/i, '')
-    .replace(/[^0-9A-Za-z\u3400-\u9fff]+/g, '')
-    .toLowerCase();
-
-  if (sourceLabel.length >= 2 && /[\u3400-\u9fff]/.test(sourceLabel)) {
-    const sourcePrefix = new RegExp(
-      '^\\s*' + escapeRegexValue(sourceLabel) +
-      '\\s*[-—|｜:：]\\s*' + siteMarker + '\\s+(?=\\S)', 'i');
-    const withoutSourcePrefix = name.replace(sourcePrefix, '').trim();
-    if (withoutSourcePrefix !== name) return withoutSourcePrefix;
-  }
-
-  // 兼容 AI 生成源名称被用户改过、或名称只有域名的情况：
-  // “任意品牌-笔趣阁 <书名>”仍是明确的站点前缀形态。
-  const genericPrefix = new RegExp(
-    '^\\s*[0-9A-Za-z\u3400-\u9fff]{2,30}\\s*[-—|｜:：]\\s*' +
-    siteMarker + '\\s+(?=\\S)', 'i');
-  const withoutGenericPrefix = name.replace(genericPrefix, '').trim();
-  if (withoutGenericPrefix !== name) return withoutGenericPrefix;
-
-  // 保留 sourceUrl 参数用于调用方统一传入源上下文；域名本身不参与
-  // 推断，避免把不可读的英文域名误当作中文书名品牌。
-  void sourceUrl;
-  return name;
-}
-
 /** 将书名链接/文本规则转换为同一元素的 title 属性规则，title 常保存网站未截短的完整书名。 */
 export function aiTitleAttributeRule(rule: string): string {
   if (!rule || /@js:/i.test(rule)) return '';
@@ -769,8 +725,8 @@ export class SourceExecutor {
      * 格式化书名：移除 "作者:XXX"、"XX 著"、"最新章节" 等噪声
      * 参考 legado-with-MD3 BookHelp.formatBookName()
      */
-    function formatBookName(raw: string, origin: string = '', originUrl: string = ''): string {
-      return sanitizeAiBookName(raw, origin, originUrl);
+    function formatBookName(raw: string): string {
+      return formatLegadoBookName(raw);
     }
 
     const isValidBookName = (name: string): boolean => this.isValidSearchBookName(name);
@@ -782,7 +738,7 @@ export class SourceExecutor {
         const rawAuthor = r.author || '';
 
         // 1. 清洗书名（formatBookName）
-        const cleanName = formatBookName(rawName, r.origin, r.originUrl);
+        const cleanName = formatBookName(rawName);
 
         // 2. 过滤无效结果
         if (!isValidBookName(cleanName) || !hasUsableSearchIdentity(cleanName, r.noteUrl || '')) {
@@ -1589,8 +1545,7 @@ export class SourceExecutor {
     const seen = new Set<string>();
     for (const a of links) {
       const rawName = a.text.trim();
-      const name = sanitizeAiBookName(this.formatBookNameForFilter(rawName),
-        source.sourceName, source.sourceUrl);
+      const name = this.formatBookNameForFilter(rawName);
       if (!this.isValidSearchBookName(name) || name.length > 50) continue;
       if (seen.has(name)) continue;
       let href = a.attributes['href'] || '';
@@ -2014,10 +1969,16 @@ export class SourceExecutor {
               }
               return '';
             }
-            const normalized = this.normalizeCssRule(ruleBeforeJs);
+            const hashIndex = ruleBeforeJs.indexOf('##');
+            const postRule = hashIndex >= 0 ? ruleBeforeJs.substring(hashIndex) : '';
+            const cssRule = hashIndex >= 0 ? ruleBeforeJs.substring(0, hashIndex).trim() : ruleBeforeJs;
+            const normalized = this.normalizeCssRule(cssRule);
             const value = parser.extractAttr(doc, normalized);
-            if (!jsCode || !value) return value;
-            return JsExpressionEvaluator.processJsResult(singleRule, value, {
+            if (!value) return value;
+            let processed = value;
+            if (postRule) processed = this.postProcessRule(postRule, processed);
+            if (!jsCode) return processed;
+            return JsExpressionEvaluator.processJsResult(singleRule, processed, {
               source: source,
               baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
             });
@@ -2050,7 +2011,6 @@ export class SourceExecutor {
           infoName = preferCompleteBookName(infoName, extractField(fullNameRule));
         }
       }
-      infoName = sanitizeAiBookName(infoName, source.sourceName, source.sourceUrl);
 
       const rawCoverUrl = extractField(source.ruleBookInfoCover) || '';
       return {
@@ -2102,7 +2062,6 @@ export class SourceExecutor {
         tocUrl: this.resolveRuleTemplate(source.ruleBookInfoTocUrl, root, noteUrl),
         chapters: [],
       };
-      info.name = sanitizeAiBookName(info.name, source.sourceName, source.sourceUrl);
       // 详情规则必须至少得到书名；仅有模板生成的 tocUrl 不能算解析成功，
       // 否则认证错误/空数据会被误报成 BookInfo JSON OK。
       if (info.name && (info.author || info.coverUrl || info.introduce || info.kind ||
@@ -3636,10 +3595,13 @@ export class SourceExecutor {
         // 分离 @js: 后缀
         const { rule: cssPart, jsCode } = JsExpressionEvaluator.stripJsSuffix(rawRule);
         const ajaxJs = /java\.ajax\s*\(\s*result\b/i.test(jsCode);
+        const hashIndex = cssPart.indexOf('##');
         // java.ajax(result) 的 result 必须是原始 href，不能先被 ## 正则清空；
-        // 这类后处理应当在 ajax 返回详情 HTML 后再执行。
-        const ajaxPostRule = ajaxJs && cssPart.includes('##') ? cssPart : '';
-        const cssRule = ajaxPostRule ? cssPart.substring(0, cssPart.indexOf('##')).trim() : cssPart;
+        // 这类后处理应当在 ajax 返回详情 HTML 后再执行。普通 HTML 字段则
+        // 在 CSS 提取后直接应用书源规则的 ## 正则后处理。
+        const ajaxPostRule = ajaxJs && hashIndex >= 0 ? cssPart : '';
+        const postRule = hashIndex >= 0 ? cssPart.substring(hashIndex) : '';
+        const cssRule = hashIndex >= 0 ? cssPart.substring(0, hashIndex).trim() : cssPart;
         return (item: HtmlElement): string => {
           // 先执行 CSS 提取
           let result = processPutGet(cssRule, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
@@ -3671,6 +3633,8 @@ export class SourceExecutor {
           }
           if (ajaxPostRule && result) {
             result = this.postProcessRule(ajaxPostRule, result);
+          } else if (postRule && result) {
+            result = this.postProcessRule(postRule, result);
           }
           return result;
         };
@@ -3729,7 +3693,6 @@ export class SourceExecutor {
       if (!name) {
         name = item.text.trim();
       }
-      name = sanitizeAiBookName(name, source.sourceName, source.sourceUrl);
       if (!name || name.length < 1) continue;
 
       // 作者
@@ -3844,7 +3807,7 @@ export class SourceExecutor {
     return list.map((item: unknown) => {
       const itemObj = item as Record<string, unknown>;
       const rawName = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
-      const name = sanitizeAiBookName(rawName, source.sourceName, source.sourceUrl);
+      const name = rawName;
       const author = this.cleanAuthorName(this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author'));
       if (!author) {
         console.info('[SrcEx] Author debug JSON', source.sourceName,

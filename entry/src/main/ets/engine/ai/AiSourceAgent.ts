@@ -605,6 +605,42 @@ function cleanAiSearchBookName_(value: string): string {
   return cleaned.trim() || raw;
 }
 
+/**
+ * 从真实搜索结果中识别书名开头重复出现的“源名称-站点标识”前缀，
+ * 并生成 Legado 书名字段的 ## 正则后处理规则。
+ *
+ * 这里不维护任何站点品牌词表：前缀必须同时满足“来自当前书源名称、带
+ * 明确分隔符、后面还有正文”且至少在两个结果中重复出现，避免误删合法
+ * 书名。返回值为空表示无法安全推断，调用方应保留原规则交给模型重试。
+ */
+export function inferAiSearchNameCleanupRule_(rule: string, results: SearchResult[], sourceName: string): string {
+  const original = (rule || '').trim();
+  if (!original || original.includes('##') || /@js:|<js>|\|\||&&/i.test(original)) return '';
+  const sourceLabel = (sourceName || '')
+    .replace(/\s*\(AI\)\s*$/i, '')
+    .replace(/[^0-9A-Za-z\u3400-\u9fff]+/g, '')
+    .toLowerCase();
+  if (sourceLabel.length < 2) return '';
+  const escapeRegexValue = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const prefixPattern = new RegExp(
+    '^\\s*' + escapeRegexValue(sourceLabel) +
+    '\\s*[-—·・|｜:：]\\s*[^\\s]+\\s+(?=\\S)', 'i');
+  const counts = new Map<string, number>();
+  for (const item of results || []) {
+    const name = (item.name || '').replace(/[\s\u3000]+/g, ' ').trim();
+    const match = name.match(prefixPattern);
+    if (!match) continue;
+    const prefix = match[0].trim();
+    counts.set(prefix, (counts.get(prefix) || 0) + 1);
+  }
+  for (const [prefix, count] of counts) {
+    if (count < 2) continue;
+    return original + '##^' + escapeRegexValue(prefix) + '\\s*##';
+  }
+  return '';
+}
+
 export function hasAiSearchCardMetadata_(value: string): boolean {
   if (!value) return false;
   // 字段型元数据（作者：、状态：、字数：等）必须带冒号，避免把合法书名中
@@ -1149,6 +1185,8 @@ export class AiSourceAgent {
   private searchFallbackKeyword_: boolean = false;
   /** 本轮已验证过无搜索结果的关键词，空结果页换词时避免重复尝试。 */
   private searchedKeywords_: string[] = [];
+  /** 从真实搜索结果推断出的书名净化后缀，写回详情规则后复用。 */
+  private searchNameCleanupSuffix_: string = '';
 
   constructor(callback: AiAgentCallback) {
     this.callback_ = callback;
@@ -1230,6 +1268,7 @@ export class AiSourceAgent {
     this.searchLoginAttempted_ = false;
     this.searchFallbackKeyword_ = false;
     this.searchedKeywords_ = [];
+    this.searchNameCleanupSuffix_ = '';
     this.original_ = request.existingSource
       ? { ...request.existingSource } as BookSource : null;
     this.draft_ = this.original_
@@ -1801,6 +1840,32 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
           this.log_('  已从规范域名首页重新推断搜索入口：' + this.draft_!.ruleSearchUrl);
         }
         continue;
+      }
+      // 某些站点把“源名称-站点标识”拼在每个书名前面。先基于真实结果
+      // 推断可复用的 ## 正则后处理，并用探针验证后写回书源配置；不在
+      // SourceExecutor 中维护站点名称表，也不对无法重复确认的前缀做猜测。
+      const originalNameRule = (this.draft_.ruleSearchName || '').trim();
+      const correctedNameRule = inferAiSearchNameCleanupRule_(
+        originalNameRule, results, this.draft_.sourceName || '');
+      if (correctedNameRule) {
+        const probe = { ...this.draft_ } as BookSource;
+        probe.ruleSearchName = correctedNameRule;
+        try {
+          const correctedResults = await globalSourceExecutor.searchForCheck(keyword, probe);
+          const changed = correctedResults.some((item: SearchResult, index: number): boolean =>
+            item.name !== (results[index] ? results[index].name : ''));
+          const correctedExtracted = correctedResults.filter((item: SearchResult): boolean =>
+            !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+          if (changed && correctedExtracted.length > 0) {
+            this.draft_.ruleSearchName = correctedNameRule;
+            this.searchNameCleanupSuffix_ = correctedNameRule.substring(originalNameRule.length);
+            results = correctedResults;
+            this.log_('  已将搜索结果中的重复站点前缀写入 ruleSearchName 净化规则：' +
+              correctedNameRule);
+          }
+        } catch (_e) {
+          // 净化探针失败时保留原始搜索结果，继续常规字段规则校验。
+        }
       }
       const extracted = results.filter((item: SearchResult): boolean =>
         !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
@@ -2386,6 +2451,7 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
           this.log_('  已将发现封面规则从“' + originalCoverRule + '”修正为“' +
             (correctedCoverRule || '（页面无图片，留空）') + '”');
         }
+        this.applySearchNameCleanupToExploreRule_();
         const probe = { ...this.draft_ } as BookSource;
         probe.isExploreRequest = true;
         probe.ruleSearchUrl = this.requiresWebView_
@@ -2399,7 +2465,32 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
         probe.ruleSearchWordCount = probe.ruleExploreWordCount;
         probe.ruleSearchLastUpdateTime = probe.ruleExploreLastUpdateTime;
         probe.ruleSearchIntroduce = probe.ruleExploreIntroduce;
-        const results = await globalSourceExecutor.searchForCheck(keyword, probe);
+        let results = await globalSourceExecutor.searchForCheck(keyword, probe);
+        const originalNameRule = (this.draft_.ruleExploreName || '').trim();
+        const correctedNameRule = inferAiSearchNameCleanupRule_(
+          originalNameRule, results, this.draft_.sourceName || '');
+        if (correctedNameRule) {
+          const correctedProbe = { ...probe } as BookSource;
+          correctedProbe.ruleSearchName = correctedNameRule;
+          try {
+            const correctedResults = await globalSourceExecutor.searchForCheck(keyword, correctedProbe);
+            const changed = correctedResults.some((item: SearchResult, index: number): boolean =>
+              item.name !== (results[index] ? results[index].name : ''));
+            const correctedExtracted = correctedResults.filter((item: SearchResult): boolean =>
+              !!item.name && !!item.noteUrl && isSafeAiImportUrl(item.noteUrl));
+            if (changed && correctedExtracted.length > 0) {
+              this.draft_.ruleExploreName = correctedNameRule;
+              if (!this.searchNameCleanupSuffix_) {
+                this.searchNameCleanupSuffix_ = correctedNameRule.substring(originalNameRule.length);
+              }
+              results = correctedResults;
+              this.log_('  已将发现结果中的重复站点前缀写入 ruleExploreName 净化规则：' +
+                correctedNameRule);
+            }
+          } catch (_e) {
+            // 净化探针失败时保留原始发现结果，继续常规字段规则校验。
+          }
+        }
         if (results.length === 0) throw new Error('发现规则执行后没有书籍');
         const invalidItems = results.filter((item: SearchResult): boolean =>
           !item.name || !item.noteUrl || !isSafeAiImportUrl(item.noteUrl) ||
@@ -2509,6 +2600,7 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, INFO_FIELDS);
       }
+      this.applySearchNameCleanupToBookInfoRule_();
       if (this.draft_.ruleBookInfoAuthor &&
         this.draft_.ruleBookInfoAuthor === this.draft_.ruleBookInfoName) {
         lastError = '作者规则不能与书名规则相同，必须定位独立的作者元素';
@@ -2606,6 +2698,24 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
     }
     this.error_(AiStep.BOOK_INFO, lastError);
     throw new Error(lastError);
+  }
+
+  /** 将搜索阶段已验证的书名后处理同步到详情书名规则。 */
+  private applySearchNameCleanupToBookInfoRule_(): void {
+    if (!this.draft_ || !this.searchNameCleanupSuffix_) return;
+    const rule = (this.draft_.ruleBookInfoName || '').trim();
+    if (!rule || rule.includes('##') || /@js:|<js>/i.test(rule)) return;
+    this.draft_.ruleBookInfoName = rule + this.searchNameCleanupSuffix_;
+    this.log_('  已将搜索书名净化后缀同步到 ruleBookInfoName');
+  }
+
+  /** 搜索阶段已确认同站前缀时，发现列表沿用同一后处理。 */
+  private applySearchNameCleanupToExploreRule_(): void {
+    if (!this.draft_ || !this.searchNameCleanupSuffix_) return;
+    const rule = (this.draft_.ruleExploreName || '').trim();
+    if (!rule || rule.includes('##') || /@js:|<js>/i.test(rule)) return;
+    this.draft_.ruleExploreName = rule + this.searchNameCleanupSuffix_;
+    this.log_('  已将搜索书名净化后缀同步到 ruleExploreName');
   }
 
   /**

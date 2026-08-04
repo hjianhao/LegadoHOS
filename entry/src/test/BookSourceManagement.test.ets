@@ -10,7 +10,7 @@ import {
   hasUsableSearchIdentity,
   isExplicitlyDisabledSearchTemplate, isTransientGetFailure, isWafProbeHtml,
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
-  sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName, sanitizeAiBookName,
+  sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
   preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
   unwrapJsCallUrlValue_, buildUrl
 } from '../main/ets/engine/source/SourceExecutor';
@@ -26,7 +26,7 @@ import {
   hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
   isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
-  plainRateLimitWaitMs_, patchSearchRuleCharset_
+  plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
@@ -945,16 +945,15 @@ export default function bookSourceManagementTest() {
       expect(formatLegadoBookName('我，刘立东，专治四合院各种不服'))
         .assertEqual('我，刘立东，专治四合院各种不服');
       expect(formatLegadoBookName('三体 作者：刘慈欣')).assertEqual('三体');
-      expect(sanitizeAiBookName(
-        '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', '🎉 抖音小说(AI)',
-        'https://www.douyinxs.com'))
-        .assertEqual('都市 七零农村大旱，我家挖出地下暗河');
-      expect(sanitizeAiBookName(
-        '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', '其他书源(AI)',
-        'https://www.example.com'))
-        .assertEqual('都市 七零农村大旱，我家挖出地下暗河');
-      expect(sanitizeAiBookName('抖音小说家', '🎉 抖音小说(AI)'))
-        .assertEqual('抖音小说家');
+      const pollutedResults: SearchResult[] = [
+        { name: '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', noteUrl: '/book/1' } as SearchResult,
+        { name: '抖音小说-笔趣阁 都市 四合院从签到开始崛起', noteUrl: '/book/2' } as SearchResult,
+      ];
+      expect(inferAiSearchNameCleanupRule_('dt a[title]@title', pollutedResults, '🎉 抖音小说'))
+        .assertEqual('dt a[title]@title##^抖音小说-笔趣阁\\s*##');
+      expect(inferAiSearchNameCleanupRule_('dt a[title]@title', [
+        { name: '抖音小说家', noteUrl: '/book/1' } as SearchResult,
+      ], '🎉 抖音小说')).assertEqual('');
     });
 
     it('normalizesCheckDependencies', 0, () => {
