@@ -108,6 +108,8 @@ struct AiSourceGeneratePage {
   @State showDiscoveryBrowser_: boolean = false;
   @State discoveryBrowserUrl_: string = '';
   @State discoveryCandidates_: AiSourceCandidate[] = [];
+  /** 用户当前勾选的网站 ID；与候选状态/批量进度解耦，避免状态回调覆盖选择。 */
+  @State selectedCandidateIds_: string[] = [];
   @State discoveryPhase_: string = 'idle';
   @State discoveryError_: string = '';
   @State allowUpdateExisting_: boolean = false;
@@ -381,6 +383,9 @@ struct AiSourceGeneratePage {
         return;
       }
       this.discoveryCandidates_ = candidates;
+      this.selectedCandidateIds_ = candidates
+        .filter((item: AiSourceCandidate): boolean => item.selected)
+        .map((item: AiSourceCandidate): string => item.id);
       this.discoveryPhase_ = 'candidates';
       this.showDiscoveryBrowser_ = false;
     } catch (e) {
@@ -390,7 +395,11 @@ struct AiSourceGeneratePage {
   }
 
   private selectionCount_(): number {
-    return this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean => item.selected).length;
+    return this.selectedCandidateIds_.length;
+  }
+
+  private isCandidateSelected_(id: string): boolean {
+    return this.selectedCandidateIds_.includes(id);
   }
 
   private cloneCandidate_(item: AiSourceCandidate, selected?: boolean,
@@ -423,10 +432,15 @@ struct AiSourceGeneratePage {
   }
 
   private toggleCandidate_(id: string, selected: boolean): void {
+    const current = this.isCandidateSelected_(id);
+    if (selected === current) return;
     if (selected && this.selectionCount_() >= 10) {
       UiUtil.showToast(this.getUIContext(), { message: '一次最多选择 10 个网站', duration: 1800 });
       return;
     }
+    this.selectedCandidateIds_ = selected
+      ? [...this.selectedCandidateIds_, id]
+      : this.selectedCandidateIds_.filter((itemId: string): boolean => itemId !== id);
     this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
       item.id === id ? this.cloneCandidate_(item, selected) : item);
   }
@@ -437,21 +451,27 @@ struct AiSourceGeneratePage {
     const safe = !!normalized && AiSourceDiscoveryService.isCandidateUrl(homepage);
     this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate => {
       if (item.id !== id) return item;
-      const next = this.cloneCandidate_(item, safe ? item.selected : false, homepage, safe,
+      const next = this.cloneCandidate_(item, safe ? this.isCandidateSelected_(item.id) : false, homepage, safe,
         safe ? item.duplicate : 'none');
       next.normalizedSiteKey = AiSourceDiscoveryService.normalizedSiteKey(homepage);
       return next;
     });
+    if (!safe) {
+      this.selectedCandidateIds_ = this.selectedCandidateIds_.filter((itemId: string): boolean => itemId !== id);
+    }
   }
 
   private selectAllNewCandidates_(): void {
     let count = 0;
+    const selectedIds: string[] = [];
     this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate => {
       if (!item.safe || item.duplicate !== 'none') return this.cloneCandidate_(item, false);
       if (count >= 10) return this.cloneCandidate_(item, false);
       count++;
+      selectedIds.push(item.id);
       return this.cloneCandidate_(item, true);
     });
+    this.selectedCandidateIds_ = selectedIds;
     if (this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean =>
       item.safe && item.duplicate === 'none').length > 10) {
       UiUtil.showToast(this.getUIContext(), { message: '已选择前 10 个新网站', duration: 1600 });
@@ -459,6 +479,7 @@ struct AiSourceGeneratePage {
   }
 
   private clearCandidateSelection_(): void {
+    this.selectedCandidateIds_ = [];
     this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
       this.cloneCandidate_(item, false));
   }
@@ -485,8 +506,9 @@ struct AiSourceGeneratePage {
     if (result.index !== 1) return;
     // 在确认按钮之后立即冻结本次任务的输入快照。后续分析过程中只使用这份
     // 快照，避免 UI 刷新或候选列表状态变化把未勾选网站带入批量任务。
+    const selectedIds = this.selectedCandidateIds_.slice();
     const selectedCandidates = this.discoveryCandidates_
-      .filter((item: AiSourceCandidate): boolean => item.selected)
+      .filter((item: AiSourceCandidate): boolean => selectedIds.includes(item.id))
       .map((item: AiSourceCandidate): AiSourceCandidate => this.cloneCandidate_(item, true));
     if (selectedCandidates.length === 0) {
       UiUtil.showToast(this.getUIContext(), { message: '没有可分析的已选网站', duration: 1600 });
@@ -508,7 +530,7 @@ struct AiSourceGeneratePage {
           onCandidateChanged: (candidate: AiSourceCandidate): void => {
             if (!this.pageActive_) return;
             this.discoveryCandidates_ = this.discoveryCandidates_.map((item: AiSourceCandidate): AiSourceCandidate =>
-              item.id === candidate.id ? candidate : item);
+              item.id === candidate.id ? this.cloneCandidate_(candidate, this.isCandidateSelected_(candidate.id)) : item);
           },
           onSourceReady: (_candidate: AiSourceCandidate, source: BookSource): void => {
             if (!this.pageActive_) return;
@@ -583,7 +605,8 @@ struct AiSourceGeneratePage {
   }
 
   private batchProgressText_(): string {
-    const selected = this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean => item.selected);
+    const selected = this.discoveryCandidates_.filter((item: AiSourceCandidate): boolean =>
+      this.isCandidateSelected_(item.id));
     const finished = selected.filter((item: AiSourceCandidate): boolean =>
       item.status === 'ready' || item.status === 'created' || item.status === 'updated' || item.status === 'unchanged' ||
       item.status === 'failed' || item.status === 'skipped' || item.status === 'cancelled').length;
@@ -904,7 +927,7 @@ struct AiSourceGeneratePage {
             Column({ space: 6 }) {
               Row({ space: 8 }) {
                 Checkbox({ name: 'ai_candidate_' + candidate.id, group: 'ai_source_candidates' })
-                  .select(candidate.selected)
+                  .select(this.isCandidateSelected_(candidate.id))
                   .selectedColor(ThemeColors.primary(this.isDark))
                   .width(26).height(26)
                   .enabled(candidate.safe && !this.isAnyTaskRunning_())
@@ -970,6 +993,7 @@ struct AiSourceGeneratePage {
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
             .onClick((): void => {
               this.discoveryCandidates_ = [];
+              this.selectedCandidateIds_ = [];
               this.discoveryPhase_ = 'idle';
               this.discoveryError_ = '';
             })
