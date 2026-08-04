@@ -26,7 +26,8 @@ import {
   hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
   isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
-  plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_
+  plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_,
+  buildAiVisibleNameRuleCandidates_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
@@ -945,6 +946,8 @@ export default function bookSourceManagementTest() {
       expect(formatLegadoBookName('我，刘立东，专治四合院各种不服'))
         .assertEqual('我，刘立东，专治四合院各种不服');
       expect(formatLegadoBookName('三体 作者：刘慈欣')).assertEqual('三体');
+      expect(buildAiVisibleNameRuleCandidates_('dt a[title]@title')
+        .includes('dt > a[title]@text')).assertTrue();
       const pollutedResults: SearchResult[] = [
         { name: '抖音小说-笔趣阁 都市 七零农村大旱，我家挖出地下暗河', noteUrl: '/book/1' } as SearchResult,
         { name: '抖音小说-笔趣阁 都市 四合院从签到开始崛起', noteUrl: '/book/2' } as SearchResult,

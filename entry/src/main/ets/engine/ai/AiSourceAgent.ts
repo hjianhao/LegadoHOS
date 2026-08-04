@@ -641,6 +641,67 @@ export function inferAiSearchNameCleanupRule_(rule: string, results: SearchResul
   return '';
 }
 
+/**
+ * 为使用 @title 的书名规则生成“同一节点的可见文本”候选。
+ * 直接子节点候选放在最前，避免 `dt a@text` 误取同一条目里的作者链接。
+ */
+export function buildAiVisibleNameRuleCandidates_(rule: string): string[] {
+  const raw = (rule || '').trim();
+  if (!raw) return [];
+  const hashIndex = raw.indexOf('##');
+  const base = (hashIndex >= 0 ? raw.substring(0, hashIndex) : raw).trim();
+  const match = base.match(/^([\s\S]+?)@(title)$/i);
+  if (!match) return [];
+  const selector = match[1].trim();
+  if (!selector) return [];
+  const candidates: string[] = [];
+  const add = (candidate: string): void => {
+    const value = candidate.trim();
+    if (value && !candidates.includes(value)) candidates.push(value);
+  };
+  // `dt a[title]` → `dt > a[title]`：当前站点的作者链接在 span 内，书名链接是 dt 直接子节点。
+  if (!/[>+~]/.test(selector)) {
+    const parts = selector.match(/^([\s\S]+?)\s+([^\s]+)$/);
+    if (parts) {
+      add(parts[1] + ' > ' + parts[2] + '@text');
+      add(parts[1] + ' > ' + parts[2] + '@ownText');
+    }
+  }
+  add(selector + '@text');
+  add(selector + '@ownText');
+  return candidates;
+}
+
+function isVisibleNameRuleImprovement_(original: SearchResult[], candidate: SearchResult[], keyword: string): boolean {
+  if (candidate.length === 0) return false;
+  const originalByUrl = new Map<string, SearchResult>();
+  for (const item of original) {
+    if (item.noteUrl) originalByUrl.set(item.noteUrl, item);
+  }
+  let compared = 0;
+  let improved = 0;
+  for (let index = 0; index < candidate.length; index++) {
+    const item = candidate[index];
+    if (!item.name || !item.noteUrl || !isSafeAiImportUrl(item.noteUrl) ||
+      !isLikelyAiBookDetailUrl(item.noteUrl) || isLikelyAiSearchActionText_(item.name)) continue;
+    const before = originalByUrl.get(item.noteUrl) || original[index];
+    if (!before || !before.name) continue;
+    const oldKey = normalizeAiBookName_(before.name);
+    const newKey = normalizeAiBookName_(item.name);
+    if (!oldKey || !newKey || oldKey === newKey || newKey.length < 4) continue;
+    // 可见文本是书名后缀、title 是带前缀的完整字符串；反过来的关系通常是
+    // 可见文本被截短，不能为了“更短”而丢掉 title 中的完整书名。
+    if (!oldKey.endsWith(newKey)) continue;
+    if (/[.…]{1,3}$|\.\.\.$/.test(item.name.trim())) continue;
+    compared++;
+    if (aiSearchRelevance_(item, keyword) >= aiSearchRelevance_(before, keyword) &&
+      normalizeAiBookName_(item.author || '') !== newKey) {
+      improved++;
+    }
+  }
+  return compared >= 2 && improved >= Math.max(2, Math.ceil(compared / 2));
+}
+
 export function hasAiSearchCardMetadata_(value: string): boolean {
   if (!value) return false;
   // 字段型元数据（作者：、状态：、字数：等）必须带冒号，避免把合法书名中
@@ -1773,7 +1834,7 @@ ruleSearchList 只能命中搜索结果中的书籍卡片，不能使用 ul > li
 必须排除导航、分类、标签、作者和榜单项。字段规则相对于每个书籍卡片；
 ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能取分类/作者链接或文本；JSON 中必须取能唯一定位当前书籍的 URL/ID 字段，必要时使用 {{字段}} 拼出详情 URL。
 如果卡片文本包含更新日期、作者、状态、大小、最新章节、开始阅读等元数据，ruleSearchName 只能定位书名子元素，不能取整张卡片文本；ruleSearchAuthor 必须定位作者字段，不能取“连载中/完结”等状态，也不能取“立即阅读/加入书架”等操作按钮。
-如果书名链接的可见文本因页面排版被截短，而 title 属性包含完整书名，ruleSearchName 必须取同一链接的 @title。
+书名规则必须先比较同一链接的可见文本与 title 属性：只有可见文本确实被截短/省略时才取 @title；如果 title 只是 SEO 标题，前面带站名、栏目名或分类，而可见文本是完整书名，必须取 @text/@ownText。列表项内有作者等其他链接时，使用直接子节点（如 dt > a[title]@text），不要用宽泛的 dt a@text 误取作者。
 如果书名文本前带明确的站点品牌前缀（例如“抖音小说-笔趣阁 ”），必须在书名规则中用 ##正则##空串 净化该前缀；不要把站点名、栏目名或“笔趣阁”等品牌保留在最终书名中，但不得删除合法书名内容。
 表格型搜索结果优先按同一行的单元格/链接索引定位字段（如 .odd.0@text、.odd.1@text、a.0@href 或 td.odd.0@text），不要用 td a@text 读取整列多个链接。
 优先稳定 id/class，避免 nth-child/nth-of-type。
@@ -1845,8 +1906,15 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       // 推断可复用的 ## 正则后处理，并用探针验证后写回书源配置；不在
       // SourceExecutor 中维护站点名称表，也不对无法重复确认的前缀做猜测。
       const originalNameRule = (this.draft_.ruleSearchName || '').trim();
+      const visibleNameCorrection = await this.tryPreferVisibleNameRule_(
+        keyword, this.draft_, originalNameRule, results);
+      if (visibleNameCorrection) {
+        this.draft_.ruleSearchName = visibleNameCorrection.rule;
+        results = visibleNameCorrection.results;
+        this.log_('  已验证书名可见文本规则，替换原 @title 规则：' + visibleNameCorrection.rule);
+      }
       const correctedNameRule = inferAiSearchNameCleanupRule_(
-        originalNameRule, results, this.draft_.sourceName || '');
+        this.draft_.ruleSearchName || originalNameRule, results, this.draft_.sourceName || '');
       if (correctedNameRule) {
         const probe = { ...this.draft_ } as BookSource;
         probe.ruleSearchName = correctedNameRule;
@@ -2004,6 +2072,33 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     }
     this.error_(AiStep.SEARCH, lastError || '搜索验证失败');
     return [];
+  }
+
+  /**
+   * 当当前规则读取 @title 时，用真实页面探针比较同一节点的可见文本。
+   * 只有多个结果都证明“旧值是新值前缀/后缀污染”时才写回，避免把被截短的
+   * 可见标题误当成完整书名。
+   */
+  private async tryPreferVisibleNameRule_(keyword: string, source: BookSource,
+    originalRule: string, originalResults: SearchResult[]): Promise<{
+      rule: string;
+      results: SearchResult[];
+    } | null> {
+    const candidates = buildAiVisibleNameRuleCandidates_(originalRule);
+    if (candidates.length === 0) return null;
+    for (const candidate of candidates) {
+      const probe = { ...source } as BookSource;
+      probe.ruleSearchName = candidate;
+      try {
+        const retried = await globalSourceExecutor.searchForCheck(keyword, probe);
+        if (isVisibleNameRuleImprovement_(originalResults, retried, keyword)) {
+          return { rule: candidate, results: retried };
+        }
+      } catch (_e) {
+        // 当前候选不适配页面结构时继续试下一个，不影响原始规则。
+      }
+    }
+    return null;
   }
 
   /**
@@ -2419,7 +2514,7 @@ ${this.evidenceRuleHint_(evidence.html)}
 ${this.promptKnowledge_('discovery', lastError, evidence.html)}
 列表字段相对于每个列表项；与搜索结果规则语义相同。
 发现表格中可能同时有书名、最新章节、作者和“加入书签/阅读”等操作链接；ruleExploreName
-只能定位书名（优先使用带完整 title 的书名主链接），ruleExploreNoteUrl 必须提取同一书名主链接
+必须比较同一书名链接的可见文本与 title 属性：只有可见文本确实被截短/省略时才优先使用完整 title；如果 title 带站名/栏目名/分类而可见文本是完整书名，必须取 @text/@ownText。ruleExploreName 只能定位书名，必要时使用直接子节点（如 dt > a[title]@text），ruleExploreNoteUrl 必须提取同一书名主链接
 的 @href，禁止使用最新章节或操作按钮链接。若列表是 table，优先使用 table.table tr!0 与
 a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取同一单元格中的任意链接。
 上次验证错误：${lastError || '无'}
@@ -2467,8 +2562,16 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
         probe.ruleSearchIntroduce = probe.ruleExploreIntroduce;
         let results = await globalSourceExecutor.searchForCheck(keyword, probe);
         const originalNameRule = (this.draft_.ruleExploreName || '').trim();
+        const visibleNameCorrection = await this.tryPreferVisibleNameRule_(
+          keyword, probe, originalNameRule, results);
+        if (visibleNameCorrection) {
+          this.draft_.ruleExploreName = visibleNameCorrection.rule;
+          results = visibleNameCorrection.results;
+          this.log_('  已验证发现列表的书名可见文本规则，替换原 @title 规则：' +
+            visibleNameCorrection.rule);
+        }
         const correctedNameRule = inferAiSearchNameCleanupRule_(
-          originalNameRule, results, this.draft_.sourceName || '');
+          this.draft_.ruleExploreName || originalNameRule, results, this.draft_.sourceName || '');
         if (correctedNameRule) {
           const correctedProbe = { ...probe } as BookSource;
           correctedProbe.ruleSearchName = correctedNameRule;
@@ -2580,7 +2683,7 @@ ${this.evidenceRuleHint_(evidence.html)}
 ${this.promptKnowledge_('detail', lastError, evidence.html)}
 当前页面应是《${expectedName}》的单本书详情页，ruleBookInfoName 必须解析出对应书名，不能把分类列表卡片当详情。
 HTML 文本字段必须使用具体容器的 CSS 选择器并显式提取 @text，封面必须定位 img 或明确的图片 meta 并提取 @src/@data-src/@data-original/@content，严禁使用 @style 或 background-image；目录入口提取 @href。JSON 字段使用对象路径，封面使用 URL 字段，目录入口使用 URL/ID 字段或 {{字段}} 模板。
-如果书名元素的可见文本被截短而 title/content 属性包含完整书名，应提取完整属性，禁止保存省略后的书名。
+如果书名元素的可见文本被截短而 title/content 属性包含完整书名，应提取完整属性，禁止保存省略后的书名；如果 title 只是带站名/栏目名的 SEO 标题而可见文本完整，应取 @text/@ownText，不要把 SEO 前缀写进书名。
 禁止用 html、body、仅 @text 或其他会返回整页文本的宽泛规则；作者规则不能与书名规则相同。
 目录入口是“全部章节/完整目录”的链接，不要返回最近章节链接。
 ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填写本次样本书的绝对或相对目录 URL，
