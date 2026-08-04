@@ -2379,14 +2379,16 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
 
   /**
    * 兼容没有 h1 的传统详情页。候选规则来自页面真实结构：
-   * #content .readinfo 的最后一个链接是书名，#content 的第一个 span 是标题，
-   * 元数据表格的语义标签定位作者/分类/字数/更新时间，内容区第一个图片是封面。
+   * 老式站点的 #content .readinfo 最后一个链接是书名、第一个 span 是标题，
+   * 元数据表格的语义标签定位作者/分类/字数/更新时间，内容区第一个图片是封面；
+   * 通用页面则从真实 DOM 找包含书名的 h1-h6 标题元素生成候选——部分站点把书名
+   * 放在内容区 h2/h3（常带书名号《》）且无面包屑/标题 span，模型容易臆测
+   * 带 class 的规则导致 miss，这里用页面真实标题结构兜底。
    */
   private async tryCorrectBookInfoRules_(bookUrl: string, expectedName: string,
     evidenceHtml: string): Promise<BookSourceBookInfo | null> {
     if (!this.draft_ || !evidenceHtml || !expectedName) return null;
-    if (!/<(?:div|td)\b[^>]*\bid\s*=\s*["']content["']/i.test(evidenceHtml) ||
-      !evidenceHtml.includes(expectedName)) return null;
+    if (!evidenceHtml.includes(expectedName)) return null;
 
     const originalName = this.draft_.ruleBookInfoName || '';
     const originalAuthor = this.draft_.ruleBookInfoAuthor || '';
@@ -2395,18 +2397,50 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
     const originalKind = this.draft_.ruleBookInfoKind || '';
     const originalWordCount = this.draft_.ruleBookInfoWordCount || '';
     const originalLastUpdateTime = this.draft_.ruleBookInfoLastUpdateTime || '';
-    const candidates: string[] = [
-      '#content .readinfo a.-1@text',
-      '#content span.0@text',
-      '#content .readinfo a.1@text',
-    ];
+    const candidates: string[] = [];
     const addCandidate = (rule: string): void => {
       if (rule && !candidates.includes(rule)) candidates.push(rule);
     };
-    // 页面结构变化时，仍保留少量通用候选，但必须通过真实详情页校验。
-    if (/<h1\b/i.test(evidenceHtml)) addCandidate('#content h1@text');
+    const hasContentContainer = /<(?:div|td)\b[^>]*\bid\s*=\s*["']content["']/i.test(evidenceHtml);
+    if (hasContentContainer) {
+      addCandidate('#content .readinfo a.-1@text');
+      addCandidate('#content span.0@text');
+      addCandidate('#content .readinfo a.1@text');
+      // 页面结构变化时，仍保留少量通用候选，但必须通过真实详情页校验。
+      if (/<h1\b/i.test(evidenceHtml)) addCandidate('#content h1@text');
+    }
     if (/<meta\b[^>]*(?:property|name)\s*=\s*["']og:title["']/i.test(evidenceHtml)) {
       addCandidate('meta[property="og:title"]@content');
+    }
+    // 通用标题元素锚定：找文本包含书名的 h1-h6（书名带《》也能匹配）。
+    // 只生成结构规则（标签/class/id），禁止把样本书名写进规则，否则运行时
+    // 对其他书籍无效。仅取第一个匹配标题：它是页面书名元素的可能性最高。
+    const headingPattern = /<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi;
+    let headingMatch: RegExpExecArray | null;
+    let matchedHeadingCount = 0;
+    while ((headingMatch = headingPattern.exec(evidenceHtml)) !== null) {
+      const headingTag = 'h' + headingMatch[1];
+      const headingAttrs = headingMatch[2];
+      const headingText = (headingMatch[3] || '').replace(/<[^>]*>/g, '').trim();
+      const comparableHeading = normalizeAiBookName_(headingText);
+      const comparableExpected = normalizeAiBookName_(expectedName);
+      if (!comparableHeading || !comparableExpected ||
+        (!comparableHeading.includes(comparableExpected) &&
+          !comparableExpected.includes(comparableHeading))) {
+        continue;
+      }
+      matchedHeadingCount++;
+      const headingId = headingAttrs.match(/\bid\s*=\s*["']([^"']+)["']/i);
+      if (headingId && headingId.length > 1 && headingId[1]) {
+        addCandidate('#' + headingId[1] + '@text');
+      }
+      const headingClass = headingAttrs.match(/\bclass\s*=\s*["']([^"']+)["']/i);
+      if (headingClass && headingClass.length > 1 && headingClass[1]) {
+        const firstClass = headingClass[1].trim().split(/\s+/)[0];
+        if (firstClass) addCandidate(headingTag + '.' + firstClass + '@text');
+      }
+      if (matchedHeadingCount === 1) addCandidate(headingTag + '@text');
+      break;
     }
 
     for (const candidate of candidates) {
@@ -2437,12 +2471,13 @@ ruleBookInfoTocUrl 必须是对当前详情页执行的提取规则，禁止填�
       } else {
         this.draft_.ruleBookInfoLastUpdateTime = originalLastUpdateTime;
       }
-      if (/<img\b[^>]*\bsrc\s*=\s*["'][^"']+\.(?:jpg|jpeg|png|webp)/i.test(evidenceHtml)) {
+      if (hasContentContainer &&
+        /<img\b[^>]*\bsrc\s*=\s*["'][^"']+\.(?:jpg|jpeg|png|webp)/i.test(evidenceHtml)) {
         this.draft_.ruleBookInfoCover = '#content img.0@src';
       } else {
         this.draft_.ruleBookInfoCover = originalCover;
       }
-      if (/<ul\b[^>]*\bclass\s*=\s*["'][^"']*\bulrow\b/i.test(evidenceHtml)) {
+      if (hasContentContainer && /<ul\b[^>]*\bclass\s*=\s*["'][^"']*\bulrow\b/i.test(evidenceHtml)) {
         this.draft_.ruleBookInfoTocUrl = '.ulrow@a.0@href';
       } else {
         this.draft_.ruleBookInfoTocUrl = originalToc;

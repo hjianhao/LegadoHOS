@@ -672,6 +672,27 @@ export default function bookSourceManagementTest() {
         '马可瓦尔多')).assertFalse();
     });
 
+    it('acceptsCornerBracketedNameFromDetailHeadingWithSparseFields', 0, () => {
+      // 爱久久网等站点把书名放在内容区 h3 中并带《》包装，兜底规则 h3@text
+      // 提取后归一化应与搜索书名一致。
+      expect(isAiBookNameConsistent('《七零四合院里欢乐多》', '七零四合院里欢乐多')).assertTrue();
+      expect(isAiBookNameConsistent('内容简介', '七零四合院里欢乐多')).assertFalse();
+      expect(isAiBookNameConsistent('爱久久小说网ijjxsw.com欢迎您', '七零四合院里欢乐多')).assertFalse();
+      // 详情页没有目录入口/简介等附加字段时，只要书名一致且作者/封面至少
+      // 一项有效即可通过（isPlausibleAiDetailValue_ 对空值放行）。
+      expect(isPlausibleAiBookInfo({
+        name: '《七零四合院里欢乐多》',
+        author: '傅延年',
+        coverUrl: '//image.jjjjxsw.com/UploadPic/2026-06/fzs0z2on3j2phmvp.jpg',
+        introduce: '',
+        kind: '',
+        wordCount: '',
+        lastUpdateTime: '',
+        tocUrl: '',
+        chapters: [],
+      }, '七零四合院里欢乐多')).assertTrue();
+    });
+
     it('rejectsWholePageTextExtractedAsBookInfo', 0, () => {
       expect(isPlausibleAiBookInfo({
         name: '夏天、烟火和我的尸体',
