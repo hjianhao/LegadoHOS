@@ -934,10 +934,15 @@ function isLikelyClientRenderedShellHtml_(html: string): boolean {
 function isLikelyAiApiAuthErrorPage_(html: string): boolean {
   const value = (html || '').replace(/\s+/g, ' ');
   if (!value) return false;
+  // 完整 HTML 页面（含文档结构标签）不是 API 错误响应：页面导航里的"登录"
+  // 链接和章节号 401/403 等数字会让下面的正则误命中（笔趣阁模板详情页常见）。
+  if (/<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>]/i.test(value)) return false;
   // WebView 返回的 JSON 可能被转成 HTML 实体或纯文本，不能依赖完整的
   // `"code":4005` 格式；错误码和认证关键词分开判断更稳妥。
+  // auth 必须用单词边界：JSON 书籍详情里的 "author" 字段含 auth 子串，
+  // 配合书籍数字 ID 401/403 会造成误命中。
   return /\b(?:4005|401|403)\b/i.test(value) &&
-    /(?:认证失败|认证错误|未认证|未授权|token|authorization|登录|auth)/i.test(value);
+    /(?:认证失败|认证错误|未认证|未授权|token|authorization|\bauth\b|登录)/i.test(value);
 }
 
 /** 目录/详情字段不能把请求选项拼进 URL；否则逗号和 JSON 会被当成路径。 */
