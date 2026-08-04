@@ -91,9 +91,9 @@ export function formatLegadoBookName(raw: string): string {
  * AI 书源的搜索/详情页面有时会把站点品牌拼进书名 title，
  * 例如“抖音小说-笔趣阁 都市 七零农村大旱……”。
  *
- * 这不是 Android 通用的作者尾注格式化能处理的内容，因此只在 AI
- * 书源调用，并且要求前缀明确包含常见站点品牌标记，避免把合法书名
- * 开头的短语误删。
+ * 这不是 Android 通用的作者尾注格式化能处理的内容。净化只接受
+ * 明确包含常见站点品牌标记的前缀，因此可用于 AI 修复过的旧书源，
+ * 即使该书源没有保留 isAiGenerated 标记，也不会误删合法书名。
  */
 export function sanitizeAiBookName(raw: string, sourceName: string = '', sourceUrl: string = ''): string {
   const name = formatLegadoBookName(raw);
@@ -769,8 +769,8 @@ export class SourceExecutor {
      * 格式化书名：移除 "作者:XXX"、"XX 著"、"最新章节" 等噪声
      * 参考 legado-with-MD3 BookHelp.formatBookName()
      */
-    function formatBookName(raw: string): string {
-      return formatLegadoBookName(raw);
+    function formatBookName(raw: string, origin: string = '', originUrl: string = ''): string {
+      return sanitizeAiBookName(raw, origin, originUrl);
     }
 
     const isValidBookName = (name: string): boolean => this.isValidSearchBookName(name);
@@ -782,7 +782,7 @@ export class SourceExecutor {
         const rawAuthor = r.author || '';
 
         // 1. 清洗书名（formatBookName）
-        const cleanName = formatBookName(rawName);
+        const cleanName = formatBookName(rawName, r.origin, r.originUrl);
 
         // 2. 过滤无效结果
         if (!isValidBookName(cleanName) || !hasUsableSearchIdentity(cleanName, r.noteUrl || '')) {
@@ -1587,12 +1587,10 @@ export class SourceExecutor {
     const links = parser.querySelectorAll(doc, 'a[href]');
     const results: SearchResult[] = [];
     const seen = new Set<string>();
-    const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
     for (const a of links) {
       const rawName = a.text.trim();
-      const name = isAiSource
-        ? sanitizeAiBookName(rawName, source.sourceName, source.sourceUrl)
-        : this.formatBookNameForFilter(rawName);
+      const name = sanitizeAiBookName(this.formatBookNameForFilter(rawName),
+        source.sourceName, source.sourceUrl);
       if (!this.isValidSearchBookName(name) || name.length > 50) continue;
       if (seen.has(name)) continue;
       let href = a.attributes['href'] || '';
@@ -2051,8 +2049,8 @@ export class SourceExecutor {
         if (fullNameRule) {
           infoName = preferCompleteBookName(infoName, extractField(fullNameRule));
         }
-        infoName = sanitizeAiBookName(infoName, source.sourceName, source.sourceUrl);
       }
+      infoName = sanitizeAiBookName(infoName, source.sourceName, source.sourceUrl);
 
       const rawCoverUrl = extractField(source.ruleBookInfoCover) || '';
       return {
@@ -2104,9 +2102,7 @@ export class SourceExecutor {
         tocUrl: this.resolveRuleTemplate(source.ruleBookInfoTocUrl, root, noteUrl),
         chapters: [],
       };
-      if (source.isAiGenerated || (source.sourceName || '').endsWith('(AI)')) {
-        info.name = sanitizeAiBookName(info.name, source.sourceName, source.sourceUrl);
-      }
+      info.name = sanitizeAiBookName(info.name, source.sourceName, source.sourceUrl);
       // 详情规则必须至少得到书名；仅有模板生成的 tocUrl 不能算解析成功，
       // 否则认证错误/空数据会被误报成 BookInfo JSON OK。
       if (info.name && (info.author || info.coverUrl || info.introduce || info.kind ||
@@ -3733,9 +3729,7 @@ export class SourceExecutor {
       if (!name) {
         name = item.text.trim();
       }
-      if (isAiSource) {
-        name = sanitizeAiBookName(name, source.sourceName, source.sourceUrl);
-      }
+      name = sanitizeAiBookName(name, source.sourceName, source.sourceUrl);
       if (!name || name.length < 1) continue;
 
       // 作者
@@ -3847,12 +3841,10 @@ export class SourceExecutor {
         }
       }
     }
-    const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
     return list.map((item: unknown) => {
       const itemObj = item as Record<string, unknown>;
       const rawName = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
-      const name = isAiSource
-        ? sanitizeAiBookName(rawName, source.sourceName, source.sourceUrl) : rawName;
+      const name = sanitizeAiBookName(rawName, source.sourceName, source.sourceUrl);
       const author = this.cleanAuthorName(this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author'));
       if (!author) {
         console.info('[SrcEx] Author debug JSON', source.sourceName,
