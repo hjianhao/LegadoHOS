@@ -25,6 +25,7 @@ import {
   prepareSourceAgentHtml, isLikelyAiLoginPage, isLikelyAiLoginResultPage,
   hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
+  isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
   plainRateLimitWaitMs_, patchSearchRuleCharset_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
@@ -471,6 +472,54 @@ export default function bookSourceManagementTest() {
       expect(extractSearchAlertInfo_(normal)).assertNull();
       // 空页面不触发。
       expect(extractSearchAlertInfo_('')).assertNull();
+    });
+
+    it('detectsEmptySearchResultPage', 0, () => {
+      // yqk.net（言情库）搜索不存在的书名时只返回导航/推荐栏：
+      // 无书籍卡片、无书籍链接，只有"很抱歉，暂时找不到结果！！"文案。
+      // 此前模型在空页上 4 轮生成规则全是 0 条，Agent 以搜索规则验证失败终止。
+      const yqkEmpty = '<html><head><title>搜索结果 - 言情库</title></head><body>' +
+        '<div class="menu"><a href="/">言情小说首页</a><a href="/zuozhe/">作家列表</a></div>' +
+        '<div class="main"><div class="left"><ul><p>很抱歉，暂时找不到结果！！</p></ul></div></div>' +
+        '<dl><dt>小说故事情节</dt><dd><a href="/qingjie/1/">欢喜冤家</a></dd></dl></body></html>';
+      expect(isLikelyAiEmptySearchResultPage_(yqkEmpty)).assertTrue();
+      // 帝国 CMS 的"没有搜索到相关的内容"页。
+      const empireCmsEmpty = '<html><head><title>没有搜索到相关的内容</title></head><body>' +
+        '<p>没有搜索到相关的内容</p></body></html>';
+      expect(isLikelyAiEmptySearchResultPage_(empireCmsEmpty)).assertTrue();
+      // 其他常见无结果文案。
+      expect(isLikelyAiEmptySearchResultPage_('<p>抱歉，没有找到您要的书籍</p>')).assertTrue();
+      expect(isLikelyAiEmptySearchResultPage_('<p>搜索无结果</p>')).assertTrue();
+      expect(isLikelyAiEmptySearchResultPage_('<p>搜索结果为空</p>')).assertTrue();
+      // 真实结果页：yqk 的书籍卡片是 <li> + /yanqing/ 链接，页面无“无结果”文案。
+      const yqkResult = '<html><body><ul><li>' +
+        '<p><strong>《<a href="/yanqing/fuguitaojia/">富贵饕家</a>》</strong></p>' +
+        '<p>作家：<a href="/zuozhe/50.html">席绢</a></p>' +
+        '<p>最新章节：<a href="/yanqing/fuguitaojia/263915.html">后记</a></p></li>' +
+        '<li><p><strong>《<a href="/yanqing/gaomen/">高门</a>》</strong></p></li>' +
+        '<li><p><strong>《<a href="/yanqing/huolu/">活路</a>》</strong></p></li></ul></body></html>';
+      expect(isLikelyAiEmptySearchResultPage_(yqkResult)).assertFalse();
+      // 页面有真实书籍标记时，即使出现"还没有找到…"的推荐文案也不能判空。
+      const withRecommendation = '<html><body><p>还没有找到喜欢的小说？看看推荐</p>' +
+        '<ul class="book-list"><li><a href="/book/1">书名一</a></li>' +
+        '<li><a href="/book/2">书名二</a></li><li><a href="/book/3">书名三</a></li></ul></body></html>';
+      expect(isLikelyAiEmptySearchResultPage_(withRecommendation)).assertFalse();
+      // 空页面不触发。
+      expect(isLikelyAiEmptySearchResultPage_('')).assertFalse();
+      expect(isLikelyAiEmptySearchResultPage_('<html><body></body></html>')).assertFalse();
+    });
+
+    it('picksNextFallbackSearchKeyword', 0, () => {
+      // 关键词阶梯：空结果页时依次换用未试过的兜底关键词，避免言情站
+      // 对"斗罗大陆外传"也无结果时没有下一个可用关键词。
+      expect(nextAiFallbackSearchKeyword_('四合院', [])).assertEqual('斗罗大陆外传');
+      expect(nextAiFallbackSearchKeyword_('斗罗大陆外传', ['四合院'])).assertEqual('穿越');
+      expect(nextAiFallbackSearchKeyword_('穿越', ['四合院', '斗罗大陆外传'])).assertEqual('重生');
+      // 全部尝试过（含当前词）后返回空串，Agent 报明确错误而不是无限换词。
+      expect(nextAiFallbackSearchKeyword_('重生',
+        ['四合院', '斗罗大陆外传', '穿越', '重生'])).assertEqual('');
+      // 当前词不在阶梯中且已尝试过阶梯首词时，跳到下一个未试过的词。
+      expect(nextAiFallbackSearchKeyword_('四合院', ['斗罗大陆外传'])).assertEqual('穿越');
     });
 
     it('detectsPlainRateLimitHtmlPage', 0, () => {

@@ -37,6 +37,23 @@ const SEARCH_EVIDENCE_MIN_LENGTH = 2000;
 // 用户输入的短关键词被站点拒绝时，用这个常见书名兜底完成搜索规则验证。
 // 搜索规则验证只关心 URL 和选择器，与具体关键词无关，不影响最终书源。
 const SEARCH_FALLBACK_KEYWORD = '斗罗大陆外传';
+// 搜索关键词阶梯：站点对不存在于站内的关键词只返回空结果页（没有书籍卡片，
+// 只有导航/推荐），模型在空页上无论如何生成规则都是 0 条。空结果页时依次
+// 换用其他常见关键词重试（言情站对“斗罗大陆外传”同样无结果，因此不能只
+// 依赖单个兜底词）。搜索规则验证只关心 URL 和选择器，最终书源的
+// ruleSearchCheckKeyWord 会被更新为实际有结果的关键词。
+const SEARCH_FALLBACK_KEYWORDS: string[] = ['斗罗大陆外传', '穿越', '重生'];
+
+/**
+ * 从兜底关键词阶梯中取下一个尚未尝试过的关键词；全部试过返回空串。
+ * 阶梯线性推进：当前词一旦是阶梯中的某个词，下一次必然换到下一个不同的词。
+ */
+export function nextAiFallbackSearchKeyword_(current: string, tried: string[]): string {
+  for (const candidate of SEARCH_FALLBACK_KEYWORDS) {
+    if (candidate !== current && !tried.includes(candidate)) return candidate;
+  }
+  return '';
+}
 
 export enum AiStep {
   HOMEPAGE = 0,
@@ -834,6 +851,27 @@ export function hasAiSearchResultMarkup_(html: string): boolean {
   return bookLinks.length >= 3;
 }
 
+/**
+ * 判断搜索结果页是否为“关键词无结果”的空结果页：页面明确提示找不到结果，
+ * 且没有任何书籍结果标记。此类页面（如 yqk.net 搜索不存在的书名时只返回
+ * 导航/推荐栏）交给模型只会生成空规则、烧完所有验证轮次后终止 Agent；
+ * 应在取证后直接换用兜底关键词重试。
+ */
+export function isLikelyAiEmptySearchResultPage_(html: string): boolean {
+  const value = html || '';
+  // 常见中文小说站“无结果”提示文案（GBK 站点解码后同样可读）。
+  const emptyHint =
+    /(?:抱歉|很抱歉|对不起)[^<>]{0,30}(?:找不到|没有(?:找到|搜索到)|无结果)/i.test(value) ||
+    /(?:暂时|实在|目前|现在)?(?:没有|未)(?:找到|搜索到|查询到|检索到)[^<>]{0,25}(?:结果|内容|书籍|小说|图书)/i.test(value) ||
+    /找不到[^<>]{0,15}(?:结果|内容|相关)/i.test(value) ||
+    /无(?:任何|相关)?(?:搜索)?结果/i.test(value) ||
+    /(?:结果|列表|搜索)为空/i.test(value);
+  if (!emptyHint) return false;
+  // 有真实书籍卡片/多条书籍链接时，即便页面某处出现“没有找到”文案
+  // （如“还没有找到喜欢的小说？看看推荐”），也不能判定为空结果页。
+  return !hasAiSearchResultMarkup_(value);
+}
+
 /** 网络异常消息可能携带整段 HTML 响应体（如 404 页面正文），只保留摘要。 */
 function conciseAiFetchError_(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -1041,6 +1079,8 @@ export class AiSourceAgent {
   private searchLoginAttempted_: boolean = false;
   /** 测试关键词过短时，已切换到兜底长关键词验证搜索规则（只切换一次）。 */
   private searchFallbackKeyword_: boolean = false;
+  /** 本轮已验证过无搜索结果的关键词，空结果页换词时避免重复尝试。 */
+  private searchedKeywords_: string[] = [];
 
   constructor(callback: AiAgentCallback) {
     this.callback_ = callback;
@@ -1119,6 +1159,7 @@ export class AiSourceAgent {
     this.searchReinferred_ = false;
     this.searchLoginAttempted_ = false;
     this.searchFallbackKeyword_ = false;
+    this.searchedKeywords_ = [];
     this.original_ = request.existingSource
       ? { ...request.existingSource } as BookSource : null;
     this.draft_ = this.original_
@@ -1546,6 +1587,26 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
           !hasAiSearchResultMarkup_(searchEvidenceHtml)) {
           lastError = '搜索结果页内容过短（' + searchEvidenceHtml.length +
             ' 字符），可能被反爬或渲染不完整';
+          this.log_('  搜索取证失败：' + lastError);
+          continue;
+        }
+        // 站点对不存在的书名/作者只返回空结果页（没有书籍卡片，只有导航与
+        // 推荐栏）。空页上模型无论生成什么列表规则都命中 0 条，烧完所有轮次
+        // 后 Agent 以"搜索规则验证失败"终止——取证阶段直接换用兜底关键词
+        // 重试，不浪费模型轮次。规则验证只关心 URL 和选择器，与关键词无关；
+        // 换词成功后把可用关键词写入 ruleSearchCheckKeyWord，保证生成的书源
+        // 在后续全链路校验中能搜到结果。
+        if (isLikelyAiEmptySearchResultPage_(searchEvidenceHtml)) {
+          this.searchedKeywords_.push(keyword);
+          const fallback = nextAiFallbackSearchKeyword_(keyword, this.searchedKeywords_);
+          if (fallback) {
+            this.log_('  搜索关键词「' + keyword + '」在本站没有搜索结果，改用兜底关键词：' +
+              fallback);
+            this.draft_.ruleSearchCheckKeyWord = fallback;
+            keyword = fallback;
+            continue;
+          }
+          lastError = '测试关键词与兜底关键词在本站都没有搜索结果，搜索接口可能只收录特定关键词';
           this.log_('  搜索取证失败：' + lastError);
           continue;
         }
