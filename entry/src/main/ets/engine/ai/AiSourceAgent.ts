@@ -166,6 +166,34 @@ function absoluteUrl_(value: string, pageUrl: string): string {
   return (slash >= originMatch[1].length ? cleanPage.substring(0, slash + 1) : originMatch[1] + '/') + value;
 }
 
+/**
+ * 从没有 action 的搜索框附近推断“关键词位于路径”的搜索入口。
+ *
+ * 新版 Vue 站点常把搜索框渲染成无 action、无 name 的 form，提交事件由
+ * 客户端脚本改写成 `/search/<关键词>`。把当前首页直接当成 GET action 会
+ * 让站点忽略关键词，返回固定的推荐列表。这里只在页面同时提供同站的
+ * `/search` 导航线索时启用该候选，避免把普通无 action 表单误改成路径搜索。
+ */
+function inferPathSearchUrl_(html: string, pageUrl: string): string {
+  const origin = urlOrigin_(pageUrl);
+  if (!origin) return '';
+  const linkPattern = /<a\b[^>]*\bhref\s*=\s*(["'])([^"']+)\1[^>]*>/gi;
+  let fallbackPath = '';
+  let match: RegExpExecArray | null;
+  while ((match = linkPattern.exec(html || '')) !== null) {
+    const href = absoluteUrl_(match[2], pageUrl);
+    if (!href || urlOrigin_(href).toLowerCase() !== origin.toLowerCase()) continue;
+    const pathMatch = href.match(/^https?:\/\/[^/?#]+(\/[^?#]*)/i);
+    if (!pathMatch) continue;
+    const path = pathMatch[1].replace(/\/+$/, '') || '/';
+    if (!/\/search(?:\/|$)/i.test(path)) continue;
+    // 精确的 /search 链接优先；带 channel 等查询参数的链接只作为弱线索。
+    if (path.toLowerCase() === '/search') return origin + '/search/{{key}}';
+    if (!fallbackPath) fallbackPath = path;
+  }
+  return fallbackPath ? origin + fallbackPath + '/{{key}}' : '';
+}
+
 function urlOrigin_(url: string): string {
   const match = (url || '').match(/^(https?:\/\/[^/?#]+)/i);
   return match ? match[1] : '';
@@ -318,7 +346,8 @@ export function inferSearchRequest(html: string, pageUrl: string,
   while ((formMatch = formPattern.exec(html)) !== null) {
     const form = formMatch[0];
     const openTag = (form.match(/^<form\b[^>]*>/i) || [''])[0];
-    let action = absoluteUrl_(htmlAttribute_(openTag, 'action') || pageUrl, pageUrl);
+    const rawAction = htmlAttribute_(openTag, 'action');
+    let action = absoluteUrl_(rawAction || pageUrl, pageUrl);
     const declaredOrigin = declaredBaseOrigin_(html, pageUrl);
     // 页面脚本声明的 baseurl 才是站点搜索接口实际使用的业务域名；渲染后的
     // form action 可能仍保留旧域名或移动别名，优先用 baseurl 保证请求不落到
@@ -333,6 +362,7 @@ export function inferSearchRequest(html: string, pageUrl: string,
     const method = (htmlAttribute_(openTag, 'method') || 'GET').toUpperCase();
     const inputs = form.match(/<input\b[^>]*>/gi) || [];
     let keywordField = '';
+    let unnamedSearchInput = false;
     const fixed: string[] = [];
     let score = /搜索|search|搜书|查询/i.test(form) ? 30 : 0;
     for (const input of inputs) {
@@ -343,7 +373,11 @@ export function inferSearchRequest(html: string, pageUrl: string,
         htmlAttribute_(input, 'placeholder') + ' ' + htmlAttribute_(input, 'aria-label');
       if (!keywordField && type !== 'hidden' && type !== 'submit' &&
         (/(key|keyword|search|query|wd|q|name|title|book)/i.test(hint) || type === 'search')) {
-        keywordField = name || 'keyword';
+        // 无 action 且无 name 的输入框不能按浏览器默认行为拼成
+        // `当前页面?keyword=...`：这通常是 Vue/React 的客户端路由搜索框。
+        // 先记下它，循环结束后根据页面中的 /search 链接推断路径形式。
+        if (!name && !rawAction) unnamedSearchInput = true;
+        else keywordField = name || 'keyword';
         score += 60;
       } else if (type === 'hidden' && name && value && value.length < 200) {
         fixed.push(encodeURIComponent(name) + '=' + encodeURIComponent(value));
@@ -371,7 +405,17 @@ export function inferSearchRequest(html: string, pageUrl: string,
       const value = selectedValue || firstValue;
       if (value) fixed.push(encodeURIComponent(name) + '=' + encodeURIComponent(value));
     }
-    if (!keywordField) continue;
+    if (!keywordField) {
+      if (unnamedSearchInput && !rawAction && method === 'GET') {
+        const pathRule = inferPathSearchUrl_(html, pageUrl);
+        if (pathRule && score > bestScore) {
+          bestScore = score;
+          best = { ruleSearchUrl: pathRule, probeUrl: pathRule.replace('{{key}}',
+            encodeURIComponent(keyword)), method, keywordField: '__path__' };
+        }
+      }
+      continue;
+    }
     const encodedName = encodeURIComponent(keywordField);
     const ruleBody = [encodedName + '={{key}}', ...fixed].join('&');
     const probeBody = [encodedName + '=' + encodeURIComponent(keyword), ...fixed].join('&');

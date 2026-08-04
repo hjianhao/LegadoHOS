@@ -214,6 +214,20 @@ export default function bookSourceManagementTest() {
       expect(spec.body).assertContain('keyword=%E8%AF%A1%E7%A7%98%E4%B9%8B%E4%B8%BB');
     });
 
+    it('infersPathSearchFromClientRenderedUnnamedForm', 0, () => {
+      // Vue 站点首页的搜索框可能没有 action/name，点击按钮后由客户端跳到
+      // /search/<关键词>。不能把首页本身拼成 ?keyword=，否则不同关键词会
+      // 得到同一批推荐书。
+      const html = '<a href="/search">全部作品</a>' +
+        '<div class="search-bar"><form><input id="searchkeyword" type="text">' +
+        '<button type="submit">搜索</button></form></div>';
+      const request = inferSearchRequest(html, 'https://example.com/', '四合院');
+      expect(request?.ruleSearchUrl || '').assertEqual(
+        'https://example.com/search/{{key}}');
+      expect(request?.probeUrl || '').assertEqual(
+        'https://example.com/search/%E5%9B%9B%E5%90%88%E9%99%A2');
+    });
+
     it('keepsSelectedSearchTypeInPostSearchForm', 0, () => {
       const form = '<form action="https://m.example.com/s.php" method="post">' +
         '<input name="s" id="s_key" placeholder="输入书名">' +
