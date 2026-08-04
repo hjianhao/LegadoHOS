@@ -1,6 +1,6 @@
 import { describe, beforeAll, beforeEach, afterEach, afterAll, it, expect } from '@ohos/hypium';
 import { parseBookSource, serializeBookSource } from '../main/ets/model/BookSource';
-import { LkongService } from '../main/ets/service/LkongService';
+import { LkongService, LkongThreadItem } from '../main/ets/service/LkongService';
 import { LkongBookAgent } from '../main/ets/engine/ai/LkongBookAgent';
 import { YoushuBookService } from '../main/ets/service/YoushuBookService';
 import { YoushuBooklistService } from '../main/ets/service/YoushuBooklistService';
@@ -86,19 +86,12 @@ export default function localUnitTest() {
         .assertEqual('https://example.com/opds/search?query={searchTerms}&page={startPage?}');
     });
     it('opds2ParsesPublicationAndRelativeUrl', 0, () => {
-      const json = JSON.stringify({
-        metadata: { title: 'OPDS 2' },
-        publications: [{
-          metadata: { title: 'JSON 书', author: [{ name: '作者乙' }], identifier: 'urn:book:2' },
-          links: [{
-            rel: 'http://opds-spec.org/acquisition',
-            type: 'application/pdf',
-            href: '../download/book.pdf',
-            length: 2048,
-          }],
-        }],
-        links: [{ rel: 'next', href: '?page=2' }],
-      });
+      // ArkTS 严格模式禁止 JSON.stringify 传无类型对象字面量，直接写 JSON 字符串
+      const json = '{"metadata":{"title":"OPDS 2"},' +
+        '"publications":[{"metadata":{"title":"JSON 书","author":[{"name":"作者乙"}],' +
+        '"identifier":"urn:book:2"},"links":[{"rel":"http://opds-spec.org/acquisition",' +
+        '"type":"application/pdf","href":"../download/book.pdf","length":2048}]}],' +
+        '"links":[{"rel":"next","href":"?page=2"}]}';
       const page = OpdsParser.parse(json, 'https://example.com/opds/v2/catalog.json');
       expect(page.acquisitions.length).assertEqual(1);
       expect(page.acquisitions[0].author).assertEqual('作者乙');
@@ -113,19 +106,10 @@ export default function localUnitTest() {
       expect(PROJECT_GUTENBERG_OPDS_ENDPOINT).assertEqual('https://www.gutenberg.org/ebooks.opds/');
     });
     it('gutendexFallbackMapsMetadataAndOfficialMirrorDownload', 0, () => {
-      const json = JSON.stringify({
-        count: 1,
-        next: 'https://gutendex.com/books/?page=2',
-        previous: null,
-        results: [{
-          id: 2701,
-          title: 'Moby Dick',
-          authors: [{ name: 'Melville, Herman' }],
-          formats: {
-            'application/epub+zip': 'https://www.gutenberg.org/ebooks/2701.epub3.images',
-          },
-        }],
-      });
+      const json = '{"count":1,"next":"https://gutendex.com/books/?page=2","previous":null,' +
+        '"results":[{"id":2701,"title":"Moby Dick",' +
+        '"authors":[{"name":"Melville, Herman"}],' +
+        '"formats":{"application/epub+zip":"https://www.gutenberg.org/ebooks/2701.epub3.images"}}]}';
       const page = OpdsParser.parse(json, 'https://gutendex.com/books/');
       expect(page.acquisitions.length).assertEqual(1);
       expect(page.acquisitions[0].author).assertEqual('Melville, Herman');
@@ -196,7 +180,8 @@ export default function localUnitTest() {
     it('htmlTextKeepsInlineChildOrder', 0, () => {
       const parser = new HtmlParser();
       const doc = parser.parse('<div class="title"><mark>四合院</mark>：从晋升工程师开始</div>');
-      const title = parser.querySelector(doc, '.title@text');
+      // querySelector 只返回元素；@text 提取应走 extractAttr（与 Legado @text 语义一致）
+      const title = parser.extractAttr(doc, '.title@text');
       expect(title).assertEqual('四合院：从晋升工程师开始');
     });
     it('bookSourceStandardFieldsRoundTrip', 0, () => {
@@ -219,7 +204,7 @@ export default function localUnitTest() {
       const now = Date.now();
       const recent = now - 2 * 24 * 60 * 60 * 1000;
       const old = now - 10 * 24 * 60 * 60 * 1000;
-      const rows = [
+      const rows: LkongThreadItem[] = [
         { tid: 1, title: '近期', author: '', authorId: 0, dateline: recent.toString(), timestamp: recent,
           replies: 0, views: 0, digest: false, url: '' },
         { tid: 2, title: '较早', author: '', authorId: 0, dateline: old.toString(), timestamp: old,
@@ -242,18 +227,19 @@ export default function localUnitTest() {
       expect(content.length > 20000).assertTrue();
     });
     it('lkongAgentParsesAndDeduplicatesBooks', 0, () => {
-      const response = JSON.stringify({ choices: [{ message: { content:
-        '```json\n[{"name":"测试书","author":"甲","reason":"节奏好"},{"name":"测试书","author":"甲","reason":"重复"}]\n```' } }] });
+      const response = '{"choices":[{"message":{"content":"' +
+        '```json\\n[{\\"name\\":\\"测试书\\",\\"author\\":\\"甲\\",\\"reason\\":\\"节奏好\\"},' +
+        '{\\"name\\":\\"测试书\\",\\"author\\":\\"甲\\",\\"reason\\":\\"重复\\"}]```"}}]}';
       const books = new LkongBookAgent().parseResponse(response);
       expect(books.length).assertEqual(1);
       expect(books[0].name).assertEqual('测试书');
       expect(books[0].author).assertEqual('甲');
     });
     it('lkongAgentParsesWrappedAndSegmentedContent', 0, () => {
-      const response = JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: [
-        { type: 'text', text: '{"books":[' },
-        { type: 'text', text: '{"name":"分段书","author":"","reason":"设定有趣"}]}' },
-      ] } }], model: 'free-model' });
+      const response = '{"choices":[{"finish_reason":"stop","message":{"content":[' +
+        '{"type":"text","text":"{\\"books\\":["},' +
+        '{"type":"text","text":"{\\"name\\":\\"分段书\\",\\"author\\":\\"\\",\\"reason\\":\\"设定有趣\\"}]}"}' +
+        ']}}],"model":"free-model"}';
       const books = new LkongBookAgent().parseResponse(response);
       expect(books.length).assertEqual(1);
       expect(books[0].name).assertEqual('分段书');

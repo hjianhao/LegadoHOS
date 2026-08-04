@@ -235,12 +235,17 @@ export class OpdsParser {
     }
 
     const feedLinks = OpdsParser.xmlLinks_(feedOnly, requestUrl);
+    // 先单独收集 rel=search：next 的 break 不能让排在它后面的 search link
+    // 被跳过（部分站点 next 声明在 search 之前，会漏掉搜索模板）。
     for (let i = 0; i < feedLinks.length; i++) {
       const link = feedLinks[i];
       if (OpdsParser.hasRel_(link.rel, 'search') && link.href && !page.searchUrl) {
         page.searchUrl = link.href;
         page.searchType = link.type;
       }
+    }
+    for (let i = 0; i < feedLinks.length; i++) {
+      const link = feedLinks[i];
       if (OpdsParser.hasRel_(link.rel, 'next') && link.href) {
         page.navigation.push({
           title: link.title || '下一页',
@@ -317,12 +322,16 @@ export class OpdsParser {
     }
 
     const rootLinks = OpdsParser.jsonLinks_(root['links'], requestUrl);
+    // 与 XML 分支一致：search 收集独立于 next 的 break，避免顺序依赖漏掉搜索模板。
     for (let i = 0; i < rootLinks.length; i++) {
       const link = rootLinks[i];
       if (OpdsParser.hasRel_(link.rel, 'search') && link.href && !page.searchUrl) {
         page.searchUrl = link.href;
         page.searchType = link.type;
       }
+    }
+    for (let i = 0; i < rootLinks.length; i++) {
+      const link = rootLinks[i];
       if (OpdsParser.hasRel_(link.rel, 'next') && link.href) {
         page.navigation.push({
           title: link.title || '下一页',

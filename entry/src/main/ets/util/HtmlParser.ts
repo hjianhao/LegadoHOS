@@ -911,6 +911,20 @@ export class HtmlParser {
       return expectedText.length > 0 && el.ownText.includes(expectedText);
     }
 
+    // CSS 伪类 :not(sel)：排除匹配括号内选择器的元素（Jsoup 标准支持，
+    // 如 li:not(.jumppage)）。必须先提取剥离：否则括号里的 .class 会被下方
+    // 的 classMatch 误当作选择器自身的类名，语义反转——只匹配到被排除的
+    // 分页 li，而书籍 li 全部被过滤掉（yqk.net 搜索结果页的 .left ul li）。
+    const notSelectors: string[] = [];
+    const notPattern = /:not\(([^()]*)\)/gi;
+    let notMatch: RegExpExecArray | null;
+    while ((notMatch = notPattern.exec(s)) !== null) {
+      if (notMatch[1].trim()) notSelectors.push(notMatch[1].trim());
+    }
+    if (notSelectors.length > 0) {
+      s = s.replace(notPattern, '').replace(/\s+/g, ' ').trim();
+    }
+
     // CSS 伪类: :nth-of-type(n), :nth-child(n), :first-child, :last-child, :eq(n), :first, :last
     // 先提取伪类，再从选择器中去掉
     let pseudoType = '';
@@ -1053,13 +1067,16 @@ export class HtmlParser {
 	      }
 	    }
 	
-	    // 如果选择器只有 .class 或 #id（没有标签名），检查通过
-	    if (!tagMatch || !tagMatch[1]) return true;
-	
-	    // 标签名匹配（包括通配符）
-	    if (tagMatch[1] === '*') return true;
-	    return el.tagName === tagMatch[1];
-  }
+	    // 基础选择器匹配通过后，再应用 :not(...) 反向过滤：元素若命中括号内
+	    // 选择器则整体不匹配（如 li:not(.jumppage) 排除分页 li，只留书籍 li）。
+	    const baseMatches = !tagMatch || !tagMatch[1] || tagMatch[1] === '*' ||
+	      el.tagName === tagMatch[1];
+	    if (!baseMatches) return false;
+	    for (const notSel of notSelectors) {
+	      if (this.matchesSelector(el, notSel)) return false;
+	    }
+	    return true;
+	  }
 
   private matchAttrSelector(el: HtmlElement, selector: string): boolean {
     // 支持三种属性值格式：[attr="val"]、[attr='val']、[attr=val]（无引号）

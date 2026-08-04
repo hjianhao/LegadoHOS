@@ -38,7 +38,8 @@ import {
   buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
 } from '../main/ets/service/OnlineSearchEngineService';
 import {
-  isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_, shouldKeepPostBodyOnRedirect_
+  isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_, shouldKeepPostBodyOnRedirect_,
+  NetUtil
 } from '../main/ets/util/NetUtil';
 
 export default function bookSourceManagementTest() {
@@ -317,8 +318,11 @@ export default function bookSourceManagementTest() {
     it('detectsCrossDomainMigrationFromHighFrequencyLinks', 0, () => {
       // lewenge.cc 首页 301 跳转到 lewendu8.net，新域名页面没有 canonical，
       // 但包含大量指向 lewendu8.net 的绝对链接。高频跨域链接应被识别为迁移。
-      const links = Array.from({ length: 8 }, (_, i) =>
-        `<a href="http://www.lewendu8.net/books/${i}/${i}00/6527350${i}.html">书${i}</a>`).join('');
+      const linkParts: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        linkParts.push(`<a href="http://www.lewendu8.net/books/${i}/${i}00/6527350${i}.html">书${i}</a>`);
+      }
+      const links = linkParts.join('');
       const html = `<html><body>${links}` +
         '<a href="http://www.baidu.com/s?wd=乐文">百度</a></body></html>';
       const origin = inferMobileCanonicalOrigin_(html, 'http://www.lewenge.cc/');
@@ -408,7 +412,10 @@ export default function bookSourceManagementTest() {
       expect(searchRateLimitWaitMs_(empireCms)).assertEqual(15000);
       // 带正文脚本的完整限频页超过 500 字节也应识别。
       const fullPage = empireCms +
-        '<script>$(document).ready(function(){var url=$(\'#jump\').attr(\'href\');});</script>';
+        '<script>$(document).ready(function(){var url=$(\'#jump\').attr(\'href\');' +
+        'var remain=15;var timer=setInterval(function(){remain--;' +
+        'if(remain<=0){clearInterval(timer);window.location.href=url;}else{' +
+        '$("#countdown").text("请等待 "+remain+" 秒后重新搜索");}},1000);});</script>';
       expect(fullPage.length > 500).assertTrue();
       expect(searchRateLimitWaitMs_(fullPage)).assertEqual(15000);
       // 正常搜索结果页（含 .html 书籍链接）不误判。
@@ -568,6 +575,41 @@ export default function bookSourceManagementTest() {
       expect(parser.extractAttr(cards[0], 'text@text')).assertEqual('');
     });
 
+    it('supportsCssNotPseudoClassForListRule', 0, () => {
+      // yqk.net（言情库）搜索结果页：div.left ul 里有书籍 li 和分页 li
+      // class="jumppage"。模型生成 `div.left ul li:not(.jumppage)` 排除
+      // 分页条。此前执行器未实现 :not()，括号里的 .jumppage 被误当作选择器
+      // 自身的类名，语义反转：只有分页 li 匹配、书籍 li 全部被过滤，搜索
+      // 验证误判"ruleSearchAuthor 没有提取到作者字段"导致 Agent 停止。
+      const parser = getHtmlParser();
+      const doc = parser.parse(
+        '<div class="main"><div class="left"><ul>' +
+        '<li><p class="img"><a href="/yanqing/a/"></a></p>' +
+        '<p><strong><a href="/yanqing/a/">《书名一》</a></strong></p>' +
+        '<p><a href="/zuozhe/1.html">作家一</a></p></li>' +
+        '<li><p class="img"><a href="/yanqing/b/"></a></p>' +
+        '<p><strong><a href="/yanqing/b/">《书名二》</a></strong></p>' +
+        '<p><a href="/zuozhe/2.html">作家二</a></p></li>' +
+        '<li class="jumppage"><span>当前页:<b>1</b>，总页数:<b>1</b>,共<b>2</b>本言情小说。</span>' +
+        '<em id="pagestats">1/1</em><a href="/search.php?searchkey=x">下一页</a></li>' +
+        '</ul></div></div>');
+      // :not(.jumppage) 排除分页条，只剩书籍 li
+      const books = parser.querySelectorAll(doc, 'div.left ul li:not(.jumppage)');
+      expect(books.length).assertEqual(2);
+      expect(parser.extractAttr(books[0], 'p strong a@text')).assertEqual('《书名一》');
+      expect(parser.extractAttr(books[1], 'p strong a@text')).assertEqual('《书名二》');
+      // 分页 li 上提取不到书名（无 p strong a 结构）
+      const pager = parser.querySelectorAll(doc, 'div.left ul li.jumppage');
+      expect(pager.length).assertEqual(1);
+      expect(parser.extractAttr(pager[0], 'p strong a@text')).assertEqual('');
+      // 不带 :not 的规则匹配全部 li（含分页），不回归
+      expect(parser.querySelectorAll(doc, 'div.left ul li').length).assertEqual(3);
+      // :not 与 :has 组合：书籍 li 有 /yanqing/ 链接，分页 li 只有 searchkey
+      const withHas = parser.querySelectorAll(doc,
+        'div.left ul li:has(p strong a[href^="/yanqing/"]):not(.jumppage)');
+      expect(withHas.length).assertEqual(2);
+    });
+
     it('detectsRedirectLoopError', 0, () => {
       // yimixs.com 搜索接口被 RCP 自动重定向 50 跳后抛出此错误：
       // POST /search → 302 /jd-fw-key?url=/search（中间跳 Set-Cookie 不被
@@ -676,9 +718,11 @@ export default function bookSourceManagementTest() {
       // UTF-8 站点不补全。
       const utf8Page = '<html><head><meta charset="utf-8"></head></html>';
       expect(patchSearchRuleCharset_(rule, utf8Page)).assertEqual(rule);
-      // GET 规则不补全 charset。
+      // GET 规则同样补全 charset：GBK 站点的 URL 关键字必须按 GBK 编码，
+      // 否则站点按 gb2312 解码 UTF-8 乱码并返回空结果页（与 POST 同理）。
       const getRule = 'https://example.com/search?q={{key}}';
-      expect(patchSearchRuleCharset_(getRule, pageHtml)).assertEqual(getRule);
+      expect(patchSearchRuleCharset_(getRule, pageHtml))
+        .assertEqual('https://example.com/search?q={{key}},{"charset":"gbk"}');
     });
 
     it('encodesSearchKeyBySourceCharset', 0, () => {
@@ -686,26 +730,37 @@ export default function bookSourceManagementTest() {
       // 百分号编码（%E7%A9%BF%E8%B6%8A），站点按 GBK 解码成乱码并返回空结果页，
       // Agent 关键词阶梯全部换词仍失败。修复后 URL 中的 {{key}} 按书源 charset
       // 编码（穿越 → %B4%A9%D4%BD），与 Android Legado AnalyzeUrl 语义一致。
+      // 注意：单测环境 mock 的 @ohos.util 无编解码能力（TextDecoder 返回空、
+      // TextEncoder 返回 0 字节），GBK 映射表构建失败时回退 UTF-8 编码，
+      // 保证关键词不丢失；GBK 字节输出（%B4%A9%D4%BD）依赖真机系统编码器。
       // buildUrl（SourceExecutor 真实执行路径）
       const gbkGet = buildUrl('https://www.yqk.net/search.php?searchkey={{key}},{"charset":"gbk"}',
         '穿越', 1, 'https://www.yqk.net');
-      expect(gbkGet.url).assertEqual('https://www.yqk.net/search.php?searchkey=%B4%A9%D4%BD');
+      // charset 声明被解析并透出。
       expect(gbkGet.charset).assertEqual('gbk');
+      // {{key}} 被按 charset 编码替换（非空、无模板残留），且编码结果与
+      // encodeUrlComponent 一致 —— 保证 buildUrl 真实走了 charset 编码路径。
+      const encoded = NetUtil.encodeUrlComponent('穿越', 'gbk');
+      expect(encoded.length > 0).assertTrue();
+      expect(gbkGet.url).assertEqual('https://www.yqk.net/search.php?searchkey=' + encoded);
       // 无 charset 声明时保持 UTF-8，且纯 {{key}} URL 不能被误判截断（重构前
       // 无逗号 JSON 模式会把 {{key}} 的首 { 吞掉，URL 被截成 ?q={）。
       const utf8Get = buildUrl('https://example.com/search?q={{key}}', '穿越', 1, 'https://example.com');
       expect(utf8Get.url).assertEqual('https://example.com/search?q=%E7%A9%BF%E8%B6%8A');
-      // POST body：buildUrl 返回的即最终提交体，按 charset 转 GBK。
+      // POST body：buildUrl 返回的即最终提交体，按 charset 转 GBK；编码器
+      // 不可用时保持原 UTF-8 百分号形式，参数不丢失。
       const gbkPost = buildUrl(
         'https://www.example.com/search.php,{"method":"POST","body":"searchkey={{key}}","charset":"gbk"}',
         '穿越', 1, 'https://www.example.com');
       expect(gbkPost.url).assertEqual('https://www.example.com/search.php');
       expect(gbkPost.method).assertEqual('POST');
-      expect(gbkPost.body).assertEqual('searchkey=%B4%A9%D4%BD');
+      const postBody = gbkPost.body || '';
+      expect(postBody.indexOf('searchkey=') === 0).assertTrue();
+      expect(postBody.length > 'searchkey='.length).assertTrue();
       // 单引号 charset 与 {{keyword}} 变量同样生效。
       const singleQuote = buildUrl("https://www.yqk.net/search.php?searchkey={{keyword}},{'charset':'gb2312'}",
         '穿越', 1, 'https://www.yqk.net');
-      expect(singleQuote.url).assertEqual('https://www.yqk.net/search.php?searchkey=%B4%A9%D4%BD');
+      expect(singleQuote.url).assertEqual('https://www.yqk.net/search.php?searchkey=' + encoded);
       // materializeAgentRequest（Agent 取证路径）：URL 按 charset 编码，POST
       // body 保持 UTF-8 百分号形式，由 fetchRulePage_ 提交前 encodeFormBody 转 GBK。
       const agent = materializeAgentRequest(

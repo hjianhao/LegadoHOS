@@ -66,10 +66,13 @@ export enum AiStep {
   COMPILE = 7,
 }
 
+/** 修复链路范围：全部（搜索+发现）、仅搜索链路、仅发现链路。仅修复模式有效。 */
+export type AiRepairScope = 'all' | 'search' | 'discovery';
+
 export interface AiStepResult {
   step: AiStep;
   label: string;
-  status: 'pending' | 'running' | 'done' | 'error';
+  status: 'pending' | 'running' | 'done' | 'error' | 'skipped';
   summary: string;
   data: Record<string, string>;
 }
@@ -86,6 +89,8 @@ export interface SourceAgentRequest {
   searchKeyword: string;
   existingSource?: BookSource;
   invalidGroups?: string[];
+  /** 修复链路范围；仅修复模式有效，缺省为全部链路。 */
+  scope?: AiRepairScope;
 }
 
 export interface AgentRequestSpec {
@@ -1080,6 +1085,8 @@ export class AiSourceAgent {
   private lastCheck_: CheckResult | null = null;
   private repairMode_: boolean = false;
   private invalidGroups_: string[] = [];
+  /** 修复链路范围：仅修复模式生效，新建模式始终全链路。 */
+  private scope_: AiRepairScope = 'all';
   private requiresWebView_: boolean = false;
   /** 首页明确声明了规范域名后，修复模式仍保留 sourceUrl 身份，但后续请求要走新站点。 */
   private canonicalOrigin_: string = '';
@@ -1143,12 +1150,13 @@ export class AiSourceAgent {
   }
 
   async repair(source: BookSource, searchKeyword: string,
-    invalidGroups: string[]): Promise<AiStepResult[]> {
+    invalidGroups: string[], scope: AiRepairScope = 'all'): Promise<AiStepResult[]> {
     return await this.run_({
       homepageUrl: source.sourceUrl,
       searchKeyword: searchKeyword,
       existingSource: source,
       invalidGroups: invalidGroups,
+      scope: scope,
     });
   }
 
@@ -1164,6 +1172,7 @@ export class AiSourceAgent {
 
     this.repairMode_ = !!request.existingSource;
     this.invalidGroups_ = request.invalidGroups || [];
+    this.scope_ = this.repairMode_ ? (request.scope || 'all') : 'all';
     this.requiresWebView_ = false;
     this.canonicalOrigin_ = '';
     this.legacyOrigin_ = '';
@@ -1205,13 +1214,37 @@ export class AiSourceAgent {
       this.normalizeMobileSiteOrigin_(homepage);
       await this.analyzeHomepage_(homepage, keyword);
 
-      const searchResults = await this.prepareSearch_(keyword);
-      if (searchResults.length === 0) throw new Error('搜索规则验证失败，无法取得后续分析样本');
-      const bookUrl = searchResults[0].noteUrl;
-      if (!bookUrl || !isSafeAiImportUrl(bookUrl)) throw new Error('搜索结果没有有效的书籍详情 URL');
+      // 修复范围：仅搜索链路时跳过发现阶段（发现规则保持原样），
+      // 仅发现链路时跳过搜索阶段（搜索规则保持原样），后续详情/目录/正文
+      // 样本改由发现列表选书。
+      let bookUrl = '';
+      let bookName = '';
+      if (this.scopeIncludesSearch_()) {
+        const searchResults = await this.prepareSearch_(keyword);
+        if (searchResults.length === 0) throw new Error('搜索规则验证失败，无法取得后续分析样本');
+        bookUrl = searchResults[0].noteUrl;
+        bookName = searchResults[0].name;
+        if (!bookUrl || !isSafeAiImportUrl(bookUrl)) throw new Error('搜索结果没有有效的书籍详情 URL');
+      } else {
+        this.skip_(AiStep.SEARCH, '修复范围：仅发现链路');
+      }
 
-      await this.prepareDiscovery_(homepage, keyword);
-      const info = await this.prepareBookInfo_(bookUrl, searchResults[0].name);
+      if (this.scopeIncludesDiscovery_()) {
+        const discoveryResults = await this.prepareDiscovery_(homepage, keyword);
+        if (!bookUrl && discoveryResults.length > 0) {
+          bookUrl = discoveryResults[0].noteUrl;
+          bookName = discoveryResults[0].name;
+        }
+      } else {
+        this.skip_(AiStep.DISCOVERY, '修复范围：仅搜索链路');
+      }
+      if (!bookUrl || !isSafeAiImportUrl(bookUrl)) {
+        throw new Error(this.scopeIncludesDiscovery_()
+          ? '发现列表没有有效的书籍详情 URL，无法取得后续分析样本'
+          : '没有有效的书籍详情 URL，无法取得后续分析样本');
+      }
+
+      const info = await this.prepareBookInfo_(bookUrl, bookName);
       const tocUrl = info.tocUrl || bookUrl;
       const chapters = await this.prepareToc_(tocUrl);
       if (chapters.length === 0) throw new Error('目录规则验证失败，无法取得正文样本');
@@ -1306,6 +1339,23 @@ export class AiSourceAgent {
     result.data = data;
     this.callback_.onStepUpdate?.(result);
     this.log_('⚠️ ' + result.label + '：' + message);
+  }
+
+  /** 修复范围外的阶段：保留现有规则不动，步骤卡片标记为跳过。 */
+  private skip_(step: AiStep, reason: string): void {
+    const result = this.results_[step];
+    result.status = 'skipped';
+    result.summary = reason;
+    this.callback_.onStepUpdate?.(result);
+    this.log_('⏭ ' + result.label + '：' + reason);
+  }
+
+  private scopeIncludesSearch_(): boolean {
+    return this.scope_ !== 'discovery';
+  }
+
+  private scopeIncludesDiscovery_(): boolean {
+    return this.scope_ !== 'search';
   }
 
   private log_(message: string): void {
@@ -1427,21 +1477,24 @@ export class AiSourceAgent {
     // 运行时对象的表达式，本执行器无法求值，materializeAgentRequest 会把
     // {{...}} 原样留在 URL 中，请求地址被拼坏（如 dangyuedu.com 把 sososhu.com
     // 的搜索地址当成路径）。这类模板必须重新生成，即使用户没有标记搜索失败。
-    const unevaluableSearchTemplate = this.repairMode_ &&
+    const unevaluableSearchTemplate = this.repairMode_ && this.scopeIncludesSearch_() &&
       isUnevaluableSearchTemplate_(this.draft_.ruleSearchUrl);
     if (unevaluableSearchTemplate) {
       this.log_('  检测到既有搜索 URL 包含无法求值的表达式，将重新生成搜索入口：' +
         this.draft_.ruleSearchUrl.substring(0, 80));
     }
-    const repairSearch = this.shouldRepair_(['搜索']) || !this.draft_.ruleSearchUrl ||
-      searchEndpointChanged || unevaluableSearchTemplate;
+    const repairSearch = this.scopeIncludesSearch_() && (this.shouldRepair_(['搜索']) ||
+      !this.draft_.ruleSearchUrl || searchEndpointChanged || unevaluableSearchTemplate);
     if (searchEndpointChanged || unevaluableSearchTemplate) {
       this.log_(this.siteOriginChanged_ && !unevaluableSearchTemplate
         ? '  首页检测到站点已迁移，将重新验证搜索请求：' + (inferred?.ruleSearchUrl || '交给模型重新识别')
         : '  首页检测到搜索表单请求已变化，将采用新 action：' + (inferred?.ruleSearchUrl || '交给模型重新识别'));
     }
-    const repairDiscovery = this.shouldRepair_(['发现']) || (!this.repairMode_ &&
-      !this.draft_.exploreUrl && !this.draft_.ruleExplores);
+    // 仅发现链路范围且书源没有发现配置时，强制让模型生成发现分类（新增发现链路）；
+    // 仅搜索链路范围时完全不触碰发现配置。
+    const discoveryMissing = !this.draft_.exploreUrl && !this.draft_.ruleExplores;
+    const repairDiscovery = this.scopeIncludesDiscovery_() && (this.shouldRepair_(['发现']) ||
+      (!this.repairMode_ && discoveryMissing) || (this.scope_ === 'discovery' && discoveryMissing));
     const needsEntryRepair = repairSearch || repairDiscovery;
     // 普通 HTML 搜索表单的 action、method、关键词字段和固定参数均可由程序可靠推导。
     // 修复模式下如果只需要搜索规则，不再让一次额外的模型调用决定成败，避免模型超时
@@ -1502,7 +1555,8 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
         inferred?.probeUrl || parsed['searchProbeUrl'] || '';
       this.results_[AiStep.HOMEPAGE].data['firstExploreUrl'] = parsed['firstExploreUrl'] || '';
     }
-    if (!this.draft_.ruleSearchUrl) {
+    // 仅发现链路范围时不要求搜索入口；搜索规则保持书源现状（可能本就为空）。
+    if (this.scopeIncludesSearch_() && !this.draft_.ruleSearchUrl) {
       this.error_(AiStep.HOMEPAGE, '没有识别到搜索入口');
       throw new Error('没有识别到可执行的搜索入口');
     }
@@ -2200,12 +2254,19 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     return false;
   }
 
-  private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<void> {
-    if (!this.draft_) return;
+  private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<SearchResult[]> {
+    if (!this.draft_) return [];
     this.start_(AiStep.DISCOVERY, '检查发现分类');
     if (!this.draft_.exploreUrl && !this.draft_.ruleExplores) {
+      // 仅发现链路范围：发现是本范围唯一入口，静默跳过会让后续无样本书，
+      // 必须明确报错让用户知道站点没有可生成的分类入口。
+      if (this.repairMode_ && this.scope_ === 'discovery') {
+        const message = '站点未发现明确分类入口，无法仅修复发现链路';
+        this.error_(AiStep.DISCOVERY, message);
+        throw new Error(message);
+      }
       this.done_(AiStep.DISCOVERY, '站点未发现明确分类入口');
-      return;
+      return [];
     }
 
     const firstUrl = this.results_[AiStep.HOMEPAGE].data['firstExploreUrl'] ||
@@ -2214,7 +2275,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       this.draft_.exploreUrl = '';
       this.draft_.ruleExplores = '';
       this.done_(AiStep.DISCOVERY, '分类配置无法转换为安全 URL，已跳过');
-      return;
+      return [];
     }
     let lastError = '';
     for (let attempt = 0; attempt < MAX_STAGE_ATTEMPTS; attempt++) {
@@ -2283,7 +2344,7 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
           if (correctedResults.length > 0) {
             this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + correctedResults.length +
               ' 本书（已修正表格字段规则）', { firstExploreUrl: firstUrl });
-            return;
+            return correctedResults;
           }
           const sample = invalidItems[0];
           throw new Error('发现规则混入操作项/导航链接（' + sample.name + ' → ' + sample.noteUrl +
@@ -2296,7 +2357,7 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
         this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + usable.length + ' 本书', {
           firstExploreUrl: firstUrl,
         });
-        return;
+        return usable;
       } catch (e) {
         lastError = (e as Error).message || '发现验证失败';
         this.log_('  发现验证失败，准备第 ' + (attempt + 2) + ' 轮');
@@ -2311,6 +2372,7 @@ a[title]@title / a[title]@href 这类明确字段，不能用 td.N a@href 读取
     this.draft_.exploreUrl = '';
     this.draft_.ruleExplores = '';
     this.done_(AiStep.DISCOVERY, '发现规则未通过验证，已安全跳过');
+    return [];
   }
 
   private async prepareBookInfo_(bookUrl: string, expectedName: string): Promise<BookSourceBookInfo> {

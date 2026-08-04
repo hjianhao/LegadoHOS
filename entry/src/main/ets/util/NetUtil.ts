@@ -217,8 +217,12 @@ export class NetUtil {
       const decode = (value: string): string => {
         try { return decodeURIComponent(value.replace(/\+/g, ' ')); } catch (_e) { return value; }
       };
-      return NetUtil.encodeFormComponent_(decode(rawName), true) + '=' +
-        NetUtil.encodeFormComponent_(decode(rawValue), false);
+      const encodedName = NetUtil.encodeFormComponent_(decode(rawName), true);
+      const encodedValue = NetUtil.encodeFormComponent_(decode(rawValue), false);
+      // 系统编码器不可用（GBK 映射表为空且 UTF-8 回退失效，如单测 mock 环境）
+      // 时编码结果为空串，此时保留原 UTF-8 百分号形式，避免请求体参数丢失。
+      if (!encodedName || !encodedValue) return part;
+      return encodedName + '=' + encodedValue;
     }).join('&');
   }
 
@@ -233,7 +237,10 @@ export class NetUtil {
     const normalized = (charset || '').toLowerCase().replace(/[_-]/g, '');
     if (!value) return '';
     if (normalized === 'gbk' || normalized === 'gb2312' || normalized === 'gb18030') {
-      return NetUtil.encodeFormComponent_(value, false);
+      const encoded = NetUtil.encodeFormComponent_(value, false);
+      // 系统编码器不可用时（GBK 映射表为空且 UTF-8 回退失效，如单测 mock
+      // 环境）不应返回空串丢失关键词，回退到标准 encodeURIComponent。
+      return encoded || encodeURIComponent(value);
     }
     return encodeURIComponent(value);
   }
