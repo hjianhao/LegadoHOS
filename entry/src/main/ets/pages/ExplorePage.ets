@@ -22,6 +22,18 @@ interface ExploreCategory {
   keyword: string;
   style: string;
   bookUrl: string;
+  // 同一分类页内的子列表可以使用自己的规则；未提供时回退到书源全局发现规则。
+  ruleExploreList: string;
+  ruleExploreName: string;
+  ruleExploreAuthor: string;
+  ruleExploreCover: string;
+  ruleExploreNoteUrl: string;
+  ruleExploreKind: string;
+  ruleExploreWordCount: string;
+  ruleExploreLastUpdateTime: string;
+  ruleExploreLastChapter: string;
+  ruleExploreIntroduce: string;
+  parent: string;
   // 布局属性（从 style JSON 解析）
   flexBasisPercent: number;
   flexGrow: number;
@@ -311,6 +323,17 @@ export struct ExplorePage {
       keyword: keyword,
       style: '',
       bookUrl: String(item['bookUrl'] || item['BookUrl'] || ''),
+      ruleExploreList: String(item['ruleExploreList'] || item['bookList'] || ''),
+      ruleExploreName: String(item['ruleExploreName'] || item['nameRule'] || ''),
+      ruleExploreAuthor: String(item['ruleExploreAuthor'] || item['authorRule'] || ''),
+      ruleExploreCover: String(item['ruleExploreCover'] || item['coverRule'] || ''),
+      ruleExploreNoteUrl: String(item['ruleExploreNoteUrl'] || item['bookUrlRule'] || ''),
+      ruleExploreKind: String(item['ruleExploreKind'] || item['kindRule'] || ''),
+      ruleExploreWordCount: String(item['ruleExploreWordCount'] || item['wordCountRule'] || ''),
+      ruleExploreLastUpdateTime: String(item['ruleExploreLastUpdateTime'] || item['lastUpdateTimeRule'] || ''),
+      ruleExploreLastChapter: String(item['ruleExploreLastChapter'] || item['lastChapterRule'] || ''),
+      ruleExploreIntroduce: String(item['ruleExploreIntroduce'] || item['introRule'] || ''),
+      parent: String(item['parent'] || item['parentTitle'] || ''),
       flexBasisPercent: flexBasisPercent,
       flexGrow: flexGrow,
       wrapBefore: wrapBefore,
@@ -398,11 +421,17 @@ export struct ExplorePage {
           name: trimmed.substring(0, doubleColonIdx).trim(),
           url: trimmed.substring(doubleColonIdx + 2).trim(),
           keyword: '', style: '', bookUrl: '',
+          ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '', ruleExploreCover: '',
+          ruleExploreNoteUrl: '', ruleExploreKind: '', ruleExploreWordCount: '',
+          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '',
           flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
         });
       } else {
         result.push({
           name: trimmed, url: '', keyword: '', style: '', bookUrl: '',
+          ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '', ruleExploreCover: '',
+          ruleExploreNoteUrl: '', ruleExploreKind: '', ruleExploreWordCount: '',
+          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '',
           flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
         });
       }
@@ -610,6 +639,18 @@ export struct ExplorePage {
         categoryName: category.name,
         categoryUrl: category.url,
         categoryKeyword: category.keyword,
+        categoryRules: JSON.stringify({
+          ruleExploreList: category.ruleExploreList,
+          ruleExploreName: category.ruleExploreName,
+          ruleExploreAuthor: category.ruleExploreAuthor,
+          ruleExploreCover: category.ruleExploreCover,
+          ruleExploreNoteUrl: category.ruleExploreNoteUrl,
+          ruleExploreKind: category.ruleExploreKind,
+          ruleExploreWordCount: category.ruleExploreWordCount,
+          ruleExploreLastUpdateTime: category.ruleExploreLastUpdateTime,
+          ruleExploreLastChapter: category.ruleExploreLastChapter,
+          ruleExploreIntroduce: category.ruleExploreIntroduce,
+        }),
       }
     });
   }
@@ -776,7 +817,7 @@ export struct ExplorePage {
       ForEach(this.calculateKindRows(this.resolvedCategories, 6), (row: ExploreCategory[]) => {
         Row() {
           ForEach(row, (cat: ExploreCategory) => {
-            Button(cat.name)
+            Button(cat.parent ? '↳ ' + cat.name : cat.name)
               .fontSize(13)
               .fontColor(ThemeColors.onBackground(this.isDark))
               .height(44)

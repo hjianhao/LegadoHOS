@@ -26,6 +26,7 @@ struct ExploreBookPage {
   @State sourceUrl: string = '';
   @State categoryName: string = '';
   @State categoryUrl: string = '';
+  @State categoryRulesJson: string = '';
 
   @StorageLink('isDark') isDark: boolean = false;
   @State @Watch('onBooksChanged_') books: SearchResult[] = [];
@@ -74,6 +75,7 @@ struct ExploreBookPage {
       this.sourceId = Number(params['sourceId'] || 0);
       this.categoryName = String(params['categoryName'] || '');
       this.categoryUrl = String(params['categoryUrl'] || '');
+      this.categoryRulesJson = String(params['categoryRules'] || '');
     }
     void this.loadBooks();
   }
@@ -91,17 +93,34 @@ struct ExploreBookPage {
     exploreSource.enabled = true;
     exploreSource.isExploreRequest = true;
     exploreSource.ruleSearchUrl = catUrl;
-    exploreSource.ruleSearchList = source.ruleExploreList || source.ruleSearchList;
-    exploreSource.ruleSearchName = source.ruleExploreName || source.ruleSearchName;
-    exploreSource.ruleSearchAuthor = source.ruleExploreAuthor || source.ruleSearchAuthor;
-    exploreSource.ruleSearchCover = source.ruleExploreCover || source.ruleSearchCover;
-    exploreSource.ruleSearchNoteUrl = source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
-    exploreSource.ruleSearchKind = source.ruleExploreKind || source.ruleSearchKind;
-    exploreSource.ruleSearchWordCount = source.ruleExploreWordCount || source.ruleSearchWordCount;
-    exploreSource.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
-    exploreSource.ruleSearchLastChapter = source.ruleExploreLastChapter || source.ruleSearchLastChapter;
-    exploreSource.ruleSearchIntroduce = source.ruleExploreIntroduce || source.ruleSearchIntroduce;
+    const categoryRules: Record<string, string> = this.parseCategoryRules_();
+    exploreSource.ruleSearchList = categoryRules['ruleExploreList'] || source.ruleExploreList || source.ruleSearchList;
+    exploreSource.ruleSearchName = categoryRules['ruleExploreName'] || source.ruleExploreName || source.ruleSearchName;
+    exploreSource.ruleSearchAuthor = categoryRules['ruleExploreAuthor'] || source.ruleExploreAuthor || source.ruleSearchAuthor;
+    exploreSource.ruleSearchCover = categoryRules['ruleExploreCover'] || source.ruleExploreCover || source.ruleSearchCover;
+    exploreSource.ruleSearchNoteUrl = categoryRules['ruleExploreNoteUrl'] || source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
+    exploreSource.ruleSearchKind = categoryRules['ruleExploreKind'] || source.ruleExploreKind || source.ruleSearchKind;
+    exploreSource.ruleSearchWordCount = categoryRules['ruleExploreWordCount'] || source.ruleExploreWordCount || source.ruleSearchWordCount;
+    exploreSource.ruleSearchLastUpdateTime = categoryRules['ruleExploreLastUpdateTime'] || source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
+    exploreSource.ruleSearchLastChapter = categoryRules['ruleExploreLastChapter'] || source.ruleExploreLastChapter || source.ruleSearchLastChapter;
+    exploreSource.ruleSearchIntroduce = categoryRules['ruleExploreIntroduce'] || source.ruleExploreIntroduce || source.ruleSearchIntroduce;
     return exploreSource;
+  }
+
+  private parseCategoryRules_(): Record<string, string> {
+    if (!this.categoryRulesJson || !this.categoryRulesJson.trim()) return {};
+    try {
+      const parsed = JSON.parse(this.categoryRulesJson) as Record<string, Object>;
+      const result: Record<string, string> = {};
+      Object.keys(parsed).forEach((key: string): void => {
+        const value = parsed[key];
+        if (typeof value === 'string' && value.trim()) result[key] = value.trim();
+      });
+      return result;
+    } catch (_e) {
+      console.warn('[ExploreBook] Invalid category rules payload');
+      return {};
+    }
   }
 
   async loadBooks(): Promise<void> {
