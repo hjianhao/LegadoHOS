@@ -78,6 +78,12 @@ class ChapterDataSource implements IDataSource {
   }
 }
 
+interface ChapterNumberedItem {
+  chapter: BookSourceChapter;
+  number: number;
+  position: number;
+}
+
 @Entry
 @Component
 export struct ChapterListPage {
@@ -206,6 +212,9 @@ export struct ChapterListPage {
         console.info('[ChapterList] last:', this.chapters_[this.chapters_.length - 1].title.substring(0, 30));
       }
       this.ensureAscendingOrder();
+      // ensureAscendingOrder 可能修正分页合并造成的局部乱序；同步内存缓存，
+      // 这样从目录进入阅读页时“上一章/下一章”也使用同一份已排序目录。
+      ChapterCache.chapters = this.chapters_;
       this.detectVolumes();
       this.applySort(this.isAscending);
     } finally {
@@ -388,6 +397,55 @@ export struct ChapterListPage {
     }
     const rev = descCount > ascCount;
     console.info('[ChapterList] trend: asc=' + ascCount + ' desc=' + descCount + ' rev=' + rev);
+
+    // 目录页常把“最新章节”倒序块插在分页正文前面。多页合并/去重后，
+    // 可能出现 1-100、213-200、101-199 这种“整体多数递增但局部乱序”。
+    // 仅按整体趋势决定是否 reverse 会漏掉这种情况，因此在章节标题都能
+    // 提取出数字、且编号覆盖范围基本连续时，发现明显非单调就按章节号
+    // 做稳定升序重排。卷标题/特殊标题混入时不强行排序，避免破坏卷结构。
+    const numbered: ChapterNumberedItem[] = [];
+    let minNumber = Number.MAX_SAFE_INTEGER;
+    let maxNumber = 0;
+    for (let i = 0; i < this.chapters_.length; i++) {
+      const number = extractNum(this.chapters_[i].title);
+      if (number <= 0) continue;
+      numbered.push({ chapter: this.chapters_[i], number: number, position: i });
+      minNumber = Math.min(minNumber, number);
+      maxNumber = Math.max(maxNumber, number);
+    }
+    const allChaptersNumbered = numbered.length === this.chapters_.length;
+    if (allChaptersNumbered && numbered.length >= 10) {
+      let localAsc = 0;
+      let localDesc = 0;
+      for (let i = 1; i < numbered.length; i++) {
+        if (numbered[i].number > numbered[i - 1].number) localAsc++;
+        else if (numbered[i].number < numbered[i - 1].number) localDesc++;
+      }
+      const distinctNumbers = new Set<number>();
+      numbered.forEach((item): void => { distinctNumbers.add(item.number); });
+      const numericRange = Math.max(1, maxNumber - minNumber + 1);
+      const rangeCoverage = distinctNumbers.size / numericRange;
+      const dominantAscending = localAsc >= localDesc;
+      const disorderCount = dominantAscending ? localDesc : localAsc;
+      const disorderThreshold = Math.max(2, Math.floor(numbered.length * 0.02));
+      if (disorderCount >= disorderThreshold && rangeCoverage >= 0.8) {
+        const sorted = numbered.slice().sort((left, right): number =>
+          left.number - right.number || left.position - right.position);
+        this.chapters_ = sorted.map((item, index): BookSourceChapter => ({
+          title: item.chapter.title,
+          url: item.chapter.url,
+          index: index,
+          isVolume: item.chapter.isVolume,
+        }));
+        console.info('[ChapterList] non-monotonic numeric order detected; sorted by chapter number',
+          'chapters=' + this.chapters_.length,
+          'range=' + minNumber + '-' + maxNumber,
+          'coverage=' + rangeCoverage.toFixed(2),
+          'localAsc=' + localAsc,
+          'localDesc=' + localDesc);
+        return;
+      }
+    }
     if (!rev) return;
     console.info('[ChapterList] sorting ' + this.chapters_.length + ' chapters');
     // STATE-002: build new array instead of in-place reverse + element-by-element mutation
