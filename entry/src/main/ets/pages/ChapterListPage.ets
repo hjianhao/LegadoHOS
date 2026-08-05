@@ -348,13 +348,13 @@ export struct ChapterListPage {
     if (volumeCount > 0) console.info('[ChapterList] Detected', volumeCount, 'volumes');
   }
 
-  /** 确保目录排序正确（依赖 getToc 已排序，仅做最终兜底反转） */
+  /** 确保目录排序正确：识别分页插入的倒序块，并对章节号做最终兜底整理 */
   ensureAscendingOrder(): void {
     if (this.chapters_.length < 3) return;
     // 本地书按 spine 顺序排列，无需自动反转
     if (this.origin === '本地') return;
     const cnNumMap: Record<string, number> = {
-      '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
+      '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
       '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
       '十': 10, '百': 100, '千': 1000, '万': 10000,
     };
@@ -401,8 +401,8 @@ export struct ChapterListPage {
     // 目录页常把“最新章节”倒序块插在分页正文前面。多页合并/去重后，
     // 可能出现 1-100、213-200、101-199 这种“整体多数递增但局部乱序”。
     // 仅按整体趋势决定是否 reverse 会漏掉这种情况，因此在章节标题都能
-    // 提取出数字、且编号覆盖范围基本连续时，发现明显非单调就按章节号
-    // 做稳定升序重排。卷标题/特殊标题混入时不强行排序，避免破坏卷结构。
+    // 提取出数字、且编号覆盖范围不是过度稀疏时，发现明显非单调就按章节号
+    // 做稳定升序重排。站点可能删章/缺章，不能要求编号范围完全连续。
     const numbered: ChapterNumberedItem[] = [];
     let minNumber = Number.MAX_SAFE_INTEGER;
     let maxNumber = 0;
@@ -413,8 +413,12 @@ export struct ChapterListPage {
       minNumber = Math.min(minNumber, number);
       maxNumber = Math.max(maxNumber, number);
     }
-    const allChaptersNumbered = numbered.length === this.chapters_.length;
-    if (allChaptersNumbered && numbered.length >= 10) {
+    // 目录中偶尔会混入“请假一天”、卷名或公告等无章节号条目。
+    // 这类条目不应阻止其余章节按章节号重排；只要数字章节占比足够高，
+    // 就按数字章节重排，同时把无数字条目保留在原来的相对位置。
+    const numberedRatio = numbered.length / this.chapters_.length;
+    const enoughNumberedChapters = numbered.length >= 10 && numberedRatio >= 0.8;
+    if (enoughNumberedChapters) {
       let localAsc = 0;
       let localDesc = 0;
       for (let i = 1; i < numbered.length; i++) {
@@ -428,17 +432,27 @@ export struct ChapterListPage {
       const dominantAscending = localAsc >= localDesc;
       const disorderCount = dominantAscending ? localDesc : localAsc;
       const disorderThreshold = Math.max(2, Math.floor(numbered.length * 0.02));
-      if (disorderCount >= disorderThreshold && rangeCoverage >= 0.8) {
+      if (disorderCount >= disorderThreshold && rangeCoverage >= 0.5) {
         const sorted = numbered.slice().sort((left, right): number =>
           left.number - right.number || left.position - right.position);
-        this.chapters_ = sorted.map((item, index): BookSourceChapter => ({
-          title: item.chapter.title,
-          url: item.chapter.url,
-          index: index,
-          isVolume: item.chapter.isVolume,
-        }));
+        let sortedIndex = 0;
+        const reordered: BookSourceChapter[] = [];
+        for (const chapter of this.chapters_) {
+          const number = extractNum(chapter.title);
+          const item = number > 0 ? sorted[sortedIndex++] : undefined;
+          const source = item ? item.chapter : chapter;
+          reordered.push({
+            title: source.title,
+            url: source.url,
+            index: reordered.length,
+            isVolume: source.isVolume,
+          });
+        }
+        this.chapters_ = reordered;
         console.info('[ChapterList] non-monotonic numeric order detected; sorted by chapter number',
           'chapters=' + this.chapters_.length,
+          'numbered=' + numbered.length,
+          'ratio=' + numberedRatio.toFixed(2),
           'range=' + minNumber + '-' + maxNumber,
           'coverage=' + rangeCoverage.toFixed(2),
           'localAsc=' + localAsc,
