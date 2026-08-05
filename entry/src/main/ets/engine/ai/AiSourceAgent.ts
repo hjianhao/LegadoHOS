@@ -2245,7 +2245,13 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
         ? { ...(styleRaw as Record<string, Object>) } : {};
       const parent = aiExploreString_(item['parent'] || item['parentTitle']);
       if (isParent || configs.length === 0) {
-        if (style['layout_flexBasisPercent'] === undefined) style['layout_flexBasisPercent'] = 1;
+        // 父分类必须独占一行。模型即使误返回 0.5，也不能让父分类
+        // 与第一个子列表挤在同一行。
+        const currentBasis = typeof style['layout_flexBasisPercent'] === 'number'
+          ? style['layout_flexBasisPercent'] as number
+          : (typeof style['layout_flexBasisPercent'] === 'string'
+            ? parseFloat(style['layout_flexBasisPercent'] as string) || 0 : 0);
+        if (currentBasis < 1) style['layout_flexBasisPercent'] = 1;
       } else if (style['layout_flexBasisPercent'] === undefined) {
         style['layout_flexBasisPercent'] = 0.5;
         style['layout_flexGrow'] = 1;

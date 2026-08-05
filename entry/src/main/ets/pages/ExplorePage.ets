@@ -666,8 +666,15 @@ export struct ExplorePage {
     // 全宽条目独占一行，紧随其后的非全宽条目组成下一行（必要时再按列数
     // 换行）。这也兼容企鹅阅读的配置，其中父分类没有 parent 字段而是
     // 单纯依靠 style.layout_flexBasisPercent 表示层级。
-    const hasFullWidth = kinds.some((kind: ExploreCategory): boolean =>
-      kind.wrapBefore || kind.flexBasisPercent >= 1.0);
+    // 某些旧配置/模型输出会漏写父分类的 100% 样式，但子项已经带有
+    // parent 字段。此时根据父子关系补全父分类语义，不能再把它按 50%
+    // 普通按钮排进子分类那一行。
+    const hasExplicitChildren = kinds.some((kind: ExploreCategory): boolean =>
+      kind.parent.trim().length > 0);
+    const isFullWidthCategory = (kind: ExploreCategory): boolean =>
+      kind.wrapBefore || kind.flexBasisPercent >= 1.0 ||
+      (hasExplicitChildren && kind.parent.trim().length === 0 && kind.url.trim().length > 0);
+    const hasFullWidth = kinds.some((kind: ExploreCategory): boolean => isFullWidthCategory(kind));
     if (hasFullWidth) {
       const groupedRows: ExploreCategory[][] = [];
       let childRow: ExploreCategory[] = [];
@@ -680,7 +687,7 @@ export struct ExplorePage {
         }
       };
       for (const kind of kinds) {
-        const fullWidth = kind.wrapBefore || kind.flexBasisPercent >= 1.0;
+        const fullWidth = isFullWidthCategory(kind);
         if (fullWidth) {
           flushChildRow();
           groupedRows.push([kind]);
