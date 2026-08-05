@@ -3938,14 +3938,32 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       // alert("搜索间隔：30 秒") 等纯脚本页，prepareHtmlForAi 移除 <script>
       // 后会变成空页面。在清理前按文案分类处理：
       //  - 关键词太短 → 抛出明确错误，触发 prepareSearch_ 的兜底长关键词重试；
-      //  - 搜索频率限制 → 等待站点要求的间隔后自动重试，避免把限频误报成
-      //    "关键词太短"（设备 IP 刚搜过书时，兜底关键词也会被限频拒绝）；
+      //  - 搜索频率限制 → 优先打开交互 WebView，让用户在真实页面中等待并提交；
+      //    不能在后台连续重发 POST，否则部分站点会在每次拒绝时刷新限频窗口，
+      //    永远等不到成功结果；
       //  - 其它可读文案 → 报告真实文案，让 Agent 决策。
       if (label.includes('搜索')) {
         const alertInfo = extractSearchAlertInfo_(html);
         if (alertInfo && alertInfo.kind === 'rateLimit') {
           this.log_('  搜索被频率限制：' + alertInfo.text + '，等待 ' +
-            Math.round(alertInfo.waitMs / 1000) + ' 秒后重试');
+            Math.round(alertInfo.waitMs / 1000) + ' 秒');
+          const hasInteractiveWebView = !!this.callback_.onRequestWebView ||
+            !!WebViewFetcher.interactiveFetcher;
+          if (hasInteractiveWebView) {
+            this.requiresWebView_ = true;
+            this.ensureSearchWebViewOption_();
+            const interactivePage = await this.fetchInteractivePage_(
+              spec.url,
+              '搜索被网站限制，请等待提示时间后确认关键词并点击站点搜索，再点击“验证完成”',
+              { method: 'POST', body: requestBody });
+            if (interactivePage) {
+              this.log_('  交互 WebView 返回搜索页面，停止重复 POST 并继续分析');
+              return interactivePage;
+            }
+            throw new Error('搜索被频率限制：' + alertInfo.text +
+              '，请在验证 WebView 中等待后完成一次搜索');
+          }
+          // 没有交互入口的后台执行路径保留一次等待重试；不能无限重发。
           await sleepMs_(alertInfo.waitMs);
           try {
             html = await NetUtil.httpPost(spec.url, requestBody, headers, 30000);
@@ -3953,7 +3971,6 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
             const retryMessage = (retryError as Error).message || String(retryError);
             throw new Error(label + ' 频率限制重试失败：' + retryMessage.substring(0, 160));
           }
-          // 重试结果可能仍是限频页或其它 alert 页，再走一次分类。
           const retriedAlert = extractSearchAlertInfo_(html);
           if (retriedAlert) {
             if (retriedAlert.kind === 'rateLimit') {
@@ -3983,6 +4000,48 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       };
     }
     return await this.fetchPage_(spec.url, label);
+  }
+
+  /**
+   * 直接打开可交互的搜索页面。限频页不能继续由后台 POST 重试，否则站点
+   * 可能在每次拒绝时刷新限频窗口；用户在真实 WebView 中等待并提交一次，
+   * 才能拿到与手动浏览器一致的搜索结果。
+   */
+  private async fetchInteractivePage_(url: string, reason: string,
+    request?: WebViewInteractiveRequest): Promise<PageEvidence | null> {
+    let rawHtml = '';
+    try {
+      if (this.callback_.onRequestWebView) {
+        WebViewFetcher.interactivePurpose = 'challenge';
+        rawHtml = await this.callback_.onRequestWebView(url, reason, request);
+      } else if (WebViewFetcher.interactiveFetcher) {
+        rawHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', reason, request);
+      }
+    } catch (e) {
+      this.log_('  交互 WebView 搜索页失败：' +
+        ((e as Error).message || String(e)).substring(0, 160));
+      return null;
+    }
+    const html = WebViewFetcher.decodeJavaScriptString(rawHtml || '');
+    if (html.length <= 300) return null;
+    // 用户可能在倒计时结束前就点击了“验证完成”，此时 WebView 返回的仍是
+    // 限频脚本页；不要把它当成可供 Agent 分析的搜索样本。
+    if (extractSearchAlertInfo_(html) || WebViewFetcher.isInteractiveChallengeHtml(html)) {
+      return null;
+    }
+    const scriptSrcs: string[] = [];
+    const scriptSrcPattern = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+    let srcMatch: RegExpExecArray | null;
+    while ((srcMatch = scriptSrcPattern.exec(html)) !== null) {
+      if (srcMatch[1]) scriptSrcs.push(srcMatch[1]);
+    }
+    return {
+      url: url,
+      finalUrl: url,
+      html: prepareSourceAgentHtml(html),
+      usedWebView: true,
+      scriptSrcs: scriptSrcs,
+    };
   }
 
   private async fetchPage_(url: string, label: string, forceWebView: boolean = false,
