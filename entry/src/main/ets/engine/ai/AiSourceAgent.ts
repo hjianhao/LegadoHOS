@@ -14,7 +14,7 @@ import {
 import { SearchResult } from '../../model/SearchResult';
 import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule, searchRateLimitWaitMs_ } from '../source/SourceExecutor';
 import { CheckResult, firstExploreUrlFromText, SourceChecker } from '../../service/SourceChecker';
-import { WebViewFetcher } from '../web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../web/WebViewFetcher';
 import {
   inferAiContentRule, isSafeAiImportUrl, isUsableAiExtractedContent,
   parseAiRulesJson, prepareHtmlForAi
@@ -81,7 +81,8 @@ export interface AiAgentCallback {
   onStepUpdate?: (result: AiStepResult) => void;
   onLog?: (message: string) => void;
   /** WAF、登录或需要用户操作时，返回用户操作后的渲染 DOM。 */
-  onRequestWebView?: (url: string, reason: string) => Promise<string>;
+  onRequestWebView?: (url: string, reason: string,
+    request?: WebViewInteractiveRequest) => Promise<string>;
 }
 
 export interface SourceAgentRequest {
@@ -3895,7 +3896,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         // 同步到 CookieStore；随后重试原始 POST，保留表单方法和请求体语义。
         this.log_('  POST 被 WAF 拦截，转交 WebView 完成人工验证');
         try {
-          await this.fetchPage_(spec.url, label + '（WebView 验证）', true);
+          await this.fetchPage_(spec.url, label + '（WebView 验证）', true,
+            { method: 'POST', body: requestBody });
         } catch (webViewError) {
           this.log_('  WebView 验证页未返回可分析内容：' +
             ((webViewError as Error).message || String(webViewError)).substring(0, 120));
@@ -3917,7 +3919,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         this.requiresWebView_ = true;
         this.ensureSearchWebViewOption_();
         try {
-          await this.fetchPage_(spec.url, label + '（WebView 验证）', true);
+          await this.fetchPage_(spec.url, label + '（WebView 验证）', true,
+            { method: 'POST', body: requestBody });
         } catch (_webViewError) {
           // WebView 验证失败时仍用原结果继续，由后续短页面检测处理。
         }
@@ -3982,7 +3985,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     return await this.fetchPage_(spec.url, label);
   }
 
-  private async fetchPage_(url: string, label: string, forceWebView: boolean = false): Promise<PageEvidence> {
+  private async fetchPage_(url: string, label: string, forceWebView: boolean = false,
+    interactiveRequest?: WebViewInteractiveRequest): Promise<PageEvidence> {
     if (!isSafeAiImportUrl(url)) throw new Error(label + ' URL 不是安全公网地址');
     this.log_('  抓取 ' + label + '：' + url.substring(0, 100));
     let html = '';
@@ -4049,9 +4053,9 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       // WebViewFetcher 注册的全局交互处理器。
       if (this.callback_.onRequestWebView) {
         WebViewFetcher.interactivePurpose = purpose;
-        interactive = await this.callback_.onRequestWebView(finalUrl, reason);
+        interactive = await this.callback_.onRequestWebView(finalUrl, reason, interactiveRequest);
       } else if (WebViewFetcher.interactiveFetcher) {
-        interactive = await WebViewFetcher.fetchInteractive(finalUrl, purpose, reason);
+        interactive = await WebViewFetcher.fetchInteractive(finalUrl, purpose, reason, interactiveRequest);
       }
       if (interactive && interactive.length > 300) {
         html = WebViewFetcher.decodeJavaScriptString(interactive);

@@ -15,6 +15,12 @@ export class WebViewFetchResult {
   finalUrl: string = '';
 }
 
+/** 交互 WebView 需要复现的请求语义；POST 验证页不能丢掉原始 body。 */
+export interface WebViewInteractiveRequest {
+  method?: string;
+  body?: string;
+}
+
 interface InteractivePageCacheEntry {
   html: string;
   cachedAt: number;
@@ -60,7 +66,7 @@ export class WebViewFetcher {
    * 交互式 Cloudflare 验证处理器
    * 页面启动时注册，当请求被 Cloudflare 拦截时弹出 WebView 让用户手动验证
    */
-  static interactiveFetcher: ((url: string) => Promise<string>) | null = null;
+  static interactiveFetcher: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
 
   /** 交互式验证的 Promise resolve（由 CloudflareDialog 调用） */
   static interactiveResolve: ((html: string) => void) | null = null;
@@ -80,9 +86,9 @@ export class WebViewFetcher {
 
   /** 弹出交互式 WebView 验证 */
   static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge',
-    reason: string = ''): Promise<string> {
+    reason: string = '', request?: WebViewInteractiveRequest): Promise<string> {
     WebViewFetcher.interactivePurpose = purpose;
-    const cacheKey = WebViewFetcher.interactiveCacheKey(url);
+    const cacheKey = WebViewFetcher.interactiveCacheKey(url, request);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
     // 登录模式必须重新打开页面，不能复用上次验证缓存，否则用户无法进入登录面板。
     if (purpose !== 'login' && cached && Date.now() - cached.cachedAt <= WebViewFetcher.INTERACTIVE_CACHE_TTL_MS) {
@@ -105,7 +111,7 @@ export class WebViewFetcher {
     WebViewFetcher.interactiveReason = reason;
     let rawHtml = '';
     try {
-      rawHtml = await WebViewFetcher.interactiveFetcher(url);
+      rawHtml = await WebViewFetcher.interactiveFetcher(url, request);
     } finally {
       WebViewFetcher.interactiveReason = '';
     }
@@ -124,12 +130,14 @@ export class WebViewFetcher {
     return html;
   }
 
-  private static interactiveCacheKey(url: string): string {
-    return (url || '')
+  private static interactiveCacheKey(url: string, request?: WebViewInteractiveRequest): string {
+    const normalized = (url || '')
       .replace(/#.*$/, '')
       .replace(/([?&])(?:t|_|timestamp)=\d+(?=&|$)/gi, '$1')
       .replace(/\?&/, '?')
       .replace(/[?&]$/, '');
+    const body = request?.body || '';
+    return body ? normalized + '|body:' + body : normalized;
   }
 
   private static isReusableInteractiveHtml(html: string): boolean {

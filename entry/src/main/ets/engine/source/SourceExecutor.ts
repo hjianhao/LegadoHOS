@@ -1276,7 +1276,39 @@ export class SourceExecutor {
         if (WebViewFetcher.interactiveFetcher) {
           try {
             console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
-            const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge');
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge', '',
+              finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
+            // 交互 WebView 只能先以 GET 打开页面完成 WAF/JS 验证；搜索请求若
+            // 原本是 POST，验证完成后必须用同一 body 重放，否则页面会停在
+            // 空搜索框，用户看到“没有结果”，Agent 也拿不到真实搜索页。
+            if (finalMethod === 'POST' && finalBody) {
+              try {
+                let retriedPost = await NetUtil.httpPost(
+                  finalUrl, finalBody, requestHeaders, requestTimeout);
+                const retryWaitMs = searchRateLimitWaitMs_(retriedPost);
+                if (retryWaitMs > 0) {
+                  console.info('[SrcEx] Interactive WebView 后 POST 重放触发搜索间隔，等待',
+                    retryWaitMs, 'ms');
+                  await new Promise<void>((resolve: () => void): void => {
+                    setTimeout((): void => resolve(), retryWaitMs);
+                  });
+                  retriedPost = await NetUtil.httpPost(
+                    finalUrl, finalBody, requestHeaders, requestTimeout);
+                }
+                if (retriedPost && !WebViewFetcher.isInteractiveChallengeHtml(retriedPost)) {
+                  const retriedResults = await this.parseResponse(
+                    this.tryHexDecode_(retriedPost) || retriedPost, source, baseUrl, 0, finalUrl);
+                  if (retriedResults.length > 0) {
+                    console.info('[SrcEx] Interactive WebView 后 POST 重放得到',
+                      retriedResults.length, 'results for', source.sourceName);
+                    return retriedResults;
+                  }
+                }
+              } catch (retryError) {
+                console.warn('[SrcEx] Interactive WebView 后 POST 重放失败：',
+                  (retryError as Error).message);
+              }
+            }
             if (interactiveHtml && interactiveHtml.length > 200) {
               const interactiveResults = await this.parseResponse(
                 this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl, 0, finalUrl);
@@ -1339,7 +1371,8 @@ export class SourceExecutor {
           // 静态 WebView 结果为空/太小/0结果 → 尝试交互式 Cloudflare 验证
           if (WebViewFetcher.needsInteractive(url, msg)) {
             console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
-            const interactiveHtml = await WebViewFetcher.fetchInteractive(url);
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
+              finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
             if (interactiveHtml && interactiveHtml.length > 200) {
               console.info('[SrcEx] Interactive WebView got', interactiveHtml.length, 'bytes for', source.sourceName);
               return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
@@ -1351,7 +1384,8 @@ export class SourceExecutor {
           if (WebViewFetcher.needsInteractive(url, msg)) {
             try {
               console.info('[SrcEx] Trying interactive WebView (catch) for', source.sourceName);
-              const interactiveHtml = await WebViewFetcher.fetchInteractive(url);
+              const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
+                finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
               if (interactiveHtml && interactiveHtml.length > 200) {
                 return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
                   Date.now() - Date.now(), finalUrl);

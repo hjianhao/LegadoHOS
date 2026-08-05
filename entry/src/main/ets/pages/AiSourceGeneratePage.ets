@@ -1,6 +1,6 @@
 /** AI 全站书源生成与现有书源修复页面。 */
 import { AiRepairScope, AiSourceAgent, AiStep, AiStepResult } from '../engine/ai/AiSourceAgent';
-import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { WebViewEngine } from '../components/WebViewEngine';
@@ -128,16 +128,16 @@ struct AiSourceGeneratePage {
   private saveNameDlg?: CustomDialogController;
   private batchImportDlg?: CustomDialogController;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
-  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
 
   aboutToAppear(): void {
     this.pageActive_ = true;
     void this.loadDiscoveryPrefs_();
     this.registerCaptchaHandler_();
     if (!this.interactiveFetcher_) {
-      this.interactiveFetcher_ = (url: string): Promise<string> =>
+      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
         this.openInteractiveWebView_(url,
-          WebViewFetcher.interactiveReason || '页面需要登录或人工验证');
+          WebViewFetcher.interactiveReason || '页面需要登录或人工验证', request?.body || '');
     }
     WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     this.agent_ = new AiSourceAgent({
@@ -152,8 +152,9 @@ struct AiSourceGeneratePage {
         // 保留完整过程供复制排障；界面 List 仍只渲染可见区域，不需要截断数据。
         this.logMessages = [...this.logMessages, message];
       },
-      onRequestWebView: (url: string, reason: string): Promise<string> => {
-        return this.openInteractiveWebView_(url, reason);
+      onRequestWebView: (url: string, reason: string,
+        request?: WebViewInteractiveRequest): Promise<string> => {
+        return this.openInteractiveWebView_(url, reason, request?.body || '');
       },
     });
 
@@ -233,12 +234,13 @@ struct AiSourceGeneratePage {
     JsExpressionEvaluator.captchaHandler = this.captchaHandler_;
   }
 
-  private openInteractiveWebView_(url: string, reason: string): Promise<string> {
+  private openInteractiveWebView_(url: string, reason: string, requestBody: string = ''): Promise<string> {
     return new Promise<string>((resolve: (html: string) => void) => {
       this.logMessages = [...this.logMessages, '👤 ' + reason + '，请完成后点击“验证完成”'];
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
-        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url, reason: reason }),
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url, reason: reason,
+          requestBody: requestBody }),
         autoCancel: false,
         customStyle: true,
         alignment: DialogAlignment.Center,
@@ -541,8 +543,9 @@ struct AiSourceGeneratePage {
           onSummaryChanged: (next: AiSourceBatchSummary): void => {
             if (this.pageActive_) this.batchSummary_ = next;
           },
-          onRequestWebView: (url: string, reason: string): Promise<string> =>
-            this.pageActive_ ? this.openInteractiveWebView_(url, reason) : Promise.resolve(''),
+          onRequestWebView: (url: string, reason: string,
+            request?: WebViewInteractiveRequest): Promise<string> =>
+            this.pageActive_ ? this.openInteractiveWebView_(url, reason, request?.body || '') : Promise.resolve(''),
           onBatchError: (message: string): void => {
             if (this.pageActive_) UiUtil.showToast(this.getUIContext(), { message: message, duration: 2200 });
           },

@@ -16,6 +16,8 @@ export struct CloudflareDialog {
   url: string = '';
   /** 当前页面需要用户完成的具体操作，例如登录或输入图片验证码。 */
   reason: string = '页面需要人工验证';
+  /** POST 搜索验证时用于预填搜索框的原始表单体。 */
+  requestBody: string = '';
   @StorageLink('isDark') isDark: boolean = false;
   private webController: web_webview.WebviewController = new web_webview.WebviewController();
   @State pageTitle: string = '页面加载中...';
@@ -82,6 +84,7 @@ export struct CloudflareDialog {
             .onPageBegin(() => { this.isLoading = true; })
             .onPageEnd(() => {
               this.isLoading = false;
+              void this.prefillRequest_();
               if (WebViewFetcher.interactivePurpose === 'login') {
                 this.pageTitle = '登录页面（登录后点击"验证完成"）';
                 void this.openLoginPanel_();
@@ -121,6 +124,66 @@ export struct CloudflareDialog {
     .width('96%').height('92%').constraintSize({ maxWidth: 1200, maxHeight: 900 })
     .backgroundColor(ThemeColors.background(this.isDark))
     .borderRadius(16)
+  }
+
+  /**
+   * 交互验证打开的是 GET 页面，而触发验证的请求可能是 POST；如果不把
+   * 原始表单体回填，用户看到的搜索框就是空的，点击“验证完成”也只会
+   * 返回空搜索页。回填只更新字段并触发 input/change，不自动提交，避免
+   * 在 WAF 脚本尚未完成时打断页面验证。
+   */
+  private async prefillRequest_(): Promise<void> {
+    const body = (this.requestBody || '').trim();
+    if (!body) return;
+    const bodyLiteral = JSON.stringify(body) || '""';
+    try {
+      const result = await this.webController.runJavaScript(`(function(raw) {
+        try {
+          var fields = document.querySelectorAll('input,textarea,select');
+          var pairs = String(raw || '').split('&');
+          var values = [];
+          var filled = 0;
+          var decode = function(value) {
+            try { return decodeURIComponent(String(value || '').split('+').join(' ')); }
+            catch (e) { return String(value || ''); }
+          };
+          for (var p = 0; p < pairs.length; p++) {
+            var pair = pairs[p];
+            var index = pair.indexOf('=');
+            var key = decode(index >= 0 ? pair.substring(0, index) : pair);
+            var value = decode(index >= 0 ? pair.substring(index + 1) : '');
+            if (!key) continue;
+            values.push({ key: key, value: value });
+            for (var i = 0; i < fields.length; i++) {
+              if (String(fields[i].name || '') !== key) continue;
+              fields[i].value = value;
+              try { fields[i].dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+              try { fields[i].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+              filled++;
+              break;
+            }
+          }
+          // 某些站点的搜索输入框没有 name，body 中的字段名只能作为语义线索；
+          // 找不到同名控件时回填第一个可见文本搜索框，至少保证用户可直接点击搜索。
+          if (filled === 0 && values.length > 0) {
+            for (var j = 0; j < fields.length; j++) {
+              var type = String(fields[j].type || 'text').toLowerCase();
+              if ((type === 'text' || type === 'search') && !fields[j].disabled) {
+                fields[j].value = values[0].value;
+                try { fields[j].dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+                try { fields[j].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+                filled++;
+                break;
+              }
+            }
+          }
+          return String(filled);
+        } catch (e) { return '0'; }
+      })(${bodyLiteral})`);
+      console.info('[CloudflareDialog] POST 搜索关键词预填字段数=' + String(result || '0'));
+    } catch (e) {
+      console.warn('[CloudflareDialog] 预填 POST 搜索关键词失败：', (e as Error).message);
+    }
   }
 
   /** 登录模式下自动展开站点常见的登录弹层，避免用户先找登录入口。 */
