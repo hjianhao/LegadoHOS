@@ -1698,8 +1698,13 @@ export class AiSourceAgent {
       this.results_[AiStep.HOMEPAGE].data['searchProbeUrl'] = inferred!.probeUrl || '';
       this.log_('  已直接采用程序识别的搜索表单规则：' + this.draft_.ruleSearchUrl);
     }
-    const needsEntryModel = needsEntryRepair &&
-      (repairDiscovery || !this.repairMode_ || (!useInferredSearch && !preserveExistingPostSearch));
+    // 发现范围修复需要重新读取首页上的完整分类导航。否则仅凭第一个分类页
+    // 做子列表识别时，不能恢复被旧版本错误覆盖的其它父分类。
+    const refreshDiscoveryEntry = this.repairMode_ && this.scopeIncludesDiscovery_() &&
+      this.scope_ === 'discovery' && !discoveryMissing;
+    const needsEntryModel = (needsEntryRepair || refreshDiscoveryEntry) &&
+      (repairDiscovery || refreshDiscoveryEntry || !this.repairMode_ ||
+        (!useInferredSearch && !preserveExistingPostSearch));
     if (needsEntryModel) {
       const candidateText = inferred ? JSON.stringify(inferred) : '未检测到标准 HTML form';
       const prompt = `分析小说网站首页或搜索接口响应，识别站点名称、搜索请求、发现分类和登录入口。
@@ -1730,7 +1735,7 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
         this.anchorSearchRuleToCanonicalOrigin_();
         this.ensureSearchWebViewOption_();
       }
-      if (repairDiscovery) {
+      if (repairDiscovery || refreshDiscoveryEntry) {
         this.draft_.exploreUrl = parsed['exploreUrl'] || this.draft_.exploreUrl;
         this.draft_.ruleExplores = this.draft_.exploreUrl;
       }
@@ -2263,9 +2268,11 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       }
       return output;
     });
-    this.draft_.exploreUrl = JSON.stringify(serialized);
+    const merged = this.mergeExploreCategories_(serialized, firstUrl, parentTitle);
+    this.draft_.exploreUrl = JSON.stringify(merged);
     this.draft_.ruleExplores = this.draft_.exploreUrl;
-    this.log_('  已验证发现页子分类：' + configs.map((item): string => item.title).join('、'));
+    this.log_('  已验证发现页子分类：' + configs.map((item): string => item.title).join('、') +
+      '（保留父分类 ' + String(merged.length) + ' 项）');
   }
 
   /** 当前书源是否已经保存过带独立规则的分类条目。 */
@@ -2285,6 +2292,80 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
     } catch (_e) {
       return false;
     }
+  }
+
+  /** 解析当前书源已有的父分类，保留其顺序和样式。 */
+  private parseExploreEntries_(raw: string): Array<Record<string, Object>> {
+    const value = (raw || '').trim();
+    if (!value) return [];
+    if (value.startsWith('[') || value.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(value) as Object;
+        if (Array.isArray(parsed)) {
+          return parsed.filter((item: Object): boolean => !!item && typeof item === 'object')
+            .map((item: Object): Record<string, Object> => ({ ...(item as Record<string, Object>) }));
+        }
+        if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, Object>;
+          const nested = obj['categories'] || obj['items'] || obj['data'];
+          if (Array.isArray(nested)) {
+            return nested.filter((item: Object): boolean => !!item && typeof item === 'object')
+              .map((item: Object): Record<string, Object> => ({ ...(item as Record<string, Object>) }));
+          }
+        }
+      } catch (_e) {
+        // 继续按文本分类格式尝试。
+      }
+    }
+    const result: Array<Record<string, Object>> = [];
+    value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/&&/g, '\n')
+      .split('\n').forEach((line: string): void => {
+        const text = line.trim();
+        if (!text) return;
+        const index = text.indexOf('::');
+        if (index >= 0) {
+          result.push({ title: text.substring(0, index).trim(), url: text.substring(index + 2).trim() });
+        } else {
+          result.push({ title: text, url: '' });
+        }
+      });
+    return result;
+  }
+
+  /** 将首个分类页识别出的子分类插入对应父分类后，不覆盖其它父分类。 */
+  private mergeExploreCategories_(children: Array<Record<string, Object>>,
+    firstUrl: string, parentTitle: string): Array<Record<string, Object>> {
+    if (!this.draft_) return children;
+    const existing = this.parseExploreEntries_(this.draft_.exploreUrl || this.draft_.ruleExplores || '');
+    if (existing.length === 0) return children;
+    const normalize = (raw: Object): string => {
+      const value = typeof raw === 'string' ? raw.trim() : '';
+      if (!value) return '';
+      if (/^https?:\/\//i.test(value)) return value.replace(/\{\{page\}\}/g, '1').replace(/\/$/, '').toLowerCase();
+      if (value.startsWith('/')) return (this.origin_(firstUrl) + value).replace(/\{\{page\}\}/g, '1').replace(/\/$/, '').toLowerCase();
+      return value;
+    };
+    const targetUrl = normalize(firstUrl);
+    let parentIndex = existing.findIndex((item): boolean => normalize(item['url'] || item['exploreUrl']) === targetUrl);
+    if (parentIndex < 0) parentIndex = 0;
+    const filtered = existing.filter((item: Record<string, Object>, index: number): boolean => {
+      if (index === parentIndex) return true;
+      const itemParent = typeof item['parent'] === 'string' ? (item['parent'] as string).trim() : '';
+      const itemUrl = normalize(item['url'] || item['exploreUrl']);
+      const itemRule = item['ruleExploreList'] || item['bookList'];
+      // 只移除这个父分类上一次生成的子条目，不能误删其它父分类。
+      return itemParent !== parentTitle && !(itemUrl === targetUrl && typeof itemRule === 'string' &&
+        (itemRule as string).trim().length > 0);
+    });
+    parentIndex = filtered.findIndex((item): boolean => normalize(item['url'] || item['exploreUrl']) === targetUrl);
+    if (parentIndex < 0) parentIndex = 0;
+    const childItems = children.filter((item): boolean => {
+      const parent = item['parent'];
+      const isParent = item['isParent'] === true || parent === undefined || parent === '';
+      return !isParent;
+    });
+    filtered.splice(parentIndex + 1, 0, ...childItems);
+    return filtered;
   }
 
   /**
