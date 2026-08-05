@@ -660,6 +660,48 @@ export struct ExplorePage {
    * 每行最多 maxSpan(6) 列，根据 flexBasisPercent 分配宽度
    */
   calculateKindRows(kinds: ExploreCategory[], maxSpan: number): ExploreCategory[][] {
+    // Android 书源通常把发现页写成“父分类（100%）+ 子分类（25%）”的
+    // 顺序结构。不能把它们当成一个普通的流式网格，否则父分类按钮会和
+    // 第一组子分类挤在同一行。只要配置中出现全宽条目，就按全宽条目切组：
+    // 全宽条目独占一行，紧随其后的非全宽条目组成下一行（必要时再按列数
+    // 换行）。这也兼容企鹅阅读的配置，其中父分类没有 parent 字段而是
+    // 单纯依靠 style.layout_flexBasisPercent 表示层级。
+    const hasFullWidth = kinds.some((kind: ExploreCategory): boolean =>
+      kind.wrapBefore || kind.flexBasisPercent >= 1.0);
+    if (hasFullWidth) {
+      const groupedRows: ExploreCategory[][] = [];
+      let childRow: ExploreCategory[] = [];
+      let childSpan = 0;
+      const flushChildRow = (): void => {
+        if (childRow.length > 0) {
+          groupedRows.push(childRow);
+          childRow = [];
+          childSpan = 0;
+        }
+      };
+      for (const kind of kinds) {
+        const fullWidth = kind.wrapBefore || kind.flexBasisPercent >= 1.0;
+        if (fullWidth) {
+          flushChildRow();
+          groupedRows.push([kind]);
+          continue;
+        }
+        let span = 2;
+        if (kind.flexBasisPercent > 0) {
+          span = Math.max(1, Math.min(maxSpan, Math.round(maxSpan * kind.flexBasisPercent)));
+        } else if (kind.flexGrow > 0) {
+          span = 3;
+        }
+        if (childRow.length > 0 && childSpan + span > maxSpan) flushChildRow();
+        childRow.push(kind);
+        childSpan += span;
+        if (childSpan >= maxSpan) flushChildRow();
+      }
+      flushChildRow();
+      return groupedRows;
+    }
+
+    // 没有全宽样式时保留旧版普通网格行为，兼容简单的 name::url 配置。
     const rows: ExploreCategory[][] = [];
     let currentRow: ExploreCategory[] = [];
     let currentSpan = 0;
