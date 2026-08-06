@@ -150,9 +150,13 @@ export class ScriptEngine {
       let isError: boolean;
 
       try {
+        const useSystemHttp = headers['X-Legado-Use-System-Http'] === '1';
         if (method === 'GET') {
-          responseBody = await netUtil.NetUtil.httpGet(url, headers);
+          responseBody = useSystemHttp
+            ? await netUtil.NetUtil.httpGetSystem(url, headers)
+            : await netUtil.NetUtil.httpGet(url, headers);
         } else {
+          delete headers['X-Legado-Use-System-Http'];
           responseBody = await netUtil.NetUtil.httpPost(url, body || '', headers);
         }
         isError = false;

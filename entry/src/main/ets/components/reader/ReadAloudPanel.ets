@@ -355,8 +355,8 @@ export struct ReadAloudPanel {
       this.avSession_.on('play', () => { if (!this.isPlaying) this.togglePlay(); });
       this.avSession_.on('pause', () => { if (this.isPlaying_()) this.togglePlay(); });
       this.avSession_.on('stop', () => { if (this.isPlaying_() || this.isPaused) this.stopPlay(); });
-      this.avSession_.on('playNext', () => { this.stopPlay(); this.onNextChapter?.(); });
-      this.avSession_.on('playPrevious', () => { this.stopPlay(); this.onPrevChapter?.(); });
+      this.avSession_.on('playNext', () => { this.switchChapter_(true); });
+      this.avSession_.on('playPrevious', () => { this.switchChapter_(false); });
       console.info('[Aloud] AVSession created');
     } catch (e) {
       console.error('[Aloud] AVSession failed: ' + (e as Error).message);
@@ -451,6 +451,10 @@ export struct ReadAloudPanel {
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
       await eng.speak(startText, this.speed, this.textOffset, this.currentChapterIndex);
+      // 以引擎最终状态再同步一次，避免首次播放时状态回调早于面板订阅，
+      // 导致按钮仍停留在“播放”图标。
+      this.isPlaying = eng.state === AloudState.PLAYING;
+      this.isPaused = eng.state === AloudState.PAUSED;
       console.info('[Aloud] speak done');
     } catch (e) {
       const msg = (e as Error).message || String(e);
@@ -474,13 +478,25 @@ export struct ReadAloudPanel {
 
   async stopPlay(): Promise<void> {
     console.info('[Aloud] stopPlay called');
-    this.stopBgTask_();
+    await this.stopBgTask_();
     await this.destroyAvSession_();
     const eng = this.engine_ ?? getGlobalEngineRef();
     if (eng) await eng.stop();
     this.isPlaying = false;
     this.isPaused = false;
     this.progress = 0;
+  }
+
+  /** 切换章节前必须等待旧播放彻底停止，避免旧章节的完成回调与新章节加载交错。 */
+  private async switchChapter_(next: boolean): Promise<void> {
+    await this.stopPlay();
+    if (next) this.onNextChapter?.();
+    else this.onPrevChapter?.();
+  }
+
+  private async restartPlay_(): Promise<void> {
+    await this.stopPlay();
+    await this.startPlay();
   }
 
   async changeSpeed(v: number): Promise<void> {
@@ -806,19 +822,13 @@ export struct ReadAloudPanel {
       Row() {
         Button($r('app.string.ui_4ccc70caa6')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
-          .onClick(() => {
-            this.stopPlay(); this.stopBgTask_();
-            this.onPrevChapter?.();
-          })
-        Button(this.isPlaying_() ? '⏸' : '▶️').fontSize(28).fontColor(ThemeColors.onSurface(this.isDark))
+          .onClick(() => { this.switchChapter_(false); })
+        Button(this.isPlaying ? '⏸' : '▶️').fontSize(28).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => { this.togglePlay(); })
         Button($r('app.string.ui_dc0d472de6')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
-          .onClick(() => {
-            this.stopPlay(); this.stopBgTask_();
-            this.onNextChapter?.();
-          })
+          .onClick(() => { this.switchChapter_(true); })
         Button($r('app.string.ui_0ef94bd672')).fontSize(22).fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.transparent()).layoutWeight(1)
           .onClick(() => {
@@ -831,7 +841,7 @@ export struct ReadAloudPanel {
       Row() {
         Button($r('app.string.ui_6701c1a30b')).fontSize(12).height(40).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(ThemeColors.successContainer(this.isDark)).fontColor(ThemeColors.success(this.isDark))
-          .onClick(() => { this.stopPlay(); this.startPlay(); })
+          .onClick(() => { this.restartPlay_(); })
         Button($r('app.string.ui_56b1c4def5')).fontSize(12).height(40).padding({ left: 12, right: 12 }).borderRadius(16)
           .backgroundColor(ThemeColors.primaryContainer(this.isDark)).fontColor(ThemeColors.primary(this.isDark))
           .onClick(() => { const eng = getGlobalEngineRef(); const ci = this.curCharIdx_; const ch = eng?.startChapter || this.curAloudChapter_ || this.currentChapterIndex; if (eng && eng.state === AloudState.PLAYING) this.onGoToPosition?.(ci, ch); })

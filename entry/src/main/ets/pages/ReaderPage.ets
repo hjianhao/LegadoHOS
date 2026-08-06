@@ -1601,12 +1601,14 @@ struct ReaderPage {
     if (this.tocItems.length > 0 && (this.isMobi_ || this.isPdf_ || this.isEpubFoliate_ || this.isFoliate_)) {
       if (index < 0 || index >= this.tocItems.length) return;
       this.currentIndex = index;
+      this.lastAloudProviderIdx_ = index;
       this.currentTitle = this.tocItems[index].label;
       this.goToTocItem_(this.tocItems[index]);
       return;
     }
     if (index < 0 || index >= this.chapters_.length) return;
     this.currentIndex = index;
+    this.lastAloudProviderIdx_ = index;
     this.currentTitle = this.chapters_[index]?.title || '';
     this.goToChapter_(this.chapters_[index]);
   }

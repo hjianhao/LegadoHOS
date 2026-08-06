@@ -8,6 +8,7 @@ import promptAction from '@ohos.promptAction';
 import picker from '@ohos.file.picker';
 import fileIo from '@ohos.file.fs';
 import util from '@ohos.util';
+import pasteboard from '@ohos.pasteboard';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
@@ -52,7 +53,7 @@ export struct ImportSourceDialog {
     this.jsonText = '';
   }
 
-  private async loadPreview(json: string): Promise<void> {
+  private async loadPreview(json: string): Promise<boolean> {
     this.isLoading = true; this.statusText = '解析中...';
     // DocumentViewPicker / 剪贴板导入的 UTF-8 文本可能保留 BOM，JSON.parse 不接受它。
     const normalizedJson = json.replace(/^\uFEFF/, '').trim();
@@ -65,12 +66,15 @@ export struct ImportSourceDialog {
       this.items = await dao.importSourcesPreview(JSON.stringify(normalizedSources));
       this.statusText = `${this.items.length} 条书源`;
       console.info('[ImportSource] preview done: ' + this.items.length + ' items');
+      this.isLoading = false;
+      return true;
     } catch (e) {
       console.error('[ImportSource] loadPreview error: ' + e);
       UiUtil.showToast(this.getUIContext(), {message:'书源解析失败: '+String(e).substring(0,80),duration:2500});
       this.statusText = '书源解析失败';
+      this.isLoading = false;
+      return false;
     }
-    this.isLoading = false;
   }
 
   private async doImport(): Promise<void> {
@@ -141,8 +145,7 @@ export struct ImportSourceDialog {
     this.statusText = '下载中...';
     try {
       const json = await this.fetchImportUrl_(url);
-      await this.loadPreview(json);
-      this.resetMode();
+      if (await this.loadPreview(json)) this.resetMode();
     } catch (e) {
       const msg = (e as Error).message || String(e);
       console.error('[ImportSource] URL import failed:', url, msg);
@@ -158,8 +161,107 @@ export struct ImportSourceDialog {
 
   private async doJsonImport(json: string): Promise<void> {
     if (!json || json.trim().length === 0) { UiUtil.showToast(this.getUIContext(), {message:'请粘贴 JSON 内容',duration:1500}); return; }
-    await this.loadPreview(json);
-    this.resetMode();
+    if (await this.loadPreview(json)) this.resetMode();
+  }
+
+  /** 通过 PasteButton 的临时授权直接读取剪贴板，绕过长文本输入事件的长度限制。 */
+  private async doClipboardJsonImport(): Promise<void> {
+    if (this.isLoading) return;
+    const clipboard = pasteboard.getSystemPasteboard();
+    let data: pasteboard.PasteData | null = null;
+    let pasteStarted = false;
+    try {
+      data = await clipboard.getData();
+      // 跨设备剪贴板需要在读取数据记录前保持通道；否则大文本可能只拿到不完整的同步结果。
+      data.pasteStart();
+      pasteStarted = true;
+      const candidates: string[] = [];
+      const recordCount = data.getRecordCount();
+      if (recordCount > 0) {
+        try {
+          const record = data.getRecord(0);
+          if (record.plainText) candidates.push(record.plainText);
+          const plainText = record.toPlainText();
+          if (plainText) candidates.push(plainText);
+        } catch (recordError) {
+          console.warn('[ImportSource] unable to read clipboard record: ' + recordError);
+        }
+      }
+      const primaryText = data.getPrimaryText();
+      if (primaryText) candidates.push(primaryText);
+      console.info('[ImportSource] clipboard mime=' + data.getPrimaryMimeType()
+        + ', records=' + recordCount + ', lengths=' + candidates.map((value: string) => value.length).join(','));
+      let hasText = false;
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].trim().length > 0) {
+          hasText = true;
+          break;
+        }
+      }
+      if (!hasText) {
+        UiUtil.showToast(this.getUIContext(), { message: '剪贴板没有 JSON 文本', duration: 1500 });
+        return;
+      }
+      // 优先使用能通过 JSON 语法校验的候选，避免 HTML/富文本转换破坏 JSON 转义。
+      let text = '';
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = this.normalizeClipboardJson_(candidates[i]);
+        if (this.isJsonSyntaxValid_(candidate)) {
+          text = candidate;
+          break;
+        }
+      }
+      if (!text) text = this.normalizeClipboardJson_(candidates[0]);
+      this.ensurePayloadSize_(text);
+      if (await this.loadPreview(text)) this.resetMode();
+    } catch (e) {
+      console.error('[ImportSource] clipboard import error: ' + e);
+      UiUtil.showToast(this.getUIContext(), { message: '读取剪贴板失败：' + String(e).substring(0, 50), duration: 2000 });
+    } finally {
+      if (pasteStarted && data) {
+        try {
+          data.pasteComplete();
+        } catch (completeError) {
+          console.warn('[ImportSource] clipboard complete failed: ' + completeError);
+        }
+      }
+    }
+  }
+
+  /** 去除 BOM、Markdown JSON 代码围栏及复制时附带的首尾说明。 */
+  private normalizeClipboardJson_(value: string): string {
+    let text = value.replace(/^\uFEFF/, '').trim();
+    if (text.startsWith('```')) {
+      const firstLineEnd = text.indexOf('\n');
+      const lastFence = text.lastIndexOf('```');
+      if (firstLineEnd >= 0 && lastFence > firstLineEnd) {
+        text = text.substring(firstLineEnd + 1, lastFence).trim();
+      }
+    }
+    if (this.isJsonSyntaxValid_(text)) return text;
+    let first = -1;
+    const objectStart = text.indexOf('{');
+    const arrayStart = text.indexOf('[');
+    if (objectStart >= 0) first = objectStart;
+    if (arrayStart >= 0 && (first < 0 || arrayStart < first)) first = arrayStart;
+    const objectEnd = text.lastIndexOf('}');
+    const arrayEnd = text.lastIndexOf(']');
+    const last = Math.max(objectEnd, arrayEnd);
+    if (first > 0 || (last >= 0 && last < text.length - 1)) {
+      const candidate = text.substring(Math.max(first, 0), last + 1).trim();
+      if (this.isJsonSyntaxValid_(candidate)) return candidate;
+    }
+    return text;
+  }
+
+  private isJsonSyntaxValid_(text: string): boolean {
+    if (!text || text.trim().length === 0) return false;
+    try {
+      JSON.parse(text);
+      return true;
+    } catch (_error) {
+      return false;
+    }
   }
 
   private ensurePayloadSize_(text: string): void {
@@ -183,7 +285,11 @@ export struct ImportSourceDialog {
     try {
       parsed = JSON.parse(text) as Object;
     } catch (e) {
-      throw new Error('JSON格式错误: ' + ((e as Error).message || String(e)).substring(0, 80));
+      const message = (e as Error).message || String(e);
+      const positionMatch = message.match(/position\s+(\d+)/i);
+      const position = positionMatch ? positionMatch[1] : 'unknown';
+      console.error('[ImportSource] invalid JSON len=' + text.length + ', position=' + position);
+      throw new Error('JSON格式错误: ' + message.substring(0, 80));
     }
     if (Array.isArray(parsed)) {
       return parsed as Record<string, Object>[];
@@ -285,12 +391,29 @@ export struct ImportSourceDialog {
       } else if (this.importMode === 'json') {
         // JSON 粘贴模式
         Column() {
-          Text($r('app.string.ui_c5faeb98cd')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).margin({bottom:8})
+          Row() {
+            Text($r('app.string.ui_c5faeb98cd')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
+            PasteButton().height(36).onClick((event: ClickEvent, result: PasteButtonOnClickResult) => {
+              if (result === PasteButtonOnClickResult.SUCCESS) {
+                this.doClipboardJsonImport();
+              } else {
+                UiUtil.showToast(this.getUIContext(), { message: '未获得剪贴板授权', duration: 1500 });
+              }
+            })
+          }.width('100%').margin({bottom:8})
           TextArea({placeholder: $r('app.string.ui_9e6ca0bcd0'),text:this.jsonText})
-            .height(160).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            // 书源 JSON 通常包含完整的搜索、目录和正文规则；显式放宽控件字符上限，
+            // 避免部分系统版本的默认输入长度限制在粘贴阶段截断内容。
+            .height(160).maxLength(MAX_IMPORT_BYTES).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .caretColor(ThemeColors.primary(this.isDark)).borderRadius(8).padding({left:12,top:8}).fontSize(14).width('100%')
-            .margin({bottom:8}).onChange((v:string)=>{this.jsonText=v})
+            .margin({bottom:8})
+            // 先接管粘贴事件再更新状态，避免 TextArea 原生输入缓冲区截断长 JSON。
+            .onPaste((value: string, event: PasteEvent) => {
+              if (event.preventDefault) event.preventDefault();
+              this.jsonText = value;
+            })
+            .onChange((v:string)=>{this.jsonText=v})
           Row() {
             Button($r('app.string.common_cancel')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.surface(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark)).borderRadius(8).margin({right:6}).onClick(()=>{this.resetMode()})
             Button($r('app.string.ui_1503a5a605')).fontSize(14).height(40).layoutWeight(1).backgroundColor(ThemeColors.warning(this.isDark)).fontColor(ThemeColors.onPrimary(this.isDark)).borderRadius(8).margin({left:6}).onClick(()=>{this.doJsonImport(this.jsonText)})

@@ -26,6 +26,15 @@ interface InteractivePageCacheEntry {
   cachedAt: number;
 }
 
+interface WebViewRequestQueueEntry {
+  url: string;
+  timeoutMs: number;
+  headers: Record<string, string>;
+  allowedRedirectHosts: string[];
+  resolve: (result: WebViewFetchResult) => void;
+  reject: (err: Error) => void;
+}
+
 export class WebViewFetcher {
   private static controller: web_webview.WebviewController | null = null;
   private static pendingResolve: ((result: WebViewFetchResult) => void) | null = null;
@@ -42,23 +51,25 @@ export class WebViewFetcher {
   private static lastPageEndAt: number = 0;
   /** 当前 fetch 已确认属于本次导航的 URL，防止队列切换后接收上一页迟到的 onPageEnd。 */
   private static activeNavigationUrls: Set<string> = new Set();
+  /** 当前 fetch 允许的站点域名；为空表示保留原有的跨域重定向行为。 */
+  private static pendingAllowedRedirectHosts: Set<string> = new Set();
   // 轮询定时器
   private static pollIntervalId: number = -1;
   /** 排队等待的最长时间；上游 WebView 卡住时不能让后续请求无限排队。 */
   private static readonly QUEUE_WAIT_TIMEOUT_MS: number = 8000;
   // 请求队列：排队等待的 fetch（WebView 同时只能处理一个）
-  private static requestQueue: Array<{
-    url: string;
-    timeoutMs: number;
-    headers: Record<string, string>;
-    resolve: (result: WebViewFetchResult) => void;
-    reject: (err: Error) => void;
-  }> = [];
+  private static requestQueue: WebViewRequestQueueEntry[] = [];
 
   /** 与 Android Legado 后台 WebView 一致的默认桌面 UA。 */
   private static readonly DEFAULT_USER_AGENT: string =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
     '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  /**
+   * 书源的 header 可能携带 Android/Mobile UA。WebView 若沿用它，很多站点
+   * 会直接返回移动版或把移动版章节跳转到广告页；HTTP 请求仍保留书源 UA，
+   * 这里只固定浏览器页面为桌面 UA。
+   */
+  static forceDesktopUserAgent: boolean = true;
 
   /** 等待 controller 注册的回调列表（waitForReady 使用） */
   private static readyWaiters: Array<() => void> = [];
@@ -86,7 +97,8 @@ export class WebViewFetcher {
 
   /** 弹出交互式 WebView 验证 */
   static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge',
-    reason: string = '', request?: WebViewInteractiveRequest): Promise<string> {
+    reason: string = '', request?: WebViewInteractiveRequest,
+    fetcherOverride?: (url: string, request?: WebViewInteractiveRequest) => Promise<string>): Promise<string> {
     WebViewFetcher.interactivePurpose = purpose;
     const cacheKey = WebViewFetcher.interactiveCacheKey(url, request);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
@@ -105,13 +117,14 @@ export class WebViewFetcher {
         cacheKey.substring(0, 80));
     }
     if (cached) WebViewFetcher.interactivePageCache.delete(cacheKey);
-    if (!WebViewFetcher.interactiveFetcher) {
+    const fetcher = fetcherOverride || WebViewFetcher.interactiveFetcher;
+    if (!fetcher) {
       throw new Error('Interactive fetcher not registered');
     }
     WebViewFetcher.interactiveReason = reason;
     let rawHtml = '';
     try {
-      rawHtml = await WebViewFetcher.interactiveFetcher(url, request);
+      rawHtml = await fetcher(url, request);
     } finally {
       WebViewFetcher.interactiveReason = '';
     }
@@ -261,7 +274,7 @@ export class WebViewFetcher {
 
   /** 提取页面内容，返回 Promise */
   static fetch(url: string, timeoutMs: number = 30000,
-    headers: Record<string, string> = {}): Promise<WebViewFetchResult> {
+    headers: Record<string, string> = {}, allowedRedirectHosts: string[] = []): Promise<WebViewFetchResult> {
     if (!WebViewFetcher.controller) {
       return Promise.reject(new Error('WebView not registered'));
     }
@@ -270,7 +283,9 @@ export class WebViewFetcher {
     if (WebViewFetcher.pendingReject) {
       console.info('[WebViewFetcher] Previous fetch still pending, queueing request');
       return new Promise((resolve, reject) => {
-        const entry = { url, timeoutMs, headers, resolve, reject };
+        const entry: WebViewRequestQueueEntry = {
+          url, timeoutMs, headers, allowedRedirectHosts, resolve, reject
+        };
         WebViewFetcher.requestQueue.push(entry);
         // 排队请求必须有自己的等待上限：上游 fetch 若因页面销毁/控制器失效
         // 卡住，后续请求不能无限排队，应及时失败让调用方走 HTTP 兜底。
@@ -283,12 +298,12 @@ export class WebViewFetcher {
       });
     }
 
-    return WebViewFetcher.startFetch(url, timeoutMs, headers);
+    return WebViewFetcher.startFetch(url, timeoutMs, headers, allowedRedirectHosts);
   }
 
   /** 实际的 fetch 逻辑 */
   private static startFetch(url: string, timeoutMs: number,
-    headers: Record<string, string>): Promise<WebViewFetchResult> {
+    headers: Record<string, string>, allowedRedirectHosts: string[] = []): Promise<WebViewFetchResult> {
     return new Promise((resolve: (result: WebViewFetchResult) => void, reject: (err: Error) => void) => {
       const controller = WebViewFetcher.controller;
       if (!controller) {
@@ -308,6 +323,10 @@ export class WebViewFetcher {
       WebViewFetcher.initialRequestUrl = url;
       WebViewFetcher.redirectCount = 0;
       WebViewFetcher.activeNavigationUrls = new Set([WebViewFetcher.normalizeNavigationUrl(url)]);
+      WebViewFetcher.pendingAllowedRedirectHosts = new Set(
+        allowedRedirectHosts.map((host: string): string => WebViewFetcher.normalizeNavigationHost_(host))
+          .filter((host: string): boolean => !!host)
+      );
 
       // 设置总超时
       WebViewFetcher.timeoutId = setTimeout(() => {
@@ -315,6 +334,7 @@ export class WebViewFetcher {
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
         WebViewFetcher.pendingController = null;
+        WebViewFetcher.pendingAllowedRedirectHosts.clear();
         reject(new Error('WebView load timeout'));
         WebViewFetcher.processNext();
       }, timeoutMs);
@@ -325,7 +345,11 @@ export class WebViewFetcher {
       const webHeaders: Array<web_webview.WebHeader> = [];
       Object.keys(headers).forEach((key: string) => {
         if (key.toLowerCase() === 'user-agent') {
-          userAgent = headers[key] || userAgent;
+          if (!WebViewFetcher.forceDesktopUserAgent) {
+            userAgent = headers[key] || userAgent;
+          } else if (headers[key] && headers[key] !== WebViewFetcher.DEFAULT_USER_AGENT) {
+            console.info('[WebViewFetcher] Ignoring source User-Agent; using desktop UA');
+          }
         } else {
           webHeaders.push({ headerKey: key, headerValue: headers[key] });
         }
@@ -340,6 +364,7 @@ export class WebViewFetcher {
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
         WebViewFetcher.pendingController = null;
+        WebViewFetcher.pendingAllowedRedirectHosts.clear();
         reject(new Error('WebView load failed: ' + ((e as Error).message || String(e))));
         WebViewFetcher.processNext();
       }
@@ -356,6 +381,15 @@ export class WebViewFetcher {
    */
   static onLoadIntercept(url: string): boolean {
     if (!WebViewFetcher.pendingResolve) return false;
+
+    const targetHost = WebViewFetcher.navigationHost(url);
+    if (targetHost && WebViewFetcher.pendingAllowedRedirectHosts.size > 0 &&
+      !WebViewFetcher.pendingAllowedRedirectHosts.has(targetHost)) {
+      console.warn('[WebViewFetcher] Blocked unrelated redirect to', url.substring(0, 120));
+      // 不更新 pendingUrl/activeNavigationUrls：保留当前正文页，等待它的
+      // onPageEnd/readyState 提取，而不是把广告页交给规则解析器。
+      return true;
+    }
 
     // 首次加载（与 fetch 传入的 URL 相同）不计为重定向
     if (url === WebViewFetcher.initialRequestUrl) {
@@ -375,6 +409,7 @@ export class WebViewFetcher {
       WebViewFetcher.pendingResolve = null;
       WebViewFetcher.pendingReject = null;
       WebViewFetcher.pendingController = null;
+      WebViewFetcher.pendingAllowedRedirectHosts.clear();
       if (reject) reject(new Error('Too many redirects: ' + WebViewFetcher.redirectCount));
       WebViewFetcher.processNext();
       return true; // 阻止加载
@@ -722,7 +757,11 @@ export class WebViewFetcher {
 
   private static navigationHost(url: string): string {
     const match = (url || '').match(/^https?:\/\/([^\/?#]+)/i);
-    return match ? match[1].toLowerCase() : '';
+    return match ? WebViewFetcher.normalizeNavigationHost_(match[1]) : '';
+  }
+
+  private static normalizeNavigationHost_(host: string): string {
+    return (host || '').toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
   }
 
   private static belongsToActiveNavigation(url: string): boolean {
@@ -746,6 +785,7 @@ export class WebViewFetcher {
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
         WebViewFetcher.pendingController = null;
+        WebViewFetcher.pendingAllowedRedirectHosts.clear();
         if (resolve) {
           console.info('[WebViewFetcher] Extracted', decodedHtml.length, 'chars from', finalUrl.substring(0, 60));
           resolve({ html: decodedHtml, finalUrl });
@@ -758,6 +798,7 @@ export class WebViewFetcher {
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
         WebViewFetcher.pendingController = null;
+        WebViewFetcher.pendingAllowedRedirectHosts.clear();
         if (reject) reject(err);
         WebViewFetcher.processNext();
       });
@@ -778,6 +819,7 @@ export class WebViewFetcher {
       WebViewFetcher.pendingResolve = null;
       WebViewFetcher.pendingReject = null;
       WebViewFetcher.pendingController = null;
+      WebViewFetcher.pendingAllowedRedirectHosts.clear();
       if (reject) reject(new Error('WebView page destroyed'));
       WebViewFetcher.processNext();
     }
@@ -796,6 +838,7 @@ export class WebViewFetcher {
     WebViewFetcher.pendingController = null;
     WebViewFetcher.pendingUrl = '';
     WebViewFetcher.activeNavigationUrls.clear();
+    WebViewFetcher.pendingAllowedRedirectHosts.clear();
     WebViewFetcher.requestQueue = [];
     WebViewFetcher.controller = null;
     console.info('[WebViewFetcher] Cleared all state');
@@ -809,7 +852,8 @@ export class WebViewFetcher {
     console.info('[WebViewFetcher] Processing next queued request');
     // ArkWeb may deliver the previous page's final onPageEnd after outerHTML extraction resolves.
     setTimeout(() => {
-      WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers).then(next.resolve).catch(next.reject);
+      WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers, next.allowedRedirectHosts)
+        .then(next.resolve).catch(next.reject);
     }, 120);
   }
 }

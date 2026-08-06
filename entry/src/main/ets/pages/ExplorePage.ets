@@ -15,6 +15,7 @@ import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { UiUtil } from '../util/UiUtil';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
+import { SettingsStore } from '../data/preferences/SettingsStore';
 
 interface ExploreCategory {
   name: string;
@@ -51,6 +52,8 @@ export struct ExplorePage {
   @StorageLink('bookSourceRevision') @Watch('onBookSourceRevisionChanged') bookSourceRevision: number = 0;
   @State exploreSources: BookSource[] = [];
   @State searchKey: string = '';
+  @State filterHistory: string[] = [];
+  @State showFilterHistory: boolean = false;
   @State expandedSourceUrl: string = '';
   @State loadingKinds: boolean = false;
   @State categoryCache: Record<string, ExploreCategory[]> = {};
@@ -69,12 +72,14 @@ export struct ExplorePage {
 
   aboutToAppear(): void {
     this.isActive = true;
+    void this.loadFilterHistory();
     if (this.exploreSources.length === 0 || this.loadedSourceRevision !== this.bookSourceRevision) {
       void this.loadExploreSources();
     }
   }
 
   aboutToDisappear(): void {
+    void this.addFilterHistory_(this.searchKey);
     this.isActive = false;
     this.sourceRequestId++;
     this.categoryRequestId++;
@@ -82,6 +87,55 @@ export struct ExplorePage {
 
   private onBookSourceRevisionChanged(): void {
     if (this.isActive) void this.loadExploreSources();
+  }
+
+  private normalizeFilterHistory_(items: string[]): string[] {
+    const result: string[] = [];
+    for (const item of items || []) {
+      const value = (item || '').trim();
+      if (value && !result.includes(value)) {
+        result.push(value);
+        if (result.length >= 20) break;
+      }
+    }
+    return result;
+  }
+
+  private async loadFilterHistory(): Promise<void> {
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      const history = await store.get<string[]>('explore_source_filter_history', []);
+      if (this.isActive) this.filterHistory = this.normalizeFilterHistory_(history);
+    } catch (_e) {
+      if (this.isActive) this.filterHistory = [];
+    }
+  }
+
+  private async addFilterHistory_(raw: string): Promise<void> {
+    const value = (raw || '').trim();
+    if (!value || value === '失效') return;
+    this.filterHistory = this.normalizeFilterHistory_([value, ...this.filterHistory]);
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('explore_source_filter_history', this.filterHistory);
+    } catch (_e) { /* 历史记录失败不影响过滤 */ }
+  }
+
+  private async clearFilterHistory_(): Promise<void> {
+    this.filterHistory = [];
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('explore_source_filter_history', []);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private visibleFilterHistory_(): string[] {
+    const query = this.searchKey.trim().toLowerCase();
+    if (!query) return this.filterHistory.slice(0, 8);
+    return this.filterHistory.filter((item: string): boolean => item.toLowerCase().includes(query)).slice(0, 8);
   }
 
   getFilteredSources(): BookSource[] {
@@ -757,13 +811,45 @@ export struct ExplorePage {
           .fontSize(14).padding({ left: 16 }).borderRadius(22)
           .fontColor(ThemeColors.onSurface(this.isDark))
           .placeholderColor(ThemeColors.secondaryText(this.isDark))
-          .onChange((v: string) => { this.searchKey = v; })
-        if (this.searchKey.length > 0) {
-          Button($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)
-            .backgroundColor(Color.Transparent).margin({ left: 4 }).accessibilityText($r('app.string.ui_74aba3dac5'))
-            .onClick(() => { this.searchKey = ''; })
-        }
+          .onChange((v: string) => { this.searchKey = v; this.showFilterHistory = true; })
+          .onFocus(() => { this.showFilterHistory = true; })
+          .onSubmit(() => {
+            void this.addFilterHistory_(this.searchKey);
+            this.showFilterHistory = false;
+          })
+          if (this.searchKey.length > 0) {
+            Button($r('app.string.ui_0951b9a022')).fontSize(14).fontColor(ThemeColors.secondaryText(this.isDark)).width(44).height(44)
+              .backgroundColor(Color.Transparent).margin({ left: 4 }).accessibilityText($r('app.string.ui_74aba3dac5'))
+            .onClick(() => {
+              void this.addFilterHistory_(this.searchKey);
+              this.searchKey = '';
+            })
+          }
       }.width('100%').padding({ left: 16, right: 16, bottom: 8 })
+
+      if (this.showFilterHistory && this.visibleFilterHistory_().length > 0) {
+        Column() {
+          Row() {
+            Text('过滤历史').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
+            Text('清空').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+              .onClick(() => { void this.clearFilterHistory_(); })
+          }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 2 })
+          ForEach(this.visibleFilterHistory_(), (item: string) => {
+            Row() {
+              Text('↻').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width(24)
+              Text(item).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }.width('100%').height(40).padding({ left: 16, right: 16 })
+              .backgroundColor(ThemeColors.surface(this.isDark))
+              .onClick(() => {
+                this.searchKey = item;
+                this.showFilterHistory = false;
+              })
+          }, (item: string): string => item)
+        }.width('100%').padding({ bottom: 4 })
+          .backgroundColor(ThemeColors.surface(this.isDark))
+          .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+      }
 
       if (this.loadError) {
         Column() {

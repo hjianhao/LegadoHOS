@@ -15,7 +15,7 @@ import { CaptchaDialog } from '../components/reader/CaptchaDialog';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { WebViewEngine } from '../components/WebViewEngine';
-import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { NetUtil } from '../util/NetUtil';
 import { UiUtil } from '../util/UiUtil';
@@ -88,6 +88,8 @@ export struct SearchPage {
   @State selectedSourceUrls: string[] = [];
   @State scopeBySource: boolean = false;
   @State sourceFilterText: string = '';
+  @State sourceFilterHistory: string[] = [];
+  @State showSourceFilterHistory: boolean = false;
   @State expandedSourceUrl: string = '';
   @State shelfBookUrls: string[] = [];
   @State shelfNameAuthorKeys: string[] = [];
@@ -127,7 +129,7 @@ export struct SearchPage {
   private onlineImporter_: AiBookImporter | null = null;
   private pageActive_: boolean = false;
   private challengeDlg?: CustomDialogController;
-  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
 
   private onResultsChanged_(): void {
     this.resultDataSource_.reset(this.results);
@@ -148,8 +150,8 @@ export struct SearchPage {
       });
     };
     if (!this.interactiveFetcher_) {
-      this.interactiveFetcher_ = (url: string): Promise<string> =>
-        this.openInteractiveWebView_(url);
+      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
+        this.openInteractiveWebView_(url, request?.body || '');
     }
     WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     this.pageActive_ = true;
@@ -187,11 +189,12 @@ export struct SearchPage {
     }
   }
 
-  private openInteractiveWebView_(url: string): Promise<string> {
+  private openInteractiveWebView_(url: string, requestBody: string = ''): Promise<string> {
     return new Promise<string>((resolve: (html: string) => void) => {
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
-        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url,
+          reason: WebViewFetcher.interactiveReason || '页面需要登录或人工验证', requestBody: requestBody }),
         autoCancel: false,
         customStyle: true,
         alignment: DialogAlignment.Center,
@@ -218,6 +221,8 @@ export struct SearchPage {
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));
+      this.sourceFilterHistory = this.normalizeSourceFilterHistory_(
+        await s.get<string[]>('search_scope_source_filter_history', []));
       this.layoutMode = await s.get<number>('search_layout_mode', 0);
       this.matchModeExact = (await s.get<number>('search_match_mode', 0)) === 1;
       this.selectedSourceTypes = await s.get<number[]>('search_source_types', []);
@@ -776,6 +781,45 @@ export struct SearchPage {
     });
   }
 
+  private normalizeSourceFilterHistory_(items: string[]): string[] {
+    const result: string[] = [];
+    for (const item of items || []) {
+      const value = (item || '').trim();
+      if (value && !result.includes(value)) {
+        result.push(value);
+        if (result.length >= 20) break;
+      }
+    }
+    return result;
+  }
+
+  private async addSourceFilterHistory_(raw: string): Promise<void> {
+    const value = (raw || '').trim();
+    if (!value) return;
+    this.sourceFilterHistory = this.normalizeSourceFilterHistory_([value, ...this.sourceFilterHistory]);
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('search_scope_source_filter_history', this.sourceFilterHistory);
+    } catch (_e) { /* 历史记录失败不影响书源筛选 */ }
+  }
+
+  private async clearSourceFilterHistory_(): Promise<void> {
+    this.sourceFilterHistory = [];
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('search_scope_source_filter_history', []);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private visibleSourceFilterHistory_(): string[] {
+    const query = this.sourceFilterText.trim().toLowerCase();
+    if (!query) return this.sourceFilterHistory.slice(0, 8);
+    return this.sourceFilterHistory
+      .filter((item: string): boolean => item.toLowerCase().includes(query)).slice(0, 8);
+  }
+
   toggleSourceType(value: number): void {
     if (this.selectedSourceTypes.includes(value)) {
       this.selectedSourceTypes = this.selectedSourceTypes.filter((item: number): boolean => item !== value);
@@ -804,6 +848,8 @@ export struct SearchPage {
   }
 
   finishScopeSheet(): void {
+    void this.addSourceFilterHistory_(this.sourceFilterText);
+    this.showSourceFilterHistory = false;
     this.showScopeSheet = false;
     this.saveSearchPrefs();
     this.restartCommittedSearchIfNeeded();
@@ -1422,7 +1468,11 @@ export struct SearchPage {
       }
 
       if (this.showScopeSheet) {
-        this.buildDimLayer(() => { this.showScopeSheet = false; })
+        this.buildDimLayer(() => {
+          void this.addSourceFilterHistory_(this.sourceFilterText);
+          this.showSourceFilterHistory = false;
+          this.showScopeSheet = false;
+        })
         this.buildScopeSheet()
       }
 
@@ -2471,7 +2521,12 @@ export struct SearchPage {
             .fontColor(this.textColor())
             .placeholderColor(this.subTextColor())
             .padding({ left: 12 })
-            .onChange((v: string) => { this.sourceFilterText = v; })
+            .onFocus(() => { this.showSourceFilterHistory = true; })
+            .onChange((v: string) => { this.sourceFilterText = v; this.showSourceFilterHistory = true; })
+            .onSubmit(() => {
+              void this.addSourceFilterHistory_(this.sourceFilterText);
+              this.showSourceFilterHistory = false;
+            })
           if (this.sourceFilterText) {
             Text($r('app.string.ui_11f6ad8ec5'))
               .fontSize(14)
@@ -2490,6 +2545,30 @@ export struct SearchPage {
       }
       .width('100%')
       .padding({ left: 18, right: 18, bottom: 8 })
+
+      if (this.showSourceFilterHistory && this.visibleSourceFilterHistory_().length > 0) {
+        Column() {
+          Row() {
+            Text('过滤历史').fontSize(12).fontColor(this.subTextColor()).layoutWeight(1)
+            Text('清空').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+              .onClick(() => { void this.clearSourceFilterHistory_(); })
+          }.width('100%').padding({ left: 18, right: 18, top: 2, bottom: 2 })
+          ForEach(this.visibleSourceFilterHistory_(), (item: string) => {
+            Row() {
+              Text('↻').fontSize(13).fontColor(this.subTextColor()).width(24)
+              Text(item).fontSize(14).fontColor(this.textColor())
+                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }.width('100%').height(38).padding({ left: 18, right: 18 })
+              .backgroundColor(this.surfaceColor())
+              .onClick(() => {
+                this.sourceFilterText = item;
+                this.showSourceFilterHistory = false;
+              })
+          }, (item: string): string => item)
+        }.width('100%').padding({ bottom: 4 })
+          .backgroundColor(this.surfaceColor())
+          .border({ width: { bottom: 1 }, color: this.lineColor() })
+      }
 
       Row() {
         this.buildSegment('分组', !this.scopeBySource, () => { this.scopeBySource = false; })

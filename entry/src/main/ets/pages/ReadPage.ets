@@ -1088,6 +1088,9 @@ struct ReadPage {
    */
   private applyChapterContent_(idx: number, rawContent: string): void {
     this.currentIndex = idx;
+    // 章节被用户切换后，朗读自动续播的游标必须从新章节重新开始；
+    // 否则上一章已预取的游标会在新章节播完后把播放带回旧章节。
+    this.lastProviderIdx_ = idx;
     this.rawChapterContent_ = rawContent;
     this.displayTitle_ = this.purifyTitle_(this.allChapters_[idx]?.title || '');
     const content = this.processForDisplay_(rawContent);

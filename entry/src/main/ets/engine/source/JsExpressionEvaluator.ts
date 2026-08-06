@@ -76,6 +76,24 @@ function unwrapJsResult(raw: string): string {
     return raw;
   }
 }
+
+/**
+ * 书源脚本通常在同一个 QuickJS 引擎中反复求值。部分 Android 书源依赖
+ * 宽松脚本引擎允许形参与局部变量重名（例如形参 sourceUrl 再声明 let
+ * sourceUrl），QuickJS 会直接报 parameter name 冲突；统一降为 var 保持
+ * 书源兼容性，也允许引擎复用时安全重声明。
+ *
+ * 另外，少数历史书源把数组解构箭头函数写成 `map([a, b]=>...)`。这不是
+ * ECMAScript 标准语法（标准写法是 `map(([a, b])=>...)`），但 Android 端
+ * 的书源生态中确实存在这类写法；仅修复 map/filter/reduce 等调用中的参数
+ * 外层括号，不触碰普通数组表达式。
+ */
+function normalizeSourceScript(script: string): string {
+  return script
+    .replace(/\blet\s+/g, 'var ')
+    .replace(/\bconst\s+/g, 'var ')
+    .replace(/\.(map|filter|reduce|forEach)\(\s*(\[[^\]]+\])\s*=>/g, '.$1(($2)=>');
+}
 import worker from '@ohos.worker';
 
 export interface JsEvalContext {
@@ -97,6 +115,11 @@ export interface JsEvalContext {
   [key: string]: unknown;
 }
 
+interface WorkerEvalResult {
+  value: string;
+  loginHeader: string;
+}
+
 export class JsExpressionEvaluator {
   /**
    * 验证码输入回调：Worker 请求时调用，返回 Promise<string> 等待用户输入。
@@ -105,7 +128,10 @@ export class JsExpressionEvaluator {
    */
   static captchaHandler: ((url: string, image?: image.PixelMap | null) => Promise<string>) | null = null;
   private static workerInstance: worker.ThreadWorker | null = null;
-  private static workerPromise: Map<number, { resolve: (v: string) => void; reject: (e: Error) => void }> = new Map();
+  private static workerPromise: Map<number, {
+    resolve: (v: string, loginHeader?: string) => void;
+    reject: (e: Error) => void;
+  }> = new Map();
   private static nextId: number = 1;
   private static workerReady: boolean = false;
   private static workerInitPromise: Promise<boolean> | null = null;
@@ -114,6 +140,44 @@ export class JsExpressionEvaluator {
   private static workerEvalQueue: Promise<void> = Promise.resolve();
   /** Worker 端已缓存的 jsLib 所属书源 key（sourceUrl），切换书源时重新传输。 */
   private static lastWorkerJsLibKey_: string = '';
+
+  /**
+   * source.putLoginHeader() 在 QuickJS 中修改的是 JS 对象，需在本次求值
+   * 返回后同步回 ArkTS source，后续详情/目录请求才能带上 Authorization。
+   */
+  private static applyLoginHeader_(ctx: JsEvalContext, header: string): void {
+    if (!ctx.source || !header || header === 'null' || header === 'undefined') return;
+    const src = ctx.source as Record<string, unknown>;
+    src['loginHeader'] = header;
+    // 现有网络层统一从 source.header 组装请求头；把动态登录头合并进去，
+    // 保留原书源 header，并避免修改数据库中的持久化源配置。
+    let merged: Record<string, unknown> = {};
+    const original = src['header'];
+    if (typeof original === 'string' && original.trim() && !/^@js:|^<js>/i.test(original.trim())) {
+      try {
+        const parsed = JSON.parse(original) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) merged = parsed;
+      } catch (_e) { /* 非 JSON 请求头规则保持原样，不能覆盖 */ }
+    }
+    try {
+      const login = JSON.parse(header) as Record<string, unknown>;
+      if (login && typeof login === 'object' && !Array.isArray(login)) {
+        Object.assign(merged, login);
+        src['header'] = JSON.stringify(merged);
+      }
+    } catch (_e) { /* 登录头不是 JSON 时仅保留 loginHeader */ }
+  }
+
+  private static captureLoginHeader_(ctx: JsEvalContext): void {
+    if (!ctx.source) return;
+    try {
+      const raw = globalScriptEngine.evaluateJsSync(
+        '(typeof source!=="undefined"&&source&&typeof source.getLoginHeader==="function")?' +
+        '(source.getLoginHeader()||""):""'
+      );
+      this.applyLoginHeader_(ctx, unwrapJsResult(raw).trim());
+    } catch (_e) { /* source 方法不存在或脚本执行失败时忽略 */ }
+  }
 
   /**
    * 获取或创建 Worker 实例
@@ -151,14 +215,14 @@ export class JsExpressionEvaluator {
           const pending = this.workerPromise.get(msg.id);
           if (pending) {
             this.workerPromise.delete(msg.id);
-            pending.resolve(String(msg.value || ''));
+            pending.resolve(String(msg.value || ''), '');
           }
         } else if (msg.type === 'result' || msg.type === 'error') {
           const pending = this.workerPromise.get(msg.id);
           if (pending) {
             this.workerPromise.delete(msg.id);
             if (msg.type === 'result') {
-              pending.resolve(msg.value || 'null');
+              pending.resolve(msg.value || 'null', String(msg.loginHeader || ''));
             } else {
               pending.reject(new Error(msg.error || 'Worker evaluation error'));
             }
@@ -259,8 +323,8 @@ export class JsExpressionEvaluator {
    * 向 Worker 发送消息并等待响应
    */
   private static sendToWorker(type: string, timeoutMs: number = 30000, code?: string,
-    jsLibKey: string = '', jsLib?: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
+    jsLibKey: string = '', jsLib?: string): Promise<WorkerEvalResult> {
+    return new Promise<WorkerEvalResult>((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout((): void => {
         this.workerPromise.delete(id);
@@ -268,9 +332,9 @@ export class JsExpressionEvaluator {
       }, timeoutMs);
 
       this.workerPromise.set(id, {
-        resolve: (v: string): void => {
+        resolve: (v: string, loginHeader: string = ''): void => {
           clearTimeout(timer);
-          resolve(v);
+          resolve({ value: v, loginHeader: loginHeader });
         },
         reject: (e: Error): void => {
           clearTimeout(timer);
@@ -293,10 +357,10 @@ export class JsExpressionEvaluator {
    * Worker 的创建也放进队列，前一个任务超时并销毁 Worker 后，后一个任务能重新初始化。
    */
   private static enqueueWorkerEvaluation(timeoutMs: number, code: string,
-    jsLibKey: string = '', jsLib?: string): Promise<string> {
+    jsLibKey: string = '', jsLib?: string): Promise<WorkerEvalResult> {
     const task = this.workerEvalQueue
       .catch((): void => {})
-      .then(async (): Promise<string> => {
+      .then(async (): Promise<WorkerEvalResult> => {
         const workerInstance = await this.getWorker();
         if (!workerInstance) throw new Error('Worker unavailable');
         try {
@@ -366,17 +430,19 @@ export class JsExpressionEvaluator {
 
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
     // let/const → var：引擎复用时 let 重声明会报错，var 不报
-    const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
+    const safeCode = normalizeSourceScript(code);
     const fullScript = `${setupCode}\n${safeCode}`;
-    // java.get() 只是书源局部变量读取，可以直接在主线程求值。只有同步网络、
-    // Cookie 和验证码桥必须进入 Worker，否则普通 URL 计算会被慢请求一起堵住。
-    const requiresWorker = /java\.(ajax|post|connect)\s*\(|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(|(?:java\.)?getVerificationCode\s*\(|__captchaOp\s*\(/.test(fullScript);
+    // java.get() 无第二参数时是书源局部变量读取；带请求参数时是同步网络调用，
+    // 必须进入 Worker，避免主线程求值拿不到异步 HTTP 结果或被慢请求阻塞。
+    const requiresWorker = /java\.(ajax|post|connect)\s*\(|java\.get\s*\([^,\)]*,|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(|(?:java\.)?getVerificationCode\s*\(|__captchaOp\s*\(/.test(fullScript);
 
     // 原生主线程引擎可用时，普通表达式直接执行；Worker 即使已经创建也不抢占它们。
     if (!requiresWorker && isNativeLoaded()) {
       try {
         const result = await globalScriptEngine.executeScript(fullScript);
-        return unwrapJsResult(result);
+        const value = unwrapJsResult(result);
+        JsExpressionEvaluator.captureLoginHeader_(ctx);
+        return value;
       } catch (err) {
         console.warn('[JsEval] Main engine failed, falling back to Worker:',
           (err instanceof Error) ? err.message.substring(0, 80) : String(err).substring(0, 80));
@@ -396,6 +462,7 @@ export class JsExpressionEvaluator {
         const src = ctx.source as Record<string, unknown>;
         jsLibStr = (src.jsLib as string) || '';
       }
+      jsLibStr = normalizeSourceScript(jsLibStr);
       const srcObj = ctx.source as Record<string, unknown> | undefined;
       const jsLibKey = jsLibStr && jsLibStr.trim()
         ? String(srcObj?.['sourceUrl'] || srcObj?.['bookSourceUrl'] || ctx.baseUrl || '') : '';
@@ -405,9 +472,10 @@ export class JsExpressionEvaluator {
       }
       // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
       const evalTimeout = /getVerificationCode|__captchaOp/.test(fullScript) ? 125000 : 65000;
-      const result = await this.enqueueWorkerEvaluation(evalTimeout, workerScript,
+      const workerResult = await this.enqueueWorkerEvaluation(evalTimeout, workerScript,
         jsLibKey, jsLibChanged ? (jsLibStr || '') : undefined);
-      return unwrapJsResult(result);
+      this.applyLoginHeader_(ctx, unwrapJsResult(workerResult.loginHeader).trim());
+      return unwrapJsResult(workerResult.value);
     } catch (e) {
       console.warn('[JsEval] Worker failed:', e?.toString()?.substring(0, 80));
       return '';
@@ -421,13 +489,15 @@ export class JsExpressionEvaluator {
   static evaluateSync(code: string, ctx: JsEvalContext): string {
     if (!code || !code.trim()) return '';
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
-    const safeCode = code.replace(/\blet\s+/g, 'var ').replace(/\bconst\s+/g, 'var ');
+    const safeCode = normalizeSourceScript(code);
     const fullScript = `${setupCode}\n${safeCode}`;
     try {
       const result = globalScriptEngine.evaluateJsSync(fullScript);
       // 原生桥会把 JS 异常作为普通字符串返回（如 "ReferenceError: cover is not defined"），
       // 必须用 unwrapJsResult 过滤，否则错误文本会被调用方当成字段值（封面 URL 等）。
-      return unwrapJsResult(result);
+      const value = unwrapJsResult(result);
+      JsExpressionEvaluator.captureLoginHeader_(ctx);
+      return value;
     } catch (_e) {
       return '';
     }
@@ -586,7 +656,7 @@ export class JsExpressionEvaluator {
       jsLibStr = (src.jsLib as string) || '';
     }
     if (includeJsLib && jsLibStr && jsLibStr.trim()) {
-      parts.push(jsLibStr.trim());
+      parts.push(normalizeSourceScript(jsLibStr.trim()));
     }
 
     // key / keyword
@@ -650,14 +720,30 @@ export class JsExpressionEvaluator {
       parts.push(`if(typeof source.getKey==='undefined')source.getKey=function(){return encodeURIComponent(source.sourceUrl||source.bookSourceUrl||'');};`);
       // getUrl() — 返回 sourceUrl（兼容）
       parts.push(`if(typeof source.getUrl==='undefined')source.getUrl=function(){return source.sourceUrl||source.bookSourceUrl||'';};`);
-      // getVariable() / setVariable() — 书源变量持久化（用于 {{Get('url')}} 等 JS 表达式）
-      // 变量为空时初始化为 null（而非 '{}'），使 loginUrl 中的
-      // JSON.parse(source.getVariable()) 抛异常，触发 catch 分支执行 put(original) 设置默认变量
+      // getVariable() / setVariable() — 书源变量持久化（用于 {{Get('url')}} 等 JS 表达式）。
+      // Android BaseSource.getVariable() 在未初始化时返回空字符串；保持这个
+      // 语义，书源的 loginUrl 才能通过 `if (v == "")` 初始化默认变量。
       const initialVars = ctx.variableBlob || '';
-      const varsLiteral = initialVars ? JSON.stringify(initialVars) : 'null';
+      const varsLiteral = initialVars ? JSON.stringify(initialVars) : '""';
       parts.push(`(function(){var _vars=${varsLiteral};` +
         `if(typeof source.getVariable==='undefined')source.getVariable=function(){return typeof _vars==='string'?_vars:JSON.stringify(_vars);};` +
         `if(typeof source.setVariable==='undefined')source.setVariable=function(v){_vars=v;};` +
+        `})();`);
+
+      // 登录请求头（对应 Android BaseSource.getLoginHeader* / putLoginHeader）。
+      // 书源的 jsLib 经常先用 getLoginHeaderMap() 判断是否需要刷新 Token；
+      // 如果只注入 getVariable，纯 URL 规则会直接得到 “TypeError: not a function”。
+      const initialLoginHeader = typeof src['loginHeader'] === 'string' ? src['loginHeader'] : '';
+      const loginHeaderLiteral = JSON.stringify(initialLoginHeader);
+      parts.push(`(function(){var _loginHeader=${loginHeaderLiteral};` +
+        `if(typeof source.getLoginHeader==='undefined')source.getLoginHeader=function(){return _loginHeader||null;};` +
+        `if(typeof source.getLoginHeaderMap==='undefined')source.getLoginHeaderMap=function(){` +
+        `if(!_loginHeader)return null;try{var _h=typeof _loginHeader==='string'?JSON.parse(_loginHeader):_loginHeader;` +
+        `if(!_h||typeof _h!=='object')return null;` +
+        `if(typeof _h.get!=='function')_h.get=function(k){return _h[k];};return _h;}catch(_e){return null;}};` +
+        `if(typeof source.putLoginHeader==='undefined')source.putLoginHeader=function(v){` +
+        `_loginHeader=typeof v==='string'?v:JSON.stringify(v||{});return _loginHeader;};` +
+        `if(typeof source.removeLoginHeader==='undefined')source.removeLoginHeader=function(){_loginHeader='';};` +
         `})();`);
 
       // getLoginInfo / getLoginInfoMap / putLoginInfo / removeLoginInfo — 登录凭据（对应 Android BaseSource）

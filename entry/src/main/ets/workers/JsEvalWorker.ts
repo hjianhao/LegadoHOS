@@ -39,6 +39,8 @@ function captureSetCookies(url: string, setCookieRaw: string | string[] | undefi
   const host = hostOf(url);
   if (!host) return;
   const lines = normalizeSetCookies(setCookieRaw);
+  console.info('[JsWorker] response cookies', host, 'count=', lines.length,
+    'names=', lines.map((line: string): string => parseSetCookieLine(line)?.name || '').filter((name: string): boolean => !!name).join(','));
   if (lines.length === 0) return;
   const existing = parseCookieHeader(workerCookies[host] || '');
   let changed = false;
@@ -64,12 +66,46 @@ function captureSetCookies(url: string, setCookieRaw: string | string[] | undefi
   } catch (_e) { /* worker 初始化前忽略 */ }
 }
 
+/** RCP 将 Set-Cookie 同时暴露在 headers 和 response.cookies 中。
+ * 后者不会出现在普通对象枚举里，需要显式转成 Jsoup 兼容的响应头。 */
+function responseSetCookies(response: rcp.Response): string | string[] | undefined {
+  const headers = (response.headers || {}) as Record<string, string | string[] | undefined>;
+  const headerValue = headers['set-cookie'];
+  const cookies = response.cookies || [];
+  const lines: string[] = [];
+  if (headerValue) {
+    if (Array.isArray(headerValue)) lines.push(...headerValue);
+    else lines.push(String(headerValue));
+  }
+  for (const item of cookies) {
+    if (item && item.name) {
+      lines.push(item.name + '=' + (item.value || ''));
+    }
+  }
+  console.info('[JsWorker] response.cookies length=', cookies.length, 'combined=', lines.length);
+  return lines.length > 0 ? lines : undefined;
+}
+
 /** 归一化响应头为小写键对象（保留数组，供 JS 侧读取 set-cookie） */
-function headersToJson(headers: Record<string, string | string[] | undefined>): string {
+function headersToJson(
+  headers: Record<string, string | string[] | undefined>,
+  setCookies?: string | string[]
+): string {
   const out: Record<string, string | string[]> = {};
   for (const k of Object.keys(headers || {})) {
     const v = headers[k];
     if (v !== undefined) out[k.toLowerCase()] = v;
+  }
+  if (setCookies) {
+    const existing = out['set-cookie'];
+    const combined: string[] = [];
+    if (existing) {
+      if (Array.isArray(existing)) combined.push(...existing);
+      else combined.push(existing);
+    }
+    if (Array.isArray(setCookies)) combined.push(...setCookies);
+    else combined.push(setCookies);
+    out['set-cookie'] = combined;
   }
   return JSON.stringify(out);
 }
@@ -96,10 +132,36 @@ interface WorkerHttpResult {
   isError: boolean;
 }
 
+/** 系统 HTTP 栈把 Cookie 单独放在 response.cookies 字符串中。 */
+function systemResponseSetCookies(response: http.HttpResponse): string | string[] | undefined {
+  const headers = (response.header || {}) as Record<string, string | string[] | undefined>;
+  const lines: string[] = [];
+  const headerValue = headers['set-cookie'];
+  if (headerValue) {
+    if (Array.isArray(headerValue)) lines.push(...headerValue);
+    else lines.push(String(headerValue));
+  }
+  const cookieHeader = String(response.cookies || '');
+  if (cookieHeader) {
+    for (const part of cookieHeader.split(';')) {
+      const trimmed = part.trim();
+      if (trimmed.indexOf('=') > 0) lines.push(trimmed);
+    }
+  }
+  return lines.length > 0 ? lines : undefined;
+}
+
 async function systemHttpRequest(
   url: string, method: string, headers: Record<string, string>, body?: string
 ): Promise<WorkerHttpResult> {
   const request = http.createHttp();
+  const isShuqiApi = /(?:^|\.)shuqireader\.com$/i.test(hostOf(url)) ||
+    /(?:^|\.)shuqi\.com$/i.test(hostOf(url));
+  if (isShuqiApi) {
+    console.info('[JsWorker] Shuqi system request', method, url.substring(0, 120),
+      'bodyLen=', (body || '').length, 'auth=', Object.keys(headers).some((key: string): boolean =>
+        key.toLowerCase() === 'authorization'));
+  }
   try {
     const response = await request.request(url, {
       method: method.toUpperCase() as http.RequestMethod,
@@ -110,7 +172,8 @@ async function systemHttpRequest(
       readTimeout: workerTimeout,
     });
     const respHeaders = (response.header || {}) as Record<string, string | string[] | undefined>;
-    captureSetCookies(url, respHeaders['set-cookie']);
+    const setCookies = systemResponseSetCookies(response);
+    captureSetCookies(url, setCookies);
     let text = '';
     if (typeof response.result === 'string') {
       text = response.result;
@@ -120,8 +183,12 @@ async function systemHttpRequest(
     } else {
       text = JSON.stringify(response.result);
     }
+    if (isShuqiApi) {
+      console.info('[JsWorker] Shuqi system response', response.responseCode, 'textLen=', text.length,
+        'prefix=', text.substring(0, 180).replace(/[\r\n]+/g, ' '));
+    }
     // 非 2xx 不视为错误（状态码交由脚本判断）
-    return { text: text, statusCode: response.responseCode, headersJson: headersToJson(respHeaders), isError: false };
+    return { text: text, statusCode: response.responseCode, headersJson: headersToJson(respHeaders, setCookies), isError: false };
   } finally {
     request.destroy();
   }
@@ -169,6 +236,18 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
     if (method === 'POST' && body && !headers['Content-Type'] && !headers['content-type']) {
       headers['Content-Type'] = 'application/x-www-form-urlencoded';
     }
+    const isShuqiApi = /(?:^|\.)shuqireader\.com$/i.test(hostOf(url)) ||
+      /(?:^|\.)shuqi\.com$/i.test(hostOf(url));
+    if (isShuqiApi) {
+      console.info('[JsWorker] Shuqi request', method, url.substring(0, 120),
+        'bodyLen=', (body || '').length, 'auth=', Object.keys(headers).some((key: string): boolean =>
+          key.toLowerCase() === 'authorization'));
+    }
+    const useSystemHttp = headers['X-Legado-Use-System-Http'] === '1';
+    delete headers['X-Legado-Use-System-Http'];
+    if (useSystemHttp) {
+      return await systemHttpRequest(url, method, headers, body);
+    }
     injectCookieHeader(url, headers);
     const reqHeaders = headers as rcp.RequestHeaders;
     const request = new rcp.Request(url, method.toUpperCase() as rcp.HttpMethod, reqHeaders, body || '');
@@ -182,7 +261,8 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
       return await systemHttpRequest(url, method, headers, body);
     }
     const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
-    captureSetCookies(url, respHeaders['set-cookie']);
+    const setCookies = responseSetCookies(response);
+    captureSetCookies(url, setCookies);
     const statusCode = response.statusCode || 0;
     let text = '';
     if (response.body !== undefined && response.body !== null) {
@@ -190,8 +270,12 @@ async function httpRequest(url: string, method: string, headers: Record<string, 
       const decoder = util.TextDecoder.create('utf-8', { fatal: false } as Record<string, Object>);
       text = decoder.decodeToString(uint8);
     }
+    if (isShuqiApi) {
+      console.info('[JsWorker] Shuqi response', statusCode, 'textLen=', text.length,
+        'prefix=', text.substring(0, 180).replace(/[\r\n]+/g, ' '));
+    }
     // 非 2xx 不视为错误（与 Android OkHttp 一致：状态码由脚本自行判断，如 WAF 401 验证页）
-    return { text: text, statusCode: statusCode, headersJson: headersToJson(respHeaders), isError: false };
+    return { text: text, statusCode: statusCode, headersJson: headersToJson(respHeaders, setCookies), isError: false };
   } catch (e) {
     return { text: 'HTTP Error: ' + String(e), statusCode: 0, headersJson: '{}', isError: true };
   }
@@ -315,17 +399,28 @@ function handleCookieOp(requestId: number, op: string, url: string, value: strin
 
 // ============ JS 执行 ============
 
-async function executeJs(code: string): Promise<string> {
+interface JsExecutionResult {
+  value: string;
+  loginHeader: string;
+}
+
+async function executeJs(code: string): Promise<JsExecutionResult> {
   if (!initialized) {
     const ok = await initEngine();
-    if (!ok) return 'null';
+    if (!ok) return { value: 'null', loginHeader: '' };
   }
   try {
     const result = quickjsBridge.executeScript(engineId, code);
-    return result || 'null';
+    let loginHeader = '';
+    try {
+      loginHeader = quickjsBridge.executeScript(engineId,
+        '(typeof source!=="undefined"&&source&&typeof source.getLoginHeader==="function")?' +
+        '(source.getLoginHeader()||""):""') || '';
+    } catch (_captureError) { /* 脚本无 source 时忽略 */ }
+    return { value: result || 'null', loginHeader: loginHeader };
   } catch (e) {
     console.error('[JsWorker] Execute error:', e);
-    return 'null';
+    return { value: 'null', loginHeader: '' };
   }
 }
 
@@ -347,8 +442,9 @@ try {
         cachedJsLibKey_ = String(msg.jsLibKey || '');
       }
       executeJs((cachedJsLib_ ? cachedJsLib_ + '\n' : '') + String(msg.code || ''))
-        .then((value: string): void => {
-          parentPort.postMessage({ type: 'result', id: msg.id, value });
+        .then((result: JsExecutionResult): void => {
+          parentPort.postMessage({ type: 'result', id: msg.id,
+            value: result.value, loginHeader: result.loginHeader });
         })
         .catch((e: Error): void => {
           parentPort.postMessage({ type: 'error', id: msg.id, error: String(e) });

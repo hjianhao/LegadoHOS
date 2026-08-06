@@ -151,6 +151,9 @@ export class ReadAloudEngine {
   private activeChunkOffset_: number = 0;  // 正在播放块的文本起始偏移
   private systemRequestSeq_: number = 0;
   private systemSessionId_: number = 0;
+  // 每次开始/停止朗读都创建新的播放世代。异步合成或章节预取完成后，
+  // 必须确认仍属于当前世代，否则旧章节的结果会混入新章节队列。
+  private playbackSessionId_: number = 0;
   private activeSystemRequestId_: string = '';
   private systemChunkPcm_: Map<string, ArrayBuffer[]> = new Map();
   private systemChunkOffset_: Map<string, number> = new Map();
@@ -282,6 +285,7 @@ export class ReadAloudEngine {
   }
 
   async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0): Promise<void> {
+    const sessionId = ++this.playbackSessionId_;
     this.startChapterIdx_ = startChapter;
     // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或扩展后端）
     if (!this.audioRenderer_ || (!this.ttsEngine_ && !this.backend_)) { this.callback_.onError?.('引擎未初始化'); return; }
@@ -297,8 +301,10 @@ export class ReadAloudEngine {
     this.currentTextIdx_ = 0; this.totalChars_ = text.length; this.playedChars_ = 0;
     console.info('[Aloud] ' + text.length + ' chars → ' + this.textQueue_.length + ' chunks');
     this.setState_(AloudState.PLAYING);
-    this.speakNext_();
-    await this.audioRenderer_.start();
+    this.speakNext_(sessionId);
+    const renderer = this.audioRenderer_;
+    if (!renderer) return;
+    await renderer.start();
   }
 
   async pause(): Promise<void> {
@@ -314,14 +320,18 @@ export class ReadAloudEngine {
   }
 
   async stop(): Promise<void> {
+    const sessionId = ++this.playbackSessionId_;
     this.systemSessionId_++;
     this.activeChunk_ = null; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
     this.resetSystemSynthesisState_();
     this.synthPending_ = false; this.synthCount_ = 0;
-    this.firstChunkReady_ = false; this.chapterEndFired_ = false;
+    this.firstChunkReady_ = false; this.chapterEnded_ = false; this.chapterEndFired_ = false;
+    this.pendingChapterFetch_ = "";
+    // 先阻止 writeData 和完成回调继续驱动旧队列，再等待系统资源停止。
+    if (this.state_ !== AloudState.STOPPED) this.setState_(AloudState.STOPPED);
     try { await this.ttsEngine_?.stop(); } catch (_) {}
+    if (sessionId !== this.playbackSessionId_) return;
     try { await this.audioRenderer_?.stop(); await this.audioRenderer_?.flush(); } catch (_) {}
-    this.setState_(AloudState.STOPPED);
   }
 
   async release(): Promise<void> {
@@ -422,7 +432,8 @@ export class ReadAloudEngine {
 
   private pendingChapterFetch_: string = "";
   private lastChapterIdx_: number = -1;
-  private speakNext_(): void {
+  private speakNext_(sessionId: number = this.playbackSessionId_): void {
+    if (sessionId !== this.playbackSessionId_) return;
     // 检查是否需要预合成：如果pendingQueue已有足够多的音频，则不再合成
     if (this.state_ !== AloudState.PLAYING) return;
     if (this.pendingQueue_.length >= ReadAloudEngine.PRELOAD_COUNT) return;
@@ -436,14 +447,16 @@ export class ReadAloudEngine {
         if (key === this.pendingChapterFetch_) return;
         this.pendingChapterFetch_ = key;
         provider().then((next: AloudChapterText | null) => {
+          if (sessionId !== this.playbackSessionId_) return;
           this.pendingChapterFetch_ = "";
           if (next && next.text) {
             if (next.chapterIndex === this.lastChapterIdx_) return;
             this.lastChapterIdx_ = next.chapterIndex;
             this.textQueue_ = this.splitText_(next.text); this.currentTextIdx_ = 0;
             this.totalChars_ = next.text.length; this.playedChars_ = 0; this.startTextOffset_ = next.offset;
+            this.startChapterIdx_ = next.chapterIndex;
             this.callback_.onChapterChange?.(next.chapterIndex || 0);
-            this.speakNext_();
+            this.speakNext_(sessionId);
           } else { this.chapterEnded_ = true; }
         });
       } else { this.chapterEnded_ = true; }
@@ -459,14 +472,14 @@ export class ReadAloudEngine {
 
     if (this.backend_) {
       // 扩展 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
-      this.synthesizeWithBackend_(text, chunkOffset);
+      this.synthesizeWithBackend_(text, chunkOffset, sessionId);
     } else {
       // 系统 TTS：speak + onData/onComplete 回调流
       this.synthesizeWithSystem_(text, chunkOffset, 0);
     }
     
     // 立即继续预合成下一句（并行合成）
-    this.speakNext_();
+    this.speakNext_(sessionId);
   }
 
   /** 系统 TTS 每次 speak 都按 requestId 独立收集 PCM，避免回调串包。 */
@@ -492,12 +505,15 @@ export class ReadAloudEngine {
   }
 
   /** 离线后端合成：async synthesize → 直接 push 到 pendingQueue_ */
-  private async synthesizeWithBackend_(text: string, chunkOffset: number): Promise<void> {
+  private async synthesizeWithBackend_(text: string, chunkOffset: number, sessionId: number): Promise<void> {
+    const backend = this.backend_;
+    if (!backend || sessionId !== this.playbackSessionId_) return;
     try {
       const req: TtsSynthRequest = { text, speed: this.speed_ };
       console.info('[Aloud] backend synthesize start: text.len=' + text.length + ' speed=' + this.speed_);
       const synthStart = Date.now();
-      const result = await this.backend_!.synthesize(req);
+      const result = await backend.synthesize(req);
+      if (sessionId !== this.playbackSessionId_) return;
       const synthMs = Date.now() - synthStart;
       const audioSec = result.pcm.byteLength / (result.sampleRate * 2);  // S16LE mono
       const rtf = synthMs / 1000 / audioSec;
@@ -508,8 +524,9 @@ export class ReadAloudEngine {
       this.pendingOffsetQueue_.push(chunkOffset);
       if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     } catch (e) {
-      this.callback_.onError?.('合成失败: ' + (e as Error).message);
+      if (sessionId === this.playbackSessionId_) this.callback_.onError?.('合成失败: ' + (e as Error).message);
     } finally {
+      if (sessionId !== this.playbackSessionId_) return;
       this.synthCount_ = Math.max(0, this.synthCount_ - 1); // 减少合成任务计数
       this.synthPending_ = this.synthCount_ > 0;
       if (this.state_ === AloudState.PLAYING) this.speakNext_();  // 预合成下一句
@@ -613,6 +630,9 @@ export class ReadAloudEngine {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
           if (this.chapterEnded_ && !this.synthPending_ && this.synthCount_ === 0 && !this.chapterEndFired_) {
             this.chapterEndFired_ = true;
+            // 章节已经结束时先切出 PLAYING，防止渲染器的后续回调再次触发
+            // onChapterEnd，或在页面切章期间继续消费已经清空的旧队列。
+            this.setState_(AloudState.STOPPED);
             this.callback_.onChapterEnd?.();
             return audio.AudioDataCallbackResult.INVALID;
           }

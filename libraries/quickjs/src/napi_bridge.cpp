@@ -831,9 +831,13 @@ static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
   int64_t request_id;
   napi_get_value_int64(env, argv[0], &request_id);
 
-  char response_body[65536];
-  size_t body_len;
-  napi_get_value_string_utf8(env, argv[1], response_body, sizeof(response_body), &body_len);
+  // 响应体可能远大于 64 KiB（书源分类/目录接口常返回数百 KiB）。
+  // 先查询 UTF-8 字节长度，再动态分配，避免 N-API 静默截断后让 JSON.parse
+  // 看到不完整的字符串并报 Unexpected end of JSON input。
+  size_t body_len = 0;
+  napi_get_value_string_utf8(env, argv[1], nullptr, 0, &body_len);
+  std::vector<char> response_body(body_len + 1, '\0');
+  napi_get_value_string_utf8(env, argv[1], response_body.data(), response_body.size(), &body_len);
 
   bool is_error;
   napi_get_value_bool(env, argv[2], &is_error);
@@ -855,9 +859,9 @@ static napi_value OnHttpResponse(napi_env env, napi_callback_info info) {
   if (it != g_pending_requests.end()) {
     if (is_error) {
       it->second->error = true;
-      it->second->errorMsg = response_body;
+      it->second->errorMsg.assign(response_body.data(), body_len);
     } else {
-      it->second->result = response_body;
+      it->second->result.assign(response_body.data(), body_len);
     }
     if (headers_len > 0) {
       it->second->respHeaders.assign(headers_json, headers_len);

@@ -10,7 +10,7 @@ import { WebViewEngine } from '../components/WebViewEngine';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { CaptchaDialog } from '../components/reader/CaptchaDialog';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
-import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { image } from '@kit.ImageKit';
 
 @Entry
@@ -25,14 +25,14 @@ export struct BookSourceDebugPage {
   @State invalidGroups: string[] = [];
   private checker: SourceChecker | null = null;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
-  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
   private challengeDlg?: CustomDialogController;
 
   aboutToAppear(): void {
     this.registerCaptchaHandler_();
     if (!this.interactiveFetcher_) {
-      this.interactiveFetcher_ = (url: string): Promise<string> =>
-        this.openInteractiveWebView_(url);
+      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
+        this.openInteractiveWebView_(url, request?.body || '');
     }
     WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -52,12 +52,13 @@ export struct BookSourceDebugPage {
     }
   }
 
-  private openInteractiveWebView_(url: string): Promise<string> {
+  private openInteractiveWebView_(url: string, requestBody: string = ''): Promise<string> {
     return new Promise<string>((resolve: (html: string) => void) => {
       this.statusText = '请在网页中完成登录或验证，然后点击“验证完成”。';
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
-        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url,
+          reason: WebViewFetcher.interactiveReason || '页面需要登录或人工验证', requestBody: requestBody }),
         autoCancel: false,
         customStyle: true,
         alignment: DialogAlignment.Center,

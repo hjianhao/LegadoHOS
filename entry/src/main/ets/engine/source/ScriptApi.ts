@@ -50,6 +50,19 @@ export function getAjaxPolyfill(): string {
             }
           }
         }
+        // Android AnalyzeUrl 会自动合并 source.getLoginHeaderMap()；否则
+        // jsLib 刚通过 Token() 保存的 Authorization 只停留在 JS 对象中，
+        // 后续 java.ajax 请求仍会被 API 判定为未认证。
+        if (typeof source !== 'undefined' && source && typeof source.getLoginHeaderMap === 'function') {
+          var loginHeaders = source.getLoginHeaderMap();
+          if (loginHeaders && typeof loginHeaders === 'object') {
+            for (var lk in loginHeaders) {
+              if (Object.prototype.hasOwnProperty.call(loginHeaders, lk) && typeof loginHeaders[lk] !== 'function') {
+                h[lk] = String(loginHeaders[lk]);
+              }
+            }
+          }
+        }
       } catch(_) {}
       return h;
     }
@@ -104,14 +117,34 @@ export function getAjaxPolyfill(): string {
       }
       function parseSetCookies() {
         var raw = lookupRaw('set-cookie');
-        if (!raw) return [];
-        var arr = Array.isArray(raw) ? raw : String(raw).split(/,(?=\\s*[^\\s;,=]+=)/);
         var out = [];
-        for (var i = 0; i < arr.length; i++) {
-          var seg = String(arr[i]).split(';')[0];
-          var eq = seg.indexOf('=');
-          if (eq > 0) out.push([seg.substring(0, eq).trim(), seg.substring(eq + 1).trim()]);
+        if (raw) {
+          var arr = Array.isArray(raw) ? raw : String(raw).split(/,(?=\\s*[^\\s;,=]+=)/);
+          for (var i = 0; i < arr.length; i++) {
+            var seg = String(arr[i]).split(';')[0];
+            var eq = seg.indexOf('=');
+            if (eq > 0) out.push([seg.substring(0, eq).trim(), seg.substring(eq + 1).trim()]);
+          }
+          return out;
         }
+        // 主引擎的 NetUtil 会把 RCP response.cookies 写入共享 CookieStore，
+        // 但原生 http 响应对象未必暴露 Set-Cookie 响应头。此时回读已保存的
+        // Cookie 头，保持 Jsoup cookies() 对书源脚本可见（如 shuqi_token）。
+        try {
+          if (typeof cookie !== 'undefined' && cookie && typeof cookie.getCookie === 'function') {
+            var stored = cookie.getCookie(url);
+            if (stored) {
+              var storedParts = String(stored).split(';');
+              for (var si = 0; si < storedParts.length; si++) {
+                var storedPart = storedParts[si].trim();
+                var storedEq = storedPart.indexOf('=');
+                if (storedEq > 0) out.push([
+                  storedPart.substring(0, storedEq).trim(), storedPart.substring(storedEq + 1).trim()
+                ]);
+              }
+            }
+          }
+        } catch(_) {}
         return out;
       }
       var headersFn = function(name) {
@@ -141,6 +174,22 @@ export function getAjaxPolyfill(): string {
         cookies: function() {
           var cs = parseSetCookies(); var m = {};
           for (var i = 0; i < cs.length; i++) m[cs[i][0]] = cs[i][1];
+          // Android Jsoup 返回的 Cookies 是 Map；书源通常直接对
+          // cookies().toString() 做 shuqi_token=... 的正则匹配。
+          // JS 普通对象的默认 toString() 只会得到 [object Object]，
+          // 因此提供 Map 风格的字符串化及 get() 访问。
+          m.get = function(name) {
+            return Object.prototype.hasOwnProperty.call(this, name) ? this[name] : null;
+          };
+          m.toString = function() {
+            var parts = [];
+            for (var key in this) {
+              if (Object.prototype.hasOwnProperty.call(this, key) && typeof this[key] !== 'function') {
+                parts.push(key + '=' + String(this[key]));
+              }
+            }
+            return parts.join(', ');
+          };
           return m;
         },
         raw: function() { return resp; },
@@ -170,14 +219,30 @@ export function getAjaxPolyfill(): string {
         return __wrapResp(resp, String(url));
       };
     }
-    // java.get(url, headers?) — GET，headers 为 JS 对象（Jsoup 语义）
-    if (!_j.get) {
+    // java.get 同时承担两种 Android Legado 语义：get(url, headers?) 发起
+    // HTTP GET，get('key') 读取 java.put() 的临时变量。基础 polyfill 会先
+    // 注入单参数变量读取函数，因此这里要把两种调用形式合并，不能只判断
+    // _j.get 是否已存在，否则 get(url,{}) 会返回字符串并在 .cookies()
+    // 处触发 TypeError: not a function。
+    var storeGet = _j.get && _j.get._isVariableStore ? _j.get : null;
+    if (!_j.get || storeGet) {
       _j.get = function(url, headers) {
+        var target = String(url);
+        var looksLikeHttp = arguments.length >= 2 || /^https?:\/\//i.test(target);
+        if (!looksLikeHttp && storeGet) return storeGet.call(this, url);
         if (typeof http === "undefined" || !http.get) throw new Error("http.get 不可用");
         var h = headers || {};
         if (typeof h === 'string') { try { h = JSON.parse(h); } catch(_) { h = {}; } }
-        var resp = http.get(String(url), { headers: h });
-        return __wrapResp(resp, String(url));
+        // RCP 在部分设备上只暴露重复 Set-Cookie 的最后一项。登录脚本
+        // 首次获取令牌时切换到系统 HTTP 栈，由其 response.cookies 提供完整集合。
+        try {
+          if (typeof source !== 'undefined' && source &&
+              typeof source.getLoginHeaderMap === 'function' && !source.getLoginHeaderMap()) {
+            h['X-Legado-Use-System-Http'] = '1';
+          }
+        } catch(_) {}
+        var resp = http.get(target, { headers: h });
+        return __wrapResp(resp, target);
       };
     }
   }
@@ -574,6 +639,7 @@ export function getPolyfillScript(): string {
 	        var store = globalThis.__javaStore || {};
 	        return store[key] !== undefined ? store[key] : '';
 	      };
+	      _j.get._isVariableStore = true;
 	    }
 	    if (!_j.getVerificationCode) {
 	      _j.getVerificationCode = function(imgUrl) {

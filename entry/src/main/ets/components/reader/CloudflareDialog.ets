@@ -24,6 +24,9 @@ export struct CloudflareDialog {
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
   private loginPanelOpened_: boolean = false;
+  private prefillTimer_: number = -1;
+  private prefillApplied_: boolean = false;
+  private prefillSubmitted_: boolean = false;
 
   aboutToAppear(): void {
     // 与隐藏 WebViewFetcher 使用同一桌面 UA。部分站点对 HarmonyOS 默认 UA
@@ -81,10 +84,18 @@ export struct CloudflareDialog {
             .domStorageAccess(true)
             .zoomAccess(false)
             .overviewModeAccess(true)
-            .onPageBegin(() => { this.isLoading = true; })
+            .onPageBegin(() => {
+              this.isLoading = true;
+              this.clearPrefillTimer_();
+            })
             .onPageEnd(() => {
               this.isLoading = false;
-              void this.prefillRequest_();
+              // 只在首次搜索页同步输入框。提交后结果页也可能保留搜索
+              // 表单，不能再次派发 keyup 导致站点重复提交/重新限频。
+              if (!this.prefillApplied_) {
+                void this.prefillRequest_();
+                this.schedulePrefill_();
+              }
               if (WebViewFetcher.interactivePurpose === 'login') {
                 this.pageTitle = '登录页面（登录后点击"验证完成"）';
                 void this.openLoginPanel_();
@@ -129,8 +140,8 @@ export struct CloudflareDialog {
   /**
    * 交互验证打开的是 GET 页面，而触发验证的请求可能是 POST；如果不把
    * 原始表单体回填，用户看到的搜索框就是空的，点击“验证完成”也只会
-   * 返回空搜索页。回填只更新字段并触发 input/change，不自动提交，避免
-   * 在 WAF 脚本尚未完成时打断页面验证。
+   * 返回空搜索页。搜索表单回填后自动提交，等价于用户重新输入并点击搜索；
+   * WAF 页面没有匹配的搜索字段时不会提交，仍由用户手动完成验证。
    */
   private async prefillRequest_(): Promise<void> {
     const body = (this.requestBody || '').trim();
@@ -143,9 +154,44 @@ export struct CloudflareDialog {
           var pairs = String(raw || '').split('&');
           var values = [];
           var filled = 0;
+          var dispatched = 0;
+          var submitField = null;
+          var explicitSearchField = false;
           var decode = function(value) {
             try { return decodeURIComponent(String(value || '').split('+').join(' ')); }
             catch (e) { return String(value || ''); }
+          };
+          // 不能只给 element.value 赋值：Vue/React 及不少老站点的搜索脚本
+          // 会维护自己的状态，必须通过原生 setter + 输入/键盘事件同步状态，
+          // 才等价于用户重新输入同一个关键词。
+          var setNativeValue = function(element, value) {
+            try {
+              var proto = element instanceof HTMLTextAreaElement
+                ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              var descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+              if (descriptor && descriptor.set) descriptor.set.call(element, value);
+              else element.value = value;
+            } catch (e) { element.value = value; }
+            try { element.setAttribute('value', value); } catch (e) {}
+            try { element.defaultValue = value; } catch (e) {}
+          };
+          var notifyInput = function(element) {
+            var eventNames = ['input', 'change', 'keydown', 'keyup'];
+            for (var eIndex = 0; eIndex < eventNames.length; eIndex++) {
+              var eventName = eventNames[eIndex];
+              try {
+                var event;
+                if (eventName === 'keydown' || eventName === 'keyup') {
+                  event = new KeyboardEvent(eventName, {
+                    bubbles: true, cancelable: true, key: 'Unidentified', code: '', keyCode: 0, which: 0
+                  });
+                } else {
+                  event = new Event(eventName, { bubbles: true, cancelable: true });
+                }
+                element.dispatchEvent(event);
+                dispatched++;
+              } catch (e) {}
+            }
           };
           for (var p = 0; p < pairs.length; p++) {
             var pair = pairs[p];
@@ -155,10 +201,17 @@ export struct CloudflareDialog {
             if (!key) continue;
             values.push({ key: key, value: value });
             for (var i = 0; i < fields.length; i++) {
-              if (String(fields[i].name || '') !== key) continue;
-              fields[i].value = value;
-              try { fields[i].dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
-              try { fields[i].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+              if (String(fields[i].name || '').toLowerCase() !== key.toLowerCase()) continue;
+              // 页面加载后可能由异步脚本才绑定搜索监听器。延迟重放时只
+              // 更新空值或仍是本次预填值的控件，不覆盖用户已经改写的关键词。
+              var currentValue = String(fields[i].value || '');
+              if (currentValue && currentValue !== value) continue;
+              setNativeValue(fields[i], value);
+              notifyInput(fields[i]);
+              if (p === 0) {
+                submitField = fields[i];
+                explicitSearchField = true;
+              }
               filled++;
               break;
             }
@@ -168,21 +221,71 @@ export struct CloudflareDialog {
           if (filled === 0 && values.length > 0) {
             for (var j = 0; j < fields.length; j++) {
               var type = String(fields[j].type || 'text').toLowerCase();
-              if ((type === 'text' || type === 'search') && !fields[j].disabled) {
-                fields[j].value = values[0].value;
-                try { fields[j].dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
-                try { fields[j].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+              var currentFallbackValue = String(fields[j].value || '');
+              var fallbackDescriptor = [fields[j].id, fields[j].className, fields[j].placeholder,
+                fields[j].getAttribute('aria-label')].join(' ');
+              if ((type === 'text' || type === 'search') && !fields[j].disabled &&
+                (!currentFallbackValue || currentFallbackValue === values[0].value)) {
+                setNativeValue(fields[j], values[0].value);
+                notifyInput(fields[j]);
+                submitField = fields[j];
+                explicitSearchField = /search|query|keyword|搜索|关键字/i.test(fallbackDescriptor);
                 filled++;
                 break;
               }
             }
           }
-          return String(filled);
+          var submitted = 0;
+          if (filled > 0 && values.length > 0 && explicitSearchField) {
+            try {
+              // 只有明确找到请求体中的搜索字段，或控件本身明确标注为搜索框，
+              // 才自动提交；挑战页通常没有这些特征，因此不会误提交验证码表单。
+              if (submitField && submitField.form) {
+                var submitForm = submitField.form;
+                if (typeof submitForm.requestSubmit === 'function') {
+                  submitForm.requestSubmit();
+                  submitted = 1;
+                } else {
+                  var submitButton = submitForm.querySelector('button[type="submit"],input[type="submit"]');
+                  if (submitButton && typeof submitButton.click === 'function') {
+                    submitButton.click();
+                    submitted = 1;
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+          return String(filled) + ':' + String(dispatched) + ':' + String(submitted);
         } catch (e) { return '0'; }
       })(${bodyLiteral})`);
-      console.info('[CloudflareDialog] POST 搜索关键词预填字段数=' + String(result || '0'));
+      const resultText = String(result || '0');
+      const filledText = resultText.split(':')[0];
+      const submittedText = resultText.split(':')[2] || '0';
+      if (Number(filledText) > 0) this.prefillApplied_ = true;
+      if (Number(submittedText) > 0) {
+        this.prefillSubmitted_ = true;
+        this.clearPrefillTimer_();
+      }
+      console.info('[CloudflareDialog] POST 搜索关键词预填结果=' + resultText);
     } catch (e) {
       console.warn('[CloudflareDialog] 预填 POST 搜索关键词失败：', (e as Error).message);
+    }
+  }
+
+  /** 页面脚本可能在 onPageEnd 之后才绑定搜索监听器，延迟再同步一次。 */
+  private schedulePrefill_(): void {
+    this.clearPrefillTimer_();
+    if (!(this.requestBody || '').trim() || this.prefillSubmitted_) return;
+    this.prefillTimer_ = setTimeout((): void => {
+      this.prefillTimer_ = -1;
+      void this.prefillRequest_();
+    }, 800);
+  }
+
+  private clearPrefillTimer_(): void {
+    if (this.prefillTimer_ >= 0) {
+      clearTimeout(this.prefillTimer_);
+      this.prefillTimer_ = -1;
     }
   }
 
@@ -206,6 +309,7 @@ export struct CloudflareDialog {
   }
 
   private async extractAndClose(): Promise<void> {
+    this.clearPrefillTimer_();
     try {
       const html = await this.webController.runJavaScript(
         'document.documentElement.outerHTML'
@@ -241,6 +345,7 @@ export struct CloudflareDialog {
   }
 
   private doClose(): void {
+    this.clearPrefillTimer_();
     if (WebViewFetcher.interactiveResolve) {
       WebViewFetcher.interactiveResolve('');
       WebViewFetcher.interactiveResolve = null;

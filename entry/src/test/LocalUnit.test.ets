@@ -410,6 +410,8 @@ export default function localUnitTest() {
         '人物继续交谈并推动情节发展，窗外的雨声逐渐变大。故事仍然在继续，没有混入网页导航。')).assertTrue();
       expect(isUsableAiExtractedContent('首页 排行榜 小说分类 我的书架 阅读记录 意见反馈 设置 黑夜 换源 正文'))
         .assertFalse();
+      expect(isUsableAiExtractedContent('请换以下其他源继续阅读！' +
+        '张二河推开房门走进院子，少女跟在他的身后小声说着话。'.repeat(25))).assertTrue();
     });
   });
 }

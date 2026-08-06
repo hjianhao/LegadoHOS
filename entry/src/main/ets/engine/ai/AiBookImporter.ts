@@ -177,14 +177,29 @@ export function inferAiContentRule(html: string): string {
  */
 export function isUsableAiExtractedContent(content: string): boolean {
   const normalized = (content || '').replace(/\s+/g, ' ').trim();
-  if (normalized.length < MIN_CONTENT_LENGTH || isInvalidAiContentResult(normalized)) return false;
+  if (normalized.length < MIN_CONTENT_LENGTH) return false;
+
+  // 有些正文容器会把隐藏的站点脚本/兜底提示一并暴露给 textNodes。
+  // 只要结果中仍有足量连续的中文正文，就不能因为其中夹带一句“请换源”而
+  // 否定整个规则；纯占位页通常没有这么高的正文字符密度，仍会被拒绝。
+  const narrativeChars = normalized.match(/[\u3400-\u9fff]/g) || [];
+  const narrativeRatio = narrativeChars.length / Math.max(normalized.length, 1);
+  const hasSubstantialNarrative = narrativeChars.length >= 120 && narrativeRatio >= 0.2;
+  if (isInvalidAiContentResult(normalized) && !hasSubstantialNarrative) return false;
   const shellMarkers = ['首页', '排行榜', '小说分类', '我的书架', '阅读记录', '意见反馈',
     '书页', '足迹', '设置', '黑夜', '换源'];
   let shellMarkerCount = 0;
+  let shellChars = 0;
   for (const marker of shellMarkers) {
-    if (normalized.includes(marker)) shellMarkerCount++;
+    const occurrences = normalized.split(marker).length - 1;
+    shellMarkerCount += occurrences;
+    shellChars += marker.length * occurrences;
   }
-  return shellMarkerCount < 4;
+  if (shellMarkerCount < 4) return true;
+
+  // 页面外壳通常由导航词占据大部分文本；正文节点即使混入少量导航词，
+  // 中文叙事内容仍会明显占主导。按占比兜底，避免误把整页 HTML 当正文。
+  return hasSubstantialNarrative && shellMarkerCount < 9 && shellChars / normalized.length < 0.12;
 }
 
 /**

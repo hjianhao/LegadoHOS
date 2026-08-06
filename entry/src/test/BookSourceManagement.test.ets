@@ -12,7 +12,7 @@ import {
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
   preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
-  unwrapJsCallUrlValue_, buildUrl
+  unwrapJsCallUrlValue_, buildUrl, sniffNextTocPageUrl
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -60,6 +60,17 @@ export default function bookSourceManagementTest() {
         .assertEqual('https://www.baidu.com/s?wd=%E6%96%97%E7%BD%97%E5%A4%A7%E9%99%86');
       expect(isOnlineSearchResultPage('https://cn.bing.com/search?q=斗罗大陆')).assertTrue();
       expect(isOnlineSearchResultPage('https://example.com/search?q=斗罗大陆')).assertFalse();
+    });
+
+    it('sniffsSemanticTocNextPage', 0, () => {
+      const page = '<div class="index-container">' +
+        '<a class="index-container-btn" href="/bqg/1381944_2/">上一页</a>' +
+        '<a class="index-container-btn" href="/bqg/1381944_3/">下一页</a></div>';
+      expect(sniffNextTocPageUrl(page, 'https://www.douyinxs.com/bqg/1381944_2/'))
+        .assertEqual('https://www.douyinxs.com/bqg/1381944_3/');
+      expect(sniffNextTocPageUrl(
+        '<a class="index-container-btn" href="/bqg/1381944_2/">上一页</a>',
+        'https://www.douyinxs.com/bqg/1381944_3/')).assertEqual('');
     });
 
     it('normalizesAndDeduplicatesDiscoveredSites', 0, () => {
@@ -834,6 +845,10 @@ export default function bookSourceManagementTest() {
     it('rejectsNavigationPagesAndTextRulesFromAiSourceSamples', 0, () => {
       expect(isLikelyAiBookDetailUrl(
         'https://www.pinshuzhai.com/bookcat/shuxiangwenku')).assertFalse();
+      expect(isLikelyAiBookDetailUrl(
+        'http://www.xs3000.com/index/cate/id/3.html')).assertFalse();
+      expect(isLikelyAiBookDetailUrl(
+        'http://www.xs3000.com/index/top/sort/click')).assertFalse();
       expect(isLikelyAiBookDetailUrl(
         'https://www.pinshuzhai.com/book/1648.html')).assertTrue();
       expect(isLikelyAiBookDetailUrl(

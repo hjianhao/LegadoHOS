@@ -21,6 +21,8 @@
 /.claude
 /.codegraph
 /tmp
+/temp
+/docs
 
 # Machine-local signing, debug dumps, and temporary snapshots
 *.bak

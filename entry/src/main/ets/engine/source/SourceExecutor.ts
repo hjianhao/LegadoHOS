@@ -36,6 +36,30 @@ type TocParseItem = HtmlElement | Record<string, unknown>;
 const MAX_CONTENT_PAGE_COUNT = 100;
 const MAX_HTML_SEARCH_PARSE_COUNT = 200;
 
+/**
+ * WebView 允许的重定向域名集合。
+ * 书源经常从旧域名跳到新域名（例如 huaen.net → ibookben.cc），所以同时
+ * 放入当前请求地址和书源主页；但不允许随后跳到完全无关的广告域名。
+ */
+function allowedWebViewRedirectHosts_(...urls: string[]): string[] {
+  const hosts = new Set<string>();
+  for (const value of urls) {
+    const match = (value || '').match(/^https?:\/\/([^\/?#]+)/i);
+    if (!match || !match[1]) continue;
+    const host = match[1].toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+    if (host) hosts.add(host);
+  }
+  return Array.from(hosts);
+}
+
+/** WebView 返回的最终地址必须仍属于本次书源请求允许的站点。 */
+function isAllowedWebViewFinalUrl_(url: string, allowedHosts: string[]): boolean {
+  const match = (url || '').match(/^https?:\/\/([^\/?#]+)/i);
+  if (!match || !match[1]) return true;
+  const host = match[1].toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+  return allowedHosts.indexOf(host) >= 0;
+}
+
 /** 防止异常宽泛规则或超大搜索页在主线程同步解析数千条结果。 */
 export function boundedSearchParseCount(total: number): number {
   if (!Number.isFinite(total) || total <= 0) return 0;
@@ -292,6 +316,11 @@ export function sniffNextContentPageUrl(html: string, currentUrl: string): strin
     }
   }
   return attributeCandidate;
+}
+
+/** 目录分页规则失效时，兜底识别页面明确标注的“下一页”链接。 */
+export function sniffNextTocPageUrl(html: string, currentUrl: string): string {
+  return sniffNextContentPageUrl(html, currentUrl);
 }
 
 /** 判断规则解析出的链接是否仍像同一章节的分页，而不是下一章。 */
@@ -1154,7 +1183,39 @@ export class SourceExecutor {
     const requestTimeout = SourceNetworkPolicy.timeout(source);
     await SourceNetworkPolicy.wait(source);
 
-    // 源配置了 webView 且非 POST → 用 WebView 加载（WebView 不支持 POST body）
+    // 源配置了 webView 且搜索使用 POST 时，不能退回无会话的直连 URL：
+    // 隐藏 WebView 的 loadUrl 只支持 GET，但交互 WebView 可以打开同一入口、
+    // 回填并提交原始表单体。生成的 AI 书源会持久化 webView=true，实际搜索
+    // 也必须走这条路径，否则校验时能搜到、保存后却永远得到空结果/限频页。
+    if (finalWebView && finalMethod === 'POST') {
+      if (WebViewFetcher.interactiveFetcher) {
+        try {
+          console.info('[SrcEx] POST search requires interactive WebView for', source.sourceName);
+          const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge',
+            '搜索需要浏览器提交', { method: 'POST', body: finalBody || '' });
+          if (interactiveHtml && interactiveHtml.length > 200) {
+            const interactiveResults = await this.parseResponse(
+              this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl, 0, finalUrl);
+            console.info('[SrcEx] Interactive POST search got', interactiveResults.length,
+              'results for', source.sourceName);
+            // webView 是书源的明确请求语义。交互页即使解析出 0 条，也不能
+            // 再退回无会话的直连 POST，否则会重复触发限频并掩盖真正问题。
+            return interactiveResults;
+          }
+          console.warn('[SrcEx] Interactive POST search returned no usable HTML for', source.sourceName);
+        } catch (interactiveError) {
+          console.warn('[SrcEx] Interactive POST search failed for', source.sourceName, ':',
+            (interactiveError as Error).message || String(interactiveError));
+        }
+        // 交互处理器存在但用户关闭/页面未取到结果时，保持 webView 语义，
+        // 不调用会失败的搜索 URL；下次搜索可再次打开弹窗。
+        return [];
+      }
+      console.warn('[SrcEx] POST search webView requested but interactive WebView is not registered; using HTTP fallback for',
+        source.sourceName);
+    }
+
+    // 源配置了 webView 且非 POST → 用隐藏 WebView 加载
     if (finalWebView && finalMethod !== 'POST') {
       // controller 可能尚未注册（搜索在 SearchPage.aboutToAppear 阶段触发时，
       // WebViewEngine 子组件的 build() 尚未执行），等待注册完成
@@ -1170,7 +1231,8 @@ export class SourceExecutor {
           // 及时回到 HTTP 分支后才能识别探针并弹出人工验证窗口。正常阅读
           // 仍使用书源网络超时，避免影响慢站点正文加载。
           const webViewTimeout = throwOnFailure ? Math.min(requestTimeout, 15000) : requestTimeout;
-          const wvResult = await WebViewFetcher.fetch(finalUrl, webViewTimeout, headers);
+          const wvResult = await WebViewFetcher.fetch(finalUrl, webViewTimeout, headers,
+            allowedWebViewRedirectHosts_(finalUrl, source.sourceUrl));
           let bodyText = wvResult.html;
           if (WebViewFetcher.isInteractiveChallengeHtml(bodyText) &&
             WebViewFetcher.interactiveFetcher) {
@@ -1331,7 +1393,8 @@ export class SourceExecutor {
         && WebViewFetcher.isReady()) {
         console.info('[SrcEx] CSS 0 results, trying WebView fallback for', source.sourceName);
         try {
-          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers);
+          const wvResult = await WebViewFetcher.fetch(finalUrl, 30000, headers,
+            allowedWebViewRedirectHosts_(finalUrl, source.sourceUrl));
           if (wvResult.html && wvResult.html.length > 10) {
             const wvParsed = this.tryHexDecode_(wvResult.html) || wvResult.html;
             const wvResults = await this.parseResponse(wvParsed, source, baseUrl, 0, finalUrl);
@@ -1358,7 +1421,8 @@ export class SourceExecutor {
         console.info('[SrcEx] HTTP block/error detected, trying WebView for', source.sourceName, ':', msg);
         let wvHtml: string = '';
         try {
-          const wvResult = await WebViewFetcher.fetch(url, 20000, headers);
+          const wvResult = await WebViewFetcher.fetch(url, 20000, headers,
+            allowedWebViewRedirectHosts_(url, source.sourceUrl));
           wvHtml = wvResult.html || '';
           if (wvHtml && wvHtml.length > 10) {
             console.info('[SrcEx] WebView got', wvHtml.length, 'bytes for', source.sourceName);
@@ -1406,6 +1470,23 @@ export class SourceExecutor {
     // Android 会校验用户选中的停用书源；这里只启用副本，不改变数据库中的开关状态。
     const checkSource = source.enabled ? source : { ...source, enabled: true } as BookSource;
     return await this.searchSingle(keyword, checkSource, page, true, true);
+  }
+
+  /**
+   * 使用已经由交互 WebView 展示并确认过的搜索页做规则校验。
+   *
+   * 限频站点的 POST 不能在模型每次重试时再次提交：那会重新打开空的
+   * 搜索页，既浪费用户操作，也可能不断刷新站点的限频窗口。页面内容
+   * 已经是本次真实搜索的结果，因此只重跑解析规则即可。
+   */
+  async searchForCheckFromHtml(_keyword: string, source: BookSource, html: string,
+    _page: number = 1): Promise<SearchResult[]> {
+    if (!this.engineInitialized) await this.initialize();
+    if (!html || html.length < 300) return [];
+    const checkSource = source.enabled ? source : { ...source, enabled: true } as BookSource;
+    const baseUrl = getBaseUrl(checkSource.sourceUrl || checkSource.ruleSearchUrl || '');
+    return await this.parseResponse(html, checkSource, baseUrl, 0,
+      checkSource.ruleSearchUrl || baseUrl);
   }
 
   /** 带超时的搜索（20s 总超时，兜底 WebView hang 等） */
@@ -1519,7 +1600,7 @@ export class SourceExecutor {
     // JSON 直接解析（API 类书源）
     try {
       const jsonObj = JSON.parse(jsonBody) as Record<string, unknown>;
-      const results = this.parseJsonResults(jsonObj, source, baseUrl, duration);
+      const results = await this.parseJsonResults(jsonObj, source, baseUrl, duration);
       if (results.length > 0) {
         console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
         return results;
@@ -1797,7 +1878,8 @@ export class SourceExecutor {
         if (purpose === 'login' && WebViewFetcher.interactiveFetcher) {
           return await WebViewFetcher.fetchInteractive(targetUrl, 'login');
         }
-        const rendered = await WebViewFetcher.fetch(targetUrl, requestTimeout, requestHeaders);
+        const rendered = await WebViewFetcher.fetch(targetUrl, requestTimeout, requestHeaders,
+          allowedWebViewRedirectHosts_(targetUrl, url, source.sourceUrl));
         let renderedHtml = rendered.html || '';
         if (WebViewFetcher.isInteractiveChallengeHtml(renderedHtml) &&
           WebViewFetcher.interactiveFetcher) {
@@ -1839,7 +1921,17 @@ export class SourceExecutor {
     try {
       let directHtml = '';
       if (method === 'POST') {
-        requestHeaders['Content-Type'] = requestHeaders['Content-Type'] || 'application/json';
+        // HTTP header 名称大小写不敏感。书源常用小写 `content-type`，不能因为
+        // 只检查 `Content-Type` 而额外注入 application/json 覆盖表单请求。
+        const contentTypeKey = Object.keys(requestHeaders).find((key: string): boolean =>
+          key.toLowerCase() === 'content-type');
+        if (contentTypeKey) {
+          const contentType = requestHeaders[contentTypeKey];
+          delete requestHeaders[contentTypeKey];
+          requestHeaders['Content-Type'] = contentType;
+        } else {
+          requestHeaders['Content-Type'] = 'application/json';
+        }
         directHtml = await NetUtil.httpPost(url, body, requestHeaders, requestTimeout);
       } else {
         directHtml = await NetUtil.httpGet(url, requestHeaders, requestTimeout);
@@ -1899,7 +1991,7 @@ export class SourceExecutor {
   }
 
   private async fetchContentHtml(
-    url: string, headers: Record<string, string>, source: BookSource
+    url: string, headers: Record<string, string>, source: BookSource, bookUrl: string = ''
   ): Promise<string> {
     let directHtml = '';
     let directError: Error | null = null;
@@ -1927,8 +2019,18 @@ export class SourceExecutor {
     }
     const webViewUrl = requestOptions ? requestOptions[1] : url;
     try {
-      const webViewResult = await WebViewFetcher.fetch(webViewUrl, 30000, headers);
+      // 详情链接往往已经是站点迁移后的新域名（例如旧域名 huaen.net
+      // 跳到 ibookben.cc），而 source.sourceUrl 仍保留旧域名。把当前书籍
+      // URL 一并交给 WebView，既允许站内迁移，也阻断章节页中的广告跳转。
+      const allowedHosts = allowedWebViewRedirectHosts_(webViewUrl, source.sourceUrl, bookUrl);
+      const webViewResult = await WebViewFetcher.fetch(webViewUrl, 30000, headers,
+        allowedHosts);
       const webViewHtml = webViewResult.html || '';
+      if (!isAllowedWebViewFinalUrl_(webViewResult.finalUrl || webViewUrl, allowedHosts)) {
+        console.warn('[SrcEx] getContent blocked unrelated WebView final URL:',
+          (webViewResult.finalUrl || '').substring(0, 120));
+        return directHtml;
+      }
       if (webViewHtml.length > 100 && !isWafProbeHtml(webViewHtml)) {
         console.info('[SrcEx] getContent WebView got', webViewHtml.length, 'bytes from', source.sourceName);
         return webViewHtml;
@@ -1961,7 +2063,7 @@ export class SourceExecutor {
       const body = await this.fetchWithOpts(noteUrl, headers, source);
       if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
 
-      const jsonInfo = this.parseJsonBookInfo(body, source, noteUrl);
+      const jsonInfo = await this.parseJsonBookInfo(body, source, noteUrl);
       if (jsonInfo) return jsonInfo;
 
       const parser = getHtmlParser();
@@ -2067,7 +2169,7 @@ export class SourceExecutor {
     }
   }
 
-  private parseJsonBookInfo(body: string, source: BookSource, noteUrl: string): BookSourceBookInfo | null {
+  private async parseJsonBookInfo(body: string, source: BookSource, noteUrl: string): Promise<BookSourceBookInfo | null> {
     try {
       const jsonObj = JSON.parse(unwrapPreJsonResponse_(body)) as Record<string, unknown>;
       const apiCode = jsonObj['code'];
@@ -2084,6 +2186,37 @@ export class SourceExecutor {
           root = initValue as Record<string, unknown>;
         }
       }
+      let tocUrl = '';
+      const tocRule = source.ruleBookInfoTocUrl || '';
+      if (/^\s*@js:/i.test(tocRule)) {
+        // JSON 书源的详情接口常把 tocUrl 写成完整 @js: 规则。
+        // 先展开当前详情对象中的 {{$.field}}，再执行 GetUrl 等 jsLib
+        // 函数；直接 resolveRuleTemplate 会把整段 @js 文本误当成相对 URL。
+        const expanded = this.resolveRuleTemplate(tocRule, root, '');
+        const jsIndex = expanded.indexOf('@js:');
+        const jsCode = jsIndex >= 0 ? expanded.substring(jsIndex + 4).trim() : '';
+        if (jsCode) {
+          // 书源脚本通常以 `url = ...` 结束。显式读取赋值后的变量，避免
+          // QuickJS 将赋值语句的完成值当作 undefined 返回。
+          const resultCode = jsCode + '\n;typeof url !== "undefined" ? url : ' +
+            '(typeof result !== "undefined" ? result : (typeof bookUrl !== "undefined" ? bookUrl : ""));';
+          const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+            source: source,
+            jsLib: source.jsLib || '',
+            baseUrl: noteUrl,
+            variableBlob: source.variableComment || '',
+            result: '',
+          });
+          console.info('[SrcEx] BookInfo toc JS result source=' + source.sourceName +
+            ' len=' + evaluated.length + ' prefix=' + evaluated.substring(0, 120));
+          if (evaluated && !/^(?:SyntaxError|TypeError|ReferenceError|Error:)/i.test(evaluated.trim())) {
+            tocUrl = evaluated.trim().replace(/^['"`]|['"`]$/g, '');
+          }
+        }
+      }
+      if (!tocUrl && !/^\s*@js:/i.test(tocRule)) {
+        tocUrl = this.resolveRuleTemplate(tocRule, root, '');
+      }
       const info: BookSourceBookInfo = {
         name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
         author: this.cleanAuthorName(this.extractJsonRuleValue(source.ruleBookInfoAuthor, root)),
@@ -2093,7 +2226,7 @@ export class SourceExecutor {
         kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
         wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
         lastUpdateTime: this.extractJsonRuleValue(source.ruleBookInfoLastUpdateTime, root),
-        tocUrl: this.resolveRuleTemplate(source.ruleBookInfoTocUrl, root, noteUrl),
+        tocUrl: tocUrl,
         chapters: [],
       };
       // 详情规则必须至少得到书名；仅有模板生成的 tocUrl 不能算解析成功，
@@ -2103,8 +2236,9 @@ export class SourceExecutor {
         console.info('[SrcEx] BookInfo JSON OK tocUrl=', (info.tocUrl || '').substring(0, 100));
         return info;
       }
-    } catch (_e) {
-      /* not JSON */
+    } catch (error) {
+      console.warn('[SrcEx] BookInfo JSON parse failed for ' + source.sourceName + ': ' +
+        (error instanceof Error ? error.message : String(error)));
     }
     return null;
   }
@@ -2314,7 +2448,7 @@ export class SourceExecutor {
           headers['Cookie'] = `qttoken=${token}`;
         }
       }
-      let raw = await this.fetchContentHtml(contentUrl, headers, source);
+      let raw = await this.fetchContentHtml(contentUrl, headers, source, bookUrl || '');
       console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
       if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
 
@@ -2472,7 +2606,7 @@ export class SourceExecutor {
             console.warn('[SrcEx] getContent detected placeholder/transcode failure, retrying current page:',
               pageUrl.substring(0, 100));
             for (let retry = 0; retry < 2; retry++) {
-              const retryHtml = await this.fetchContentHtml(pageUrl, headers, source);
+              const retryHtml = await this.fetchContentHtml(pageUrl, headers, source, bookUrl || '');
               if (!retryHtml) continue;
               const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent });
               if (!isInvalidAiContentResult(retryResult)) {
@@ -2543,7 +2677,7 @@ export class SourceExecutor {
             break;
           }
           pageUrl = nextUrl;
-          pageHtml = await this.fetchContentHtml(pageUrl, headers, source);
+          pageHtml = await this.fetchContentHtml(pageUrl, headers, source, bookUrl || '');
           if (!pageHtml) break;
           console.info('[SrcEx] getContent next page', page + 2, pageUrl.substring(0, 100));
         }
@@ -2856,7 +2990,7 @@ export class SourceExecutor {
       if (tocUrl.includes('bookshelf.html5.qq.com')) {
         console.info('[SrcEx] TOC DUMP 企鹅:', resp.substring(0, 5000));
       }
-	      const parsed = this.parseJsonBookInfo(resp, source, tocUrl);
+      const parsed = await this.parseJsonBookInfo(resp, source, tocUrl);
       if (parsed) {
         console.info('[SrcEx] getToc BookInfo JSON OK tocUrl=', (parsed.tocUrl || '').substring(0, 100));
       }
@@ -2924,10 +3058,21 @@ export class SourceExecutor {
           let currentUrl = tocUrl;
           while (tocBodies.length < tocPageLimit) {
             const nextUrls = this.extractTocPageUrls(currentBody, nextRule, currentUrl);
-            const newUrls: string[] = [];
+            let newUrls: string[] = [];
             for (const url of nextUrls) {
               if (url && !visitedToc.has(url)) {
                 newUrls.push(url);
+              }
+            }
+            // 某些旧书源把 nextTocUrl 写成只匹配第 2 页的固定选择器
+            // （例如 href*="_2"）。第 1 页能正常跳到第 2 页，但第 2 页
+            // 再也匹配不到第 3 页。只有显式规则没有产生新 URL 时，才从
+            // 页面语义明确的“下一页”链接兜底，避免猜测普通数字链接。
+            if (newUrls.length === 0) {
+              const fallbackNext = sniffNextTocPageUrl(currentBody, currentUrl);
+              if (fallbackNext && !visitedToc.has(fallbackNext)) {
+                newUrls = [fallbackNext];
+                console.info('[SrcEx] getToc fallback semantic next page:', fallbackNext.substring(0, 120));
               }
             }
             if (newUrls.length === 0) {
@@ -3109,7 +3254,8 @@ export class SourceExecutor {
         console.info('[SrcEx] getToc empty after HTTP, trying configured WebView for',
           tocUrl.substring(0, 60));
         try {
-          const wvResult = await WebViewFetcher.fetch(tocUrl, 30000, headers);
+          const wvResult = await WebViewFetcher.fetch(tocUrl, 30000, headers,
+            allowedWebViewRedirectHosts_(tocUrl, source.sourceUrl));
           const wvHtml = wvResult.html || '';
           if (wvHtml.length > 100) {
             let wvChapters: BookSourceChapter[] = [];
@@ -3192,7 +3338,8 @@ export class SourceExecutor {
       if ((msg.includes('403') || msg.includes('Cloudflare') || msg.includes('503') || msg.includes('page not found')) && WebViewFetcher.isReady()) {
         console.info('[SrcEx] getToc trying WebView for', tocUrl.substring(0, 60));
         try {
-          const wvResult = await WebViewFetcher.fetch(tocUrl, 20000);
+          const wvResult = await WebViewFetcher.fetch(tocUrl, 20000, {},
+            allowedWebViewRedirectHosts_(tocUrl, source.sourceUrl));
           const wvHtml = wvResult.html;
           if (wvHtml && wvHtml.length > 100) {
             console.info('[SrcEx] getToc WebView got', wvHtml.length, 'bytes');
@@ -3824,7 +3971,7 @@ export class SourceExecutor {
 
   // ============ JSON 解析 ============
 
-  private parseJsonResults(json: Record<string, unknown>, source: BookSource, baseUrl: string, duration: number): SearchResult[] {
+  private async parseJsonResults(json: Record<string, unknown>, source: BookSource, baseUrl: string, duration: number): Promise<SearchResult[]> {
     let list: unknown[] = [];
     if (source.ruleSearchList) {
       const raw = this.getPath(json, source.ruleSearchList);
@@ -3838,7 +3985,7 @@ export class SourceExecutor {
         }
       }
     }
-    return list.map((item: unknown) => {
+    return await Promise.all(list.map(async (item: unknown) => {
       const itemObj = item as Record<string, unknown>;
       const rawName = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
       const name = rawName;
@@ -3853,7 +4000,7 @@ export class SourceExecutor {
       if (!coverUrl && rawCover) {
         console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
       }
-      let noteUrl = this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl) ||
+      let noteUrl = await this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl, source) ||
         this.firstStr(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
@@ -3875,7 +4022,7 @@ export class SourceExecutor {
         sourceCount: 1,
         sourceOrigins: source.sourceName ? [source.sourceName] : []
       };
-    });
+    }));
   }
 
   private getPath(obj: Record<string, unknown>, path: string): unknown {
@@ -4054,8 +4201,43 @@ export class SourceExecutor {
     return '';
   }
 
-  private resolveSearchNoteUrl(item: Record<string, unknown>, rule: string, baseUrl: string): string {
+  private async resolveSearchNoteUrl(item: Record<string, unknown>, rule: string, baseUrl: string,
+    source?: BookSource): Promise<string> {
     if (!rule) return '';
+    const jsIndex = rule.indexOf('@js:');
+    if (jsIndex >= 0 && source) {
+      // JSON 书源常把详情 URL 完整写成 @js: 规则（例如先从当前行取
+      // bookId，再调用 jsLib 中的 GetUrl）。firstStr() 只能处理“字段路径
+      // + @js 后处理”，对纯 @js 规则会把路径清空，最终得到空 noteUrl。
+      // 先展开 {{$.field}}，再在同一套 jsLib/source 上执行脚本。
+      const expanded = rule.includes('{{') ? this.resolveRuleTemplate(rule, item, '') : rule;
+      const expandedJsIndex = expanded.indexOf('@js:');
+      const prefix = expandedJsIndex >= 0 ? expanded.substring(0, expandedJsIndex).trim() : '';
+      const fallback = prefix ? this.firstStr(item, prefix) : '';
+      const code = expanded.substring(expandedJsIndex + 4).trim();
+      if (code) {
+        // Legado 书源常以 `url = ...` 作为脚本最后一条语句，而 QuickJS
+        // 的全局脚本求值不一定把赋值语句的完成值返回给 N-API。显式读取
+        // 常见结果变量，保持 Android 端“最后得到 URL”的语义。
+        const resultCode = code + '\n;typeof url !== "undefined" ? url : ' +
+          '(typeof result !== "undefined" ? result : (typeof bookUrl !== "undefined" ? bookUrl : ""));';
+        const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+          source: source,
+          jsLib: source.jsLib || '',
+          baseUrl: baseUrl,
+          variableBlob: source.variableComment || '',
+          result: fallback,
+        });
+        console.info('[SrcEx] Search note URL JS', source.sourceName,
+          'bookId=', String(item['bookId'] || item['bid'] || ''),
+          'resultLen=', evaluated.length, 'prefix=', evaluated.substring(0, 100));
+        if (evaluated && !/^(?:SyntaxError|TypeError|ReferenceError|Error:)/i.test(evaluated.trim())) {
+          return evaluated.trim();
+        }
+      }
+      if (fallback) return this.postProcessRule(rule, fallback);
+      return '';
+    }
     const usesResultTemplate = /\{\{\s*result\s*\}\}/.test(rule);
     const hasPostProcessor = rule.includes('<js>') || rule.includes('@js:') || rule.includes('##');
     if (usesResultTemplate || hasPostProcessor) {
@@ -4494,6 +4676,11 @@ export class SourceExecutor {
    */
   private shouldTryJsonToc_(tocRule: string, body: string): boolean {
     const rule = (tocRule || '').trim();
+    // 纯 <js>/@js 目录规则需要在原始响应上执行脚本，不能先把 JSON
+    // 的 data.chapterList 当作普通章节列表，否则会丢失脚本生成的章节 URL。
+    if (/^<js>[\s\S]*<\/js>$/i.test(rule) || /^@js:[\s\S]*$/i.test(rule)) {
+      return false;
+    }
     if (rule.startsWith('$.') || rule.startsWith('@json:') || rule === '$' || rule === '*' ||
       rule === '$.*' || rule === '$[*]') {
       return true;
@@ -4634,7 +4821,10 @@ export class SourceExecutor {
         }
       }
 
-      chapters.push({ title: title || '第' + (index + 1) + '章', url, index });
+      const volumeRule = rules['isVolume'] || '';
+      const volumeValue = volumeRule ? this.getPath(itemObj as Record<string, unknown>, volumeRule) : undefined;
+      const isVolume = volumeValue !== undefined && /^(true|1)$/i.test(String(volumeValue));
+      chapters.push({ title: title || '第' + (index + 1) + '章', url, index, isVolume });
     }
     return chapters;
   }
@@ -4725,6 +4915,39 @@ export class SourceExecutor {
   private async parseTocFromRules(html: string, rules: Record<string, string>, tocUrl: string, source?: BookSource): Promise<BookSourceChapter[]> {
     const tocRule = rules['toc'] || '';
     if (!tocRule) return [];
+
+    // 纯 JS 目录规则（常见形式：<js>...JSON.parse(src)...list</js>）没有
+    // CSS 列表节点可供查询，直接在原始响应上执行，并复用 JSON 目录字段映射。
+    const pureJsMatch = tocRule.trim().match(/^<js>([\s\S]*)<\/js>$/i) ||
+      tocRule.trim().match(/^@js:([\s\S]*)$/i);
+    if (pureJsMatch) {
+      const jsCode = pureJsMatch[1].trim();
+      const resultCode = jsCode + '\n;typeof list !== "undefined" ? list : ' +
+        '(typeof result !== "undefined" ? result : "");';
+      try {
+        const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+          source: source,
+          jsLib: source?.jsLib || '',
+          variableBlob: source?.variableComment || '',
+          baseUrl: tocUrl,
+          result: html,
+          src: html,
+        });
+        if (!evaluated) return [];
+        const parsed = JSON.parse(evaluated) as unknown;
+        if (!Array.isArray(parsed)) return [];
+        const jsonRules: Record<string, string> = {
+          toc: '*',
+          tocTitle: rules['tocTitle'] || '',
+          tocUrlItem: rules['tocUrlItem'] || '',
+          isVolume: rules['isVolume'] || '',
+        };
+        return await this.parseJsonToc(parsed as Object, jsonRules, tocUrl);
+      } catch (error) {
+        console.warn('[SrcEx] Pure TOC JS failed:', error instanceof Error ? error.message : String(error));
+        return [];
+      }
+    }
 
     const parser = getHtmlParser();
     const doc = parser.parse(html);

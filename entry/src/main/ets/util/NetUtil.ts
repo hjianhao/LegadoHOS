@@ -9,6 +9,31 @@ import zlib from '@ohos.zlib';
 import { CookieStore } from './CookieStore';
 import { DISABLE_COOKIE_HEADER, REQUEST_GROUP_HEADER } from '../engine/source/SourceNetworkPolicy';
 
+/** RCP 有些版本把 Set-Cookie 放在 response.cookies，而不是 headers。 */
+function responseSetCookies(response: rcp.Response): string | string[] | undefined {
+  const headers = (response.headers || {}) as Record<string, string | string[] | undefined>;
+  let headerValue = headers['set-cookie'];
+  if (!headerValue) {
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'set-cookie') {
+        headerValue = headers[key];
+        break;
+      }
+    }
+  }
+  const cookies = response.cookies || [];
+  const lines: string[] = [];
+  if (headerValue) {
+    if (Array.isArray(headerValue)) lines.push(...headerValue);
+    else lines.push(String(headerValue));
+  }
+  for (const item of cookies) {
+    if (item && item.name) lines.push(item.name + '=' + (item.value || ''));
+  }
+  console.info('[NetUtil] response cookies combined=', lines.length);
+  return lines.length > 0 ? lines : undefined;
+}
+
 interface PooledSession {
   session: rcp.Session;
   activeRequests: number;
@@ -167,7 +192,7 @@ export class NetUtil {
       const response = await session.fetch(request);
       const binHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
       if (cookieEnabled) {
-        CookieStore.getInstance().setCookiesFromResponse(requestUrl, binHeaders['set-cookie']);
+        CookieStore.getInstance().setCookiesFromResponse(requestUrl, responseSetCookies(response));
       }
       console.info('[NetUtil] GET(binary)', requestUrl.substring(0, 80), '->', response.statusCode,
         '(' + (Date.now() - startMs) + 'ms)');
@@ -450,7 +475,7 @@ export class NetUtil {
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
         // 中间跳的 Set-Cookie 必须立刻进 CookieStore，下一跳才能带上。
         if (cookieEnabled) {
-          await CookieStore.getInstance().setCookiesFromResponse(curUrl, respHeaders['set-cookie']);
+          await CookieStore.getInstance().setCookiesFromResponse(curUrl, responseSetCookies(response));
         }
         console.info('[NetUtil] manual-redirect hop' + hop, curMethod, curUrl, '→', response.statusCode);
         const status: number = response.statusCode;
@@ -493,7 +518,7 @@ export class NetUtil {
       const response = await replay.fetch(request);
       const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
       if (cookieEnabled) {
-        await CookieStore.getInstance().setCookiesFromResponse(url, respHeaders['set-cookie']);
+        await CookieStore.getInstance().setCookiesFromResponse(url, responseSetCookies(response));
       }
       console.info('[NetUtil] manual-redirect replay', method, url, '→', response.statusCode);
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -537,7 +562,7 @@ export class NetUtil {
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
         // 中间跳的 Set-Cookie 必须立刻进 CookieStore，下一跳才能带上。
         if (cookieEnabled) {
-          await CookieStore.getInstance().setCookiesFromResponse(curUrl, respHeaders['set-cookie']);
+          await CookieStore.getInstance().setCookiesFromResponse(curUrl, responseSetCookies(response));
         }
         console.info('[NetUtil] manual-post hop' + hop, curMethod, curUrl, '→', response.statusCode);
         const status: number = response.statusCode;
@@ -605,8 +630,12 @@ export class NetUtil {
     if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
     group?.systemRequests.add(request);
     try {
+      const useSystemMarker = headers['X-Legado-Use-System-Http'] === '1';
+      delete headers['X-Legado-Use-System-Http'];
       const cookieEnabled = NetUtil.prepareCookiePolicy_(headers);
-      if (cookieEnabled) NetUtil.injectCookie_(requestUrl, headers);
+      // 登录令牌的 java.get() 使用系统栈，是为了绕过 RCP 丢失重复
+      // Set-Cookie；此请求不能再注入旧 Cookie，但仍要保存新 Cookie。
+      if (cookieEnabled && !useSystemMarker) NetUtil.injectCookie_(requestUrl, headers);
       const response = await request.request(requestUrl, {
         method: method.toUpperCase() as http.RequestMethod,
         header: headers,
@@ -616,8 +645,22 @@ export class NetUtil {
         readTimeout: timeout,
       });
       const respHeaders = (response.header || {}) as Record<string, string | string[] | undefined>;
+      const systemCookies: string[] = [];
+      const headerCookie = respHeaders['set-cookie'];
+      if (headerCookie) {
+        if (Array.isArray(headerCookie)) systemCookies.push(...headerCookie);
+        else systemCookies.push(String(headerCookie));
+      }
+      const cookieHeader = String(response.cookies || '');
+      if (cookieHeader) {
+        for (const part of cookieHeader.split(';')) {
+          const trimmed = part.trim();
+          if (trimmed.indexOf('=') > 0) systemCookies.push(trimmed);
+        }
+      }
       if (cookieEnabled) {
-        CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+        CookieStore.getInstance().setCookiesFromResponse(requestUrl,
+          systemCookies.length > 0 ? systemCookies : undefined);
       }
       console.info('[NetUtil] System HTTP', method, requestUrl, '→', response.responseCode);
       if (response.responseCode < 200 || response.responseCode >= 400) {
@@ -682,7 +725,7 @@ export class NetUtil {
         const response = await session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
         if (cookieEnabled) {
-          CookieStore.getInstance().setCookiesFromResponse(requestUrl, respHeaders['set-cookie']);
+          CookieStore.getInstance().setCookiesFromResponse(requestUrl, responseSetCookies(response));
         }
         console.info('[NetUtil]', method, requestUrl, '→', response.statusCode, '(' + (Date.now() - startMs) + 'ms)');
         if (response.statusCode < 200 || response.statusCode >= 400) {

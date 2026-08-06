@@ -339,7 +339,8 @@ export class SourceChecker {
                 message: '结果均为占位项或无效链接', duration: 0 });
             }
           } else {
-            await this.checkBookPath_(source, result, '搜索', deadline, details, invalidGroups, errors);
+            await this.checkBookPath_(source, result, '搜索', deadline, details, invalidGroups, errors,
+              searchResults);
           }
         }
       }
@@ -365,7 +366,8 @@ export class SourceChecker {
                 message: '结果均为占位项或无效链接', duration: 0 });
             }
           } else {
-            await this.checkBookPath_(source, result, '发现', deadline, details, invalidGroups, errors);
+            await this.checkBookPath_(source, result, '发现', deadline, details, invalidGroups, errors,
+              exploreResults);
           }
         }
       }
@@ -411,7 +413,8 @@ export class SourceChecker {
   }
 
   private async checkBookPath_(source: BookSource, result: SearchResult, channel: string, deadline: number,
-    details: CheckDetail[], invalidGroups: string[], errors: string[]): Promise<void> {
+    details: CheckDetail[], invalidGroups: string[], errors: string[],
+    alternatives: SearchResult[] = []): Promise<void> {
     if (!this.config.checkInfo) return;
     const state: BookPathState = { result: result, info: null, chapters: [] };
     const detailName = channel + '详情';
@@ -460,7 +463,9 @@ export class SourceChecker {
       const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(
         source, tocUrl, undefined, checkTocPageLimit), deadline,
         source.checkRequestGroup || '');
-      state.chapters = selectReadableChapters(toc, 2);
+      // 保留少量候选章节：站点正文页可能只对最新章节注入广告/验证页，
+      // 校验不应因单个章节瞬态为空而判定整条发现链路失效。
+      state.chapters = selectReadableChapters(toc, 3);
       const passed = state.chapters.length > 0;
       this.addDetail_(source, details, { name: tocName, passed: passed,
         message: passed ? '读取前 ' + checkTocPageLimit + ' 页，共解析 ' + toc.length + ' 章' : '目录为空',
@@ -478,13 +483,35 @@ export class SourceChecker {
     const contentName = channel + '正文';
     const contentStart = Date.now();
     try {
-      const chapter = state.chapters[0];
-      const content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
-        source, chapter.url, result.noteUrl, isImageSource(source), state.chapters[1]?.url), deadline,
-        source.checkRequestGroup || '');
+      let content = '';
+      for (let index = 0; index < state.chapters.length && !content.trim(); index++) {
+        const chapter = state.chapters[index];
+        const nextChapterUrl = state.chapters[index + 1]?.url;
+        // 第一次正文请求可能命中站点的瞬态广告跳转；同一章节只重试一次，
+        // 随后再换下一章，避免把校验时间耗在单个坏链接上。
+        const attempts = index === 0 ? 2 : 1;
+        for (let attempt = 0; attempt < attempts && !content.trim(); attempt++) {
+          content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
+            source, chapter.url, result.noteUrl, isImageSource(source), nextChapterUrl), deadline,
+            source.checkRequestGroup || '');
+        }
+      }
+      let contentResult = result;
+      // 搜索结果或发现榜单可能包含详情和目录仍存在、但远程正文文件已删除的
+      // 残留书籍。首项正文为空时，沿用同一套规则探测少量其它结果，避免用
+      // 一个坏样本否定整条书源链路。
+      if (!content.trim() && alternatives.length > 1 && (channel === '发现' || channel === '搜索')) {
+        const fallback = await this.tryAlternateContentSamples_(source, result, alternatives, deadline);
+        if (fallback) {
+          content = fallback.content;
+          contentResult = fallback.result;
+        }
+      }
       const passed = content.trim().length > 0;
       this.addDetail_(source, details, { name: contentName, passed: passed,
-        message: passed ? '获取到 ' + content.length + ' 字内容' : '正文为空', duration: Date.now() - contentStart });
+        message: passed ? '获取到 ' + content.length + ' 字内容' +
+          (contentResult.noteUrl !== result.noteUrl ? '（已跳过正文为空的发现样本）' : '') : '正文为空',
+        duration: Date.now() - contentStart });
       if (!passed) invalidGroups.push(channel + '正文失效');
     } catch (error) {
       if (error instanceof SourceCheckCancelledError) throw error;
@@ -493,6 +520,36 @@ export class SourceChecker {
       this.addDetail_(source, details, { name: contentName, passed: false, message: '失败：' + message, duration: Date.now() - contentStart });
       invalidGroups.push(channel + '正文失效');
     }
+  }
+
+  /** 在搜索/发现结果中寻找正文可读的候选书籍；候选详情/目录失败时直接跳过。 */
+  private async tryAlternateContentSamples_(source: BookSource, original: SearchResult,
+    alternatives: SearchResult[], deadline: number): Promise<{ content: string; result: SearchResult } | null> {
+    const maxCandidates = Math.min(alternatives.length, 12);
+    for (let index = 0; index < maxCandidates; index++) {
+      const candidate = alternatives[index];
+      if (isUnresolvedResult(candidate) || candidate.noteUrl.trim() === original.noteUrl.trim()) continue;
+      try {
+        const info = await this.runBeforeDeadline_(globalSourceExecutor.getBookInfo(source, candidate.noteUrl), deadline,
+          source.checkRequestGroup || '');
+        const tocUrl = info.tocUrl || candidate.noteUrl;
+        const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(
+          source, tocUrl, undefined, 3), deadline, source.checkRequestGroup || '');
+        const chapters = selectReadableChapters(toc, 3);
+        for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex++) {
+          const chapter = chapters[chapterIndex];
+          const nextChapterUrl = chapters[chapterIndex + 1]?.url;
+          const content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
+            source, chapter.url, candidate.noteUrl, isImageSource(source), nextChapterUrl), deadline,
+            source.checkRequestGroup || '');
+          if (content.trim()) return { content: content, result: candidate };
+        }
+      } catch (error) {
+        if (error instanceof SourceCheckCancelledError || /校验超时/.test(getErrorMessage(error))) throw error;
+        // 残留书籍、失效目录或单章请求错误都只影响当前候选，继续探测下一本。
+      }
+    }
+    return null;
   }
 
   private addDetail_(source: BookSource, details: CheckDetail[], detail: CheckDetail): void {

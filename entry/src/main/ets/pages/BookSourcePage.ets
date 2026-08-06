@@ -21,7 +21,7 @@ import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { CaptchaDialog } from '../components/reader/CaptchaDialog';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
-import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { image } from '@kit.ImageKit';
 
 @Entry
@@ -32,6 +32,8 @@ export struct BookSourcePage {
   @State filtered: BookSource[] = [];
   @State displayed: BookSource[] = [];
   @State searchText: string = '';
+  @State filterHistory: string[] = [];
+  @State showFilterHistory: boolean = false;
   @State sortMode: number = 0;
   @State sortAscending: boolean = true;
   @State groupFilter: string = '';
@@ -70,7 +72,7 @@ export struct BookSourcePage {
   private lastCheckError_: string = '';
   private checkConfigOpening_: boolean = false;
   private captchaHandler_: ((url: string, captchaImage?: image.PixelMap | null) => Promise<string>) | null = null;
-  private interactiveFetcher_: ((url: string) => Promise<string>) | null = null;
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
   private challengeDlg?: CustomDialogController;
   private checkListener_: (snapshot: SourceCheckSnapshot) => void = (snapshot: SourceCheckSnapshot): void => {
     this.applyCheckSnapshot_(snapshot);
@@ -78,6 +80,7 @@ export struct BookSourcePage {
 
   aboutToAppear(): void {
     this.isActive_ = true;
+    void this.loadFilterHistory_();
     this.registerCaptchaHandler_();
     this.registerInteractiveFetcher_();
     this.checkService_.subscribe(this.checkListener_);
@@ -107,6 +110,7 @@ export struct BookSourcePage {
   }
 
   aboutToDisappear(): void {
+    void this.addFilterHistory_(this.searchText);
     this.isActive_ = false;
     this.loadRequestId_++;
     this.checkService_.unsubscribe(this.checkListener_);
@@ -151,18 +155,19 @@ export struct BookSourcePage {
    */
   private registerInteractiveFetcher_(): void {
     if (!this.interactiveFetcher_) {
-      this.interactiveFetcher_ = (url: string): Promise<string> =>
-        this.openInteractiveWebView_(url);
+      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
+        this.openInteractiveWebView_(url, request?.body || '');
     }
     WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
   }
 
-  private openInteractiveWebView_(url: string): Promise<string> {
+  private openInteractiveWebView_(url: string, requestBody: string = ''): Promise<string> {
     return new Promise<string>((resolve: (html: string) => void) => {
       this.checkCurrentMessage = '等待完成网站验证…';
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
-        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url }),
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url,
+          reason: WebViewFetcher.interactiveReason || '页面需要登录或人工验证', requestBody: requestBody }),
         autoCancel: false,
         customStyle: true,
         alignment: DialogAlignment.Center,
@@ -196,6 +201,55 @@ export struct BookSourcePage {
       }
     }
     if (this.isActive_ && requestId === this.loadRequestId_) this.isLoading = false;
+  }
+
+  private normalizeFilterHistory_(items: string[]): string[] {
+    const result: string[] = [];
+    for (const item of items || []) {
+      const value = (item || '').trim();
+      if (value && value !== '失效' && !result.includes(value)) {
+        result.push(value);
+        if (result.length >= 20) break;
+      }
+    }
+    return result;
+  }
+
+  private async loadFilterHistory_(): Promise<void> {
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      const history = await store.get<string[]>('book_source_filter_history', []);
+      if (this.isActive_) this.filterHistory = this.normalizeFilterHistory_(history);
+    } catch (_e) {
+      if (this.isActive_) this.filterHistory = [];
+    }
+  }
+
+  private async addFilterHistory_(raw: string): Promise<void> {
+    const value = (raw || '').trim();
+    if (!value || value === '失效') return;
+    this.filterHistory = this.normalizeFilterHistory_([value, ...this.filterHistory]);
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('book_source_filter_history', this.filterHistory);
+    } catch (_e) { /* 历史记录失败不影响过滤 */ }
+  }
+
+  private async clearFilterHistory_(): Promise<void> {
+    this.filterHistory = [];
+    try {
+      const store = SettingsStore.getInstance();
+      await store.init(UiUtil.getHostContext(this.getUIContext()));
+      await store.put('book_source_filter_history', []);
+    } catch (_e) { /* ignore */ }
+  }
+
+  private visibleFilterHistory_(): string[] {
+    const query = this.searchText.trim().toLowerCase();
+    if (!query) return this.filterHistory.slice(0, 8);
+    return this.filterHistory.filter((item: string): boolean => item.toLowerCase().includes(query)).slice(0, 8);
   }
 
   private splitGroups(group: string): string[] {
@@ -415,14 +469,22 @@ export struct BookSourcePage {
     if (this.operationBusy_) return;
     this.operationBusy_ = true;
     let openedFile: fileIo.File | null = null;
+    const suffix = new Date().toISOString().substring(0, 10).replace(/-/g, '');
+    const fileName = 'bookSources_' + suffix + '.json';
     try {
       const documentPicker = new picker.DocumentViewPicker(this.getUIContext().getHostContext()!);
-      const suffix = new Date().toISOString().substring(0, 10).replace(/-/g, '');
-      const uris = await documentPicker.save({ newFileNames: ['bookSources_' + suffix + '.json'] });
-      if (!uris || uris.length === 0) return;
+      let uri = '';
+      try {
+        const uris = await documentPicker.save({ newFileNames: [fileName] });
+        if (!uris || uris.length === 0) return;
+        uri = uris[0];
+      } catch (e) {
+        if (!this.isDuplicateFileError_(e)) throw new Error(e.message || String(e));
+        uri = await this.chooseOverwriteFile_(fileName);
+        if (!uri) return;
+      }
       const json = await this.dao_.exportSources(target);
-      openedFile = fileIo.openSync(
-        uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      openedFile = fileIo.openSync(uri, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
       fileIo.writeSync(openedFile.fd, json);
       UiUtil.showToast(this.getUIContext(), { message: '已导出 ' + target.length + ' 个书源', duration: 1800 });
     } catch (e) {
@@ -432,6 +494,55 @@ export struct BookSourcePage {
         try { fileIo.closeSync(openedFile); } catch (_e) { /* ignore */ }
       }
       this.operationBusy_ = false;
+    }
+  }
+
+  /** 文件选择器没有统一的覆盖参数，兼容不同设备返回的同名文件错误。 */
+  private isDuplicateFileError_(error: Error): boolean {
+    const message = error.message || String(error);
+    return /(already\s+exists|file\s+exists|same\s+name|duplicate|conflict|重名|同名|已存在)/i.test(message);
+  }
+
+  /** 询问覆盖并让用户从文件选择器中明确选中要覆盖的同名文件。 */
+  private async chooseOverwriteFile_(fileName: string): Promise<string> {
+    const result = await UiUtil.showDialog(this.getUIContext(), {
+      title: '文件已存在',
+      message: fileName + ' 已存在，是否选择该文件并覆盖？',
+      buttons: [
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '覆盖', color: ThemeColors.error(this.isDark) },
+      ],
+    });
+    if (result.index !== 1) return '';
+    try {
+      const options = new picker.DocumentSelectOptions();
+      options.fileSuffixFilters = ['.json'];
+      options.maxSelectNumber = 1;
+      const context = this.getUIContext().getHostContext()!;
+      const uris = await new picker.DocumentViewPicker(context).select(options);
+      if (!uris || uris.length === 0) return '';
+      const selectedName = this.fileNameFromUri_(uris[0]);
+      if (selectedName && selectedName !== fileName) {
+        UiUtil.showToast(this.getUIContext(), {
+          message: '请选择同名文件：' + fileName, duration: 2200,
+        });
+        return '';
+      }
+      return uris[0];
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '选择覆盖文件失败：' + String(e), duration: 2200 });
+      return '';
+    }
+  }
+
+  private fileNameFromUri_(uri: string): string {
+    const withoutQuery = (uri || '').split(/[?#]/)[0];
+    const rawName = withoutQuery.substring(withoutQuery.lastIndexOf('/') + 1);
+    try {
+      const decoded = decodeURIComponent(rawName);
+      return decoded.substring(decoded.lastIndexOf('/') + 1);
+    } catch (_e) {
+      return rawName;
     }
   }
 
@@ -696,16 +807,51 @@ export struct BookSourcePage {
           .height(48).layoutWeight(1).borderRadius(24).padding({ left: 16, right: 12 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
+          .onFocus(() => { this.showFilterHistory = true; this.showSortMenu = false; })
           .onChange((value: string) => {
             if (this.failedOnly_ && value !== '失效') this.failedOnly_ = false;
             this.searchText = value;
+            this.showFilterHistory = true;
             this.applyFilters();
+          })
+          .onSubmit(() => {
+            void this.addFilterHistory_(this.searchText);
+            this.showFilterHistory = false;
           })
         Button(this.sortLabels_[this.sortMode] + (this.sortAscending ? ' ↑' : ' ↓'))
           .height(48).borderRadius(24).margin({ left: 8 }).padding({ left: 14, right: 14 })
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
-          .onClick(() => { this.showSortMenu = !this.showSortMenu; })
+          .onClick(() => {
+            void this.addFilterHistory_(this.searchText);
+            this.showSortMenu = !this.showSortMenu;
+            this.showFilterHistory = false;
+          })
       }.padding({ left: 16, right: 16 }).width('100%')
+
+      if (this.showFilterHistory && this.visibleFilterHistory_().length > 0) {
+        Column() {
+          Row() {
+            Text('过滤历史').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark)).layoutWeight(1)
+            Text('清空').fontSize(12).fontColor(ThemeColors.error(this.isDark))
+              .onClick(() => { void this.clearFilterHistory_(); })
+          }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 2 })
+          ForEach(this.visibleFilterHistory_(), (item: string) => {
+            Row() {
+              Text('↻').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width(24)
+              Text(item).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }.width('100%').height(40).padding({ left: 16, right: 16 })
+              .backgroundColor(ThemeColors.surface(this.isDark))
+              .onClick(() => {
+                this.searchText = item;
+                this.showFilterHistory = false;
+                this.applyFilters();
+              })
+          }, (item: string): string => item)
+        }.width('100%').padding({ bottom: 4 })
+          .backgroundColor(ThemeColors.surface(this.isDark))
+          .border({ width: { bottom: 1 }, color: ThemeColors.outlineVariant(this.isDark) })
+      }
 
       if (this.showSortMenu) {
         Column() {
