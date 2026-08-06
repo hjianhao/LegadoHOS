@@ -23,6 +23,8 @@
 /tmp
 /temp
 /docs
+/release/
+/releases/
 
 # Machine-local signing, debug dumps, and temporary snapshots
 *.bak
