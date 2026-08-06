@@ -141,13 +141,18 @@ export class JsExpressionEvaluator {
   /** Worker 端已缓存的 jsLib 所属书源 key（sourceUrl），切换书源时重新传输。 */
   private static lastWorkerJsLibKey_: string = '';
 
-  /**
-   * source.putLoginHeader() 在 QuickJS 中修改的是 JS 对象，需在本次求值
-   * 返回后同步回 ArkTS source，后续详情/目录请求才能带上 Authorization。
-   */
-  private static applyLoginHeader_(ctx: JsEvalContext, header: string): void {
-    if (!ctx.source || !header || header === 'null' || header === 'undefined') return;
-    const src = ctx.source as Record<string, unknown>;
+  /** 书源脚本生成的动态登录头，供详情/目录页复用。 */
+  private static loginHeaderCache_: Map<string, string> = new Map();
+
+  private static sourceKey_(source: Partial<BookSource> | undefined): string {
+    if (!source) return '';
+    const value = source.sourceUrl || (source as Record<string, unknown>)['bookSourceUrl'];
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private static mergeLoginHeader_(source: Partial<BookSource>, header: string): void {
+    if (!header || header === 'null' || header === 'undefined') return;
+    const src = source as Record<string, unknown>;
     src['loginHeader'] = header;
     // 现有网络层统一从 source.header 组装请求头；把动态登录头合并进去，
     // 保留原书源 header，并避免修改数据库中的持久化源配置。
@@ -166,6 +171,27 @@ export class JsExpressionEvaluator {
         src['header'] = JSON.stringify(merged);
       }
     } catch (_e) { /* 登录头不是 JSON 时仅保留 loginHeader */ }
+  }
+
+  /**
+   * source.putLoginHeader() 在 QuickJS 中修改的是 JS 对象，需在本次求值
+   * 返回后同步回 ArkTS source，后续详情/目录请求才能带上 Authorization。
+   */
+  private static applyLoginHeader_(ctx: JsEvalContext, header: string): void {
+    if (!ctx.source || !header || header === 'null' || header === 'undefined') return;
+    this.mergeLoginHeader_(ctx.source, header);
+    const key = this.sourceKey_(ctx.source);
+    if (key) this.loginHeaderCache_.set(key, header);
+  }
+
+  /** 将当前进程中已获取的动态登录头应用到重新加载的书源对象。 */
+  static applyCachedLoginHeader(source: Partial<BookSource>): void {
+    const key = this.sourceKey_(source);
+    if (!key) return;
+    const current = (source as Record<string, unknown>)['loginHeader'];
+    if (typeof current === 'string' && current.trim()) return;
+    const cached = this.loginHeaderCache_.get(key);
+    if (cached) this.mergeLoginHeader_(source, cached);
   }
 
   private static captureLoginHeader_(ctx: JsEvalContext): void {
@@ -427,6 +453,7 @@ export class JsExpressionEvaluator {
    */
   static async evaluate(code: string, ctx: JsEvalContext): Promise<string> {
     if (!code || !code.trim()) return '';
+    if (ctx.source) JsExpressionEvaluator.applyCachedLoginHeader(ctx.source);
 
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
     // let/const → var：引擎复用时 let 重声明会报错，var 不报
@@ -488,6 +515,7 @@ export class JsExpressionEvaluator {
    */
   static evaluateSync(code: string, ctx: JsEvalContext): string {
     if (!code || !code.trim()) return '';
+    if (ctx.source) JsExpressionEvaluator.applyCachedLoginHeader(ctx.source);
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
     const safeCode = normalizeSourceScript(code);
     const fullScript = `${setupCode}\n${safeCode}`;

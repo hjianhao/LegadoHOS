@@ -1810,6 +1810,12 @@ export class SourceExecutor {
     url: string, headers: Record<string, string>, source: BookSource, timeout?: number
   ): Promise<string> {
     let method = 'GET', body = '';
+    // 分类/搜索脚本可能在本次求值中生成动态 Authorization。详情页会重新
+    // 从数据库加载书源，先把同一进程缓存的登录头合并回 source.header，
+    // 再发送请求，避免请求头仍停留在旧的静态配置。
+    JsExpressionEvaluator.applyCachedLoginHeader(source);
+    const cachedHeaders = parseHeader(source.header);
+    for (const [key, value] of Object.entries(cachedHeaders)) headers[key] = value;
     // AI 生成的验证码/登录站点在搜索 URL 上记录 webView 能力。
     // 同站详情、目录和正文也必须沿用浏览器会话，避免重新退回无会话的 HTTP。
     let forceWebView = /##web\s*[Vv]iew|["']web\s*[Vv]iew["']\s*:\s*true/i
