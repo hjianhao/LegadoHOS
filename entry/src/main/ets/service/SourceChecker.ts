@@ -352,7 +352,7 @@ export class SourceChecker {
           source.checkRequestGroup || '');
         if (!exploreUrl) {
           this.addDetail_(source, details, { name: '发现', passed: true, skipped: true, message: '跳过：未配置发现', duration: 0 });
-        } else if (!source.ruleExploreList.trim()) {
+        } else if (!this.getExploreListRule_(source).trim()) {
           this.addDetail_(source, details, { name: '发现', passed: true, skipped: true, message: '跳过：发现规则为空', duration: 0 });
           invalidGroups.push('发现规则为空');
         } else {
@@ -613,16 +613,22 @@ export class SourceChecker {
     copy.enabled = true;
     copy.isExploreRequest = true;
     copy.ruleSearchUrl = exploreUrl;
-    copy.ruleSearchList = source.ruleExploreList;
-    copy.ruleSearchName = source.ruleExploreName;
-    copy.ruleSearchAuthor = source.ruleExploreAuthor;
-    copy.ruleSearchCover = source.ruleExploreCover;
-    copy.ruleSearchKind = source.ruleExploreKind;
-    copy.ruleSearchWordCount = source.ruleExploreWordCount;
-    copy.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime;
-    copy.ruleSearchIntroduce = source.ruleExploreIntroduce;
-    copy.ruleSearchNoteUrl = source.ruleExploreNoteUrl;
+    // 与发现列表页保持一致：书源未提供独立的 ruleExplore* 时，
+    // 分类接口通常复用搜索结果结构，应回退到对应的 ruleSearch*。
+    copy.ruleSearchList = this.getExploreListRule_(source);
+    copy.ruleSearchName = source.ruleExploreName || source.ruleSearchName;
+    copy.ruleSearchAuthor = source.ruleExploreAuthor || source.ruleSearchAuthor;
+    copy.ruleSearchCover = source.ruleExploreCover || source.ruleSearchCover;
+    copy.ruleSearchKind = source.ruleExploreKind || source.ruleSearchKind;
+    copy.ruleSearchWordCount = source.ruleExploreWordCount || source.ruleSearchWordCount;
+    copy.ruleSearchLastUpdateTime = source.ruleExploreLastUpdateTime || source.ruleSearchLastUpdateTime;
+    copy.ruleSearchIntroduce = source.ruleExploreIntroduce || source.ruleSearchIntroduce;
+    copy.ruleSearchNoteUrl = source.ruleExploreNoteUrl || source.ruleSearchNoteUrl;
     return copy;
+  }
+
+  private getExploreListRule_(source: BookSource): string {
+    return source.ruleExploreList.trim() || source.ruleSearchList.trim();
   }
 
   private runBeforeDeadline_<T>(promise: Promise<T>, deadline: number, requestGroup: string): Promise<T> {
