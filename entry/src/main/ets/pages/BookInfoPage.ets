@@ -153,14 +153,15 @@ export struct BookInfoPage {
       this.coverDecodeJs = matched?.coverDecodeJs || '';
       // 获取书籍详情（始终请求，确保简介等字段为最新）
       const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
-      if (info.name) {
-        const isAiSource = matched.isAiGenerated || (matched.sourceName || '').endsWith('(AI)');
+      const isAiSource = matched.isAiGenerated || (matched.sourceName || '').endsWith('(AI)');
+      if (info.name && (!this.bookName || info.canReName === true || isAiSource)) {
         if (!this.bookName) {
           this.bookName = info.name;
         } else if (isAiSource) {
           this.bookName = preferCompleteBookName(this.bookName, info.name);
         }
       }
+      if (info.latestChapterTitle) this.latestChapter = info.latestChapterTitle;
       if (info.author && !this.bookAuthor) this.bookAuthor = info.author;
       // 对齐 Android analyzeBookInfo：详情页解析出的封面无条件覆盖搜索带来的旧值，
       // 否则搜索阶段产生的错误封面（如书源规则失效时退化为书籍 URL）会一直挡住正确封面。
@@ -824,6 +825,9 @@ export struct BookInfoPage {
         item.index = ch.index >= 0 ? ch.index : idx;
         item.title = ch.title || '';
         item.url = ch.url || '';
+        item.isVip = !!ch.isVip;
+        item.isPay = !!ch.isPay;
+        item.chapterUpdateTime = ch.updateTime || '';
         item.createTime = now;
         item.updateTime = now;
         return item;
@@ -939,6 +943,9 @@ export struct BookInfoPage {
         item.index = ch.index >= 0 ? ch.index : idx;
         item.title = ch.title || '';
         item.url = ch.url || '';
+        item.isVip = !!ch.isVip;
+        item.isPay = !!ch.isPay;
+        item.chapterUpdateTime = ch.updateTime || '';
         item.createTime = now;
         item.updateTime = now;
         return item;

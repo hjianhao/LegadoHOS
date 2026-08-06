@@ -117,6 +117,8 @@ struct ComicReadPage {
   private prevChapterContent_: string = '';
   private prevChapterIdx_: number = -1;
   private preloadingChapterPromises_: Map<number, Promise<string>> = new Map<number, Promise<string>>();
+  /** 书源 START_READ 只在本次漫画阅读页首次成功载入时触发一次。 */
+  private sourceStartEventSent_: boolean = false;
   /** 章节切换代次，用于丢弃已经过期的图片异步结果。 */
   private imageLoadGeneration_: number = 0;
   // 图片本地路径缓存：url -> localPath
@@ -245,6 +247,7 @@ struct ComicReadPage {
             if (dbChapters.length > 0) {
               chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
                 index: ch.index, title: ch.title, url: ch.url,
+                isVip: ch.isVip, isPay: ch.isPay, updateTime: ch.chapterUpdateTime || '',
               }));
             }
           } catch (_e) { /* fall through to network */ }
@@ -356,6 +359,10 @@ struct ComicReadPage {
         this.swiperIndex = targetPage;
         this.imageUrls = urls;
         this.isLoading = false;
+        if (!this.sourceStartEventSent_) {
+          this.sourceStartEventSent_ = true;
+          this.notifySourceEvent_('START_READ', ch);
+        }
         // 以目标页为中心向两侧扩散预加载，确保目标页优先下载
         this.preloadImages_(urls, Math.min(this.preloadNum_, 6), targetPage);
         // 下一帧滚动到目标位置（等待 List 渲染新数据后再滚动）
@@ -663,6 +670,56 @@ struct ComicReadPage {
     }
   }
 
+  /** 发送 Android 兼容的漫画阅读生命周期回调。 */
+  private notifySourceEvent_(event: string, chapter?: BookSourceChapter): void {
+    if (!this.source_ || !this.bookUrl) return;
+    const book: Record<string, Object> = {};
+    book['name'] = this.bookName;
+    book['bookUrl'] = this.bookUrl;
+    book['origin'] = this.origin;
+    book['originUrl'] = this.originUrl;
+    let chapterObject: Record<string, Object> | null = null;
+    if (chapter) {
+      chapterObject = {};
+      chapterObject['index'] = chapter.index;
+      chapterObject['title'] = chapter.title;
+      chapterObject['url'] = chapter.url;
+      chapterObject['isVip'] = chapter.isVip || false;
+      chapterObject['isPay'] = chapter.isPay || false;
+    }
+    globalSourceExecutor.runSourceEventCallback(this.source_, event, book, chapterObject)
+      .catch((error: Error) => console.warn('[ComicRead] source event failed:', event, error.message));
+  }
+
+  /** 执行漫画章节购买规则；URL 结果进入可交互 WebView，成功布尔值刷新章节图片。 */
+  private async executePayAction_(): Promise<void> {
+    this.showMenu = false;
+    const source = this.source_;
+    const chapter = this.allChapters_[this.currentIndex];
+    if (!source || !chapter) return;
+    const book: Record<string, Object> = {};
+    book['name'] = this.bookName;
+    book['bookUrl'] = this.bookUrl;
+    const chapterObject: Record<string, Object> = {};
+    chapterObject['index'] = chapter.index;
+    chapterObject['title'] = chapter.title;
+    chapterObject['url'] = chapter.url;
+    chapterObject['isVip'] = chapter.isVip || false;
+    chapterObject['isPay'] = chapter.isPay || false;
+    const result = await globalSourceExecutor.runPayAction(source, chapter.url, this.bookUrl, book, chapterObject);
+    if (/^https?:\/\//i.test(result)) {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/WebFetchPage',
+        params: { url: result, interactive: 'true' },
+      });
+    } else if (/^(true|1|ok|success|购买成功)$/i.test(result.trim())) {
+      UiUtil.showToast(this.getUIContext(), { message: '购买操作已完成，正在刷新章节', duration: 1800 });
+      await this.loadChapterImages(this.currentIndex, false, false, -1, true);
+    } else {
+      UiUtil.showToast(this.getUIContext(), { message: result || '付费操作未返回成功', duration: 1800 });
+    }
+  }
+
   private saveProgress(): void {
     const ch = this.allChapters_[this.currentIndex];
     if (!ch || !this.bookUrl) return;
@@ -672,12 +729,16 @@ struct ComicReadPage {
 
   async aboutToDisappear(): Promise<void> {
     this.imageLoadGeneration_++;
+    this.notifySourceEvent_('END_READ', this.allChapters_[this.currentIndex]);
     // 停止自动阅读
     this.stopAutoRead();
     const ch = this.allChapters_[this.currentIndex];
     if (ch && this.bookUrl) {
       const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
-      try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, this.currentPageIndex); } catch (_) { /* ignore */ }
+      try {
+        await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters, this.currentPageIndex);
+        this.notifySourceEvent_('SAVE_READ', ch);
+      } catch (_) { /* ignore */ }
     }
     // 退出时恢复系统栏
     this.setSystemBarVisible_(true);
@@ -1549,6 +1610,17 @@ struct ComicReadPage {
       .width('100%').height(48)
       .backgroundColor(ThemeColors.surface(this.isDark))
       .justifyContent(FlexAlign.SpaceEvenly)
+
+      if (this.source_ && this.source_.ruleBookContentPayAction.trim()) {
+        Row() {
+          Column() {
+            Text('执行付费').fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+          }.layoutWeight(1).justifyContent(FlexAlign.Center)
+          .onClick(() => { this.executePayAction_(); })
+        }
+        .width('100%').height(42)
+        .backgroundColor(ThemeColors.surface(this.isDark))
+      }
     }
     .width('100%').height('100%')
   }
@@ -1709,6 +1781,7 @@ struct ComicReadPage {
       this.prevChapterContent_ = '';
       this.prevChapterIdx_ = -1;
       this.preloadingChapterPromises_.clear();
+      this.sourceStartEventSent_ = false;
       ChapterCache.chapters = [];
       ChapterCache.bookUrl = '';
       this.currentIndex = 0;

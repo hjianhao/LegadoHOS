@@ -706,6 +706,8 @@ function stripHeaderQuote(raw: string): string {
 
 export class SourceExecutor {
   private engineInitialized: boolean = false;
+  /** 最近一次 getContent 根据 ContentRule.title 提取的章节标题。 */
+  private lastContentTitle_: string = '';
   /** 上次搜索因 403 失败的 URL */
   lastBlockedUrl: string = '';
 
@@ -1328,7 +1330,8 @@ export class SourceExecutor {
 
       // 尝试 hex 解码（聚合书源的 API 返回 hex 编码的 JSON）
       const hexDecoded = this.tryHexDecode_(bodyText);
-      const parsedBody = hexDecoded || bodyText;
+      let parsedBody = hexDecoded || bodyText;
+      parsedBody = await this.applyLoginCheckJs_(parsedBody, source, finalUrl);
 
       const httpResults = await this.parseResponse(parsedBody, source, baseUrl, 0, finalUrl);
 
@@ -1650,6 +1653,51 @@ export class SourceExecutor {
     }
     // 未声明列表规则的旧来源才使用通用链接提取。
     return this.fallbackExtract(bodyText, source, baseUrl);
+  }
+
+  /**
+   * 执行 Android 书源的 loginCheckJs。
+   *
+   * Android 端允许该脚本读取/修改 result 并返回新的响应对象。HOS 端没有
+   * Android 的 StrResponse 包装类，因此兼容最常见的两种形式：返回响应正文
+   * 字符串，或返回 boolean 表示当前响应是否需要登录。
+   */
+  private async applyLoginCheckJs_(body: string, source: BookSource, url: string): Promise<string> {
+    const checkJs = (source.loginCheckJs || '').trim();
+    if (!checkJs || !body) return body;
+    try {
+      if (!this.engineInitialized) await this.initialize();
+      const evaluated = await JsExpressionEvaluator.evaluate(checkJs, {
+        result: body,
+        src: body,
+        baseUrl: url,
+        source: source,
+        jsLib: source.jsLib || '',
+        variableBlob: source.variableComment || '',
+      });
+      const value = (evaluated || '').trim();
+      if (!value || value === 'undefined' || value === 'null') return body;
+      if (/^(true|false)$/i.test(value)) {
+        if (value.toLowerCase() === 'false') AppStorage.setOrCreate<boolean>('loginRequired', true);
+        return body;
+      }
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (typeof parsed === 'string') return parsed;
+        if (parsed && typeof parsed === 'object') {
+          const objectValue = parsed as Record<string, unknown>;
+          if (typeof objectValue['body'] === 'string') return objectValue['body'] as string;
+          if (typeof objectValue['content'] === 'string') return objectValue['content'] as string;
+        }
+      } catch (_e) {
+        // 非 JSON 字符串就是脚本返回的正文。
+      }
+      return value;
+    } catch (error) {
+      console.warn('[SrcEx] loginCheckJs failed for ' + source.sourceName + ': ' +
+        (error instanceof Error ? error.message : String(error)));
+      return body;
+    }
   }
 
   private fallbackExtract(html: string, source: BookSource, baseUrl: string): SearchResult[] {
@@ -2066,7 +2114,8 @@ export class SourceExecutor {
         'Referer': source.sourceUrl || '',
         ...parseHeader(source.header)
       };
-      const body = await this.fetchWithOpts(noteUrl, headers, source);
+      let body = await this.fetchWithOpts(noteUrl, headers, source);
+      body = await this.applyLoginCheckJs_(body, source, noteUrl);
       if (!body || body.length < 100) return { name: '', author: '', coverUrl: '', introduce: '', kind: '', wordCount: '', lastUpdateTime: '', chapters: [] };
 
       const jsonInfo = await this.parseJsonBookInfo(body, source, noteUrl);
@@ -2155,6 +2204,19 @@ export class SourceExecutor {
       }
 
       const rawCoverUrl = extractField(source.ruleBookInfoCover) || '';
+      const latestChapterTitle = extractField(source.ruleBookInfoLastChapter) || '';
+      const canReNameValue = extractField(source.ruleBookInfoCanReName) || '';
+      const downloadValue = extractField(source.ruleBookInfoDownloadUrls) || '';
+      const relatedValue = extractField(source.ruleBookInfoRelatedBooks) || '';
+      let relatedBooks: Object[] = [];
+      if (relatedValue) {
+        try {
+          const parsedRelated: unknown = JSON.parse(relatedValue);
+          if (Array.isArray(parsedRelated)) relatedBooks = parsedRelated as Object[];
+        } catch (_e) {
+          // 非 JSON 相关书籍规则仍保留为详情文本，不阻断其它字段。
+        }
+      }
       return {
         name: infoName,
         author: this.cleanAuthorName(extractField(source.ruleBookInfoAuthor) || ''),
@@ -2166,6 +2228,11 @@ export class SourceExecutor {
         kind: extractField(source.ruleBookInfoKind) || '',
         wordCount: extractField(source.ruleBookInfoWordCount) || '',
         lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
+        latestChapterTitle: latestChapterTitle,
+        canReName: source.ruleBookInfoCanReName ? !!canReNameValue : undefined,
+        downloadUrls: downloadValue ? downloadValue.split(/[\r\n,，]+/).map((v: string): string => v.trim())
+          .filter((v: string): boolean => !!v) : [],
+        relatedBooks: relatedBooks,
         tocUrl: this.resolvePageUrl(
           resolvedTocUrl || extractField(source.ruleBookInfoTocUrl) || '', noteUrl),
         chapters: [] as BookSourceChapter[],
@@ -2232,6 +2299,12 @@ export class SourceExecutor {
         kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
         wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
         lastUpdateTime: this.extractJsonRuleValue(source.ruleBookInfoLastUpdateTime, root),
+        latestChapterTitle: this.extractJsonRuleValue(source.ruleBookInfoLastChapter, root),
+        canReName: source.ruleBookInfoCanReName
+          ? !!this.extractJsonRuleValue(source.ruleBookInfoCanReName, root) : undefined,
+        downloadUrls: this.extractJsonRuleValue(source.ruleBookInfoDownloadUrls, root)
+          .split(/[\r\n,，]+/).map((v: string): string => v.trim()).filter((v: string): boolean => !!v),
+        relatedBooks: this.parseJsonArrayRuleValue_(source.ruleBookInfoRelatedBooks, root),
         tocUrl: tocUrl,
         chapters: [],
       };
@@ -2253,6 +2326,17 @@ export class SourceExecutor {
     if (!rule) return '';
     if (rule.includes('{{')) return this.resolveRuleTemplate(rule, item, '');
     return this.firstStr(item, rule);
+  }
+
+  private parseJsonArrayRuleValue_(rule: string, item: Record<string, unknown>): Object[] {
+    const value = this.extractJsonRuleValue(rule, item);
+    if (!value) return [];
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed as Object[] : [];
+    } catch (_e) {
+      return [];
+    }
   }
 
   private resolveRuleTemplate(template: string, item: Record<string, unknown>, baseUrl: string): string {
@@ -2391,6 +2475,131 @@ export class SourceExecutor {
     return lastPathMatch ? decodeURIComponent(lastPathMatch[1]) : '';
   }
 
+  /** 应用 Android ContentRule.sourceRegex，提取 WebView/接口响应中的正文片段。 */
+  private applyContentSourceRegex_(body: string, sourceRegex: string): string {
+    const rule = (sourceRegex || '').trim();
+    if (!rule || !body) return body;
+    try {
+      let pattern = rule;
+      let flags = 's';
+      const literal = rule.match(/^\/(.*)\/([a-z]*)$/is);
+      if (literal) {
+        pattern = literal[1];
+        flags = literal[2] || 's';
+        if (!flags.includes('s')) flags += 's';
+      }
+      const match = body.match(new RegExp(pattern, flags));
+      if (!match) return body;
+      return match[1] !== undefined ? match[1] : match[0];
+    } catch (error) {
+      console.warn('[SrcEx] Content sourceRegex failed:', error instanceof Error ? error.message : String(error));
+      return body;
+    }
+  }
+
+  /** 执行 Android ContentRule.webJs，允许脚本把正文响应转换为 HTML/文本。 */
+  private async applyContentWebJs_(body: string, source: BookSource, url: string): Promise<string> {
+    const webJs = (source.ruleBookContentWebJs || '').trim();
+    if (!webJs || !body) return body;
+    try {
+      const result = await JsExpressionEvaluator.evaluate(webJs, {
+        src: body,
+        result: body,
+        baseUrl: url,
+        source: source,
+        jsLib: source.jsLib || '',
+        variableBlob: source.variableComment || '',
+      });
+      const value = (result || '').trim();
+      if (!value || value === 'undefined' || value === 'null') return body;
+      try {
+        const parsed: unknown = JSON.parse(value);
+        return typeof parsed === 'string' ? parsed : value;
+      } catch (_e) {
+        return value;
+      }
+    } catch (error) {
+      console.warn('[SrcEx] Content webJs failed:', error instanceof Error ? error.message : String(error));
+      return body;
+    }
+  }
+
+  /** 获取最近一次正文请求提取出的 ContentRule.title。 */
+  getLastContentTitle(): string {
+    return this.lastContentTitle_;
+  }
+
+  private updateContentTitle_(raw: string, source: BookSource): void {
+    this.lastContentTitle_ = '';
+    const rule = (source.ruleBookContentTitle || '').trim();
+    if (!rule || !raw) return;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.lastContentTitle_ = this.extractJsonRuleValue(rule, parsed as Record<string, unknown>).trim();
+        if (this.lastContentTitle_) return;
+      }
+    } catch (_e) { /* HTML 或非对象 JSON */ }
+    this.lastContentTitle_ = this.parseContentFromRules(raw, { content: rule }).trim();
+  }
+
+  /**
+   * 执行 Android ContentRule.callBackJs。
+   *
+   * Android 会在阅读生命周期中把 event/book/chapter/result 注入脚本；此前 HOS
+   * 只保存了 callBackJs 字段，实际没有任何调用点。这里统一封装脚本上下文，页面
+   * 只需要发送标准事件名即可。回调失败不影响阅读主流程，返回值交给调用方按需处理。
+   */
+  async runSourceEventCallback(source: BookSource, event: string,
+    book?: Record<string, Object> | null, chapter?: Record<string, Object> | null,
+    result: string = ''): Promise<string> {
+    if (!source.eventListener || !source.ruleBookContentCallBackJs.trim()) return '';
+    try {
+      return await JsExpressionEvaluator.evaluate(source.ruleBookContentCallBackJs, {
+        event: event,
+        result: result,
+        book: book || null,
+        chapter: chapter || null,
+        source: source,
+        baseUrl: (chapter && typeof chapter['url'] === 'string')
+          ? chapter['url'] as string : source.sourceUrl,
+        jsLib: source.jsLib || '',
+        variableBlob: source.variableComment || '',
+      });
+    } catch (error) {
+      console.warn('[SrcEx] source callback failed:', event,
+        error instanceof Error ? error.message : String(error));
+      return '';
+    }
+  }
+
+  /** 执行 Android ContentRule.payAction，返回脚本返回的 URL/布尔值文本。 */
+  async runPayAction(source: BookSource, chapterUrl: string, bookUrl: string = '',
+    book?: Record<string, Object> | null, chapter?: Record<string, Object> | null): Promise<string> {
+    const action = (source.ruleBookContentPayAction || '').trim();
+    if (!action) return '';
+    // Android 允许 payAction 直接写成带 {{baseUrl.match(...)}} 的购买 URL。
+    if (/^https?:\/\//i.test(action) && action.includes('{{')) {
+      return this.resolveTocUrlTemplate(action, chapterUrl || bookUrl || source.sourceUrl);
+    }
+    try {
+      return (await JsExpressionEvaluator.evaluate(action, {
+        result: '',
+        src: '',
+        baseUrl: chapterUrl || bookUrl || source.sourceUrl,
+        bookUrl: bookUrl,
+        book: book || null,
+        chapter: chapter || null,
+        source: source,
+        jsLib: source.jsLib || '',
+        variableBlob: source.variableComment || '',
+      })).trim();
+    } catch (error) {
+      console.warn('[SrcEx] payAction failed:', error instanceof Error ? error.message : String(error));
+      return '';
+    }
+  }
+
   async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false,
     nextChapterUrl?: string): Promise<string> {
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
@@ -2455,6 +2664,10 @@ export class SourceExecutor {
         }
       }
       let raw = await this.fetchContentHtml(contentUrl, headers, source, bookUrl || '');
+      raw = await this.applyLoginCheckJs_(raw, source, contentUrl);
+      raw = this.applyContentSourceRegex_(raw, source.ruleBookContentSourceRegex);
+      raw = await this.applyContentWebJs_(raw, source, contentUrl);
+      this.updateContentTitle_(raw, source);
       console.info('[SrcEx] getContent raw len=' + (raw || '').length + ' prefix=' + (raw || '').substring(0, 200));
       if (!raw) { console.warn('[SrcEx] getContent empty response'); return ''; }
 
@@ -2642,7 +2855,19 @@ export class SourceExecutor {
             // 当纯文本排版，否则 <br>/<p>/<div> 会丢失段落边界；漫画仍保留图片标签。
             const finalContent = preserveImages ? ContentCleaner.formatKeepImg(cleaned, pageUrl) :
               ContentCleaner.formatHtml(cleaned);
-            contentParts.push(finalContent);
+            let pageContent = finalContent;
+            if (source.ruleBookContentSubContent) {
+              const subResult = this.parseContentFromRules(pageHtml, {
+                content: source.ruleBookContentSubContent,
+              });
+              if (subResult) {
+                const subCleaned = this.applyReplaceRegex(subResult, source.ruleBookContentReplaceRegex);
+                const subContent = preserveImages ? ContentCleaner.formatKeepImg(subCleaned, pageUrl) :
+                  ContentCleaner.formatHtml(subCleaned);
+                if (subContent) pageContent += '\n' + subContent;
+              }
+            }
+            contentParts.push(pageContent);
             console.info('[SrcEx] getContent page', page + 1, 'extracted', result.length, 'chars → cleaned', cleaned.length, 'chars');
           } else {
             console.info('[SrcEx] getContent page', page + 1, 'empty result, ruleBookContent=[' + source.ruleBookContent + '] htmlLen=' + pageHtml.length);
@@ -2932,6 +3157,21 @@ export class SourceExecutor {
     if (effectiveTocUrlRule) {
       tocUrl = this.resolveUrl(effectiveTocUrlRule, tocUrl);
     }
+    const preUpdateJs = (source.ruleTocPreUpdateJs || '').trim();
+    if (preUpdateJs) {
+      try {
+        if (!this.engineInitialized) await this.initialize();
+        await JsExpressionEvaluator.evaluate(preUpdateJs, {
+          source: source,
+          baseUrl: tocUrl,
+          result: '',
+          jsLib: source.jsLib || '',
+          variableBlob: source.variableComment || '',
+        });
+      } catch (error) {
+        console.warn('[SrcEx] Toc preUpdateJs failed:', error instanceof Error ? error.message : String(error));
+      }
+    }
     // 协议相对 URL 补全（//www.example.com -> https://www.example.com）
     if (tocUrl.startsWith('//')) {
       tocUrl = 'https:' + tocUrl;
@@ -2973,6 +3213,7 @@ export class SourceExecutor {
         ...parseHeader(source.header)
       };
       let resp = await this.fetchWithOpts(tocUrl, headers, source);
+      resp = await this.applyLoginCheckJs_(resp, source, tocUrl);
       // 短响应检测：可能是 JSON 错误（如 {"code":4005,"msg":"认证失败"}）
       if (!resp || resp.length < 100) {
         const body = resp || '';
@@ -3016,6 +3257,9 @@ export class SourceExecutor {
         tocTitle: source.ruleTocTitle || '',
         tocUrlItem: source.ruleTocUrlItem || '',
         isVolume: source.ruleTocIsVolume || '',
+        isVip: source.ruleTocIsVip || '',
+        isPay: source.ruleTocIsPay || '',
+        updateTime: source.ruleTocUpdateTime || '',
       };
       const progressChapters: BookSourceChapter[] = [];
       const progressChapterKeys = new Map<string, number>();
@@ -3318,6 +3562,9 @@ export class SourceExecutor {
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
               isVolume: source.ruleTocIsVolume || '',
+              isVip: source.ruleTocIsVip || '',
+              isPay: source.ruleTocIsPay || '',
+              updateTime: source.ruleTocUpdateTime || '',
             };
             if (retryTocRules.toc) {
               let retryChapters: BookSourceChapter[] = [];
@@ -3354,6 +3601,9 @@ export class SourceExecutor {
               tocTitle: source.ruleTocTitle || '',
               tocUrlItem: source.ruleTocUrlItem || '',
               isVolume: source.ruleTocIsVolume || '',
+              isVip: source.ruleTocIsVip || '',
+              isPay: source.ruleTocIsPay || '',
+              updateTime: source.ruleTocUpdateTime || '',
             };
             const wvChapters = await this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
@@ -3761,6 +4011,7 @@ export class SourceExecutor {
       this.resolveDynamicRuleTemplate(
         (source as unknown as Record<string, string>).ruleSearchLastChapter || '', source, ruleUrl
       ),
+      this.resolveDynamicRuleTemplate(source.ruleSearchLastUpdateTime || '', source, ruleUrl),
     ]);
     const nameRule = dynamicRules[0];
     const authorRule = dynamicRules[1];
@@ -3770,6 +4021,7 @@ export class SourceExecutor {
     const wordCountRule = dynamicRules[5];
     const introRule = dynamicRules[6];
     const lastChapterRule = dynamicRules[7];
+    const lastUpdateTimeRule = dynamicRules[8];
     const isAiSource = source.isAiGenerated || (source.sourceName || '').endsWith('(AI)');
     const fullNameRule = isAiSource
       ? (aiTitleAttributeRule(noteUrlRule) || aiTitleAttributeRule(nameRule)) : '';
@@ -3847,6 +4099,7 @@ export class SourceExecutor {
     const getWordCount = compileFieldRule(wordCountRule);
     const getIntro = compileFieldRule(introRule);
     const getLastChapter = compileFieldRule(lastChapterRule);
+    const getLastUpdateTime = compileFieldRule(lastUpdateTimeRule);
     const getFullName = compileFieldRule(fullNameRule);
     const ajaxAuthorValues = await this.resolveAjaxFieldValues_(
       items.slice(0, parseItemCount), authorRule, source, baseUrl);
@@ -3959,13 +4212,14 @@ export class SourceExecutor {
       const cssWordCount = getWordCount(item);
       const cssIntro = getIntro(item);
       const cssLastChapter = getLastChapter(item);
+      const cssLastUpdateTime = getLastUpdateTime(item);
 
       results.push({
         key: (source.sourceUrl || '') + '|' + noteUrl + '|' + idx,
         name: name, author: author || '',
         coverUrl: coverUrl || '', noteUrl: noteUrl || '',
         origin: source.sourceName || '未知', originUrl: source.sourceUrl || '',
-        kind: cssKind || '', wordCount: cssWordCount || '', lastUpdateTime: '', latestChapterTitle: cssLastChapter || '', introduce: cssIntro || '', helperMsg: '',
+        kind: cssKind || '', wordCount: cssWordCount || '', lastUpdateTime: cssLastUpdateTime || '', latestChapterTitle: cssLastChapter || '', introduce: cssIntro || '', helperMsg: '',
         duration: 0, searchTime: Date.now(),
         sourceCount: 1, sourceOrigins: [],
         coverDecodeJs: source.coverDecodeJs || '',
@@ -4830,7 +5084,19 @@ export class SourceExecutor {
       const volumeRule = rules['isVolume'] || '';
       const volumeValue = volumeRule ? this.getPath(itemObj as Record<string, unknown>, volumeRule) : undefined;
       const isVolume = volumeValue !== undefined && /^(true|1)$/i.test(String(volumeValue));
-      chapters.push({ title: title || '第' + (index + 1) + '章', url, index, isVolume });
+      const vipRule = rules['isVip'] || '';
+      const payRule = rules['isPay'] || '';
+      const updateTimeRule = rules['updateTime'] || '';
+      const vipValue = vipRule ? this.getPath(itemObj as Record<string, unknown>, this.cleanRule(vipRule)) : undefined;
+      const payValue = payRule ? this.getPath(itemObj as Record<string, unknown>, this.cleanRule(payRule)) : undefined;
+      const updateValue = updateTimeRule
+        ? this.getPath(itemObj as Record<string, unknown>, this.cleanRule(updateTimeRule)) : undefined;
+      chapters.push({
+        title: title || '第' + (index + 1) + '章', url, index, isVolume,
+        isVip: vipValue !== undefined && /^(true|1|yes|vip)$/i.test(String(vipValue)),
+        isPay: payValue !== undefined && /^(true|1|yes|pay|paid)$/i.test(String(payValue)),
+        updateTime: updateValue === undefined || updateValue === null ? '' : String(updateValue),
+      });
     }
     return chapters;
   }
@@ -4947,6 +5213,9 @@ export class SourceExecutor {
           tocTitle: rules['tocTitle'] || '',
           tocUrlItem: rules['tocUrlItem'] || '',
           isVolume: rules['isVolume'] || '',
+          isVip: rules['isVip'] || '',
+          isPay: rules['isPay'] || '',
+          updateTime: rules['updateTime'] || '',
         };
         return await this.parseJsonToc(parsed as Object, jsonRules, tocUrl);
       } catch (error) {
@@ -5136,6 +5405,9 @@ export class SourceExecutor {
         const hasRuleUrl = !!chapterUrl;
         const isVolumeValue = await resolveTocField(rules['isVolume'] || '');
         const isVolume = /^(true|1)$/i.test(isVolumeValue);
+        const isVipValue = await resolveTocField(rules['isVip'] || '');
+        const isPayValue = await resolveTocField(rules['isPay'] || '');
+        const updateTimeValue = await resolveTocField(rules['updateTime'] || '');
         if (!chapterUrl) chapterUrl = isVolume ? (title + index) : tocUrl;
         if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
         if (chapterUrl && (!isVolume || hasRuleUrl) &&
@@ -5147,6 +5419,9 @@ export class SourceExecutor {
           url: chapterUrl,
           index: index,
           isVolume: isVolume,
+          isVip: /^(true|1|yes|vip)$/i.test(isVipValue),
+          isPay: /^(true|1|yes|pay|paid)$/i.test(isPayValue),
+          updateTime: updateTimeValue,
         };
       }));
       chapters.push(...batchResults);
@@ -5197,6 +5472,9 @@ export class SourceExecutor {
         title: title || ('章节' + (deduped.length + 1)),
         url: url,
         isVolume: !!ch.isVolume,
+        isVip: !!ch.isVip,
+        isPay: !!ch.isPay,
+        updateTime: ch.updateTime || '',
       });
     }
 
@@ -5205,6 +5483,30 @@ export class SourceExecutor {
     }
     for (let i = 0; i < deduped.length; i++) {
       deduped[i].index = i;
+    }
+    const formatJs = (source.ruleTocFormatJs || '').trim();
+    if (formatJs) {
+      for (let i = 0; i < deduped.length; i++) {
+        const chapter = deduped[i];
+        try {
+          const formatted = JsExpressionEvaluator.evaluateSync(formatJs +
+            '\n;typeof title !== "undefined" ? title : result', {
+            source: source,
+            result: chapter.title,
+            title: chapter.title,
+            index: i + 1,
+            chapter: chapter,
+            jsLib: source.jsLib || '',
+            variableBlob: source.variableComment || '',
+          } as JsEvalContext);
+          if (formatted && formatted !== 'undefined' && formatted !== 'null') {
+            chapter.title = formatted.replace(/^['"`]|['"`]$/g, '').trim() || chapter.title;
+          }
+        } catch (error) {
+          console.warn('[SrcEx] Toc formatJs failed:', error instanceof Error ? error.message : String(error));
+          break;
+        }
+      }
     }
     return deduped;
   }

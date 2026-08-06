@@ -158,7 +158,8 @@ export class BookshelfTransferService {
           wordCount: info.wordCount || '',
           introduce: info.introduce || '',
           lastUpdateTime: info.lastUpdateTime || '',
-          latestChapterTitle: chapters.length > 0 ? chapters[chapters.length - 1].title : '',
+          latestChapterTitle: info.latestChapterTitle ||
+            (chapters.length > 0 ? chapters[chapters.length - 1].title : ''),
           totalChapterNum: chapters.length,
         }, groupId, chapters);
         result.success++;
@@ -196,7 +197,8 @@ export class BookshelfTransferService {
       wordCount: info.wordCount || item.wordCount,
       introduce: info.introduce || item.introduce || introOverride,
       lastUpdateTime: info.lastUpdateTime || item.lastUpdateTime,
-      latestChapterTitle: item.latestChapterTitle || (chapters.length > 0 ? chapters[chapters.length - 1].title : ''),
+      latestChapterTitle: item.latestChapterTitle || info.latestChapterTitle ||
+        (chapters.length > 0 ? chapters[chapters.length - 1].title : ''),
       totalChapterNum: chapters.length,
     }, groupId, chapters);
   }
@@ -251,6 +253,9 @@ export class BookshelfTransferService {
       item.index = ch.index >= 0 ? ch.index : idx;
       item.title = ch.title || '';
       item.url = ch.url || '';
+      item.isVip = !!ch.isVip;
+      item.isPay = !!ch.isPay;
+      item.chapterUpdateTime = ch.updateTime || '';
       item.createTime = now;
       item.updateTime = now;
       return item;

@@ -154,6 +154,7 @@ export struct ChapterListPage {
           if (stored.length > 0) {
             this.chapters_ = stored.map((chapter): BookSourceChapter => ({
               index: chapter.index, title: chapter.title, url: chapter.url, isVolume: false,
+              isVip: chapter.isVip, isPay: chapter.isPay, updateTime: chapter.chapterUpdateTime || '',
             }));
             ChapterCache.chapters = this.chapters_;
             ChapterCache.bookUrl = this.bookUrl;
@@ -847,6 +848,14 @@ export struct ChapterListPage {
                   .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                   .wordBreak(WordBreak.BREAK_ALL)
                   .layoutWeight(1)
+                if (ch.isVip) {
+                  Text('VIP').fontSize(10).fontColor(ThemeColors.error(this.isDark))
+                    .margin({ left: 6 })
+                }
+                if (ch.isPay && !ch.isVip) {
+                  Text('付费').fontSize(10).fontColor(ThemeColors.secondaryText(this.isDark))
+                    .margin({ left: 6 })
+                }
               }
               .width('100%').padding({ top: 10, bottom: 10, left: 16, right: 16 })
               .backgroundColor(ch.index === this.durChapterIndex
