@@ -18,6 +18,9 @@ export const ChapterTableCreate = `
     is_cached INTEGER DEFAULT 0,
     duration INTEGER DEFAULT 0,
     audio_url TEXT DEFAULT '',
+    is_vip INTEGER DEFAULT 0,
+    is_pay INTEGER DEFAULT 0,
+    chapter_update_time TEXT DEFAULT '',
     create_time INTEGER DEFAULT 0,
     update_time INTEGER DEFAULT 0,
     FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
@@ -141,6 +144,9 @@ export class ChapterTable {
       item.url = key;
       item.createTime = old ? old.createTime : now;
       item.updateTime = now;
+      item.isVip = !!ch.isVip;
+      item.isPay = !!ch.isPay;
+      item.chapterUpdateTime = ch.updateTime || '';
       return item;
     });
     await this.insertChapters(newChapters);
@@ -164,6 +170,9 @@ export class ChapterTable {
         isCached: RdbUtil.long(rs, 'is_cached') === 1,
         duration: RdbUtil.long(rs, 'duration'),
         audioUrl: RdbUtil.string(rs, 'audio_url') || '',
+        isVip: RdbUtil.long(rs, 'is_vip') === 1,
+        isPay: RdbUtil.long(rs, 'is_pay') === 1,
+        chapterUpdateTime: RdbUtil.string(rs, 'chapter_update_time') || '',
         createTime: RdbUtil.long(rs, 'create_time'),
         updateTime: RdbUtil.long(rs, 'update_time'),
         start: RdbUtil.long(rs, 'start'),
@@ -188,6 +197,9 @@ export class ChapterTable {
       'is_cached': ch.isCached ? 1 : 0,
       'duration': ch.duration,
       'audio_url': ch.audioUrl,
+      'is_vip': ch.isVip ? 1 : 0,
+      'is_pay': ch.isPay ? 1 : 0,
+      'chapter_update_time': ch.chapterUpdateTime || '',
       'create_time': ch.createTime,
       'update_time': ch.updateTime,
       'start': ch.start,

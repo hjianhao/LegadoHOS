@@ -217,6 +217,8 @@ struct ReadPage {
   private rawChapterContent_: string = '';
   /** 当前章净化后的显示标题（用户规则 applyTitle 结果） */
   @State displayTitle_: string = '';
+  /** 书源 START_READ 只在本次阅读页首次成功打开章节时触发一次。 */
+  private sourceStartEventSent_: boolean = false;
 
   onLoginRequired(): void {
     if (this.loginRequired && !this.loginDlg) {
@@ -535,10 +537,13 @@ struct ReadPage {
 		            const ct = new ChapterTable(db);
 		            const dbChapters = await ct.getChaptersByBookId(this.bookId_);
 		            if (dbChapters.length > 0) {
-	              chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
+	          chapters = dbChapters.map((ch: BookChapter): BookSourceChapter => ({
 	                index: ch.index,
 	                title: ch.title,
 	                url: ch.url,
+	                isVip: ch.isVip,
+	                isPay: ch.isPay,
+	                updateTime: ch.chapterUpdateTime || '',
 	              }));
 		              console.info('[ReadPage] Loaded chapters from DB:', chapters.length);
 		            }
@@ -577,6 +582,9 @@ struct ReadPage {
 	                  index: ch.index,
 	                  title: ch.title,
 	                  url: ch.url,
+	                  isVip: ch.isVip,
+	                  isPay: ch.isPay,
+	                  updateTime: ch.chapterUpdateTime || '',
 	                }));
 	                dbChapterCount = chapters.length;
 	                console.info('[ReadPage] Loaded chapters from DB cache:', chapters.length);
@@ -743,6 +751,10 @@ struct ReadPage {
         this.saveProgress();
         this.preloadAdjacentChapters_(idx);
         this.cacheSurrounding_(idx);
+        if (!this.sourceStartEventSent_) {
+          this.sourceStartEventSent_ = true;
+          this.notifySourceEvent_('START_READ', ch);
+        }
         return;
       }
     }
@@ -771,6 +783,12 @@ struct ReadPage {
       }
       if (content && content.length > 50) {
         this.applyChapterContent_(loadedIdx, content);
+        // Android ContentRule.title 允许从正文页补充章节标题；网络抓取完成后覆盖目录标题，
+        // 仅对当前章节生效，预加载的邻章不会改变当前阅读页标题。
+        if (loadedIdx === this.currentIndex) {
+          const contentTitle = globalSourceExecutor.getLastContentTitle();
+          if (contentTitle) this.displayTitle_ = this.purifyTitle_(contentTitle);
+        }
         // 持久化缓存到数据库（content 为净化前原文，净化结果不落缓存）
         this.saveToDbCache_(loadedIdx, content);
       } else if (this.isLocalEpub_ && previousIndex !== idx && this.text.length > 50 && !fromToc) {
@@ -792,6 +810,10 @@ struct ReadPage {
     }
     this.isLoading = false;
     this.finishScrollRebuild_(rebuildScroll, true);
+    if (!this.sourceStartEventSent_ && this.rawChapterContent_.length > 0) {
+      this.sourceStartEventSent_ = true;
+      this.notifySourceEvent_('START_READ', ch);
+    }
     // 保存阅读进度
     this.saveProgress();
     // 无缝翻页：预加载上下章
@@ -1566,6 +1588,7 @@ struct ReadPage {
           content: '', contentLength: 0,
           isRead: false, isDownloaded: false, isCached: false,
           duration: 0, audioUrl: '', createTime: now, updateTime: now,
+          isVip: !!ch.isVip, isPay: !!ch.isPay, chapterUpdateTime: ch.updateTime || '',
         };
         // 还原已缓存的内容
         const cached = contentByUrl.get(ch.url);
@@ -1633,6 +1656,7 @@ struct ReadPage {
 
 	  async aboutToDisappear(): Promise<void> {
 	    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
+    this.notifySourceEvent_('END_READ', this.allChapters_[this.currentIndex]);
     // 对齐安卓：退出阅读时尝试自动备份（24h 节流）
     BackupService.autoBack().catch((e: Error) => console.warn('[ReadPage] autoBack failed:', e.message));
 	    if (this.progressUploadTimer_ >= 0) {
@@ -1683,7 +1707,11 @@ struct ReadPage {
     if (!ch || !this.bookUrl) return;
     const bookTable = new BookTable(AppDatabase.getInstance().rdbStore);
     console.info('[ReadPage] saveProgressAsync calling DB...');
-    try { await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageIndex); console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex); } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
+    try {
+      await bookTable.updateReadingProgress(this.bookUrl, this.currentIndex, ch.title || '', this.totalChapters_, this.pageIndex);
+      this.notifySourceEvent_('SAVE_READ', ch);
+      console.info('[ReadPage] saveProgressAsync DB done: page=' + this.pageIndex);
+    } catch (_) { console.info('[ReadPage] saveProgressAsync DB failed'); }
   }
 
   /** 保存进度并尝试上传到云端（silent=true 时静默，供定时/退出场景） */
@@ -2379,6 +2407,9 @@ struct ReadPage {
         index: ch.index,
         title: ch.title,
         url: ch.url,
+        isVip: ch.isVip,
+        isPay: ch.isPay,
+        updateTime: ch.chapterUpdateTime || '',
       }));
       this.totalChapters_ = this.allChapters_.length;
       this.chapters = this.allChapters_;
@@ -2542,6 +2573,9 @@ struct ReadPage {
           isCached: false,
           duration: 0,
           audioUrl: '',
+          isVip: !!ch.isVip,
+          isPay: !!ch.isPay,
+          chapterUpdateTime: ch.updateTime || '',
           createTime: now,
           updateTime: now,
         }));
@@ -2706,10 +2740,71 @@ struct ReadPage {
     return this.source_?.sourceName || this.origin || (this.isLocalBook_ ? '本地书籍' : '未知书源');
   }
 
+  /** 发送 Android 兼容的书源回调事件；回调脚本不得阻塞阅读页面。 */
+  private notifySourceEvent_(event: string, chapter?: BookSourceChapter): void {
+    if (!this.source_ || this.isLocalBook_ || !this.bookUrl) return;
+    const book: Record<string, Object> = {};
+    book['name'] = this.bookName;
+    book['author'] = this.bookAuthor;
+    book['bookUrl'] = this.bookUrl;
+    book['origin'] = this.origin;
+    book['originUrl'] = this.originUrl;
+    let chapterObject: Record<string, Object> | null = null;
+    if (chapter) {
+      chapterObject = {};
+      chapterObject['index'] = chapter.index;
+      chapterObject['title'] = chapter.title;
+      chapterObject['url'] = chapter.url;
+      chapterObject['isVip'] = chapter.isVip || false;
+      chapterObject['isPay'] = chapter.isPay || false;
+    }
+    globalSourceExecutor.runSourceEventCallback(this.source_, event, book, chapterObject)
+      .catch((error: Error) => console.warn('[ReadPage] source event failed:', event, error.message));
+  }
+
+  /** 执行当前章节的 Android payAction；返回 URL 时进入可交互 WebView，返回 true 时刷新正文。 */
+  private async executePayAction_(): Promise<void> {
+    this.showMenu = false;
+    const source = this.source_;
+    const chapter = this.allChapters_[this.currentIndex];
+    if (!source || !chapter) return;
+    const book: Record<string, Object> = {};
+    book['name'] = this.bookName;
+    book['author'] = this.bookAuthor;
+    book['bookUrl'] = this.bookUrl;
+    const chapterObject: Record<string, Object> = {};
+    chapterObject['index'] = chapter.index;
+    chapterObject['title'] = chapter.title;
+    chapterObject['url'] = chapter.url;
+    chapterObject['isVip'] = chapter.isVip || false;
+    chapterObject['isPay'] = chapter.isPay || false;
+    const result = await globalSourceExecutor.runPayAction(source, chapter.url, this.bookUrl, book, chapterObject);
+    if (/^https?:\/\//i.test(result)) {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/WebFetchPage',
+        params: { url: result, interactive: 'true' },
+      });
+      return;
+    }
+    if (/^(true|1|ok|success|购买成功)$/i.test(result.trim())) {
+      UiUtil.showToast(this.getUIContext(), { message: '购买操作已完成，正在刷新章节', duration: 1800 });
+      await this.loadChapter(this.currentIndex, true);
+    } else {
+      UiUtil.showToast(this.getUIContext(), { message: result || '付费操作未返回成功', duration: 1800 });
+    }
+  }
+
   /** 顶部“更多”承载低频阅读工具，底部只保留高频入口。 */
   private showReadToolsMenu_(): void {
     this.showMenu = false;
     const options: OptionItem[] = [];
+    if (this.source_ && this.source_.ruleBookContentPayAction.trim() && !this.isLocalBook_) {
+      options.push({
+        title: '执行付费操作',
+        description: '执行当前书源的章节购买规则',
+        action: () => { this.executePayAction_(); },
+      });
+    }
     if (!this.isLocalBook_) {
       options.push({
         title: '更换书源',

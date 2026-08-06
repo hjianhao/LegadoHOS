@@ -648,6 +648,9 @@ export struct BookshelfPage {
       item.index = ch.index >= 0 ? ch.index : index;
       item.title = ch.title || '';
       item.url = ch.url || '';
+      item.isVip = !!ch.isVip;
+      item.isPay = !!ch.isPay;
+      item.chapterUpdateTime = ch.updateTime || '';
       item.createTime = now;
       item.updateTime = now;
       return item;

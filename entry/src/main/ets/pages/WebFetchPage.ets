@@ -17,11 +17,13 @@ export struct WebFetchPage {
   @State fetchUrl: string = '';
   @State statusText: string = '正在加载...';
   @State isLoaded: boolean = false;
+  @State interactive: boolean = false;
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
     if (params) {
       this.fetchUrl = params['url'] || '';
+      this.interactive = params['interactive'] === 'true';
     }
     if (!this.fetchUrl) {
       this.statusText = '无效的 URL';
@@ -31,8 +33,12 @@ export struct WebFetchPage {
   onPageEnd(): void {
     if (this.isLoaded) return;
     this.isLoaded = true;
-    this.statusText = '页面已加载，提取内容...';
+    this.statusText = this.interactive ? '页面已加载，可完成购买或登录操作' : '页面已加载，提取内容...';
     console.info('[WebFetch] Page loaded:', this.fetchUrl);
+
+    // 交互模式用于书源 payAction/login 等需要用户操作的 URL，不自动提取或返回，
+    // 保留完整页面直到用户点击“返回阅读”。
+    if (this.interactive) return;
 
     // 等待 Cloudflare 挑战完成（通常需要几秒）
     setTimeout((): void => {
@@ -83,7 +89,10 @@ export struct WebFetchPage {
 
       // 隐藏的 Web 组件（缩小到几乎不可见，但保持可渲染）
       Web({ src: this.fetchUrl, controller: this.controller })
-        .width(1).height(1).position({ x: 0, y: 0 })
+        .width(this.interactive ? '100%' : 1)
+        .height(this.interactive ? '100%' : 1)
+        .layoutWeight(this.interactive ? 1 : 0)
+        .visibility(this.interactive ? Visibility.Visible : Visibility.Hidden)
         .onPageEnd((): void => { this.onPageEnd(); })
         .onErrorReceive((_event) => {
           console.error('[WebFetch] Load error');
@@ -96,9 +105,13 @@ export struct WebFetchPage {
 
       // 显示实际内容的预览（可选）
       if (this.isLoaded) {
-        Button($r('app.string.common_back')).margin(16).fontSize(14)
+        Button(this.interactive ? '返回阅读' : $r('app.string.common_back')).margin(16).fontSize(14)
           .onClick((): void => {
-            UiUtil.back(this.getUIContext(), { url: 'pages/MainPage' });
+            if (this.interactive) {
+              UiUtil.back(this.getUIContext());
+            } else {
+              UiUtil.back(this.getUIContext(), { url: 'pages/MainPage' });
+            }
           })
       }
     }

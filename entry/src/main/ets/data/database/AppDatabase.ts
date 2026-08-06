@@ -195,6 +195,9 @@ export class AppDatabase {
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE books ADD COLUMN charset TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN start INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN end INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN is_vip INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN is_pay INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE chapters ADD COLUMN chapter_update_time TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_book_content_replace_regex TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN cover_decode_js TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN variable_comment TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
@@ -236,15 +239,30 @@ export class AppDatabase {
       if (!rawJson) continue;
       try {
         const obj: Record<string, Object> = JSON.parse(rawJson) as Record<string, Object>;
-        const rs2: Record<string, Object> = (obj['ruleSearch'] || {}) as Record<string, Object>;
+        const nested = (value: Object): Record<string, Object> => {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            return value as Record<string, Object>;
+          }
+          if (typeof value === 'string') {
+            try {
+              const parsed: Object = JSON.parse(value);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed as Record<string, Object>;
+              }
+            } catch (_e) { /* 普通字符串规则 */ }
+          }
+          return {};
+        };
+        const rs2: Record<string, Object> = nested(obj['ruleSearch']);
         const toStr = (val: Object): string => {
           if (typeof val === 'string') return val;
           if (val === null || val === undefined) return '';
           return JSON.stringify(val);
         };
-        const bi: Record<string, Object> = (obj['ruleBookInfo'] || {}) as Record<string, Object>;
-        const rtc: Record<string, Object> = (obj['ruleToc'] || {}) as Record<string, Object>;
-        const rc: Record<string, Object> = (obj['ruleContent'] || {}) as Record<string, Object>;
+        const bi: Record<string, Object> = nested(obj['ruleBookInfo']);
+        const rtc: Record<string, Object> = nested(obj['ruleToc']);
+        const rc: Record<string, Object> = nested(obj['ruleContent']);
+        const rawToc = obj['ruleToc'];
         const row: relationalStore.ValuesBucket = {
           'id': id,
           'rule_search_url': toStr(obj['ruleSearchUrl'] || rs2['searchUrl'] || obj['searchUrl'] || ''),
@@ -255,7 +273,8 @@ export class AppDatabase {
           'rule_search_note_url': toStr(obj['ruleSearchNoteUrl'] || rs2['bookUrl'] || ''),
           'rule_search_kind': toStr(obj['ruleSearchKind'] || rs2['kind'] || ''),
           'rule_search_word_count': toStr(obj['ruleSearchWordCount'] || rs2['wordCount'] || ''),
-          'rule_search_last_update_time': toStr(obj['ruleSearchLastUpdateTime'] || rs2['lastUpdateTime'] || ''),
+          'rule_search_last_update_time': toStr(obj['ruleSearchLastUpdateTime'] ||
+            rs2['updateTime'] || rs2['lastUpdateTime'] || ''),
           'rule_search_introduce': toStr(obj['ruleSearchIntroduce'] || rs2['intro'] || rs2['introduce'] || ''),
           'rule_book_info_init': toStr(obj['ruleBookInfoInit'] || bi['init'] || ''),
           'rule_book_info_name': toStr(obj['ruleBookInfoName'] || bi['name'] || ''),
@@ -264,10 +283,12 @@ export class AppDatabase {
           'rule_book_info_introduce': toStr(obj['ruleBookInfoIntroduce'] || bi['intro'] || ''),
           'rule_book_info_kind': toStr(obj['ruleBookInfoKind'] || bi['kind'] || ''),
           'rule_book_info_word_count': toStr(obj['ruleBookInfoWordCount'] || bi['wordCount'] || ''),
-          'rule_book_info_last_update_time': toStr(obj['ruleBookInfoLastUpdateTime'] || bi['lastUpdateTime'] || ''),
+          'rule_book_info_last_update_time': toStr(obj['ruleBookInfoLastUpdateTime'] ||
+            bi['updateTime'] || bi['lastUpdateTime'] || ''),
           'rule_book_info_toc_url': toStr(obj['ruleBookInfoTocUrl'] || bi['tocUrl'] || obj['tocUrl'] || ''),
           'rule_toc_url': toStr(obj['ruleTocUrl'] || rtc['tocUrl'] || ''),
-          'rule_toc': toStr(typeof obj['ruleToc'] === 'object' ? (obj['ruleToc'] as Record<string, Object>)['chapterList'] || '' : obj['ruleToc'] || rtc['chapterList'] || ''),
+          'rule_toc': toStr(typeof rawToc === 'string' && Object.keys(rtc).length === 0
+            ? rawToc : rtc['chapterList'] || ''),
           'rule_toc_title': toStr(obj['ruleTocTitle'] || rtc['chapterName'] || ''),
           'rule_toc_url_item': toStr(obj['ruleTocUrlItem'] || rtc['chapterUrl'] || ''),
           'rule_book_content_url': toStr(obj['ruleBookContentUrl'] || rc['contentUrl'] || ''),

@@ -24,6 +24,11 @@ export interface BookChapter {
   createTime: number;
   updateTime: number;
 
+  /** 书源目录标记（Android TocRule.isVip/isPay/updateTime） */
+  isVip?: boolean;
+  isPay?: boolean;
+  chapterUpdateTime?: string;
+
   /** 本地 TXT 章节在原始文件中的起始字节偏移 */
   start?: number;
   /** 本地 TXT 章节在原始文件中的结束字节偏移 */

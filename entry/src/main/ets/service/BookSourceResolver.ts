@@ -14,6 +14,9 @@ export class BookSourceResolver {
     const regular = sources.find((source: BookSource): boolean =>
       source.sourceUrl === book.originUrl || source.sourceName === book.origin);
     if (regular) return regular;
+    const byPattern = sources.find((source: BookSource): boolean =>
+      BookSourceResolver.matchesBookUrlPattern_(source.bookUrlPattern, book.bookUrl));
+    if (byPattern) return byPattern;
     return await this.resolveAiProfile_(book.id, book.bookUrl);
   }
 
@@ -34,6 +37,9 @@ export class BookSourceResolver {
         source.sourceName === cleanName;
     });
     if (regular) return regular;
+    const byPattern = sources.find((source: BookSource): boolean =>
+      BookSourceResolver.matchesBookUrlPattern_(source.bookUrlPattern, bookUrl));
+    if (byPattern) return byPattern;
     return await this.resolveAiProfile_(bookId, bookUrl);
   }
 
@@ -41,6 +47,18 @@ export class BookSourceResolver {
     const s = (value || '').trim();
     const idx = s.indexOf('##');
     return idx >= 0 ? s.substring(0, idx).trim() : s;
+  }
+
+  private static matchesBookUrlPattern_(pattern: string, bookUrl: string): boolean {
+    const rawPattern = (pattern || '').trim();
+    const url = (bookUrl || '').trim();
+    if (!rawPattern || rawPattern.toUpperCase() === 'NONE' || !url) return false;
+    try {
+      return new RegExp(rawPattern).test(url);
+    } catch (_e) {
+      console.warn('[BookSourceResolver] invalid bookUrlPattern:', rawPattern);
+      return false;
+    }
   }
 
   private static async resolveAiProfile_(bookId: number, bookUrl: string): Promise<BookSource | null> {

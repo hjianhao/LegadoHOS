@@ -196,6 +196,10 @@ export interface BookSourceBookInfo {
   kind: string;
   wordCount: string;
   lastUpdateTime: string;
+  latestChapterTitle?: string;
+  canReName?: boolean;
+  downloadUrls?: string[];
+  relatedBooks?: Object[];
   tocUrl?: string;
   chapters: BookSourceChapter[];
 }
@@ -205,6 +209,9 @@ export interface BookSourceChapter {
   url: string;
   index: number;
   isVolume?: boolean;  // 是否是卷标题
+  isVip?: boolean;
+  isPay?: boolean;
+  updateTime?: string;
 }
 
 /**
@@ -228,6 +235,60 @@ function toRuleString(val: unknown): string {
 }
 
 /**
+ * Android Legado 的嵌套规则既可能是 JSON 对象，也可能是“JSON 对象字符串”。
+ * Gson 的自定义反序列化器同时支持这两种形式，HOS 端也必须先还原对象，
+ * 否则 ruleSearch/BookInfo 等字段会在导入时整体变成空规则。
+ */
+function parseNestedRuleObject(val: unknown): Record<string, unknown> {
+  if (val && typeof val === 'object' && !Array.isArray(val)) {
+    return val as Record<string, unknown>;
+  }
+  if (typeof val === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(val);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (_e) {
+      // 普通字符串规则（例如 ruleToc 的 CSS 选择器）不是嵌套对象。
+    }
+  }
+  return {};
+}
+
+function isNestedRuleObjectString(val: unknown): boolean {
+  if (typeof val !== 'string') return false;
+  try {
+    const parsed: unknown = JSON.parse(val);
+    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch (_e) {
+    return false;
+  }
+}
+
+/** 从 rawJson 取出嵌套对象，供导出时保留未建模字段。 */
+function rawNestedRuleObject(rawJson: string, key: string): Record<string, Object> {
+  if (!rawJson) return {};
+  try {
+    const raw = JSON.parse(rawJson) as Record<string, unknown>;
+    const nested = parseNestedRuleObject(raw[key]);
+    return nested as Record<string, Object>;
+  } catch (_e) {
+    return {};
+  }
+}
+
+function mergeNestedRuleObject(
+  rawJson: string, key: string, standard: Record<string, Object>
+): Record<string, Object> {
+  const result: Record<string, Object> = rawNestedRuleObject(rawJson, key);
+  Object.keys(standard).forEach((field: string): void => {
+    result[field] = standard[field];
+  });
+  return result;
+}
+
+/**
  * 创建空的 BookSource 对象（所有字段为默认值）
  */
 export function createEmptyBookSource(): BookSource {
@@ -241,11 +302,12 @@ export function createEmptyBookSource(): BookSource {
  */
 export function parseBookSource(json: any): BookSource {
   // 兼容嵌套格式: ruleSearch.bookList 或 ruleSearchList
-  const rs = json.ruleSearch || {};
-  const re = json.ruleExplore || {};
-  const bi = json.ruleBookInfo || {};
-  const rt = json.ruleToc || {};
-  const rc = json.ruleContent || {};
+  const rs = parseNestedRuleObject(json.ruleSearch);
+  const re = parseNestedRuleObject(json.ruleExplore);
+  const bi = parseNestedRuleObject(json.ruleBookInfo);
+  const rt = parseNestedRuleObject(json.ruleToc);
+  const rc = parseNestedRuleObject(json.ruleContent);
+  const rr = parseNestedRuleObject(json.ruleReview);
   return {
     id: json.id || 0,
     sourceName: json.sourceName || json.bookSourceName || '',
@@ -264,7 +326,9 @@ export function parseBookSource(json: any): BookSource {
     ruleSearchNoteUrl: toRuleString(json.ruleSearchNoteUrl || rs.bookUrl || ''),
     ruleSearchKind: toRuleString(json.ruleSearchKind || rs.kind || ''),
     ruleSearchWordCount: toRuleString(json.ruleSearchWordCount || rs.wordCount || ''),
-    ruleSearchLastUpdateTime: toRuleString(json.ruleSearchLastUpdateTime || rs.lastUpdateTime || ''),
+    // Android 标准字段名是 updateTime，lastUpdateTime 是旧版 HOS 兼容名。
+    ruleSearchLastUpdateTime: toRuleString(json.ruleSearchLastUpdateTime ||
+      rs.updateTime || rs.lastUpdateTime || ''),
     ruleSearchIntroduce: toRuleString(json.ruleSearchIntroduce || rs.intro || rs.introduce || ''),
     ruleBookInfoInit: toRuleString(json.ruleBookInfoInit || bi.init || ''),
     ruleBookInfoName: toRuleString(json.ruleBookInfoName || bi.name || ''),
@@ -273,16 +337,19 @@ export function parseBookSource(json: any): BookSource {
     ruleBookInfoIntroduce: toRuleString(json.ruleBookInfoIntroduce || bi.intro || bi.introduce || ''),
     ruleBookInfoKind: toRuleString(json.ruleBookInfoKind || bi.kind || ''),
     ruleBookInfoWordCount: toRuleString(json.ruleBookInfoWordCount || bi.wordCount || ''),
-    ruleBookInfoLastUpdateTime: toRuleString(json.ruleBookInfoLastUpdateTime || bi.lastUpdateTime || ''),
+    ruleBookInfoLastUpdateTime: toRuleString(json.ruleBookInfoLastUpdateTime ||
+      bi.updateTime || bi.lastUpdateTime || ''),
     ruleBookInfoFrom: toRuleString(json.ruleBookInfoFrom || bi.from || ''),
     ruleTocUrl: toRuleString(json.ruleTocUrl || rt.tocUrl || ''),
-    ruleToc: toRuleString(typeof json.ruleToc === 'string' ? json.ruleToc : rt.chapterList || ''),
+    ruleToc: toRuleString(typeof json.ruleToc === 'string' && !isNestedRuleObjectString(json.ruleToc)
+      ? json.ruleToc : rt.chapterList || ''),
     ruleTocTitle: toRuleString(json.ruleTocTitle || rt.chapterName || ''),
     ruleTocUrlItem: toRuleString(json.ruleTocUrlItem || rt.chapterUrl || ''),
     ruleBookContentUrl: toRuleString(json.ruleBookContentUrl || rc.contentUrl || ''),
     ruleBookContent: toRuleString(json.ruleBookContent || rc.content || ''),
     ruleBookContentNext: toRuleString(json.ruleBookContentNext || rc.nextContentUrl || ''),
     ruleExplores: toRuleString(json.ruleExplores),
+    // ReviewRule 同样支持对象和 JSON 字符串两种 Android 导入格式。
     ruleReview: toRuleString(json.ruleReview),
     script: toRuleString(json.script),
     header: toRuleString(json.header || ''),
@@ -327,7 +394,7 @@ export function parseBookSource(json: any): BookSource {
     ruleExploreKind: json.ruleExploreKind || re.kind || '',
     ruleExploreWordCount: json.ruleExploreWordCount || re.wordCount || '',
     ruleExploreLastChapter: json.ruleExploreLastChapter || re.lastChapter || '',
-    ruleExploreLastUpdateTime: json.ruleExploreLastUpdateTime || re.lastUpdateTime || '',
+    ruleExploreLastUpdateTime: json.ruleExploreLastUpdateTime || re.updateTime || re.lastUpdateTime || '',
     ruleExploreNoteUrl: json.ruleExploreNoteUrl || re.bookUrl || '',
     ruleExploreIntroduce: json.ruleExploreIntroduce || re.intro || '',
     exploreUrl: json.exploreUrl || '',
@@ -339,16 +406,16 @@ export function parseBookSource(json: any): BookSource {
     enabledExplore: json.enabledExplore !== false,
     exploreScreen: json.exploreScreen || '',
     review: json.review || '',
-    reviewUrl: json.reviewUrl || '',
-    ruleReviewUrl: json.ruleReviewUrl || '',
-    ruleReviewAvatar: json.ruleReviewAvatar || '',
-    ruleReviewContent: json.ruleReviewContent || '',
-    ruleReviewPostTime: json.ruleReviewPostTime || '',
-    ruleReviewQuoteUrl: json.ruleReviewQuoteUrl || '',
-    reviewAvatar: json.reviewAvatar || '',
-    reviewContent: json.reviewContent || '',
-    reviewPostTime: json.reviewPostTime || '',
-    reviewQuoteUrl: json.reviewQuoteUrl || '',
+    reviewUrl: json.reviewUrl || rr.reviewUrl || '',
+    ruleReviewUrl: json.ruleReviewUrl || rr.reviewUrl || '',
+    ruleReviewAvatar: json.ruleReviewAvatar || rr.avatarRule || '',
+    ruleReviewContent: json.ruleReviewContent || rr.contentRule || '',
+    ruleReviewPostTime: json.ruleReviewPostTime || rr.postTimeRule || '',
+    ruleReviewQuoteUrl: json.ruleReviewQuoteUrl || rr.reviewQuoteUrl || '',
+    reviewAvatar: json.reviewAvatar || rr.avatarRule || '',
+    reviewContent: json.reviewContent || rr.contentRule || '',
+    reviewPostTime: json.reviewPostTime || rr.postTimeRule || '',
+    reviewQuoteUrl: json.reviewQuoteUrl || rr.reviewQuoteUrl || '',
     rawJson: json.rawJson || '',
     createTime: json.createTime || 0,
     // Android Legado 以 lastUpdateTime 判断导入源是否需要更新。
@@ -397,7 +464,18 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
   // 兼容旧版 HOS/Legado 书源字段：这些字段不能只依赖 rawJson 保留，
   // 新建或 AI 生成的 BookSource 也必须能够完整导出。
   result['ruleExplores'] = source.ruleExplores;
-  result['ruleReview'] = source.ruleReview;
+  result['ruleReview'] = mergeNestedRuleObject(source.rawJson, 'ruleReview', {
+    'reviewUrl': source.ruleReviewUrl || source.reviewUrl,
+    'avatarRule': source.ruleReviewAvatar || source.reviewAvatar,
+    'contentRule': source.ruleReviewContent || source.reviewContent,
+    'postTimeRule': source.ruleReviewPostTime || source.reviewPostTime,
+    'reviewQuoteUrl': source.ruleReviewQuoteUrl || source.reviewQuoteUrl,
+    'voteUpUrl': rawNestedRuleObject(source.rawJson, 'ruleReview')['voteUpUrl'] || '',
+    'voteDownUrl': rawNestedRuleObject(source.rawJson, 'ruleReview')['voteDownUrl'] || '',
+    'postReviewUrl': rawNestedRuleObject(source.rawJson, 'ruleReview')['postReviewUrl'] || '',
+    'postQuoteUrl': rawNestedRuleObject(source.rawJson, 'ruleReview')['postQuoteUrl'] || '',
+    'deleteUrl': rawNestedRuleObject(source.rawJson, 'ruleReview')['deleteUrl'] || ''
+  });
   result['script'] = source.script;
   result['respond'] = source.respond;
   result['ruleExploreScreen'] = source.ruleExploreScreen;
@@ -419,7 +497,7 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
   result['customButton'] = source.customButton;
 
   result['searchUrl'] = source.ruleSearchUrl;
-  result['ruleSearch'] = {
+  result['ruleSearch'] = mergeNestedRuleObject(source.rawJson, 'ruleSearch', {
     'checkKeyWord': source.ruleSearchCheckKeyWord,
     'bookList': source.ruleSearchList,
     'name': source.ruleSearchName,
@@ -427,30 +505,34 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
     'kind': source.ruleSearchKind,
     'wordCount': source.ruleSearchWordCount,
     'lastChapter': source.ruleSearchLastChapter,
+    // Android Legado 的标准字段名；lastUpdateTime 仅保留给旧版 HOS。
+    'updateTime': source.ruleSearchLastUpdateTime,
     'lastUpdateTime': source.ruleSearchLastUpdateTime,
     'intro': source.ruleSearchIntroduce,
     'coverUrl': source.ruleSearchCover,
     'bookUrl': source.ruleSearchNoteUrl
-  };
-  result['ruleExplore'] = {
+  });
+  result['ruleExplore'] = mergeNestedRuleObject(source.rawJson, 'ruleExplore', {
     'bookList': source.ruleExploreList,
     'name': source.ruleExploreName,
     'author': source.ruleExploreAuthor,
     'kind': source.ruleExploreKind,
     'wordCount': source.ruleExploreWordCount,
     'lastChapter': source.ruleExploreLastChapter,
+    'updateTime': source.ruleExploreLastUpdateTime,
     'lastUpdateTime': source.ruleExploreLastUpdateTime,
     'intro': source.ruleExploreIntroduce,
     'coverUrl': source.ruleExploreCover,
     'bookUrl': source.ruleExploreNoteUrl
-  };
-  result['ruleBookInfo'] = {
+  });
+  result['ruleBookInfo'] = mergeNestedRuleObject(source.rawJson, 'ruleBookInfo', {
     'init': source.ruleBookInfoInit,
     'name': source.ruleBookInfoName,
     'author': source.ruleBookInfoAuthor,
     'kind': source.ruleBookInfoKind,
     'wordCount': source.ruleBookInfoWordCount,
     'lastChapter': source.ruleBookInfoLastChapter,
+    'updateTime': source.ruleBookInfoLastUpdateTime,
     'lastUpdateTime': source.ruleBookInfoLastUpdateTime,
     'intro': source.ruleBookInfoIntroduce,
     'coverUrl': source.ruleBookInfoCover,
@@ -459,8 +541,8 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
     'downloadUrls': source.ruleBookInfoDownloadUrls,
     'relatedBooks': source.ruleBookInfoRelatedBooks,
     'from': source.ruleBookInfoFrom
-  };
-  result['ruleToc'] = {
+  });
+  result['ruleToc'] = mergeNestedRuleObject(source.rawJson, 'ruleToc', {
     'tocUrl': source.ruleTocUrl,
     'chapterList': source.ruleToc,
     'chapterName': source.ruleTocTitle,
@@ -472,8 +554,8 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
     'isPay': source.ruleTocIsPay,
     'updateTime': source.ruleTocUpdateTime,
     'nextTocUrl': source.ruleTocNextTocUrl
-  };
-  result['ruleContent'] = {
+  });
+  result['ruleContent'] = mergeNestedRuleObject(source.rawJson, 'ruleContent', {
     'contentUrl': source.ruleBookContentUrl,
     'content': source.ruleBookContent,
     'subContent': source.ruleBookContentSubContent,
@@ -486,7 +568,7 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
     'imageDecode': source.ruleBookContentImageDecode,
     'payAction': source.ruleBookContentPayAction,
     'callBackJs': source.ruleBookContentCallBackJs
-  };
+  });
   return result;
 }
 
