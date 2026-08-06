@@ -394,6 +394,24 @@ export function bookSourceToJsonObject(source: BookSource): Record<string, Objec
   result['bookSourceComment'] = source.bookSourceComment;
   result['isAiGenerated'] = source.isAiGenerated;
   result['variableComment'] = source.variableComment;
+  // 兼容旧版 HOS/Legado 书源字段：这些字段不能只依赖 rawJson 保留，
+  // 新建或 AI 生成的 BookSource 也必须能够完整导出。
+  result['ruleExplores'] = source.ruleExplores;
+  result['ruleReview'] = source.ruleReview;
+  result['script'] = source.script;
+  result['respond'] = source.respond;
+  result['ruleExploreScreen'] = source.ruleExploreScreen;
+  result['review'] = source.review;
+  result['ruleReviewUrl'] = source.ruleReviewUrl;
+  result['ruleReviewAvatar'] = source.ruleReviewAvatar;
+  result['ruleReviewContent'] = source.ruleReviewContent;
+  result['ruleReviewPostTime'] = source.ruleReviewPostTime;
+  result['ruleReviewQuoteUrl'] = source.ruleReviewQuoteUrl;
+  result['reviewUrl'] = source.reviewUrl;
+  result['reviewAvatar'] = source.reviewAvatar;
+  result['reviewContent'] = source.reviewContent;
+  result['reviewPostTime'] = source.reviewPostTime;
+  result['reviewQuoteUrl'] = source.reviewQuoteUrl;
   result['exploreUrl'] = source.exploreUrl;
   result['exploreScreen'] = source.exploreScreen;
   result['homepageModules'] = source.homepageModules;
