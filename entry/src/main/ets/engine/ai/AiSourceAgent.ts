@@ -3496,6 +3496,7 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
 
   private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<SearchResult[]> {
     if (!this.draft_) return [];
+    const siteOrigin = urlOrigin_(homepage.finalUrl || homepage.url || this.draft_?.sourceUrl || '');
     this.start_(AiStep.DISCOVERY, '检查发现分类');
     if (!this.draft_.exploreUrl && !this.draft_.ruleExplores) {
       // JS 渲染的 SPA 没有静态分类链接，但脚本里可能暴露发现/分类接口
@@ -3584,6 +3585,7 @@ ${this.evidenceRuleHint_(evidence.html)}
 ${this.promptKnowledge_('discovery', lastError, evidence.html)}
 列表字段相对于每个列表项；与搜索结果规则语义相同。
 排行榜（总榜、周榜、月榜、日榜等）也是合法的发现分类；如果页面存在“暂无记录”或分类为空，不要为导航/空壳生成规则，等待 Agent 从首页排行榜入口重新取证。
+${siteOrigin ? `站点域名（详情/搜索接口所在）为 ${siteOrigin}。若列表是 JSON 接口且条目只有 book_id/source/tab 等 ID/来源字段、没有 url/detail_url/href 等详情字段，ruleExploreNoteUrl 必须用字段模板拼出详情地址，例如 https://${siteOrigin}/detail?book_id={{$.book_id}}&source={{$.source}}&tab={{$.tab}}，禁止用 /novel/、/book/ 之类不存在的路径或把 ID 当作完整列表项地址。` : ''}
 发现表格中可能同时有书名、最新章节、作者和“加入书签/阅读”等操作链接；ruleExploreName
 必须比较同一书名链接的可见文本与 title 属性：只有可见文本确实被截短/省略时才优先使用完整 title；如果 title 带站名/栏目名/分类而可见文本是完整书名，必须取 @text/@ownText。ruleExploreName 只能定位书名，必要时使用直接子节点（如 dt > a[title]@text），ruleExploreNoteUrl 必须提取同一书名主链接
 的 @href，禁止使用最新章节或操作按钮链接。若列表是 table，优先使用 table.table tr!0 与
