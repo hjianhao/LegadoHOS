@@ -3533,6 +3533,17 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
   private async prepareDiscovery_(homepage: PageEvidence, keyword: string): Promise<SearchResult[]> {
     if (!this.draft_) return [];
     const siteOrigin = urlOrigin_(homepage.finalUrl || homepage.url || this.draft_?.sourceUrl || '');
+    // 无论 exploreUrl 是否已存在，都先确认平台名单与发现接口基址，好让
+    // “修复已有（平铺）发现配置”时也能改写为动态两级平台配置。
+    this.discoverPlatforms_ = extractDiscoverPlatformsFromScript_(homepage.rawInlineScript || '');
+    if (this.discoverPlatforms_.length > 0 && !this.discoverBaseUrl_ && siteOrigin) {
+      const pageUrlForHint = homepage.finalUrl || homepage.url || '';
+      const discoHint = (homepage.scriptEndpointHints || []).find((hint: string): boolean =>
+        /discovesty?le|discover|discoverstyle|categor|sort|rank/i.test(hint));
+      if (discoHint && pageUrlForHint) {
+        this.discoverBaseUrl_ = absoluteUrl_(discoHint, pageUrlForHint);
+      }
+    }
     this.start_(AiStep.DISCOVERY, '检查发现分类');
     if (!this.draft_.exploreUrl && !this.draft_.ruleExplores) {
       // JS 渲染的 SPA 没有静态分类链接，但脚本里可能暴露发现/分类接口
