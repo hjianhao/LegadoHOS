@@ -925,7 +925,6 @@ export struct ExplorePage {
             Row() {
               Text('↻').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width(24)
               Text(item).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
-                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             }.width('100%').height(40).padding({ left: 16, right: 16 })
               .backgroundColor(ThemeColors.surface(this.isDark))
               .onClick(() => {
@@ -964,7 +963,6 @@ export struct ExplorePage {
                   Column() {
                     Text(source.sourceName).fontSize(16).fontWeight(FontWeight.Medium)
                       .fontColor(ThemeColors.onBackground(this.isDark)).alignSelf(ItemAlign.Start)
-                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(source.group || '').fontSize(11).fontColor(ThemeColors.secondaryText(this.isDark))
                       .alignSelf(ItemAlign.Start).margin({ top: 2 })
                   }.flexShrink(1).alignItems(HorizontalAlign.Start)
@@ -986,7 +984,6 @@ export struct ExplorePage {
                       if (this.getCurrentSourceLine(source)) {
                         Text(this.getCurrentSourceLine(source)).fontSize(11)
                           .fontColor(ThemeColors.secondaryText(this.isDark))
-                          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                           .layoutWeight(1).textAlign(TextAlign.End).margin({ left: 8 })
                       }
                     }
@@ -1066,6 +1063,16 @@ export struct ExplorePage {
     return this.dynamicExpandedUrl === url;
   }
 
+  /** 过滤动态两级里无 url 或明显占位的二级分类瓦片（避免显示无意义的空按钮）。 */
+  private filteredSubNavChildren_(url: string): ExploreCategory[] {
+    const all = this.subCategoryCache[url] || [];
+    return all.filter((cat: ExploreCategory): boolean => {
+      if (!cat.url || cat.url.trim() === '') return false;
+      if (/(点击登录|切换后段|长按刷新|当前为|刷新即可|敬请期待|未开发|暂无记录|加载中)/.test(cat.name)) return false;
+      return true;
+    });
+  }
+
   /**
    * 动态两级发现：一级是若干"平台/分类目录"项，点击展开该目录下的二级分类；
    * 再点另一个一级则切换。二级分类点击后进入书籍列表页。
@@ -1075,7 +1082,7 @@ export struct ExplorePage {
     Column({ space: 6 }) {
       ForEach(this.resolvedCategories, (parent: ExploreCategory) => {
         Button((this.isDynamicExpanded_(parent.url) ? '▾ ' : '▸ ') + parent.name)
-          .width('100%').height(44).fontSize(14)
+          .width('100%').height(46).fontSize(15)
           .fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .borderRadius(8)
@@ -1086,32 +1093,28 @@ export struct ExplorePage {
           if (this.subLoadingUrl === parent.url) {
             Row({ space: 8 }) {
               LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
-              Text('加载分类中…').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+              Text('加载分类中…').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
             }.width('100%').padding({ left: 16, top: 6, bottom: 6 })
           } else {
-            if ((this.subCategoryCache[parent.url] || []).length > 0) {
-              Column({ space: 6 }) {
-                ForEach(this.calculateKindRows(this.subCategoryCache[parent.url] || [], 6), (row: ExploreCategory[]) => {
-                  Row() {
-                    ForEach(row, (child: ExploreCategory) => {
-                      Button(child.name)
-                        .fontSize(12)
-                        .fontColor(ThemeColors.onBackground(this.isDark))
-                        .height(38)
-                        .padding({ left: 4, right: 4 })
-                        .backgroundColor(ThemeColors.surface(this.isDark))
-                        .borderRadius(7)
-                        .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
-                        .layoutWeight(1)
-                        .margin({ left: 3, right: 3, bottom: 4 })
-                        .accessibilityText('打开分类：' + child.name)
-                        .onClick((): void => { this.openCategory(source, child); })
-                    })
-                  }.width('100%').padding({ left: 22, right: 12 })
-                })
-              }.width('100%')
+            if (this.filteredSubNavChildren_(parent.url).length > 0) {
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(this.filteredSubNavChildren_(parent.url), (child: ExploreCategory) => {
+                  Button(child.name)
+                    .fontSize(13)
+                    .fontColor(ThemeColors.onBackground(this.isDark))
+                    .height(40)
+                    .padding({ left: 4, right: 4 })
+                    .width('31%')
+                    .margin({ left: '1%', right: '1%', bottom: 8 })
+                    .backgroundColor(ThemeColors.surface(this.isDark))
+                    .borderRadius(8)
+                    .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
+                    .accessibilityText('打开分类：' + child.name)
+                    .onClick((): void => { this.openCategory(source, child); })
+                }, (child: ExploreCategory): string => child.url || child.name)
+              }.width('100%').padding({ left: 14, right: 14, top: 4 })
             } else {
-              Text('该分类下暂无子分类').fontSize(12)
+              Text('该分类下暂无子分类').fontSize(13)
                 .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4, bottom: 4 })
             }
           }
