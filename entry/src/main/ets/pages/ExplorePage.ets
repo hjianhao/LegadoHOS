@@ -1100,12 +1100,12 @@ export struct ExplorePage {
               Flex({ wrap: FlexWrap.Wrap }) {
                 ForEach(this.filteredSubNavChildren_(parent.url), (child: ExploreCategory) => {
                   Button(child.name)
-                    .fontSize(13)
+                    .fontSize(14)
                     .fontColor(ThemeColors.onBackground(this.isDark))
-                    .height(40)
-                    .padding({ left: 4, right: 4 })
-                    .width('31%')
-                    .margin({ left: '1%', right: '1%', bottom: 8 })
+                    .height(46)
+                    .padding({ left: 6, right: 6 })
+                    .width('47%')
+                    .margin({ left: '1%', right: '1%', bottom: 10 })
                     .backgroundColor(ThemeColors.surface(this.isDark))
                     .borderRadius(8)
                     .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
