@@ -357,6 +357,12 @@ export class SourceChecker {
           invalidGroups.push('发现规则为空');
         } else {
           const exploreSource = this.createExploreSource_(source, exploreUrl);
+          // 动态两级的平台项（一期）返回的是“分类瓦片”而非书籍列表；
+          // 先下沉到第一个真实分类的书籍列表再校验书籍链路。
+          const bookFeedUrl = await this.runBeforeDeadline_(
+            this.resolveExploreToBookFeed_(source, exploreUrl, 3), deadline,
+            source.checkRequestGroup || '');
+          exploreSource.ruleSearchUrl = bookFeedUrl;
           const exploreResults = await this.checkList_(exploreSource, '发现', '', deadline, details, errors);
           const result = selectCheckResult(source, exploreResults);
           if (!result) {
@@ -629,6 +635,94 @@ export class SourceChecker {
 
   private getExploreListRule_(source: BookSource): string {
     return source.ruleExploreList.trim() || source.ruleSearchList.trim();
+  }
+
+  private absExploreUrl_(value: string, baseUrl: string): string {
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    const origin = (baseUrl || '').replace(/^(https?:\/\/[^/]+).*$/, '$1');
+    if (value.startsWith('//')) return ((baseUrl || '').startsWith('https') ? 'https:' : 'http:') + value;
+    if (value.startsWith('/')) return origin + value;
+    const base = (baseUrl || '').replace(/[?#].*$/, '').replace(/\/[^/]*$/, '/');
+    return base + value;
+  }
+
+  /** 从 JSON 中提取分类/列表数组。 */
+  private exploreArrayOf_(json: unknown): Object[] | null {
+    if (Array.isArray(json)) return json as Object[];
+    if (json && typeof json === 'object') {
+      const obj = json as Record<string, unknown>;
+      for (const key of ['data', 'categories', 'category', 'list', 'items', 'result', 'results', 'rows']) {
+        const v = obj[key];
+        if (Array.isArray(v)) return v as Object[];
+      }
+    }
+    return null;
+  }
+
+  /** 是否为“分类瓦片”列表（title + 多数带 url，几乎没有书籍字段）。 */
+  private isExploreCategoryTileList_(json: unknown): boolean {
+    const arr = this.exploreArrayOf_(json);
+    if (!arr || arr.length === 0) return false;
+    let tile = 0;
+    let book = 0;
+    for (const it of arr) {
+      if (!it || typeof it !== 'object') continue;
+      const o = it as Record<string, unknown>;
+      const title = typeof o['title'] === 'string' ? (o['title'] as string).trim() : '';
+      if (title && typeof (o['url'] ?? o['link']) === 'string') tile++;
+      if (o['book_name'] || o['bookName'] || o['author'] || o['book_id'] ||
+        o['bookId'] || o['thumb_url'] || o['cover']) book++;
+    }
+    return tile > 0 && book < Math.ceil(arr.length / 2);
+  }
+
+  /** 从分类瓦片列表取第一个真实存在的子列表地址。 */
+  private firstExploreLeafUrl_(json: unknown, baseUrl: string): string {
+    const arr = this.exploreArrayOf_(json);
+    if (!arr) return '';
+    for (const it of arr) {
+      if (!it || typeof it !== 'object') continue;
+      const o = it as Record<string, unknown>;
+      const title = String(o['title'] || o['name'] || '');
+      if (/点击登录|切换后段|当前为|刷新即可|暂无|敬请期待|未开发|长按刷新|返回/.test(title)) continue;
+      const raw = String((o['url'] ?? o['link']) || '').trim();
+      if (!raw || /^(?:javascript:|#)/i.test(raw)) continue;
+      const abs = this.absExploreUrl_(raw, baseUrl);
+      if (abs) return abs;
+    }
+    return '';
+  }
+
+  /**
+   * 动态两级发现：一级平台项返回的是“分类瓦片”（点击后二级才是书籍列表）。
+   * 若抓取该 URL 得到的是分类瓦片而非书籍，就向下沉到第一个真实子分类的
+   * 书籍列表 URL，作为书籍链路的取证入口（最多下沉 depth 层）。
+   */
+  private async resolveExploreToBookFeed_(source: BookSource, url: string, depth: number): Promise<string> {
+    if (!url || depth <= 0) return url;
+    let body = '';
+    try {
+      body = await NetUtil.httpGet(url, {}, 20000);
+    } catch (_e) {
+      return url;
+    }
+    if (!body || body.length < 10) return url;
+    const trimmed = body.trim();
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return url;
+    let json: unknown;
+    try {
+      json = JSON.parse(trimmed);
+    } catch (_e) {
+      return url;
+    }
+    if (!this.isExploreCategoryTileList_(json)) return url;
+    const leaf = this.firstExploreLeafUrl_(json, url);
+    if (!leaf) return url;
+    const leafPage1 = leaf.replace(/\{\{\s*page\s*\}\}/g, '1')
+      .replace(/\{\{\s*pageNum\s*\}\}/g, '1');
+    console.info('[SourceChecker] 发现两级：平台 ' + url.substring(0, 90) + ' → 分类 ' + leafPage1.substring(0, 90));
+    return this.resolveExploreToBookFeed_(source, leafPage1, depth - 1);
   }
 
   private runBeforeDeadline_<T>(promise: Promise<T>, deadline: number, requestGroup: string): Promise<T> {
