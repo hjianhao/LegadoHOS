@@ -91,6 +91,8 @@ struct AiSourceGeneratePage {
   @StorageLink('isDark') isDark: boolean = false;
   @State homepageUrl: string = '';
   @State searchKeyword: string = '斗罗大陆';
+  /** 用户确认目标网站需要登录：Agent 先弹出登录页面，完成登录后再生成书源。 */
+  @State requireLogin: boolean = false;
   @State isAnalyzing: boolean = false;
   @State steps: AiStepResult[] = [];
   @State expandedStep: number = -1;
@@ -311,8 +313,8 @@ struct AiSourceGeneratePage {
       }
       const results = this.repairMode && this.repairSource_
         ? await this.agent_.repair(this.repairSource_, this.searchKeyword, this.invalidGroups,
-          this.repairScope)
-        : await this.agent_.analyze(this.homepageUrl, this.searchKeyword);
+          this.repairScope, this.requireLogin)
+        : await this.agent_.analyze(this.homepageUrl, this.searchKeyword, this.requireLogin);
       this.steps = results.slice();
       const compiled = results[AiStep.COMPILE];
       UiUtil.showToast(this.getUIContext(), {
@@ -860,6 +862,7 @@ struct AiSourceGeneratePage {
       '模式：' + (this.repairMode ? '诊断修复' : '生成书源'),
       '网站：' + this.homepageUrl,
       '测试关键词：' + this.searchKeyword,
+      '网站需要登录：' + (this.requireLogin ? '是（先登录后生成）' : '否'),
       '',
       '执行日志：',
     ];
@@ -1189,12 +1192,25 @@ struct AiSourceGeneratePage {
           TextInput({ text: this.searchKeyword, placeholder: '输入站内确实存在的书名' })
             .fontSize(14).width('100%').fontColor(ThemeColors.onSurface(this.isDark))
             .onChange((value: string): void => { this.searchKeyword = value; })
+          Row({ space: 8 }) {
+            Toggle({ type: ToggleType.Switch, isOn: this.requireLogin })
+              .onChange((value: boolean): void => { this.requireLogin = value; })
+            Column({ space: 2 }) {
+              Text('网站需要登录').fontSize(14)
+                .fontColor(ThemeColors.onSurface(this.isDark)).width('100%')
+              Text('勾选后 Agent 先弹出登录页面，登录完成后再生成书源')
+                .fontSize(11).lineHeight(16)
+                .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+            }.layoutWeight(1).margin({ left: 8 })
+          }.width('100%').margin({ top: 16 })
           Button(this.repairMode ? '开始诊断并修复' : '开始生成').fontSize(16)
             .fontColor(ThemeColors.onPrimary(this.isDark))
             .backgroundColor(ThemeColors.primary(this.isDark))
             .width('100%').height(48).borderRadius(24).margin({ top: 28 })
             .onClick(() => { void this.startAnalyze(); })
-          Text('Agent 会真实执行搜索、详情、目录和正文规则；遇到登录或验证码会暂停等待操作。')
+          Text(this.requireLogin
+            ? '先登录后生成：Agent 会在分析前弹出登录页面，登录完成后才进行搜索、详情、目录和正文的验证；登录未完成会停止并提示。'
+            : 'Agent 会真实执行搜索、详情、目录和正文规则；遇到登录或验证码会暂停等待操作。')
             .fontSize(11).lineHeight(17).fontColor(ThemeColors.secondaryText(this.isDark))
             .margin({ top: 12 }).width('100%')
         }.padding({ left: 16, right: 16, top: 8 }).width('100%').layoutWeight(1)

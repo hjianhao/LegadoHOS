@@ -93,6 +93,12 @@ export interface SourceAgentRequest {
   invalidGroups?: string[];
   /** 修复链路范围；仅修复模式有效，缺省为全部链路。 */
   scope?: AiRepairScope;
+  /**
+   * 用户确认网站需要登录：Agent 在首页分析之前先弹出交互式 WebView 完成
+   * 登录（Cookie 同步进 CookieStore），后续所有 HTTP/WebView 请求都携带
+   * 登录态；登录未完成则直接失败，不再等到搜索/详情阶段才被动发现。
+   */
+  requireLogin?: boolean;
 }
 
 export interface AgentRequestSpec {
@@ -1316,6 +1322,16 @@ export class AiSourceAgent {
   private searchReinferred_: boolean = false;
   /** 搜索接口要求登录时，已弹出交互式 WebView 让用户登录（只尝试一次）。 */
   private searchLoginAttempted_: boolean = false;
+  /**
+   * 用户勾选“网站需要登录”：启动时先完成前置登录，再执行后续阶段；
+   * 前置登录完成前不允许任何阶段继续。
+   */
+  private requireLogin_: boolean = false;
+  /**
+   * 前置登录步骤已弹出过登录 WebView（无论成功与否）。之后任何阶段再检测到
+   * 登录页都不再重复弹窗，直接按登录未生效报错，避免每个阶段反复打断用户。
+   */
+  private loginPromptSuppressed_: boolean = false;
   /** 测试关键词过短时，已切换到兜底长关键词验证搜索规则（只切换一次）。 */
   private searchFallbackKeyword_: boolean = false;
   /** 本轮已验证过无搜索结果的关键词，空结果页换词时避免重复尝试。 */
@@ -1372,21 +1388,25 @@ export class AiSourceAgent {
     return result;
   }
 
-  async analyze(homepageUrl: string, searchKeyword: string): Promise<AiStepResult[]> {
+  async analyze(homepageUrl: string, searchKeyword: string,
+    requireLogin: boolean = false): Promise<AiStepResult[]> {
     return await this.run_({
       homepageUrl: homepageUrl,
       searchKeyword: searchKeyword,
+      requireLogin: requireLogin,
     });
   }
 
   async repair(source: BookSource, searchKeyword: string,
-    invalidGroups: string[], scope: AiRepairScope = 'all'): Promise<AiStepResult[]> {
+    invalidGroups: string[], scope: AiRepairScope = 'all',
+    requireLogin: boolean = false): Promise<AiStepResult[]> {
     return await this.run_({
       homepageUrl: source.sourceUrl,
       searchKeyword: searchKeyword,
       existingSource: source,
       invalidGroups: invalidGroups,
       scope: scope,
+      requireLogin: requireLogin,
     });
   }
 
@@ -1409,6 +1429,8 @@ export class AiSourceAgent {
     this.siteOriginChanged_ = false;
     this.searchReinferred_ = false;
     this.searchLoginAttempted_ = false;
+    this.requireLogin_ = !!request.requireLogin;
+    this.loginPromptSuppressed_ = false;
     this.searchFallbackKeyword_ = false;
     this.searchedKeywords_ = [];
     this.searchNameCleanupSuffix_ = '';
@@ -1439,6 +1461,11 @@ export class AiSourceAgent {
     draft.ruleSearchCheckKeyWord = keyword;
 
     try {
+      // 用户勾选“网站需要登录”时，先完成前置登录，保证后续搜索/详情/目录/
+      // 正文取证都携带登录态；登录未完成直接失败，不做无登录态的后续操作。
+      if (this.requireLogin_) {
+        await this.loginFirst_(request.homepageUrl);
+      }
       // 一些已有书源是 API 源，sourceUrl 只是 API 域名根地址，并没有可供分析的 HTML 首页。
       // 修复时首页抓取失败不能直接终止，应优先用旧书源的搜索请求取得真实取证页面。
       const homepage = await this.fetchRepairEntry_(request.homepageUrl, keyword);
@@ -1965,6 +1992,11 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
           continue;
         }
         if (isLikelyAiLoginResultPage(searchEvidenceHtml)) {
+          // 用户已勾选“网站需要登录”并完成前置登录，搜索仍返回登录页说明
+          // 登录未生效；直接失败，不再重复弹窗。
+          if (this.loginPromptSuppressed_) {
+            throw new Error('搜索接口仍返回登录页，登录可能未生效，请确认账号已登录后重新运行');
+          }
           lastError = '搜索请求返回了登录页面，搜索接口可能需要登录认证';
           this.log_('  搜索取证失败：' + lastError);
           // 搜索接口要求登录时，弹出交互式 WebView 让用户完成登录，登录后
@@ -4483,6 +4515,44 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     return '';
   }
 
+  /**
+   * 前置登录步骤（用户勾选“网站需要登录”）。
+   *
+   * 在首页分析之前弹出交互式 WebView 完成登录：登录页面的 Cookie 会由
+   * CloudflareDialog 同步进 CookieStore，之后的 HTTP 请求（NetUtil 自动注入
+   * Cookie）与隐藏 WebView 请求（共享应用级 Web Cookie 存储）都携带登录态。
+   * 登录未完成或仍停留在登录页时直接抛错终止，避免后续阶段在无登录态下
+   * 反复失败、把登录页当成内容页生成无效规则。
+   */
+  private async loginFirst_(homepageUrl: string): Promise<void> {
+    this.start_(AiStep.HOMEPAGE, '网站需要登录，先完成登录');
+    this.log_('  网站标记为需要登录，先弹出登录页面等待用户完成认证');
+    if (!this.callback_.onRequestWebView && !WebViewFetcher.interactiveFetcher) {
+      throw new Error('当前页面没有交互登录能力，无法完成登录');
+    }
+    let interactive = '';
+    try {
+      interactive = await this.requestInteractivePage_(homepageUrl, 'login',
+        '该网站需要登录，请在页面中完成登录后点击“验证完成”');
+    } catch (e) {
+      throw new Error('登录页面打开失败：' + conciseAiFetchError_(e));
+    }
+    const html = WebViewFetcher.decodeJavaScriptString(interactive || '');
+    if (html.length <= 300) {
+      throw new Error('未完成登录（登录页面未返回内容）。请重新运行，在登录页面完成登录后点击“验证完成”');
+    }
+    // 登录后仍停留在登录页说明账号或会话未生效；不能把登录页交给后续阶段。
+    if (this.isLoginPage_(html, '')) {
+      throw new Error('登录未生效：页面仍是登录页。请确认账号密码正确，登录成功后再点击“验证完成”');
+    }
+    this.loginPromptSuppressed_ = true;
+    // 保守起见，搜索规则先标记 webView：站点要求登录时浏览会话最可靠。
+    // 定稿前 demoteUnnecessaryWebView_ 会用纯 HTTP 重放验证，能直连
+    // （Cookie 已够用）的站点会自动摘掉标记，日常搜索仍走 HTTP。
+    this.requiresWebView_ = true;
+    this.log_('  登录完成，Cookie 已同步；后续搜索、详情、目录和正文请求将携带登录态');
+  }
+
   private async fetchPage_(url: string, label: string, forceWebView: boolean = false,
     interactiveRequest?: WebViewInteractiveRequest): Promise<PageEvidence> {
     if (!isSafeAiImportUrl(url)) throw new Error(label + ' URL 不是安全公网地址');
@@ -4571,7 +4641,10 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     const challengeForInteraction = (this.isChallengePage_(html) || imageCaptchaPage) &&
       !imageCaptchaHandled && !captchaSolvedByDialog;
     const loginRequired = this.isLoginPage_(html, finalUrl);
-    if ((challengeForInteraction || loginRequired) &&
+    // 用户已勾选“网站需要登录”并完成前置登录后，后续阶段不再重复弹出登录
+    // WebView；若某页仍返回登录页，说明登录未生效，直接失败并给出明确提示。
+    const shouldPromptLogin = loginRequired && !this.loginPromptSuppressed_;
+    if ((challengeForInteraction || shouldPromptLogin) &&
       (this.callback_.onRequestWebView || WebViewFetcher.interactiveFetcher)) {
       const reason = loginRequired
         ? '页面需要登录'
@@ -4610,7 +4683,9 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     if ((this.isChallengePage_(html) && !imageCaptchaHandled) || stillLogin) {
       throw new Error(label + (imageCaptchaPage
         ? '仍停留在图片验证码页，请输入验证码并等待真实搜索结果出现后再点击完成'
-        : '仍被登录或人工验证拦截，请完成操作后再继续'));
+        : this.loginPromptSuppressed_
+          ? '网站仍要求登录（登录可能已失效或未生效），请确认账号已登录后重新运行'
+          : '仍被登录或人工验证拦截，请完成操作后再继续'));
     }
     // 检测"关键字太短"提示页：站点返回 alert("关键字最少 10 个字符")，
     // prepareHtmlForAi 移除 <script> 后会变成空页面。在清理前检测并抛出
