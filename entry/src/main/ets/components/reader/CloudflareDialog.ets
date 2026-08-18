@@ -106,6 +106,11 @@ export struct CloudflareDialog {
               .fontColor(ThemeColors.secondaryText(this.isDark)).margin({ top: 16 })
               .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
               .padding({ left: 20, right: 20 })
+            Button('重试').fontSize(14).height(40).padding({ left: 24, right: 24 })
+              .borderRadius(20).margin({ top: 20 })
+              .fontColor(ThemeColors.onPrimary(this.isDark))
+              .backgroundColor(ThemeColors.primary(this.isDark))
+              .onClick(() => { this.retryLoad_(); })
           }.width('100%').layoutWeight(1).alignItems(HorizontalAlign.Center)
         } else {
           Web({ src: this.url, controller: this.webController })
@@ -145,16 +150,29 @@ export struct CloudflareDialog {
               console.warn('[CloudflareDialog] WebView error:', errInfo);
               this.hasError = true;
               this.isLoading = false;
-              this.pageTitle = '页面加载出错，请关闭后重试';
+              this.pageTitle = '页面加载出错，可重试或关闭';
             })
             .onHttpErrorReceive((event) => {
               const code = event?.response?.getResponseCode();
-              // 403 可能来自 Cloudflare 验证页（Turnstile），让用户看到页面而非报错
-              if ((code && code >= 500) || code === 404 || code === 410) {
-                console.warn('[CloudflareDialog] HTTP error:', code);
-                this.hasError = true;
-                this.pageTitle = '页面错误 ' + (code || '');
-                this.isLoading = false;
+              // 子资源（图片/字体/统计接口）404/5xx 经常伴随正常页面出现，
+              // 不能把整个交互页面切换成错误界面。即使主框架 4xx/5xx，浏览器
+              // 仍会渲染站点错误页正文：保留 WebView 让用户看到真实内容并自行
+              // 重试或导航，只是把状态码记入标题，避免“页面明明显示了一部分
+              // 却突然跳到错误页”的断送式体验。
+              let isMainFrame = true;
+              try {
+                isMainFrame = event?.request?.isMainFrame() ?? true;
+              } catch (_e) {
+                // 旧版本 Web API 可能不支持 isMainFrame，按主框架处理。
+              }
+              if (code && (code >= 500 || code === 404 || code === 410)) {
+                console.warn('[CloudflareDialog] HTTP error:', code,
+                  'mainFrame=', String(isMainFrame), 'url=', this.url);
+                if (isMainFrame) {
+                  this.pageTitle = '页面错误 ' + code + ' · 可切换视图或重试后继续';
+                }
+              } else {
+                console.info('[CloudflareDialog] Subresource HTTP status:', code);
               }
             })
             .mixedMode(MixedMode.All)
@@ -340,6 +358,13 @@ export struct CloudflareDialog {
     } catch (e) {
       console.warn('[CloudflareDialog] Auto-open login panel failed:', (e as Error).message);
     }
+  }
+
+  /** 真实加载失败（网络/TLS 等）后重置错误状态，Web 组件重新挂载会自动重新加载 URL。 */
+  private retryLoad_(): void {
+    this.hasError = false;
+    this.isLoading = true;
+    this.pageTitle = '页面加载中...';
   }
 
   private async extractAndClose(): Promise<void> {

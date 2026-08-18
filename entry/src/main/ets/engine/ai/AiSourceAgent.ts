@@ -4545,6 +4545,10 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     if (this.isLoginPage_(html, '')) {
       throw new Error('登录未生效：页面仍是登录页。请确认账号密码正确，登录成功后再点击“验证完成”');
     }
+    // 记录实际捕获的页面标题，便于确认打开的是站点登录入口而不是错误地址。
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,80})<\/title>/i);
+    this.log_('  登录后页面标题：' + (titleMatch ? titleMatch[1].trim() : '(无标题)') +
+      '（页面长度 ' + html.length + '）');
     this.loginPromptSuppressed_ = true;
     // 保守起见，搜索规则先标记 webView：站点要求登录时浏览会话最可靠。
     // 定稿前 demoteUnnecessaryWebView_ 会用纯 HTTP 重放验证，能直连
