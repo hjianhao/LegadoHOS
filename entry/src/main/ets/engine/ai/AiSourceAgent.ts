@@ -173,6 +173,68 @@ interface AiExploreCategoryConfig {
   rules: Record<string, string>;
 }
 
+/** 判断一组 JSON 条目是否是“发现分类瓦片”（title+url，url 指向书籍列表）而非书籍列表。 */
+function isLikelyDiscoverCategoryListJson_(json: unknown): boolean {
+  if (!Array.isArray(json) || json.length === 0) return false;
+  const items = json as Array<Record<string, unknown>>;
+  let tile = 0;
+  let bookLike = 0;
+  for (const it of items) {
+    if (!it || typeof it !== 'object' || Array.isArray(it)) continue;
+    const o = it as Record<string, unknown>;
+    const title = typeof o['title'] === 'string' ? (o['title'] as string).trim() : '';
+    const rawUrl = typeof (o['url'] ?? o['link']) === 'string' ? String(o['url'] ?? o['link']).trim() : '';
+    if (title && rawUrl) tile++;
+    if (o['book_name'] || o['bookName'] || o['book_title'] || o['author'] ||
+      o['book_id'] || o['bookId'] || o['cover'] || o['thumb_url'] || o['content']) {
+      bookLike++;
+    }
+  }
+  if (tile === 0) return false;
+  // 分类瓦片为主，且基本不含书籍字段，才判定为分类列表（而非书籍列表）。
+  return bookLike < Math.ceil(items.length / 2);
+}
+
+/**
+ * 从 JSON 中发现接口响应中展开“分类瓦片”：每个分类的 url 指向真实的书籍
+ * 列表接口。返回新的取证入口（第一个分类的书籍列表 URL）；不是分类瓦片
+ * 或解析失败则原样返回入参。
+ */
+export function expandDiscoverCategoryListFromJson_(json: unknown, baseUrl: string): {
+  lines: string[]; firstUrl: string
+} {
+  const empty: { lines: string[]; firstUrl: string } = { lines: [], firstUrl: '' };
+  const items = Array.isArray(json)
+    ? (json as Array<Record<string, unknown>>)
+    : (json && typeof json === 'object' && Array.isArray((json as Record<string, unknown>)['data']))
+      ? ((json as Record<string, unknown>)['data'] as Array<Record<string, unknown>>)
+      : [];
+  if (!isLikelyDiscoverCategoryListJson_(items)) return empty;
+  const lines: string[] = [];
+  let firstUrl = '';
+  for (const it of items) {
+    if (!it || typeof it !== 'object' || Array.isArray(it)) continue;
+    const o = it as Record<string, unknown>;
+    const title = String(o['title'] || '').trim();
+    const rawUrl = String((o['url'] ?? o['link']) || '').trim();
+    if (!title || !rawUrl || /^(?:javascript:|#)/i.test(rawUrl)) continue;
+    const abs = absoluteUrl_(rawUrl, baseUrl);
+    if (!abs) continue;
+    if (!firstUrl) firstUrl = abs;
+    lines.push(title + '::' + abs);
+  }
+  if (lines.length === 0) return empty;
+  return { lines, firstUrl };
+}
+
+/** 聚合源/换源等返回“分类瓦片”时使用，供 trySynthesize 等判断发现接口是否可用。 */
+
+/** 将 URL 模板里的分页占位符实例化为第 1 页（取证用）。 */
+function materializeFirstPage_(url: string): string {
+  return (url || '').replace(/\{\{\s*page\s*\}\}/g, '1')
+    .replace(/\{\{\s*pageNum\s*\}\}/g, '1');
+}
+
 function aiExploreString_(value: Object | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -3322,6 +3384,10 @@ ruleSearchNoteUrl 在 HTML 中必须取“书名主链接”的 @href，不能�
       this.done_(AiStep.DISCOVERY, '分类配置无法转换为安全 URL，已跳过');
       return [];
     }
+    // 发现入口可能是“分类瓦片”接口（如晴天聚合的 /discovestyle）：响应是一组
+    // 分类，每个分类的 url 才真正指向书籍列表。先展开成发现分类并切到第一个
+    // 真实书籍列表取证，再走下面的书籍规则生成。
+    firstUrl = await this.expandDiscoverCategoryListEntry_(firstUrl);
     let lastError = '';
     // 有些站点的分类导航仍然存在，但分类页本身为空；首页的排行榜通常
     // 仍有真实书籍。先从首页同站链接收集少量排行榜候选，只有首个入口
@@ -3565,6 +3631,42 @@ ${this.evidenceRuleHint_(discoveryEvidenceHtml)}
     this.draft_.ruleExplores = '';
     this.done_(AiStep.DISCOVERY, '发现规则未通过验证，已安全跳过');
     return [];
+  }
+
+  /**
+   * 发现入口返回“分类瓦片”接口时（如晴天聚合 /discovestyle），把每个分类的
+   * 书籍列表 url 展开成发现分类，并切到第一个真实书籍列表作为取证入口。
+   * 用 NetUtil 直连获取纯 JSON，避免短 JSON 响应触发 WebView 包装成 HTML。
+   */
+  private async expandDiscoverCategoryListEntry_(firstUrl: string): Promise<string> {
+    const draft = this.draft_;
+    if (!draft || !isSafeAiImportUrl(firstUrl)) return firstUrl;
+    let body = '';
+    try {
+      body = await NetUtil.httpGet(firstUrl, this.headerMap_(draft.header || ''), 20000);
+    } catch (e) {
+      this.log_('  分类瓦片接口预取失败，按普通列表处理：' +
+        ((e as Error).message || '').substring(0, 100));
+      return firstUrl;
+    }
+    if (!body || body.length < 10) return firstUrl;
+    const trimmed = body.trim();
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return firstUrl;
+    let json: unknown;
+    try {
+      json = JSON.parse(trimmed);
+    } catch (_e) {
+      return firstUrl;
+    }
+    const expanded = expandDiscoverCategoryListFromJson_(json, firstUrl);
+    if (expanded.lines.length === 0 || !expanded.firstUrl) return firstUrl;
+    draft.exploreUrl = expanded.lines.join('\n');
+    draft.ruleExplores = draft.exploreUrl;
+    const probeFirstUrl = materializeFirstPage_(expanded.firstUrl);
+    this.results_[AiStep.HOMEPAGE].data['firstExploreUrl'] = probeFirstUrl;
+    this.log_('  发现入口返回分类瓦片，已展开为 ' + expanded.lines.length +
+      ' 个发现分类；取证入口：' + probeFirstUrl.substring(0, 100));
+    return probeFirstUrl;
   }
 
   /**
