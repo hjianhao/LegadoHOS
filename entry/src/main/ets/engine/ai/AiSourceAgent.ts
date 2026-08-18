@@ -910,6 +910,36 @@ function extractInlineScriptText_(html: string): string {
   return bodies.join('\n');
 }
 
+/**
+ * 从首页脚本的 `sources = { '平台名':['小说','听书',...], ... }` 配置里提取
+ * 含“小说”频道的平台名单，用于生成动态两级发现的一级平台项。
+ */
+export function extractDiscoverPlatformsFromScript_(script: string): string[] {
+  const value = script || '';
+  const configMatch = value.match(/\bsources\s*=\s*\{([\s\S]*?)\}/);
+  if (!configMatch || !configMatch[1]) return [];
+  const entryRe = /['"]([^'"]{1,24})['"]\s*:\s*\[([^\]]*)\]/g;
+  const platforms: string[] = [];
+  let entry: RegExpExecArray | null;
+  while ((entry = entryRe.exec(configMatch[1])) !== null) {
+    const name = (entry[1] || '').trim();
+    if (!name || ['推荐', '全部', '首页', '热门', '男频', '女频'].includes(name)) continue;
+    // 只取“小说”频道的平台，保证分类书籍规则与已验证规则一致。
+    if (!/'小说'/.test(entry[2] || '') && !/"小说"/.test(entry[2] || '')) continue;
+    if (!platforms.includes(name)) platforms.push(name);
+  }
+  return platforms;
+}
+
+/** 把发现接口基址里 source/platform 参数替换为指定平台；没有则补 source=。 */
+export function setDiscoverPlatformUrl_(baseDiscoverUrl: string, platform: string): string {
+  const enc = encodeURIComponent(platform);
+  const value = (baseDiscoverUrl || '').trim();
+  if (/\bsource\s*=/i.test(value)) return value.replace(/\bsource\s*=\s*[^&]*/i, 'source=' + enc);
+  if (/\bplatform\s*=/i.test(value)) return value.replace(/\bplatform\s*=\s*[^&]*/i, 'platform=' + enc);
+  return value + (value.includes('?') ? '&' : '?') + 'source=' + enc;
+}
+
 /** 保留 DOM 结构，同时移除认证值、脚本和提示注入常见载体。 */
 export function prepareSourceAgentHtml(html: string): string {
   return prepareHtmlForAi(html, PAGE_EVIDENCE_LIMIT)
@@ -1584,6 +1614,10 @@ export class AiSourceAgent {
    * 登录页都不再重复弹窗，直接按登录未生效报错，避免每个阶段反复打断用户。
    */
   private loginPromptSuppressed_: boolean = false;
+  /** 聚合源发现：发现接口基址（如 /discovesty?le?source_type=男频&page=1），用于动态两级平台配置。 */
+  private discoverBaseUrl_: string = '';
+  /** 聚合源发现：首页脚本里提取到的“小说”平台名单。 */
+  private discoverPlatforms_: string[] = [];
   /** 测试关键词过短时，已切换到兜底长关键词验证搜索规则（只切换一次）。 */
   private searchFallbackKeyword_: boolean = false;
   /** 本轮已验证过无搜索结果的关键词，空结果页换词时避免重复尝试。 */
@@ -1683,6 +1717,8 @@ export class AiSourceAgent {
     this.searchLoginAttempted_ = false;
     this.requireLogin_ = !!request.requireLogin;
     this.loginPromptSuppressed_ = false;
+    this.discoverBaseUrl_ = '';
+    this.discoverPlatforms_ = [];
     this.searchFallbackKeyword_ = false;
     this.searchedKeywords_ = [];
     this.searchNameCleanupSuffix_ = '';
@@ -3759,6 +3795,7 @@ ${this.evidenceRuleHint_(discoveryEvidenceHtml)}
         if (invalidItems.length > 0) {
           const correctedResults = await this.tryCorrectTableDiscoveryRules_(firstUrl, keyword);
           if (correctedResults.length > 0) {
+            this.applyDynamicPlatformExplore_();
             this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + correctedResults.length +
               ' 本书（已修正表格字段规则）', { firstExploreUrl: firstUrl });
             return correctedResults;
@@ -3768,6 +3805,7 @@ ${this.evidenceRuleHint_(discoveryEvidenceHtml)}
             '），必须让 ruleExploreName 定位书名、ruleExploreNoteUrl 定位书名主链接@href');
         }
         if (usable.length === 0) throw new Error('发现规则没有有效的书籍详情链接');
+        this.applyDynamicPlatformExplore_();
         this.done_(AiStep.DISCOVERY, '发现分类真实返回 ' + usable.length + ' 本书', {
           firstExploreUrl: firstUrl,
         });
@@ -3998,6 +4036,9 @@ ${hints.map((hint: string): string => '- ' + hint).join('\n')}
         lines.push(title + '::' + fixed);
       }
       if (lines.length === 0) return false;
+      // 记录发现接口基址与平台名单，供通过验证后生成动态两级平台配置。
+      this.discoverBaseUrl_ = firstExplore;
+      this.discoverPlatforms_ = extractDiscoverPlatformsFromScript_(homepage.rawInlineScript || '');
       this.draft_.exploreUrl = lines.join('\n');
       this.draft_.ruleExplores = this.draft_.exploreUrl;
       this.results_[AiStep.HOMEPAGE].data['firstExploreUrl'] = firstExplore;
@@ -4011,6 +4052,30 @@ ${hints.map((hint: string): string => '- ' + hint).join('\n')}
         ((e as Error).message || String(e)).substring(0, 120));
       return false;
     }
+  }
+
+  /**
+   * 发现规则通过后，若首页脚本暴露了平台来源列表，把 exploreUrl 由“平铺分类”
+   * 改写成动态两级“平台级”JSON（dynamic:true，点击平台再展开其分类），避免
+   * 一个平台 200+ 分类全平铺、其它平台缺失。
+   */
+  private applyDynamicPlatformExplore_(): void {
+    const draft = this.draft_;
+    if (!draft || !this.discoverBaseUrl_ || this.discoverPlatforms_.length === 0) return;
+    const items: Array<Record<string, Object>> = [];
+    for (const platform of this.discoverPlatforms_) {
+      items.push({
+        title: platform,
+        url: setDiscoverPlatformUrl_(this.discoverBaseUrl_, platform),
+        dynamic: true,
+      });
+    }
+    if (items.length === 0) return;
+    const json = JSON.stringify(items);
+    draft.exploreUrl = json;
+    draft.ruleExplores = json;
+    this.log_('  发现改为动态两级平台配置：' + this.discoverPlatforms_.length +
+      ' 个“小说”平台作为一级，点击平台再展开该平台分类');
   }
 
   private async regenerateDiscoveryEntry_(homepage: PageEvidence): Promise<boolean> {
