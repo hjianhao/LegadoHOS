@@ -235,6 +235,55 @@ function materializeFirstPage_(url: string): string {
     .replace(/\{\{\s*pageNum\s*\}\}/g, '1');
 }
 
+/**
+ * 站点根路径可能是登录/用户中心落地页，真正的内容首页在另一路径（需要点
+ * “在线阅读/进入书架”才到，如晴天聚合的 /online_search）。从这类落地页的
+ * 链接/按钮中找内容首页链接；只接受同站、http(s)、带明显“阅读/书架/搜索”
+ * 文字或内容路径的候选。
+ */
+export function inferContentHomeUrl_(html: string, pageUrl: string): string {
+  const value = html || '';
+  if (!value) return '';
+  const origin = urlOrigin_(pageUrl);
+  if (!origin) return '';
+  const candidates: Array<{ url: string; score: number }> = [];
+  const pushUrl = (rawUrl: string, text: string): void => {
+    if (!rawUrl) return;
+    let abs = '';
+    try {
+      abs = absoluteUrl_(rawUrl, pageUrl);
+    } catch (_e) {
+      return;
+    }
+    if (!abs || !/^https?:\/\//i.test(abs)) return;
+    if (urlOrigin_(abs).toLowerCase() !== origin.toLowerCase()) return;
+    if (abs.replace(/\/+$/, '') === pageUrl.replace(/\/+$/, '')) return;
+    const textScore = /在线阅读|进入阅读|进入书架|开始阅读|在线搜索|继续阅读|进入书城|在线看|内容阅读|书城阅读|阅读器|开始看书/.test(text)
+      ? 2 : 0;
+    const pathScore = /(?:\/|:)(?:online_search|online-search|onlinesearch|index|home|novel(?:s)?|book(?:s)?|read(?:er)?|search|book_shelf|bookshelf|readmode|reader)(?:[\/?#.]|$)/i.test(abs)
+      ? 2 : 0;
+    if (textScore === 0 && pathScore === 0) return;
+    candidates.push({ url: abs, score: textScore + pathScore });
+  };
+  const anchorRe = /<a\b[^>]*\bhref\s*=\s*(["'])([^"']+)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  let anchor: RegExpExecArray | null;
+  while ((anchor = anchorRe.exec(value)) !== null) {
+    const text = (anchor[3] || '').replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;|&#160;/gi, ' ').replace(/\s+/g, ' ').trim();
+    pushUrl(anchor[2] || '', text);
+  }
+  // 兼容按钮式跳转：onclick 里 location.href='...' / window.location='...'。
+  const btnRe = /<(?:button|a|div|span)\b[^>]*\bonclick\s*=\s*["'][^"']*(?:location(?:\.href)?|window\.location)[^"']*=\s*["']([^"';]+)["'][^>]*>/gi;
+  let btn: RegExpExecArray | null;
+  while ((btn = btnRe.exec(value)) !== null) {
+    pushUrl(btn[1] || '', (btn[0] || ''));
+  }
+  if (candidates.length === 0) return '';
+  candidates.sort((left: { url: string; score: number }, right: { url: string; score: number }): number =>
+    right.score - left.score);
+  return candidates[0].url;
+}
+
 function aiExploreString_(value: Object | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -1609,8 +1658,12 @@ export class AiSourceAgent {
       }
       // 一些已有书源是 API 源，sourceUrl 只是 API 域名根地址，并没有可供分析的 HTML 首页。
       // 修复时首页抓取失败不能直接终止，应优先用旧书源的搜索请求取得真实取证页面。
-      const homepage = await this.fetchRepairEntry_(request.homepageUrl, keyword);
+      let homepage = await this.fetchRepairEntry_(request.homepageUrl, keyword);
       this.normalizeMobileSiteOrigin_(homepage);
+      // 站点根路径可能只是登录/用户中心落地页（晴天聚合需点“在线阅读”才能到
+      // https://v1.gyks.cf/online_search 内容首页）。修复模式用的是书源 sourceUrl
+      // （站点根），首页没有搜索/发现线索时，跟随落地页里的内容首页链接取证。
+      homepage = await this.resolveContentHomePage_(homepage);
       await this.analyzeHomepage_(homepage, keyword);
 
       // 修复范围：仅搜索链路时跳过发现阶段（发现规则保持原样），
@@ -1839,6 +1892,39 @@ export class AiSourceAgent {
     }
     return '当前执行器支持的书源规则契约：\n' + supportedAiRuleContract(stage) +
       (selection.text ? '\n' + selection.text : '');
+  }
+
+  /**
+   * 当前首页可能是登录/用户中心落地页而非内容首页（如晴天聚合根路径登陆后
+   * 落到用户中心，需点“在线阅读”才到 /online_search）。若首页没有搜索/发现
+   * 线索，尝试跟随落地页里的内容首页链接；新页面确有搜索/发现线索才采用，
+   * 否则保留原首页（避免误切换到无效页）。
+   */
+  private async resolveContentHomePage_(evidence: PageEvidence): Promise<PageEvidence> {
+    const html = evidence.html || '';
+    const pageUrl = evidence.finalUrl || evidence.url || '';
+    const hasContentSignal = hasAiSearchOrBookMarkup_(html) ||
+      (evidence.scriptEndpointHints || []).some((hint: string): boolean =>
+        /search|discovesty?le|discover|categor|cate|sort|rank|fenlei|class|genre|category|list/i.test(hint));
+    if (hasContentSignal) return evidence;
+    const contentHome = inferContentHomeUrl_(html, pageUrl);
+    if (!contentHome || !isSafeAiImportUrl(contentHome)) return evidence;
+    this.log_('  首页可能是登录/用户中心落地页，切换到内容首页取证：' +
+      contentHome.substring(0, 100));
+    try {
+      const next = await this.fetchPage_(contentHome, '内容首页');
+      if (next.html.length >= 300 &&
+        (hasAiSearchOrBookMarkup_(next.html) ||
+          (next.scriptEndpointHints || []).some((hint: string): boolean =>
+            /search|discovesty?le|discover|sort|rank|class|genre|category|cate|fenlei/i.test(hint)))) {
+        this.log_('  已采用内容首页：' + (next.finalUrl || contentHome).substring(0, 100));
+        return next;
+      }
+      this.log_('  内容首页没有发现搜索/发现线索，保留原首页');
+    } catch (e) {
+      this.log_('  内容首页切换失败，使用原首页：' + conciseAiFetchError_(e));
+    }
+    return evidence;
   }
 
   private async analyzeHomepage_(evidence: PageEvidence, keyword: string): Promise<void> {
