@@ -766,6 +766,79 @@ struct AiSourceGeneratePage {
     return '−';
   }
 
+  /**
+   * 阶段卡片展开时显示的诊断内容。
+   *
+   * Agent 会为部分阶段返回样本结果，但完整规则保存在编译草稿中。
+   * 这里只显示当前阶段相关字段，避免展开后因为 data 没有随回调带到页面
+   * 而出现一块空白。
+   */
+  private stepDetailText_(result: AiStepResult): string {
+    const values: Record<string, string> = {};
+    const stageData = result.data || {};
+    Object.keys(stageData).forEach((key: string): void => {
+      const value = stageData[key];
+      if (value !== undefined && value !== null && String(value).length > 0) {
+        values[key] = String(value);
+      }
+    });
+
+    const source = this.agent_?.getCompiledSource() || {};
+    let stageKeys: string[] = [];
+    switch (result.step) {
+      case AiStep.HOMEPAGE:
+        stageKeys = ['ruleSearchUrl', 'exploreUrl', 'loginUrl'];
+        break;
+      case AiStep.SEARCH:
+        stageKeys = [
+          'ruleSearchUrl', 'ruleSearchList', 'ruleSearchName', 'ruleSearchAuthor',
+          'ruleSearchCover', 'ruleSearchNoteUrl', 'ruleSearchKind',
+          'ruleSearchWordCount', 'ruleSearchLastUpdateTime', 'ruleSearchIntroduce'
+        ];
+        break;
+      case AiStep.DISCOVERY:
+        stageKeys = [
+          'exploreUrl', 'ruleExplores', 'ruleExploreList', 'ruleExploreName',
+          'ruleExploreAuthor', 'ruleExploreCover', 'ruleExploreNoteUrl',
+          'ruleExploreKind', 'ruleExploreWordCount', 'ruleExploreLastUpdateTime',
+          'ruleExploreIntroduce'
+        ];
+        break;
+      case AiStep.BOOK_INFO:
+        stageKeys = [
+          'ruleBookInfoName', 'ruleBookInfoAuthor', 'ruleBookInfoCover',
+          'ruleBookInfoIntroduce', 'ruleBookInfoKind', 'ruleBookInfoWordCount',
+          'ruleBookInfoLastUpdateTime', 'ruleBookInfoTocUrl'
+        ];
+        break;
+      case AiStep.TOC:
+        stageKeys = [
+          'ruleTocUrl', 'ruleToc', 'ruleTocTitle', 'ruleTocUrlItem', 'ruleTocNextTocUrl'
+        ];
+        break;
+      case AiStep.CONTENT:
+        stageKeys = [
+          'ruleBookContent', 'ruleBookContentTitle', 'ruleBookContentNext',
+          'ruleBookContentReplaceRegex'
+        ];
+        break;
+      default:
+        stageKeys = [];
+        break;
+    }
+    stageKeys.forEach((key: string): void => {
+      if (!values[key] && source[key]) values[key] = source[key];
+    });
+
+    const keys = Object.keys(values);
+    if (keys.length === 0) {
+      return result.status === 'error'
+        ? '错误：' + (result.summary || '该阶段执行失败')
+        : result.summary || '该阶段没有可展开的详细数据';
+    }
+    return keys.map((key: string): string => key + ': ' + values[key]).join('\n');
+  }
+
   private repairScopeDesc_(): string {
     if (this.repairScope === 'search') {
       return '仅诊断修复搜索链路：搜索结果 → 详情 → 目录 → 正文；发现规则保持原样';
@@ -1150,11 +1223,11 @@ struct AiSourceGeneratePage {
                         this.expandedStep = this.expandedStep === result.step ? -1 : result.step;
                       })
                   }.width('100%')
-                  if (this.expandedStep === result.step && Object.keys(result.data).length > 0) {
-                    Text(JSON.stringify(result.data, null, 2)).fontSize(10).fontFamily('monospace')
+                  if (this.expandedStep === result.step) {
+                    Text(this.stepDetailText_(result)).fontSize(10).fontFamily('monospace')
                       .fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
                       .padding(8).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-                      .borderRadius(8).maxLines(20)
+                      .borderRadius(8).maxLines(30)
                   }
                 }.padding({ left: 12, right: 8, top: 6, bottom: 6 })
                   .backgroundColor(ThemeColors.surface(this.isDark)).borderRadius(12)

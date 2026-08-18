@@ -39,6 +39,8 @@ export interface AloudCallback {
   onNeedNextChapter?: () => Promise<AloudChapterText | null>;
   /** 引擎成功加载新章节时回调 */
   onChapterChange?: (chapterIndex: number) => void;
+  /** 蓝牙耳机断开导致引擎自动暂停时回调 */
+  onAutoPause?: (reason: string) => void;
 }
 
 export class TtsVoiceManager {
@@ -171,6 +173,10 @@ export class ReadAloudEngine {
   private chapterEnded_: boolean = false;
   private chapterEndFired_: boolean = false;
   private voice_: ReadAloudVoiceConfig;
+  // 蓝牙耳机断开自动暂停：监听音频输出设备变化，断连后立即暂停，避免从扬声器外放
+  private routingManager_: audio.AudioRoutingManager | null = null;
+  private deviceChangeCb_: ((action: audio.DeviceChangeAction) => void) | null = null;
+  private outputWasBluetooth_: boolean = false;  // 最近一次记录时，输出设备是否为蓝牙
   // 预合成配置：熄屏后需要更多预合成来保证流畅播放
   private static readonly PRELOAD_COUNT = 15; // 预合成15句音频（熄屏后合成慢，需要更多缓冲）
 
@@ -281,6 +287,7 @@ export class ReadAloudEngine {
     } catch (err) {
       throw new Error(String(err));
     }
+    this.registerDeviceChangeListener_();
     console.info('[Aloud] init OK, sampleRate=' + sampleRate + ' backend=' + (this.backend_ ? this.backend_.name : 'system'));
   }
 
@@ -305,6 +312,8 @@ export class ReadAloudEngine {
     const renderer = this.audioRenderer_;
     if (!renderer) return;
     await renderer.start();
+    // 渲染器启动后音频路由已确定，记录输出设备是否为蓝牙，供断连自动暂停判断
+    this.outputWasBluetooth_ = this.isCurrentOutputBluetooth_();
   }
 
   async pause(): Promise<void> {
@@ -336,6 +345,7 @@ export class ReadAloudEngine {
 
   async release(): Promise<void> {
     await this.stop();
+    this.unregisterDeviceChangeListener_();
     try { await this.audioRenderer_?.release(); } catch (_) {}
     try { await this.ttsEngine_?.shutdown(); } catch (_) {}
     if (this.backend_) {
@@ -401,6 +411,79 @@ export class ReadAloudEngine {
       case 48000: return audio.AudioSamplingRate.SAMPLE_RATE_48000;
       default:    return audio.AudioSamplingRate.SAMPLE_RATE_16000;
     }
+  }
+
+  // ---- 蓝牙耳机断开自动暂停 ----
+
+  private registerDeviceChangeListener_(): void {
+    if (this.deviceChangeCb_) return;
+    try {
+      const routing = audio.getAudioManager().getRoutingManager();
+      const cb: (action: audio.DeviceChangeAction) => void = (action: audio.DeviceChangeAction) => {
+        this.handleDeviceChange_(action);
+      };
+      routing.on('deviceChange', audio.DeviceFlag.OUTPUT_DEVICES_FLAG, cb);
+      this.routingManager_ = routing;
+      this.deviceChangeCb_ = cb;
+      console.info('[Aloud] deviceChange listener registered');
+    } catch (e) {
+      console.warn('[Aloud] register deviceChange listener failed: ' + (e as Error).message);
+      this.routingManager_ = null;
+      this.deviceChangeCb_ = null;
+    }
+  }
+
+  private unregisterDeviceChangeListener_(): void {
+    if (!this.routingManager_ || !this.deviceChangeCb_) return;
+    try {
+      this.routingManager_.off('deviceChange', this.deviceChangeCb_);
+    } catch (e) {
+      console.warn('[Aloud] unregister deviceChange listener failed: ' + (e as Error).message);
+    }
+    this.routingManager_ = null;
+    this.deviceChangeCb_ = null;
+  }
+
+  /** 输出设备变化回调：蓝牙耳机断开时自动暂停，避免扬声器外放造成尴尬 */
+  private handleDeviceChange_(action: audio.DeviceChangeAction): void {
+    const wasBt = this.outputWasBluetooth_;
+    const nowBt = this.isCurrentOutputBluetooth_();
+    this.outputWasBluetooth_ = nowBt;
+    if (this.state_ !== AloudState.PLAYING) return;
+    // 只关心设备断开事件
+    if (action.type !== audio.DeviceChangeType.DISCONNECT) return;
+    // 之前通过蓝牙播放，断开后输出设备已不再是蓝牙 → 自动暂停
+    if (wasBt && !nowBt) {
+      console.info('[Aloud] bluetooth output disconnected, auto pause');
+      this.pause().catch(() => {});
+      this.callback_.onAutoPause?.('蓝牙耳机已断开，朗读已暂停');
+    }
+  }
+
+  /** 查询当前朗读流（AUDIOBOOK usage）实际输出的设备是否为蓝牙（SCO/A2DP） */
+  private isCurrentOutputBluetooth_(): boolean {
+    try {
+      const routing = this.routingManager_ ?? audio.getAudioManager().getRoutingManager();
+      // 优先按朗读流的实际路由查询
+      const preferred = routing.getPreferredOutputDeviceForRendererInfoSync({
+        usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+        rendererFlags: 0,
+      });
+      if (preferred.length > 0) return this.containsBluetoothDevice_(preferred);
+      // 个别场景路由查询为空时，回退到全部输出设备列表
+      return this.containsBluetoothDevice_(routing.getDevicesSync(audio.DeviceFlag.OUTPUT_DEVICES_FLAG));
+    } catch (e) {
+      console.warn('[Aloud] query output devices failed: ' + (e as Error).message);
+    }
+    return false;
+  }
+
+  private containsBluetoothDevice_(devices: audio.AudioDeviceDescriptors): boolean {
+    for (let i = 0; i < devices.length; i++) {
+      const t = devices[i].deviceType;
+      if (t === audio.DeviceType.BLUETOOTH_SCO || t === audio.DeviceType.BLUETOOTH_A2DP) return true;
+    }
+    return false;
   }
 
   // ========================
@@ -698,6 +781,7 @@ export interface AloudGlobalListener {
   onChapterEnd?: () => void;
   onError?: (msg: string) => void;
   onChapterChange?: (chapterIndex: number) => void;
+  onAutoPause?: (reason: string) => void;
 }
 
 let globalListener_: AloudGlobalListener | null = null;
@@ -715,6 +799,7 @@ function makeCallbackForGlobal_(): AloudCallback {
     onProgress: (ci: number, t: number) => { if (globalListener_) globalListener_.onProgress?.(ci, t); },
     onChapterEnd: () => { if (globalListener_) globalListener_.onChapterEnd?.(); },
     onChapterChange: (chapterIndex: number) => { if (globalListener_) globalListener_.onChapterChange?.(chapterIndex); },
+    onAutoPause: (reason: string) => { if (globalListener_) globalListener_.onAutoPause?.(reason); },
     onError: (msg: string) => { if (globalListener_) globalListener_.onError?.(msg); },
     onNeedNextChapter: async (): Promise<AloudChapterText | null> => {
       if (globalChapterProvider_) return await globalChapterProvider_();

@@ -11,7 +11,8 @@
  */
 import { BookSource } from '../../model/BookSource';
 import { globalScriptEngine } from './ScriptEngine';
-import { getPolyfillScript, getAjaxPolyfill } from './ScriptApi';
+import { getPolyfillScript, getAjaxPolyfill, CONSOLE_SHIM } from './ScriptApi';
+import { JS_CRYPTO_POLYFILL } from './JsCryptoPolyfill';
 import { NetUtil } from '../../util/NetUtil';
 import { CookieStore } from '../../util/CookieStore';
 import { LoginInfoStore } from '../../util/LoginInfoStore';
@@ -25,20 +26,7 @@ function getPolyfillForWorker(): string {
   if (!cachedPolyfill_) {
     // QuickJS 引擎没有 console 对象，需要先注入 console shim
     // 否则 polyfill 中大量的 console.log() 会抛出 ReferenceError
-    const consoleShim = `
-(function() {
-  if (typeof console === 'undefined') {
-    globalThis.console = {
-      log: function() {},
-      info: function() {},
-      warn: function() {},
-      error: function() {},
-      debug: function() {}
-    };
-  }
-})();
-`;
-    cachedPolyfill_ = consoleShim + '\n' + getPolyfillScript();
+    cachedPolyfill_ = CONSOLE_SHIM + '\n' + getPolyfillScript() + '\n' + JS_CRYPTO_POLYFILL;
   }
   if (!cachedAjaxPolyfill_) {
     cachedAjaxPolyfill_ = getAjaxPolyfill();
@@ -127,6 +115,28 @@ export class JsExpressionEvaluator {
    * 保证取图会话与后续提交会话一致；抓取失败时为 null，调用方可退回 URL 加载。
    */
   static captchaHandler: ((url: string, image?: image.PixelMap | null) => Promise<string>) | null = null;
+
+  /**
+   * 引擎自动路径（搜索/取证遇到图片验证码门禁）请求用户输入验证码。
+   * 与 Worker 的 java.getVerificationCode 走同一对话框（CaptchaDialog）：
+   * 图片用应用 HTTP 栈预取（带 Cookie，保证取图与提交同一会话），
+   * 预取失败退回 URL 加载。未注册对话框处理器时返回空串。
+   */
+  static async requestCaptchaInput(captchaUrl: string): Promise<string> {
+    const handler = JsExpressionEvaluator.captchaHandler;
+    if (!handler || !captchaUrl) return '';
+    try {
+      const buf = await NetUtil.httpGetBinary(captchaUrl);
+      try {
+        const pm = await image.createImageSource(buf).createPixelMap();
+        return await handler(captchaUrl, pm);
+      } catch (_decodeError) {
+        return await handler(captchaUrl, null);
+      }
+    } catch (_fetchError) {
+      return await handler(captchaUrl, null);
+    }
+  }
   private static workerInstance: worker.ThreadWorker | null = null;
   private static workerPromise: Map<number, {
     resolve: (v: string, loginHeader?: string) => void;
@@ -143,6 +153,9 @@ export class JsExpressionEvaluator {
 
   /** 书源脚本生成的动态登录头，供详情/目录页复用。 */
   private static loginHeaderCache_: Map<string, string> = new Map();
+
+  /** 主线程原生引擎不可用（mock）时只提示一次，避免每次字段求值刷屏。 */
+  private static syncMockWarned_: boolean = false;
 
   private static sourceKey_(source: Partial<BookSource> | undefined): string {
     if (!source) return '';
@@ -516,6 +529,14 @@ export class JsExpressionEvaluator {
   static evaluateSync(code: string, ctx: JsEvalContext): string {
     if (!code || !code.trim()) return '';
     if (ctx.source) JsExpressionEvaluator.applyCachedLoginHeader(ctx.source);
+    // 主线程原生引擎不可用（mock 桥 executeScript 恒返回 'null'）时，同步求值
+    // 必然返回空，这是书源字段 <js> 规则静默失效的常见根因（如搜索卡片 onclick
+    // 提取 noteUrl 返回空 → 结果被过滤为 0）。只提示一次便于从日志定位。
+    if (!isNativeLoaded() && !JsExpressionEvaluator.syncMockWarned_) {
+      JsExpressionEvaluator.syncMockWarned_ = true;
+      console.warn('[JsEval] evaluateSync: native engine unavailable (mock), ' +
+        'sync JS rules return empty. code=' + code.substring(0, 120));
+    }
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
     const safeCode = normalizeSourceScript(code);
     const fullScript = `${setupCode}\n${safeCode}`;
@@ -813,10 +834,54 @@ export class JsExpressionEvaluator {
       } else if (typeof v === 'boolean') {
         parts.push(`var ${k}=${v};`);
       } else if (v !== null && v !== undefined) {
-        parts.push(`var ${k}=${JSON.stringify(v)};`);
+        // 整段 <js> 字段规则的 result 为当前列表元素时，注入带
+        // attr()/text()/html() 等方法的元素桥（对齐 Android jsoup Element，
+        // 如书源用 result.attr('onclick') 提取卡片跳转 URL）。
+        if (k === 'result' && typeof v === 'object' && !Array.isArray(v) &&
+          typeof (v as Record<string, unknown>)['attributes'] === 'object') {
+          parts.push(JsExpressionEvaluator.buildElementBridgeScript(v as Record<string, unknown>));
+        } else {
+          parts.push(`var ${k}=${JSON.stringify(v)};`);
+        }
       }
     }
 
     return parts.join('\n');
+  }
+
+  /**
+   * 生成 Legado 元素桥：把列表元素序列化为带 attr()/text()/html()/ownText()/
+   * select() 方法的 JS 对象，对齐 Android jsoup Element 语义。jsoup 的
+   * .text()/.html()/.ownText() 都是方法，与字段名冲突，因此用 _text/_html
+   * 等内部字段承载内容。children 只序列化一层简化信息，控制注入体积。
+   */
+  static buildElementBridgeScript(node: Record<string, unknown>): string {
+    const attrs = (node['attributes'] as Record<string, string>) || {};
+    const tagName = String(node['tagName'] || '');
+    const ownText = String(node['ownText'] || '');
+    const text = String(node['text'] || '');
+    const innerHtml = String(node['innerHtml'] || '');
+    const outerHtml = String(node['outerHtml'] || '');
+    const children = (node['children'] as Record<string, unknown>[]) || [];
+    const childrenLiteral = children.slice(0, 16).map((child: Record<string, unknown>): string => {
+      const cAttrs = (child['attributes'] as Record<string, string>) || {};
+      return '{tagName:' + JSON.stringify(String(child['tagName'] || '')) +
+        ',attributes:' + JSON.stringify(cAttrs) +
+        ',text:' + JSON.stringify(String(child['text'] || '')) +
+        ',attr:function(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:"";}}';
+    }).join(',');
+    return `var result=(function(){var attrs=${JSON.stringify(attrs)};` +
+      `var el={tagName:${JSON.stringify(tagName)},attributes:attrs,` +
+      `_ownText:${JSON.stringify(ownText)},_text:${JSON.stringify(text)},` +
+      `_innerHtml:${JSON.stringify(innerHtml)},_outerHtml:${JSON.stringify(outerHtml)},` +
+      `children:[${childrenLiteral}]};` +
+      `el.attr=function(name){return Object.prototype.hasOwnProperty.call(attrs,name)?attrs[name]:"";};` +
+      `el.text=function(){return el._text;};` +
+      `el.html=function(){return el._innerHtml;};` +
+      `el.ownText=function(){return el._ownText;};` +
+      `el.outerHtml=function(){return el._outerHtml;};` +
+      `el.select=function(){return [];};` +
+      `el.first=function(){return el.children.length>0?el.children[0]:null;};` +
+      `return el;})();`;
   }
 }

@@ -571,6 +571,14 @@ export class SettingsStore {
     await this.put('webdav_pwd', encoded);
   }
 
+  /** WebDAV 用户名。旧版本与密码一起存在 Preferences；保留以兼容迁移数据。 */
+  async getWebDavUser(): Promise<string> {
+    return await this.get('webdav_user', '') as string;
+  }
+  async setWebDavUser(v: string): Promise<void> {
+    await this.put('webdav_user', v);
+  }
+
   // ---- 书架设置 ----
   async getBookGroupStyle(): Promise<number> { return await this.get('book_group_style', 0); }
   async setBookGroupStyle(v: number): Promise<void> { await this.put('book_group_style', v); }

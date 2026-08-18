@@ -1,12 +1,12 @@
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../theme/ThemeColors';
 import { AiSearchPageLink } from '../model/AiSourceDiscovery';
+import { WebUserAgent } from '../util/WebUserAgent';
 
 const AI_WEB_DESKTOP_MODE_KEY = 'ai_import_web_desktop_mode';
-const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-// 在线导入默认请求桌面网页，并跨应用重启记住用户最后一次选择。
+// 在线导入默认请求桌面网页（搜索结果结构稳定），并跨应用重启记住用户
+// 最后一次选择。UA 字符串与验证码界面统一引用 WebUserAgent。
 PersistentStorage.persistProp(AI_WEB_DESKTOP_MODE_KEY, true);
 
 export interface AiImportPreviewResult {
@@ -88,7 +88,6 @@ export struct AiImportPreviewDialog {
   @State private controllerAttached_: boolean = false;
   private initialScriptExecuted_: boolean = false;
   private fallbackUsed_: boolean = false;
-  private mobileUserAgent_: string = '';
 
   aboutToAppear(): void {
     this.currentUrl = this.initialUrl;
@@ -212,10 +211,7 @@ export struct AiImportPreviewDialog {
   private applyPageMode_(reload: boolean): void {
     if (!this.controllerAttached_) return;
     try {
-      if (!this.mobileUserAgent_) {
-        this.mobileUserAgent_ = this.webController_.getCustomUserAgent();
-      }
-      const userAgent = this.isDesktopMode_ ? DESKTOP_USER_AGENT : this.mobileUserAgent_;
+      const userAgent = this.isDesktopMode_ ? WebUserAgent.DESKTOP : WebUserAgent.MOBILE;
       this.webController_.setCustomUserAgent(userAgent);
       if (reload) this.webController_.refresh();
     } catch (e) {

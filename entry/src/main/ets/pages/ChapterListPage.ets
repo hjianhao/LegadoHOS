@@ -117,6 +117,10 @@ export struct ChapterListPage {
   @State isRefreshingToc: boolean = false;  // 目录刷新中
   private listScroller_: Scroller = new Scroller();
   private bookId_: number = 0;
+  /** LazyForEach 首屏布局完成前 scrollToIndex 可能被忽略，延迟重试定位当前章节。 */
+  private tocScrollTimer_: number = -1;
+  private tocScrollAttempt_: number = 0;
+  private tocScrollPending_: boolean = false;
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -221,11 +225,82 @@ export struct ChapterListPage {
     } finally {
       this.isLoading = false;
       this.isRefreshingToc = false;
-      setTimeout(() => {
-        if (this.activeTab === 0 && this.durChapterIndex >= 0) {
-          try { this.listScroller_.scrollToIndex(this.durChapterIndex); } catch (_e) { /* ignore */ }
-        }
-      }, 0);
+      this.scheduleScrollToCurrentChapter_();
+    }
+  }
+
+  /**
+   * 等待目录 List 完成布局后定位当前章节。
+   *
+   * 目录使用 LazyForEach，loadChapters() 完成时 List 可能还没有可滚动
+   * 的内容；此时直接调用 scrollToIndex 不一定抛错，但会停在列表顶部。
+   * 通过短时间内的有限重试覆盖首屏布局、数据源刷新和大目录渲染时序。
+   */
+  private scheduleScrollToCurrentChapter_(): void {
+    if (this.activeTab !== 0 || this.isLoading || this.chapters_.length === 0 ||
+      this.durChapterIndex < 0) {
+      return;
+    }
+    this.tocScrollPending_ = true;
+    this.tocScrollAttempt_ = 0;
+    if (this.tocScrollTimer_ >= 0) {
+      clearTimeout(this.tocScrollTimer_);
+      this.tocScrollTimer_ = -1;
+    }
+    this.tryScrollToCurrentChapter_();
+  }
+
+  private tryScrollToCurrentChapter_(): void {
+    if (!this.tocScrollPending_ || this.activeTab !== 0 || this.isLoading ||
+      this.chapters_.length === 0) {
+      return;
+    }
+    const target = this.currentChapterDisplayIndex_();
+    if (target < 0 || target >= this.chapters_.length) {
+      this.tocScrollPending_ = false;
+      return;
+    }
+
+    try {
+      this.listScroller_.scrollToIndex(target);
+    } catch (_e) {
+      // List 尚未完成布局时部分系统版本会抛异常，交给下一次重试。
+    }
+
+    this.tocScrollAttempt_++;
+    if (this.tocScrollAttempt_ >= 5) {
+      this.tocScrollPending_ = false;
+      return;
+    }
+    const delay = this.tocScrollAttempt_ === 1 ? 80
+      : (this.tocScrollAttempt_ === 2 ? 180
+        : (this.tocScrollAttempt_ === 3 ? 360 : 600));
+    this.tocScrollTimer_ = setTimeout(() => {
+      this.tocScrollTimer_ = -1;
+      this.tryScrollToCurrentChapter_();
+    }, delay);
+  }
+
+  /** 当前章节在实际 List（正序/倒序）中的位置。 */
+  private currentChapterDisplayIndex_(): number {
+    let sourceIndex = -1;
+    for (let i = 0; i < this.chapters_.length; i++) {
+      if (this.chapters_[i].index === this.durChapterIndex) {
+        sourceIndex = i;
+        break;
+      }
+    }
+    if (sourceIndex < 0) {
+      sourceIndex = Math.max(0, Math.min(this.durChapterIndex, this.chapters_.length - 1));
+    }
+    return this.isAscending ? sourceIndex : this.chapters_.length - 1 - sourceIndex;
+  }
+
+  aboutToDisappear(): void {
+    this.tocScrollPending_ = false;
+    if (this.tocScrollTimer_ >= 0) {
+      clearTimeout(this.tocScrollTimer_);
+      this.tocScrollTimer_ = -1;
     }
   }
 
@@ -496,6 +571,7 @@ export struct ChapterListPage {
 
   toggleSort(): void {
     this.applySort(!this.isAscending);
+    this.scheduleScrollToCurrentChapter_();
   }
 
   /** 点击章节跳转到阅读页 */
@@ -872,6 +948,9 @@ export struct ChapterListPage {
       }
       .layoutWeight(1).width('100%')
       .cachedCount(5)
+      .onAreaChange((_old: Area, area: Area) => {
+        if (area.height > 0) this.scheduleScrollToCurrentChapter_();
+      })
 
       if (this.selectMode) {
         Row() {

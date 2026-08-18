@@ -98,18 +98,27 @@ export class WebDavService {
     try {
       WebDavService.ensurePersistentProps();
       const url = AppStorage.get<string>('webdav_url') || '';
-      const user = AppStorage.get<string>('webdav_user') || '';
+      let user = AppStorage.get<string>('webdav_user') || '';
       const path = AppStorage.get<string>('webdav_path') || 'legado';
-      if (!url || !user) {
-        console.info('[WebDav] initFromStorage skip: url/user empty');
-        return; // 从未配置过
-      }
       let pwd = '';
       try {
         const s = SettingsStore.getInstance();
         await s.init(context);
         pwd = await s.getWebDavPassword();
+        // 兼容旧版本：用户名曾与密码一起存在 SettingsStore，
+        // PersistentStorage 只有密码兜底没有用户名，这里同样兜底恢复。
+        if (!user) {
+          const storedUser = await s.getWebDavUser();
+          if (storedUser) {
+            user = storedUser;
+            AppStorage.setOrCreate<string>('webdav_user', storedUser);
+          }
+        }
       } catch (_e) { /* 密码读取失败按空处理 */ }
+      if (!url || !user) {
+        console.info('[WebDav] initFromStorage skip: url/user empty');
+        return; // 从未配置过
+      }
       // 兼容旧版本：密码只写在 PersistentStorage.webdav_password 时也能恢复
       if (!pwd) {
         pwd = AppStorage.get<string>('webdav_password') || '';

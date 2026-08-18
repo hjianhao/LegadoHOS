@@ -715,3 +715,28 @@ cacheKey = modelId + sid + speed + hash(normalizedText)
 | `tts_voice_person` | number | `13` | 系统 TTS 音色 ID |
 | `tts_voice_style` | string | `'interaction-broadcast'` | 系统 TTS 风格 |
 | `tts_speed` | number | `1.0` | 系统 TTS 语速 |
+
+---
+
+## 13. 蓝牙耳机断开自动暂停
+
+**问题**：朗读（TTS）通过蓝牙耳机播放时，耳机意外断连（超出范围/电量耗尽/手动关闭），系统会把音频路由回扬声器，导致朗读在公共场合从扬声器外放，造成尴尬。Android 版 Legado 通过 `ACTION_AUDIO_BECOMING_NOISY` 广播在断连时暂停，鸿蒙端没有该广播。
+
+**方案**：在 `ReadAloudEngine` 中监听音频输出设备变化（`AudioRoutingManager.on('deviceChange')`），当满足以下全部条件时自动暂停（保留进度，非停止）：
+
+1. 引擎处于 `PLAYING` 状态；
+2. 事件类型为 `DISCONNECT`；
+3. 播放开始时/上次设备变化时，朗读流（`STREAM_USAGE_AUDIOBOOK`）实际路由到蓝牙设备（SCO/A2DP）；
+4. 断连后该路由已不再是蓝牙（查询 `getPreferredOutputDeviceForRendererInfoSync`，空结果回退 `getDevicesSync(OUTPUT_DEVICES_FLAG)`）。
+
+**实现位置**：
+
+- `entry/src/main/ets/service/ReadAloudEngine.ets`：新增 `registerDeviceChangeListener_` / `unregisterDeviceChangeListener_` / `handleDeviceChange_` / `isCurrentOutputBluetooth_`；`init()` 注册、`release()` 注销；`speak()` 在 `renderer.start()` 后记录初始蓝牙状态；`AloudCallback` / `AloudGlobalListener` 新增 `onAutoPause` 回调。
+- `entry/src/main/ets/components/reader/ReadAloudPanel.ets`：全局监听 `onAutoPause` 弹 Toast 提示「蓝牙耳机已断开，朗读已暂停」，并在状态变为 `PAUSED` 时释放后台任务（`stopBgTask_`）。
+
+**行为说明**：
+
+- 采用「暂停」而非「停止」：保留朗读进度，用户重连耳机或明确点击播放后可从原位置继续；
+- 只在「之前确实走蓝牙、断连后路由不再是蓝牙」时触发，用户手动切换扬声器、有线耳机插入/拔出、或蓝牙连接但未作为输出时不误暂停；
+- 引擎级实现，书籍阅读（ReadPage/ReadAloudPanel）与 RSS 阅读（ReaderPage）共用，一处修复全局生效；
+- 面板未打开（如熄屏后台朗读）时仅引擎内部暂停，不弹提示。

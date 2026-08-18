@@ -484,7 +484,20 @@ export struct BookSourcePage {
         if (!uri) return;
       }
       const json = await this.dao_.exportSources(target);
-      openedFile = fileIo.openSync(uri, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      try {
+        openedFile = fileIo.openSync(uri,
+          fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      } catch (e) {
+        // 某些文件提供方会在这里才返回“文件已存在”（而不是在 save() 返回）。
+        // 用户确认覆盖后，使用已选中的既有 URI 以纯写入方式截断覆盖。
+        if (!this.isDuplicateFileError_(e)) {
+          throw new Error((e as Error).message || String(e));
+        }
+        const overwriteUri = await this.chooseOverwriteFile_(fileName);
+        if (!overwriteUri) return;
+        openedFile = fileIo.openSync(overwriteUri,
+          fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      }
       fileIo.writeSync(openedFile.fd, json);
       UiUtil.showToast(this.getUIContext(), { message: '已导出 ' + target.length + ' 个书源', duration: 1800 });
     } catch (e) {
@@ -499,8 +512,16 @@ export struct BookSourcePage {
 
   /** 文件选择器没有统一的覆盖参数，兼容不同设备返回的同名文件错误。 */
   private isDuplicateFileError_(error: Error): boolean {
-    const message = error.message || String(error);
-    return /(already\s+exists|file\s+exists|same\s+name|duplicate|conflict|重名|同名|已存在)/i.test(message);
+    // 部分设备只返回 BusinessError.code=13900015（File exists），message
+    // 只有“业务异常”或本地化文本，不能只靠英文/中文错误描述判断。
+    const raw = error as Object as Record<string, Object>;
+    const code = String(raw['code'] || raw['errorCode'] || '');
+    const message = [
+      error.message || '', String(raw['message'] || ''), String(raw['name'] || ''),
+      String(raw['details'] || ''), String(error)
+    ].join(' ');
+    return code === '13900015' || /\b13900015\b/.test(message) ||
+      /(already\s+exists|file\s+exists|same\s+name|duplicate|conflict|重名|同名|已存在)/i.test(message);
   }
 
   /** 询问覆盖并让用户从文件选择器中明确选中要覆盖的同名文件。 */
@@ -522,7 +543,9 @@ export struct BookSourcePage {
       const uris = await new picker.DocumentViewPicker(context).select(options);
       if (!uris || uris.length === 0) return '';
       const selectedName = this.fileNameFromUri_(uris[0]);
-      if (selectedName && selectedName !== fileName) {
+      // datashare:// URI 有些设备不会把真实文件名放在 URI 尾部，只有在
+      // 能确认 URI 携带了文件名时才做严格校验，避免误拒绝合法的覆盖目标。
+      if (selectedName && /\.[a-z0-9]{1,8}$/i.test(selectedName) && selectedName !== fileName) {
         UiUtil.showToast(this.getUIContext(), {
           message: '请选择同名文件：' + fileName, duration: 2200,
         });

@@ -9,6 +9,8 @@
  */
 import quickjsBridge, { tryLoadNative, getBridge, isNativeLoaded } from '../../napi/quickjs_bridge';
 import { CookieStore } from '../../util/CookieStore';
+import { JS_CRYPTO_POLYFILL } from './JsCryptoPolyfill';
+import { getPolyfillScript, CONSOLE_SHIM } from './ScriptApi';
 
 export class ScriptEngine {
   private engineId: number = -1;
@@ -47,6 +49,28 @@ export class ScriptEngine {
         (requestId: number, op: string, url: string, value: string): void => {
           this.handleCookieOp(requestId, op, url, value);
         });
+
+      // 一次性注入完整 ScriptApi polyfill（java.put/get/getString/javaString/
+      // Base64/md5 等纯计算 API）。Android 所有 JS 规则在同一个 Rhino 环境
+      // 执行；主线程 evaluateSync 此前只注入了加密 polyfill，字段规则的
+      // <js> 块用到这些 API 时 ReferenceError 被静默吞掉，字段解析为空
+      // （如搜索卡片 onclick 跳转取不到 noteUrl）。java.ajax 依赖 Worker 的
+      // http 对象，主线程不注入（evaluateSync 语义不含 ajax）。脚本幂等。
+      try {
+        bridge.executeScript(this.engineId, CONSOLE_SHIM + '\n' + getPolyfillScript());
+      } catch (polyfillError) {
+        console.warn('[ScriptEngine] ScriptApi polyfill inject failed:',
+          String(polyfillError).substring(0, 120));
+      }
+
+      // 加密 polyfill（java.createSymmetricCrypto/encodeURI/base64Decode）。
+      // 主线程引擎全局对象持久，脚本幂等（typeof 保护），后续求值复用零开销。
+      try {
+        bridge.executeScript(this.engineId, JS_CRYPTO_POLYFILL);
+      } catch (cryptoError) {
+        console.warn('[ScriptEngine] Crypto polyfill inject failed:',
+          String(cryptoError).substring(0, 120));
+      }
     } catch (err) {
       console.error('[ScriptEngine] Failed to create engine:', err);
       throw err;

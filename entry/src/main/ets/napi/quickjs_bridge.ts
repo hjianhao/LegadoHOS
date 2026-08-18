@@ -53,6 +53,11 @@ let nativeLoaded: boolean = false;
 export async function tryLoadNative(): Promise<boolean> {
   if (nativeLoaded) return true;
 
+  // 1) requireNapi（兼容方式）。它只在系统模块目录（/system/lib64/module/）
+  //    查找，真机/模拟器上常因目录不存在而失败（日志 "libquickjs_bridge.z.so
+  //    not exist"），失败时主线程会降级为 mock 桥，而 mock 桥的 executeScript
+  //    永远返回 'null'，导致所有主线程同步求值（evaluateSync，如搜索卡片的
+  //    <js> noteUrl 规则）静默返回空，搜索结果被全部过滤。
   try {
     const native = requireNapi('quickjs_bridge');
     if (native && typeof (native as QuickJSBridge).createEngine === 'function') {
@@ -65,6 +70,25 @@ export async function tryLoadNative(): Promise<boolean> {
     }
   } catch (e) {
     console.warn('[NAPI] requireNapi threw:', e?.toString()?.substring(0, 100));
+  }
+
+  // 2) 动态 import libquickjs_bridge.so（HarmonyOS NEXT 推荐方式）。
+  //    import 走 bundle 内 libs 路径（与 JsEvalWorker 的静态 import 等价，
+  //    Worker 已验证该方式在真机上可成功加载），requireNapi 失败时在此兜底。
+  //    动态 import 可被 try/catch 包裹，preview/降级环境失败仅回退 mock，不影响启动。
+  try {
+    const mod = await import('libquickjs_bridge.so');
+    const native = (mod && (mod as Record<string, unknown>)['default']) || mod;
+    if (native && typeof (native as QuickJSBridge).createEngine === 'function') {
+      currentBridge = native as QuickJSBridge;
+      nativeLoaded = true;
+      console.info('[NAPI] Native module loaded via dynamic import');
+      return true;
+    }
+    console.warn('[NAPI] dynamic import returned invalid module');
+  } catch (e) {
+    console.warn('[NAPI] dynamic import(libquickjs_bridge.so) failed:',
+      e?.toString()?.substring(0, 100));
   }
 
   console.info('[NAPI] Native module not available, using mock');

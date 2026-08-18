@@ -33,6 +33,7 @@ export class BackupService {
     return BackupRestoreLock.withLock(async () => {
       const result = await BackupCodec.importHarmonyData(data, ignore);
       BackupConfig.setLastBackup(Date.now());
+      BackupService.notifyRestoreComplete_();
       return result;
     });
   }
@@ -69,11 +70,20 @@ export class BackupService {
       try {
         const result = await BackupCodec.importFromZipPath(path, ignore);
         BackupConfig.setLastBackup(Date.now());
+        BackupService.notifyRestoreComplete_();
         return result;
       } catch (err) {
         throw new Error(`备份文件格式错误: ${(err as Error).message}`);
       }
     });
+  }
+
+  /** 恢复后通知书架等页面刷新（AppStorage 计数，@StorageLink 监听侧自动重载） */
+  private static notifyRestoreComplete_(): void {
+    try {
+      const cur = AppStorage.get<number>('shelfRefreshCounter') || 0;
+      AppStorage.setOrCreate<number>('shelfRefreshCounter', cur + 1);
+    } catch (_e) { /* ignore */ }
   }
 
   /** 恢复前初始化设置与云端凭证 store */
@@ -145,6 +155,7 @@ export class BackupService {
       try {
         const result = await BackupCodec.importFromZipPath(zipPath, ignore);
         BackupConfig.setLastBackup(Date.now());
+        BackupService.notifyRestoreComplete_();
         return result;
       } finally {
         try { fileFs.unlinkSync(zipPath); } catch (_e) { /* ignore */ }

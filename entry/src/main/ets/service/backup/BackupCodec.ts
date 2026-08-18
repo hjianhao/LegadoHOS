@@ -171,7 +171,14 @@ export class BackupCodec {
     };
     for (const [key, table] of Object.entries(fieldMap)) {
       try {
-        resultMap[key] = await BackupCodec.queryAll(rdb, table) as Object;
+        if (key === 'books') {
+          // 对齐安卓：备份只包含书架书（is_shelf=1）。
+          // is_shelf=0 的临时阅读书（从搜索打开但未加入书架）不进备份，
+          // 避免恢复到其他设备后“以前删除的书”复活。
+          resultMap[key] = await BackupCodec.queryShelfBooks(rdb) as Object;
+        } else {
+          resultMap[key] = await BackupCodec.queryAll(rdb, table) as Object;
+        }
       } catch (err) {
         console.warn(`[BackupCodec] export ${table}: ${(err as Error).message}`);
       }
@@ -410,6 +417,11 @@ export class BackupCodec {
         try {
           const book = BackupCodec.rowToBook(row);
           if (BackupCodec.shouldSkipLocalBook(book, ignoreCfg.localBook)) {
+            result.skipped++;
+            continue;
+          }
+          // 不在书架的临时阅读书不恢复（对齐安卓：备份不携带 notShelf 书）
+          if (!book.isShelf) {
             result.skipped++;
             continue;
           }
@@ -718,6 +730,11 @@ export class BackupCodec {
               result.skipped++;
               continue;
             }
+            // 安卓 notShelf（type & 1024）的书不恢复（对齐安卓备份语义）
+            if (!book.isShelf) {
+              result.skipped++;
+              continue;
+            }
             result.books += await BackupCodec.upsertBook(bookTable, book);
           } catch (e) {
             result.errors.push(`bookshelf item: ${(e as Error).message}`);
@@ -988,6 +1005,10 @@ export class BackupCodec {
     const originUrl = String(row['origin_url'] ?? row['originUrl'] ?? '');
     const originName = String(row['origin'] ?? '');
     const type = Number(row['type'] ?? 0);
+    // 对齐安卓 BookType.notShelf=1024：鸿蒙 is_shelf=0（不在书架）导出为 notShelf 位，
+    // 供安卓端恢复时保持「不在书架」语义，也保证鸿蒙↔安卓往返一致。
+    const isShelf = Number(row['is_shelf'] ?? 1) === 1;
+    const androidType = isShelf ? (type & ~1024) : (type | 1024);
     return {
       bookUrl: String(row['book_url'] ?? row['bookUrl'] ?? ''),
       tocUrl: String(row['toc_url'] ?? row['tocUrl'] ?? ''),
@@ -1001,7 +1022,7 @@ export class BackupCodec {
       intro: String(row['introduce'] ?? row['intro'] ?? ''),
       remark: String(row['remark'] ?? ''),
       charset: String(row['charset'] ?? ''),
-      type: type,
+      type: androidType,
       group: Number(row['group_id'] ?? row['groupId'] ?? 0),
       latestChapterTitle: String(row['latest_chapter_title'] ?? ''),
       totalChapterNum: Number(row['total_chapter_num'] ?? row['chapter_count'] ?? 0),
@@ -1051,7 +1072,9 @@ export class BackupCodec {
     book.wordCount = String(raw['wordCount'] ?? '');
     book.canUpdate = raw['canUpdate'] !== false;
     book.order = Number(raw['order'] ?? 0);
-    book.isShelf = true;
+    // 安卓 BookType.notShelf = 1024：未正式加入书架的临时阅读书籍。
+    // 只有不含该标志的书才应出现在书架上。
+    book.isShelf = (Number(raw['type'] ?? 0) & 1024) === 0;
     book.isAudio = book.type === BookType.AUDIO;
     book.isManga = book.type === BookType.MANGA;
     book.updateTime = Date.now();
@@ -1064,11 +1087,14 @@ export class BackupCodec {
    * - 在线书：按 bookUrl upsert（整本更新，进度取更靠后者）
    * - 本地书：若本机已有同一本，只同步阅读进度，不覆盖元数据/路径/分组等
    * - 本地书：若本机没有且文件存在，新增完整记录
+   *
+   * isShelf 处理：
+   * - 新书保留备份中的 is_shelf（源设备不在书架的书，恢复后也不进书架）
+   * - 已存在的书取「本地 || 备份」，只增不减，避免把用户已在书架的书移出
    */
   private static async upsertBook(bookTable: BookTable, book: Book): Promise<number> {
     const now = Date.now();
     book.updateTime = now;
-    book.isShelf = true;
 
     const existing = await BackupCodec.findExistingBook(bookTable, book);
     if (existing) {
@@ -1079,9 +1105,10 @@ export class BackupCodec {
         return 1;
       }
 
-      // 在线书：整本更新，但保留更靠后的本地进度
+      // 在线书：整本更新，但保留更靠后的本地进度；书架状态只增不减
       book.id = existing.id;
       book.createTime = existing.createTime || now;
+      book.isShelf = existing.isShelf || book.isShelf;
       const merged = BackupCodec.pickNewerProgress(existing, book);
       book.durChapterIndex = merged.durChapterIndex;
       book.durChapterPos = merged.durChapterPos;
@@ -1715,6 +1742,27 @@ export class BackupCodec {
   private static async queryAll(rdb: relationalStore.RdbStore, table: string): Promise<Record<string, Object>[]> {
     const result: Record<string, Object>[] = [];
     const rs = await RdbUtil.querySql(rdb, `SELECT * FROM ${table}`, []);
+    try {
+      while (RdbUtil.next(rs)) {
+        const row: Record<string, Object> = {};
+        const colCount = rs.columnCount;
+        for (let i = 0; i < colCount; i++) {
+          const colName = rs.getColumnName(i);
+          const val = RdbUtil.stringAt(rs, i);
+          if (val !== null) row[colName] = val as Object;
+        }
+        result.push(row);
+      }
+    } finally {
+      RdbUtil.close(rs);
+    }
+    return result;
+  }
+
+  /** 仅导出书架书（is_shelf=1），对齐安卓备份语义 */
+  private static async queryShelfBooks(rdb: relationalStore.RdbStore): Promise<Record<string, Object>[]> {
+    const result: Record<string, Object>[] = [];
+    const rs = await RdbUtil.querySql(rdb, `SELECT * FROM books WHERE is_shelf = 1`, []);
     try {
       while (RdbUtil.next(rs)) {
         const row: Record<string, Object> = {};

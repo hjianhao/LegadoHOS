@@ -62,6 +62,14 @@ export class BookTable {
     return this.toBooks(resultSet);
   }
 
+  /** 不在书架的临时阅读书（对齐安卓 BookType.notShelf 语义） */
+  async getNotShelfBooks(): Promise<Book[]> {
+    const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
+    predicates.equalTo('is_shelf', 0);
+    const resultSet = await RdbUtil.query(this.rdbStore, predicates, []);
+    return this.toBooks(resultSet);
+  }
+
   async getBooksByGroup(groupId: number): Promise<Book[]> {
     const predicates = new relationalStore.RdbPredicates(BookTable.TABLE_NAME);
     predicates.equalTo('is_shelf', 1);

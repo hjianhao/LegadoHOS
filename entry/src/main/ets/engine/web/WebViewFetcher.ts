@@ -9,6 +9,17 @@
  */
 import web_webview from '@ohos.web.webview';
 import connection from '@ohos.net.connection';
+import { WebUserAgent } from '../../util/WebUserAgent';
+
+/**
+ * 交互式 WebView 的用途。UI 行为（标题、登录面板自动展开、搜索表单预填）
+ * 按枚举分支，不再依赖 reason 字符串匹配。
+ * - challenge：Cloudflare/WAF/JS 挑战，用户手动验证后提取页面
+ * - login：书源 loginUrl 登录页，页面加载后自动展开登录面板
+ * - imageCaptcha：图片验证码门禁页，提示用户输入验证码后完成
+ * - searchSubmit：webView 源 POST 搜索，回填原始表单体并自动提交
+ */
+export type InteractivePurpose = 'challenge' | 'login' | 'imageCaptcha' | 'searchSubmit';
 
 export class WebViewFetchResult {
   html: string = '';
@@ -31,8 +42,37 @@ interface WebViewRequestQueueEntry {
   timeoutMs: number;
   headers: Record<string, string>;
   allowedRedirectHosts: string[];
+  quickExtract: boolean;
   resolve: (result: WebViewFetchResult) => void;
   reject: (err: Error) => void;
+}
+
+/**
+ * 判断重定向目标是否与当前内容页同路径（站点自身 CDN/镜像域名）。
+ *
+ * 漫画/小说站常用独立域名承载同一份内容（如禁漫天堂 jmcomic-zzz.one
+ * 302 到 jm18c-dfg.cc，album 路径完全不变）。这类跳转不是广告，应放行；
+ * 广告/验证码跳转路径通常不同，仍会被 onLoadIntercept 拦截。
+ * 比较时剥掉 scheme/host/query/hash 与末尾斜杠，只要求 pathname 非空且一致。
+ */
+export function isSamePathMirrorUrl_(candidate: string, current: string): boolean {
+  if (!candidate || !current) return false;
+  const pathOf = (raw: string): string => {
+    const m = (raw || '').match(/^https?:\/\/[^\/?#]+([^?#]*)/i);
+    if (!m) return '';
+    let path = m[1].replace(/\/+$/, '');
+    // WebView 重定向地址常把中文路径 percent-encode（如 /album/1255565/
+    // %E9%9A%BE…），而 pendingUrl 是原始中文；解码后同一路径才能判相等。
+    try {
+      path = decodeURIComponent(path);
+    } catch (_e) {
+      // 非法编码序列保持原样比较。
+    }
+    return path;
+  };
+  const candidatePath = pathOf(candidate);
+  const currentPath = pathOf(current);
+  return !!candidatePath && candidatePath === currentPath;
 }
 
 export class WebViewFetcher {
@@ -53,6 +93,12 @@ export class WebViewFetcher {
   private static activeNavigationUrls: Set<string> = new Set();
   /** 当前 fetch 允许的站点域名；为空表示保留原有的跨域重定向行为。 */
   private static pendingAllowedRedirectHosts: Set<string> = new Set();
+  /**
+   * 快速提取模式：onPageEnd 后一旦 readyState complete 立即提取，跳过 1.5 秒
+   * 稳定窗口。用于只为种会话 cookie 的预访问页面（结果本身会被丢弃），
+   * 内容页解析仍走完整稳定等待，避免抓到 WAF 探针页。
+   */
+  private static quickExtractMode: boolean = false;
   // 轮询定时器
   private static pollIntervalId: number = -1;
   /** 排队等待的最长时间；上游 WebView 卡住时不能让后续请求无限排队。 */
@@ -61,9 +107,7 @@ export class WebViewFetcher {
   private static requestQueue: WebViewRequestQueueEntry[] = [];
 
   /** 与 Android Legado 后台 WebView 一致的默认桌面 UA。 */
-  private static readonly DEFAULT_USER_AGENT: string =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  private static readonly DEFAULT_USER_AGENT: string = WebUserAgent.DESKTOP;
   /**
    * 书源的 header 可能携带 Android/Mobile UA。WebView 若沿用它，很多站点
    * 会直接返回移动版或把移动版章节跳转到广告页；HTTP 请求仍保留书源 UA，
@@ -82,7 +126,7 @@ export class WebViewFetcher {
   /** 交互式验证的 Promise resolve（由 CloudflareDialog 调用） */
   static interactiveResolve: ((html: string) => void) | null = null;
   /** 当前交互 WebView 的用途；登录模式会在页面加载后自动打开登录面板。 */
-  static interactivePurpose: 'challenge' | 'login' = 'challenge';
+  static interactivePurpose: InteractivePurpose = 'challenge';
   /** 当前交互 WebView 的用户提示，由页面层传入，避免所有弹窗都显示成泛化“验证”。 */
   static interactiveReason: string = '';
   private static interactivePageCache: Map<string, InteractivePageCacheEntry> = new Map();
@@ -96,7 +140,7 @@ export class WebViewFetcher {
   }
 
   /** 弹出交互式 WebView 验证 */
-  static async fetchInteractive(url: string, purpose: 'challenge' | 'login' = 'challenge',
+  static async fetchInteractive(url: string, purpose: InteractivePurpose = 'challenge',
     reason: string = '', request?: WebViewInteractiveRequest,
     fetcherOverride?: (url: string, request?: WebViewInteractiveRequest) => Promise<string>): Promise<string> {
     WebViewFetcher.interactivePurpose = purpose;
@@ -274,7 +318,8 @@ export class WebViewFetcher {
 
   /** 提取页面内容，返回 Promise */
   static fetch(url: string, timeoutMs: number = 30000,
-    headers: Record<string, string> = {}, allowedRedirectHosts: string[] = []): Promise<WebViewFetchResult> {
+    headers: Record<string, string> = {}, allowedRedirectHosts: string[] = [],
+    quickExtract: boolean = false): Promise<WebViewFetchResult> {
     if (!WebViewFetcher.controller) {
       return Promise.reject(new Error('WebView not registered'));
     }
@@ -284,7 +329,7 @@ export class WebViewFetcher {
       console.info('[WebViewFetcher] Previous fetch still pending, queueing request');
       return new Promise((resolve, reject) => {
         const entry: WebViewRequestQueueEntry = {
-          url, timeoutMs, headers, allowedRedirectHosts, resolve, reject
+          url, timeoutMs, headers, allowedRedirectHosts, quickExtract, resolve, reject
         };
         WebViewFetcher.requestQueue.push(entry);
         // 排队请求必须有自己的等待上限：上游 fetch 若因页面销毁/控制器失效
@@ -298,12 +343,13 @@ export class WebViewFetcher {
       });
     }
 
-    return WebViewFetcher.startFetch(url, timeoutMs, headers, allowedRedirectHosts);
+    return WebViewFetcher.startFetch(url, timeoutMs, headers, allowedRedirectHosts, quickExtract);
   }
 
   /** 实际的 fetch 逻辑 */
   private static startFetch(url: string, timeoutMs: number,
-    headers: Record<string, string>, allowedRedirectHosts: string[] = []): Promise<WebViewFetchResult> {
+    headers: Record<string, string>, allowedRedirectHosts: string[] = [],
+    quickExtract: boolean = false): Promise<WebViewFetchResult> {
     return new Promise((resolve: (result: WebViewFetchResult) => void, reject: (err: Error) => void) => {
       const controller = WebViewFetcher.controller;
       if (!controller) {
@@ -327,6 +373,7 @@ export class WebViewFetcher {
         allowedRedirectHosts.map((host: string): string => WebViewFetcher.normalizeNavigationHost_(host))
           .filter((host: string): boolean => !!host)
       );
+      WebViewFetcher.quickExtractMode = quickExtract;
 
       // 设置总超时
       WebViewFetcher.timeoutId = setTimeout(() => {
@@ -385,10 +432,19 @@ export class WebViewFetcher {
     const targetHost = WebViewFetcher.navigationHost(url);
     if (targetHost && WebViewFetcher.pendingAllowedRedirectHosts.size > 0 &&
       !WebViewFetcher.pendingAllowedRedirectHosts.has(targetHost)) {
-      console.warn('[WebViewFetcher] Blocked unrelated redirect to', url.substring(0, 120));
-      // 不更新 pendingUrl/activeNavigationUrls：保留当前正文页，等待它的
-      // onPageEnd/readyState 提取，而不是把广告页交给规则解析器。
-      return true;
+      // 站点自身 CDN/镜像域名：目标路径与当前内容页完全相同（如禁漫天堂
+      // jmcomic-zzz.one → jm18c-dfg.cc 的同一 album 路径）。这类跳转不是广告，
+      // 放行并把域名加入允许集；否则拦截后不会触发 onPageEnd，轮询无法启动，
+      // 整轮 fetch 只能卡到总超时才结算。
+      if (WebViewFetcher.pendingUrl && isSamePathMirrorUrl_(url, WebViewFetcher.pendingUrl)) {
+        console.info('[WebViewFetcher] Same-path mirror redirect to', url.substring(0, 120));
+        WebViewFetcher.pendingAllowedRedirectHosts.add(targetHost);
+      } else {
+        console.warn('[WebViewFetcher] Blocked unrelated redirect to', url.substring(0, 120));
+        // 不更新 pendingUrl/activeNavigationUrls：保留当前正文页，等待它的
+        // onPageEnd/readyState 提取，而不是把广告页交给规则解析器。
+        return true;
+      }
     }
 
     // 首次加载（与 fetch 传入的 URL 相同）不计为重定向
@@ -582,14 +638,24 @@ export class WebViewFetcher {
    */
   static isLikelyBookDocumentHtml(html: string): boolean {
     if (!html) return false;
-    const detailContainer = /<(?:article|main|section|div)\b[^>]*(?:id|class)=["'][^"']*(?:r_cons|r_tools|lastrecord|novel[_-]?list|book(?:info|[_-]?detail|[_-]?content)|chapter[_-]?list|catalog)[^"']*["']/i;
+    const detailContainer = /<(?:article|main|section|div)\b[^>]*(?:id|class)=["'][^"']*(?:r_cons|r_tools|lastrecord|novel[_-]?list|book(?:info|[_-]?detail|[_-]?content)|chapter[_-]?list|catalog|btn-toolbar|intro-block)[^"']*["']/i;
     if (detailContainer.test(html)) return true;
+
+    // 漫画/视频播放页（如 antbyw 的 plugin.php?a=bofang&kuid=…）：页面主体
+    // 是章节/播放器而不是登录表单，即便导航栏预渲染了隐藏登录下拉框也
+    // 不能当独立登录页处理。播放器标记与章节导航同时出现才算；漫画站
+    // 常用“阅读”按钮（a=read&zjid=）和 kuid= 章节链接，而不是“章/话”。
+    const hasPlayerMarkup = /(?:id|class|href)=["'][^"']*(?:bofang|kuid|play[_-]?list|episode|video|\.m3u8)[^"']*["']/i
+      .test(html) || /<(?:video|canvas)\b[^>]*>/i.test(html);
+    const hasChapterNav = /上[一]?章|下[一]?章|章节列表|选集|上一页|下一页|第\s*\d+\s*[章话集]/.test(html) ||
+      /(?:href=)[^>]*[?&]a=read|zjid=|开始阅读|播放地址/.test(html);
+    if (hasPlayerMarkup && hasChapterNav) return true;
 
     // 兜底覆盖没有统一 class 命名的老站：页面同时有书籍标题、作者/简介/目录
     // 文案和书籍链接时，视为详情页，而不是独立登录页。
     const hasHeading = /<h[1-3]\b[^>]*>[\s\S]{1,300}<\/h[1-3]>/i.test(html);
     const hasBookLabel = /作者|简介|目录|最新章节|book\s*detail|novel\s*info/i.test(html);
-    const hasBookLink = /href=["'][^"']*(?:bookbook|\/book(?:\/|[_-])|chapter|\/\d+\/\d+)[^"']*["']/i.test(html);
+    const hasBookLink = /href=["'][^"']*(?:bookbook|\/book(?:\/|[_-])|chapter|\/photo(?:s)?\/|\/\d+\/\d+)[^"']*["']/i.test(html);
     return hasHeading && hasBookLabel && hasBookLink;
   }
 
@@ -603,6 +669,11 @@ export class WebViewFetcher {
     // 但真实搜索结果已经出现；先识别结果，避免被脚本标记误判为未完成验证。
     const hasSearchResultMarkup = /<table\b[^>]*class=["'][^"']*\btable\b[^"']*["'][\s\S]*<tr\b[\s\S]*<td\b[\s\S]*<a\b[^>]*href=/i.test(html) ||
       /(?:book-coverlist|novel-row(?:-main)?|search[-_ ]?(?:item|result|row))/i.test(html);
+    // 页面主体已是书籍/漫画/章节内容时，直接按内容页处理，绝不再触发交互
+    // 验证：禁漫天堂等站点在正常详情页嵌入 Cloudflare Turnstile 脚本，登录
+    // 弹窗还带验证码输入框（其 id 与 login_regist 等常见命名不一致时会漏过
+    // 下方弹窗判断）。真实挑战页没有书籍 DOM，仍走下方各标记判定。
+    if (WebViewFetcher.isLikelyBookDocumentHtml(html)) return false;
     // 这些标记属于真正的 Cloudflare/WAF 挑战页。
     const hasStrongChallengeMarker = /_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证/i
       .test(html);
@@ -624,17 +695,11 @@ export class WebViewFetcher {
     if (hasGuardChallengeMarker && !hasSearchResultMarkup) return true;
 
     // searchcode.php 和 __17mb_input 也是一些老站隐藏登录/注册表单的字段，
-    // 不能脱离页面上下文直接触发验证弹窗。详情页优先按普通页面处理；真正
-    // 的挑战页通常没有书籍详情 DOM，或会带 challenge/captcha/verification 容器。
+    // 不能脱离页面上下文直接触发验证弹窗。到达这里的页面已无书籍 DOM（有则
+    // 在上方提前返回），带这些标记即视为挑战页；搜索结果页已在上方放行。
     const hasLegacyCaptchaMarker = /searchcode\.php|__17mb_input/i.test(html);
-    const hasBookMarkup = WebViewFetcher.isLikelyBookDocumentHtml(html);
-    // 图片验证码成功后，页面脚本可能仍保留 searchcode.php 和验证码代码，
-    // 但搜索结果表格已经出现。此时应视为验证完成，否则“验证完成”按钮
-    // 会永远把已成功的搜索页拦截掉。
-    const hasChallengeContainer = /(?:id|class)=["'][^"']*(?:challenge|captcha|verification)[^"']*["']/i.test(html);
     if (hasLegacyCaptchaMarker && hasSearchResultMarkup) return false;
-    if (hasLegacyCaptchaMarker && hasBookMarkup && !hasChallengeContainer) return false;
-    if (hasLegacyCaptchaMarker && !hasBookMarkup) return true;
+    if (hasLegacyCaptchaMarker) return true;
 
     // 不能仅凭“请输入验证码”判断挑战页：搬山人等站点会把注册表单
     // 隐藏在每个正常详情页中，注册表单也带有验证码占位文字。
@@ -650,11 +715,70 @@ export class WebViewFetcher {
       (/\bcaptcha\b/i.test(html) && hasCaptchaControl);
     if (!hasCaptchaText) return false;
     if (!hasCaptchaControl) return false;
-    const hasHiddenLoginDialog = /<(?:form|div)\b[^>]*(?:login[_-]?regist|register_form|login_form)[^>]*>/i.test(html);
-    if (hasHiddenLoginDialog && hasBookMarkup && !hasChallengeContainer) {
+    return true;
+  }
+
+  // ========== 图片验证码门禁识别 ==========
+
+  /**
+   * 当前 HTML 是否是图片验证码门禁，而不是正常的搜索结果页。
+   * 与 isInteractiveChallengeHtml 互补：后者识别所有 WAF/JS 挑战页，
+   * 前者精确识别「图片验证码输入」门禁，用于优先弹验证码输入对话框
+   * （CaptchaDialog）而不是完整 WebView。
+   */
+  static isLikelyImageCaptchaPage(html: string): boolean {
+    const value = html || '';
+    if (!/(?:searchcode\.php|__17mb_(?:code|input)|请输入验证码|验证码图片|captcha)/i.test(value)) {
       return false;
     }
-    return true;
+    // 正常搜索页可能把验证码表单隐藏在页面外壳中；有书籍详情链接/结果卡片时
+    // 不把它判成搜索门禁，避免复现详情页误弹验证的问题。
+    const hasBookResult = /<(?:article|li|tr|div)\b[^>]*(?:book[-_ ]?(?:item|card|row|list)|novel[-_ ]?(?:item|card|row|list)|search[-_ ]?(?:item|result|row)|result[-_ ]?(?:item|row)|book-coverlist|novel-row)[^>]*>/i.test(value) ||
+      /<a\b[^>]*href=["'][^"']*(?:\/(?:book|books|novel|read)\/|\/\d+\/[A-Za-z0-9])/i.test(value);
+    return !hasBookResult;
+  }
+
+  /**
+   * 从图片验证码门禁页提取验证码图片 URL（相对地址已按 baseUrl 补全）。
+   * 启发式：优先 src/id/class 含验证码关键字（captcha/verify/yzm/checkcode/
+   * seccode/验证码）的 <img>，取最后一个（验证码图通常在表单内最后出现）；
+   * 找不到返回空串，调用方降级到交互 WebView。
+   */
+  static extractCaptchaImageUrl(html: string, baseUrl: string): string {
+    const value = html || '';
+    const strong = /(?:captcha|verification|verify|yzm|checkcode|seccode|验证码|随机码)/i;
+    const weak = /(?:code|img[_-]?code)/i;
+    const imgPattern = /<img\b[^>]*>/gi;
+    let m: RegExpExecArray | null;
+    let lastStrong = '';
+    let lastWeak = '';
+    while ((m = imgPattern.exec(value)) !== null) {
+      const tag = m[0];
+      const srcMatch = tag.match(/\b(?:src|data-src|data-original|data-img)\s*=\s*["']([^"']+)["']/i);
+      if (!srcMatch || !srcMatch[1]) continue;
+      const idClass = (tag.match(/\b(?:id|class)\s*=\s*["']([^"']*)["']/i) || [])[1] || '';
+      if (strong.test(srcMatch[1]) || strong.test(idClass)) {
+        lastStrong = srcMatch[1];
+      } else if (weak.test(srcMatch[1]) || weak.test(idClass)) {
+        lastWeak = srcMatch[1];
+      }
+    }
+    const raw = lastStrong || lastWeak;
+    if (!raw) return '';
+    return WebViewFetcher.resolveCaptchaUrl_(raw, baseUrl);
+  }
+
+  /** 相对验证码图片 URL 解析为绝对地址（协议相对/根相对/普通相对）。 */
+  private static resolveCaptchaUrl_(raw: string, baseUrl: string): string {
+    const url = (raw || '').trim();
+    if (!url) return '';
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('http://') ||
+      url.startsWith('https://')) return url;
+    if (url.startsWith('//')) return 'https:' + url;
+    const origin = (baseUrl || '').replace(/^(https?:\/\/[^/]+).*$/, '$1');
+    if (url.startsWith('/')) return origin + url;
+    const base = (baseUrl || '').replace(/[#?].*$/, '').replace(/\/[^/]*$/, '/');
+    return base + url;
   }
 
   // ========== 私有方法 ==========
@@ -678,7 +802,9 @@ export class WebViewFetcher {
         // 页面结束后稳定 1.5 秒再提取；若发生 onPageEnd，稳定窗口会重新计时。
         // onPageEnd 从未触发（lastPageEndAt === 0）时，页面加载满 3 秒且
         // readyState complete 也直接提取，避免控制器异常时挂到总超时。
+        // quickExtract 模式（仅种 cookie 的预访问页面）跳过稳定窗口。
         if (state.readyState === 'complete' && (
+          (WebViewFetcher.quickExtractMode && WebViewFetcher.lastPageEndAt > 0) ||
           (WebViewFetcher.lastPageEndAt > 0 &&
             Date.now() - WebViewFetcher.lastPageEndAt >= 1500) ||
           (WebViewFetcher.lastPageEndAt === 0 &&
@@ -852,7 +978,8 @@ export class WebViewFetcher {
     console.info('[WebViewFetcher] Processing next queued request');
     // ArkWeb may deliver the previous page's final onPageEnd after outerHTML extraction resolves.
     setTimeout(() => {
-      WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers, next.allowedRedirectHosts)
+      WebViewFetcher.startFetch(next.url, next.timeoutMs, next.headers, next.allowedRedirectHosts,
+        next.quickExtract)
         .then(next.resolve).catch(next.reject);
     }, 120);
   }

@@ -14,7 +14,8 @@ import {
 import { SearchResult } from '../../model/SearchResult';
 import { globalSourceExecutor, sanitizeAiGeneratedTocUrlRule, searchRateLimitWaitMs_ } from '../source/SourceExecutor';
 import { CheckResult, firstExploreUrlFromText, selectCheckResult, SourceChecker } from '../../service/SourceChecker';
-import { WebViewFetcher, WebViewInteractiveRequest } from '../web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest, InteractivePurpose } from '../web/WebViewFetcher';
+import { JsExpressionEvaluator } from '../source/JsExpressionEvaluator';
 import {
   inferAiContentRule, isSafeAiImportUrl, isUsableAiExtractedContent,
   parseAiRulesJson, prepareHtmlForAi
@@ -491,16 +492,58 @@ function extractSearchFormFromInlineScript_(html: string, pageUrl: string,
   let scriptMatch: RegExpExecArray | null;
   while ((scriptMatch = scriptPattern.exec(html || '')) !== null) {
     const script = scriptMatch[1] || '';
-    // document.write('<form ... action="https://..." ...>...<input name="q" ...>...</form>')
-    const writeMatch = script.match(/document\.write\s*\(\s*['"]([\s\S]*?)['"]\s*\)/i);
-    if (!writeMatch) continue;
-    const fragment = writeMatch[1];
-    if (!/<form\b/i.test(fragment)) continue;
-    // 把片段交给主推断逻辑递归处理（它已能识别 form 结构）。
-    const request = inferSearchRequest(fragment, pageUrl, keyword);
+    const request = extractSearchFormFromJsSource_(script, pageUrl, keyword, formCharset);
     if (request) return request;
   }
   return null;
+}
+
+/**
+ * 还原 JS 字符串字面量中的常见转义（\" \' \\ \n \t \r），
+ * 用于把 document.write/writeln 的字符串参数还原成真实 HTML。
+ */
+function unescapeJsStringLiteral_(value: string): string {
+  return (value || '')
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '\r')
+    .replace(/\\\\/g, '\\');
+}
+
+/**
+ * 从一段 JS 源码（内联脚本内容或外部 JS 文件全文）中提取
+ * document.write / document.writeln 渲染的搜索表单。
+ *
+ * 老式小说站（如 picdg/wxc8 的 header.js）常用多条 writeln 分片拼接表单：
+ *   document.writeln("<div class=\"search\"><form action='/modules/article/search.php' method='post'>");
+ *   document.writeln("<input type=\"hidden\" name=\"action\" value=\"login\">");
+ *   document.writeln("<input name=\"searchkey\" .../>");
+ *   document.writeln("</form></div>");
+ * 单条片段不含完整 <form>，必须按出现顺序拼接还原成 HTML 再交给
+ * inferSearchRequest 解析，才能得到 action/method/关键词字段。
+ * 也兼容单条 document.write('<form ...>...</form>') 的写法。
+ */
+export function extractSearchFormFromJsSource_(jsText: string, pageUrl: string,
+  keyword: string, formCharset: string): InferredSearchRequest | null {
+  const value = jsText || '';
+  // 匹配 document.write('...') / document.writeln("...") 片段（单/双引号）。
+  const writePattern = /document\.writeln?\s*\(\s*(['"])([\s\S]*?)\1\s*\)/gi;
+  const fragments: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = writePattern.exec(value)) !== null) {
+    const fragment = unescapeJsStringLiteral_(match[2] || '');
+    // 只拼接包含表单结构的片段，跳过无关的 write 调用（如统计代码）。
+    if (/<form\b|<input\b|<select\b|<\/form>/i.test(fragment)) {
+      fragments.push(fragment);
+    }
+  }
+  if (fragments.length === 0) return null;
+  const html = fragments.join('');
+  if (!/<form\b/i.test(html)) return null;
+  // 交给主推断逻辑（它已能识别 form 结构与 charset 补全）。
+  return inferSearchRequest(html, pageUrl, keyword);
 }
 
 /**
@@ -849,19 +892,6 @@ export function correctAiCoverRuleFromHtml(rule: string, html: string): string |
   return null;
 }
 
-/** 当前 HTML 取证是否是图片验证码门禁，而不是正常的搜索结果页。 */
-export function isLikelyImageCaptchaPage(html: string): boolean {
-  const value = html || '';
-  if (!/(?:searchcode\.php|__17mb_(?:code|input)|请输入验证码|验证码图片|captcha)/i.test(value)) {
-    return false;
-  }
-  // 正常搜索页可能把验证码表单隐藏在页面外壳中；有书籍详情链接/结果卡片时
-  // 不把它判成搜索门禁，避免复现详情页误弹验证的问题。
-  const hasBookResult = /<(?:article|li|tr|div)\b[^>]*(?:book[-_ ]?(?:item|card|row|list)|novel[-_ ]?(?:item|card|row|list)|search[-_ ]?(?:item|result|row)|result[-_ ]?(?:item|row)|book-coverlist|novel-row)[^>]*>/i.test(value) ||
-    /<a\b[^>]*href=["'][^"']*(?:\/(?:book|books|novel|read)\/|\/\d+\/[A-Za-z0-9])/i.test(value);
-  return !hasBookResult;
-}
-
 function hasHiddenAiLoginContainer_(html: string): boolean {
   const tags = (html || '').match(/<(?:form|div|section|aside)\b[^>]*>/gi) || [];
   return tags.some((tag: string): boolean => {
@@ -941,11 +971,14 @@ export interface SearchAlertInfo {
  * 两次搜索间隔不足时返回 200 状态、约 2KB 的普通页面，文案为"系统限制的
  * 搜索时间间隔为 15 秒,请稍后再搜索"（同时出现在 <title> 与正文），没有
  * alert/window.history 脚本，超出 alert 页 500 字节的检测范围，只能按文案
- * 识别。返回需要等待的毫秒数，0 表示不是限频页。
+ * 识别。jieqi 系统（picdg/wxc8 等 17mb 模板站）则返回 title="出现错误！"、
+ * 正文"错误原因：对不起，两次搜索的间隔时间不得少于 10 秒"的 1-2KB 错误页。
+ * 返回需要等待的毫秒数，0 表示不是限频页。
  */
 export function plainRateLimitWaitMs_(html: string): number {
   if (!html || html.length > 8000) return 0;
-  const intervalMatch = html.match(/搜索时间间隔(?:为|：|:)\s*(\d+)\s*秒/);
+  const intervalMatch = html.match(/搜索时间间隔(?:为|：|:)\s*(\d+)\s*秒/) ||
+    html.match(/(?:两次|每次)搜索的?间隔(?:时间)?(?:不得|不能)少于\s*(\d+)\s*秒/i);
   if (!intervalMatch) return 0;
   // 防误判：正常搜索结果页不应命中该文案；限频页只有返回/导航链接
   // （如 <a id="jump" href="javascript:history.go(-1)">），不含任何
@@ -1495,6 +1528,9 @@ export class AiSourceAgent {
       }
       if (!sampleReady) throw new Error(lastSampleError || '没有可用的书籍正文样本');
       await this.validate_(keyword);
+      // 定稿前验证搜索规则的 webView 标记是否必要：HTTP 直连可行则移除，
+      // 避免 AI 取证受阻时打上的过度保护标记让每次搜索都弹交互 WebView。
+      await this.demoteUnnecessaryWebView_();
       this.compile_();
     } catch (e) {
       const message = (e as Error).message || String(e);
@@ -1662,10 +1698,14 @@ export class AiSourceAgent {
     this.start_(AiStep.HOMEPAGE, evidence.usedWebView ? '分析渲染后的 DOM' : '分析页面和表单');
     let inferred = inferSearchRequest(evidence.html, evidence.finalUrl || evidence.url, keyword);
     // 渲染后的 DOM 可能不含 document.write 输出的搜索表单（外部 JS 中的
-    // search() 函数在内联调用时尚未加载）。既有搜索 URL 不可求值时，尝试从
-    // 页面引用的同站外部 JS 中提取搜索表单，避免把失效模板继续当成搜索地址。
-    if (!inferred?.ruleSearchUrl && this.repairMode_ &&
-      isUnevaluableSearchTemplate_(this.draft_?.ruleSearchUrl || '')) {
+    // search() 函数在内联调用时尚未加载，如 picdg/wxc8 的 header.js 用多条
+    // document.writeln 分片渲染搜索框）。首页没有静态 form 时，尝试从页面
+    // 引用的同站外部 JS 中提取搜索表单：新建书源同样需要，不能只限修复模式
+    // （否则模型只能看到无表单的首页，会猜出 404 的搜索路径）。既有搜索
+    // URL 可求值时保留现状，不重复抓取外部脚本。
+    const existingSearchUrl = this.draft_?.ruleSearchUrl || '';
+    if (!inferred?.ruleSearchUrl && (!existingSearchUrl ||
+      isUnevaluableSearchTemplate_(existingSearchUrl))) {
       inferred = await this.inferSearchFromExternalScripts_(
         evidence.scriptSrcs || [], evidence.finalUrl || evidence.url, keyword);
       // 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点（如
@@ -1788,6 +1828,11 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
       }
       if (repairSearch && !useInferredSearch && !preserveExistingPostSearch) {
         this.draft_.ruleSearchUrl = inferred?.ruleSearchUrl || parsed['ruleSearchUrl'] || this.draft_.ruleSearchUrl;
+        // 模型生成的搜索 URL 通常不带 charset 选项；GBK 站点（如 picdg/wxc8
+        // 的 modules/article/search.php）关键词必须按 GBK 编码提交，否则站点按
+        // GBK 解码 UTF-8 字节得到乱码并返回空结果页，模型在空页上只能生成无效
+        // 规则。从首页 HTML 的 charset 声明补全规则。
+        this.draft_.ruleSearchUrl = patchSearchRuleCharset_(this.draft_.ruleSearchUrl, evidence.html);
         this.anchorSearchRuleToCanonicalOrigin_();
         this.ensureSearchWebViewOption_();
       }
@@ -1870,6 +1915,48 @@ ${this.promptKnowledge_('homepage', '', evidence.html)}
         }
         searchEvidenceHtml = evidence.html;
         searchEvidenceUsedWebView = evidence.usedWebView;
+        // jieqi/帝国 CMS 系站点（如 picdg/wxc8）用 cookie 记录上次搜索时间，
+        // 两次搜索间隔不足（如 <10 秒）时返回 title="出现错误！"、正文
+        // "两次搜索的间隔时间不得少于 10 秒"的 1-2KB 错误页。取证与上一轮
+        // 搜索间隔太近时容易触发。检测到后等待窗口结束再重新取证，避免把
+        // 限频页误判成"内容过短"或"无结果"烧完所有轮次。
+        const searchRateLimitWait = plainRateLimitWaitMs_(searchEvidenceHtml);
+        if (searchRateLimitWait > 0) {
+          this.log_('  搜索被站点限频，等待 ' + Math.round(searchRateLimitWait / 1000) +
+            ' 秒后重新取证');
+          await sleepMs_(searchRateLimitWait);
+          try {
+            evidence = await this.fetchRulePage_(this.draft_.ruleSearchUrl, keyword, '搜索结果');
+          } catch (e) {
+            lastError = '搜索请求失败：' + conciseAiFetchError_(e);
+            this.log_('  搜索取证失败：' + lastError);
+            continue;
+          }
+          searchEvidenceHtml = evidence.html;
+          searchEvidenceUsedWebView = evidence.usedWebView;
+        }
+        // GBK 站点的搜索结果页若声明了 gbk/gb2312 编码而搜索 URL 规则没有
+        // charset 选项，关键词按 UTF-8 提交会被站点按 GBK 解码成乱码并返回
+        // 空结果页（如 picdg/wxc8 的 modules/article/search.php）。用搜索结果
+        // 页自身的 charset 声明补全规则后重新取证一次，让模型在真实卡片上
+        // 生成规则，避免在空页上烧完所有轮次。规则已带 charset 时此函数
+        // 原样返回，不会无限重取。
+        const searchCharsetPatched = patchSearchRuleCharset_(
+          this.draft_.ruleSearchUrl || '', searchEvidenceHtml);
+        if (searchCharsetPatched !== (this.draft_.ruleSearchUrl || '')) {
+          this.draft_.ruleSearchUrl = searchCharsetPatched;
+          this.log_('  搜索结果页声明 GBK 编码，已为搜索 URL 补全 charset：' +
+            searchCharsetPatched);
+          try {
+            evidence = await this.fetchRulePage_(searchCharsetPatched, keyword, '搜索结果');
+          } catch (e) {
+            lastError = '搜索请求失败：' + conciseAiFetchError_(e);
+            this.log_('  搜索取证失败：' + lastError);
+            continue;
+          }
+          searchEvidenceHtml = evidence.html;
+          searchEvidenceUsedWebView = evidence.usedWebView;
+        }
         if (isLikelyAiServerErrorPage(searchEvidenceHtml)) {
           lastError = '搜索请求返回站点错误页（最终地址：' +
             (evidence.finalUrl || evidence.url).substring(0, 120) +
@@ -4380,7 +4467,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
    * 请求交互页面的统一入口。页面级回调只负责显示 UI，真正的调用优先
    * 走 WebViewFetcher，以便复用刚刚由用户确认过的搜索结果页。
    */
-  private async requestInteractivePage_(url: string, purpose: 'challenge' | 'login',
+  private async requestInteractivePage_(url: string, purpose: InteractivePurpose,
     reason: string, request?: WebViewInteractiveRequest): Promise<string> {
     if (this.callback_.onRequestWebView) {
       // 批量任务通过回调更新 waiting_user 状态；缓存只包裹回调，不绕过它。
@@ -4446,18 +4533,50 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       }
     }
     // 已有 Java 验证码规则由 SourceExecutor 直接弹出 CaptchaDialog；新源尚未
-    // 生成这段规则时，交给交互 WebView 让用户完成站点页面自己的验证码脚本。
+    // 生成这段规则时，先弹验证码输入对话框（CaptchaDialog）而不是直接交给
+    // 完整 WebView——与 Android 的验证码对话框体验一致。输入成功后站点会话
+    // Cookie 通常放行，重试原请求即可拿到真实结果；重试仍被拦截再降级交互
+    // WebView 让用户完成站点页面自己的验证码脚本。
     // 只有用户完成后页面出现真实结果，后续搜索验证才会通过。
-    const imageCaptchaPage = /搜索/i.test(label) && isLikelyImageCaptchaPage(html);
+    const imageCaptchaPage = /搜索/i.test(label) && WebViewFetcher.isLikelyImageCaptchaPage(html);
     const imageCaptchaHandled = imageCaptchaPage && this.hasImageCaptchaRule_();
-    const challengeForInteraction = (this.isChallengePage_(html) || imageCaptchaPage) && !imageCaptchaHandled;
+    let captchaSolvedByDialog = false;
+    if (imageCaptchaPage && !imageCaptchaHandled && !this.isLoginPage_(html, finalUrl)) {
+      const captchaImgUrl = WebViewFetcher.extractCaptchaImageUrl(html, finalUrl);
+      if (captchaImgUrl && JsExpressionEvaluator.captchaHandler) {
+        this.log_('  检测到图片验证码门禁，弹出验证码输入对话框');
+        const code = await JsExpressionEvaluator.requestCaptchaInput(captchaImgUrl);
+        if (code) {
+          try {
+            const retriedHtml = await NetUtil.httpGet(
+              url, this.headerMap_(this.draft_?.header || ''), 30000);
+            if (retriedHtml && retriedHtml.length > 300 &&
+              !WebViewFetcher.isLikelyImageCaptchaPage(retriedHtml) &&
+              !this.isChallengePage_(retriedHtml)) {
+              html = retriedHtml;
+              captchaSolvedByDialog = true;
+              this.log_('  验证码输入后重试成功，跳过交互 WebView');
+            } else {
+              this.log_('  验证码输入后重试仍被拦截，降级交互 WebView');
+            }
+          } catch (retryError) {
+            this.log_('  验证码输入后重试失败：' +
+              ((retryError as Error).message || '').substring(0, 100));
+          }
+        } else {
+          this.log_('  验证码对话框未输入，降级交互 WebView');
+        }
+      }
+    }
+    const challengeForInteraction = (this.isChallengePage_(html) || imageCaptchaPage) &&
+      !imageCaptchaHandled && !captchaSolvedByDialog;
     const loginRequired = this.isLoginPage_(html, finalUrl);
     if ((challengeForInteraction || loginRequired) &&
       (this.callback_.onRequestWebView || WebViewFetcher.interactiveFetcher)) {
       const reason = loginRequired
         ? '页面需要登录'
         : imageCaptchaPage ? '搜索页面需要输入图片验证码' : '页面需要人工验证';
-      const purpose = loginRequired ? 'login' : 'challenge';
+      const purpose = loginRequired ? 'login' : imageCaptchaPage ? 'imageCaptcha' : 'challenge';
       let interactive = '';
       // 页面级回调负责显示弹窗；统一入口同时保留交互页面缓存，避免
       // 同一搜索请求在模型重试时重复打开限频页面。
@@ -4500,7 +4619,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       throw new Error('测试关键词太短，该站点要求更长的搜索关键词');
     }
     if (!html || html.length < 300) throw new Error(label + '页面内容过短，可能被反爬或登录拦截');
-    if (usedWebView && !imageCaptchaHandled) {
+    if (usedWebView && !imageCaptchaHandled && !captchaSolvedByDialog) {
       // 取证阶段如果只能通过浏览器拿到完整 DOM，后续正文/目录验证及最终书源
       // 也必须沿用 WebView 会话，否则会再次退回无 Cookie 的短占位页。
       this.requiresWebView_ = true;
@@ -4627,7 +4746,13 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       try {
         const jsText = await NetUtil.httpGet(resolved, this.headerMap_(this.draft_?.header || ''), 15000);
         if (!jsText) continue;
-        const inferred = inferSearchRequest(jsText, pageUrl, keyword);
+        // 老式站点（如 picdg/wxc8 的 header.js）的搜索表单由多条
+        // document.writeln 分片拼接渲染，单条片段不含完整 <form>；
+        // 先按 JS 源码提取（拼接 + 反转义），失败再回退常规 HTML 推断。
+        let inferred = extractSearchFormFromJsSource_(jsText, pageUrl, keyword, '');
+        if (!inferred?.ruleSearchUrl) {
+          inferred = inferSearchRequest(jsText, pageUrl, keyword);
+        }
         if (inferred?.ruleSearchUrl) {
           this.log_('  已从外部脚本提取搜索表单：' + resolved.substring(0, 80));
           return inferred;
@@ -4671,6 +4796,77 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       }
     }
     return template + '##webView';
+  }
+
+  /** withWebViewOption_ 的反操作：移除 ##webView 后缀或选项里的 webView:true。 */
+  private stripWebViewOption_(rawTemplate: string): string {
+    let template = rawTemplate.trim().replace(/##web\s*[Vv]iew/ig, '').trim();
+    const optionMatch = template.match(/^(.*?),(\{[\s\S]*\})$/);
+    if (optionMatch) {
+      try {
+        const options = JSON.parse(optionMatch[2]) as Record<string, Object>;
+        if (options['webView'] === true || options['webview'] === true) {
+          delete options['webView'];
+          delete options['webview'];
+          const rest = Object.keys(options);
+          if (rest.length === 0) return optionMatch[1];
+          return optionMatch[1] + ',' + JSON.stringify(options);
+        }
+      } catch (_e) { /* 非标准 JSON 选项保留原样 */ }
+    }
+    return template;
+  }
+
+  /**
+   * 定稿前验证搜索规则的 webView 标记是否必要。
+   *
+   * AI 取证在受阻时（WAF/JS 挑战、频率限制、客户端渲染误判）会给搜索规则
+   * 打上 webView 标记，其中一部分站点实际支持直接 HTTP 搜索（如悠久小说网
+   * 的 searchbooks.php）。这里用纯 HTTP 重放一次测试关键词：拿到真实搜索
+   * 结果（结果卡片/书籍链接，且不是挑战/验证码页）就移除标记，让日常搜索
+   * 直接走 HTTP，不再每次弹交互 WebView 框。验证失败或结果不可靠时保留
+   * 标记，由校验环节已有的 WebView 语义兜底。
+   *
+   * 注意必须用 NetUtil 直连而不是 searchForCheck：SourceExecutor 在 HTTP
+   * 失败后会自动降级隐藏 WebView，会掩盖"HTTP 直连不可行"的真实结论。
+   */
+  private async demoteUnnecessaryWebView_(): Promise<void> {
+    const draft = this.draft_;
+    if (!draft) return;
+    const template = (draft.ruleSearchUrl || '').trim();
+    if (!/##web\s*[Vv]iew|["']web\s*[Vv]iew["']\s*:\s*true/i.test(template)) return;
+    const keyword = (draft.ruleSearchCheckKeyWord || '').trim();
+    if (!keyword) return;
+    const withoutWebView = this.stripWebViewOption_(template);
+    if (!withoutWebView || withoutWebView === template) return;
+
+    this.log_('  校验搜索 webView 标记是否必要（HTTP 直连验证）...');
+    let html = '';
+    try {
+      const spec = materializeAgentRequest(withoutWebView, keyword, 1, draft.sourceUrl || '');
+      if (!isSafeAiImportUrl(spec.url)) return;
+      const headers = this.headerMap_(draft.header || '');
+      if (spec.method === 'POST') {
+        const body = spec.charset ? NetUtil.encodeFormBody(spec.body, spec.charset) : spec.body;
+        headers['Content-Type'] = headers['Content-Type'] ||
+          ('application/x-www-form-urlencoded' + (spec.charset ? '; charset=' + spec.charset : ''));
+        headers['Referer'] = draft.sourceUrl || '';
+        html = await NetUtil.httpPost(spec.url, body, headers, 30000);
+      } else {
+        html = await NetUtil.httpGet(spec.url, headers, 30000);
+      }
+    } catch (e) {
+      this.log_('  webView 必要性验证请求失败，保留标记：' +
+        ((e as Error).message || String(e)).substring(0, 100));
+      return;
+    }
+    if (!html || html.length < 300) return;
+    if (WebViewFetcher.isInteractiveChallengeHtml(html)) return;
+    if (WebViewFetcher.isLikelyImageCaptchaPage(html)) return;
+    if (!hasAiSearchResultMarkup_(html)) return;
+    draft.ruleSearchUrl = withoutWebView;
+    this.requiresWebView_ = false;
+    this.log_('  HTTP 直连搜索成功，已移除搜索规则的 webView 标记');
   }
 
   private isChallengePage_(html: string): boolean {

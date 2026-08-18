@@ -70,11 +70,12 @@ export struct ReadAloudPanel {
     }
     // 注册全局监听，追踪朗读进度
     setAloudGlobalListener({
-      onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; if (s === AloudState.PLAYING) this.errorText = ''; },
+      onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; if (s === AloudState.PLAYING) this.errorText = ''; if (s === AloudState.PAUSED) this.stopBgTask_(); },
       onProgress: (ci: number, t: number) => { this.curCharIdx_ = ci; this.progress = t > 0 ? Math.round((ci / t) * 100) : 0; this.progressText = ci + '/' + t; },
       onChapterChange: (chapterIdx: number) => { this.curAloudChapter_ = chapterIdx; this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; },
       onChapterEnd: () => { this.progress = 100; this.onNextChapter?.(); },
       onError: (msg: string) => { this.errorText = msg; },
+      onAutoPause: (reason: string) => { this.errorText = reason; UiUtil.showToast(this.getUIContext(), { message: reason, duration: 2000 }); },
     });
   }
 

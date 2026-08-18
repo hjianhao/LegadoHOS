@@ -12,7 +12,8 @@ import {
   needsWebViewDocument, resolveContentPageUrl, boundedSearchParseCount,
   sanitizeAiGeneratedTocUrlRule, aiTitleAttributeRule, formatLegadoBookName,
   preferCompleteBookName, normalizeMediaUrlValue, searchRateLimitWaitMs_,
-  unwrapJsCallUrlValue_, buildUrl, sniffNextTocPageUrl
+  unwrapJsCallUrlValue_, buildUrl, sniffNextTocPageUrl, isLoginDocument,
+  substituteJavaGetStringCall_, substituteJavaGetElementCall_, seedWebViewCookieUrl_
 } from '../main/ets/engine/source/SourceExecutor';
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
@@ -20,21 +21,21 @@ import {
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
 import {
   inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
-  isLikelyAiBookDetailUrl, isLikelyImageCaptchaPage, isPlausibleAiBookInfo,
+  isLikelyAiBookDetailUrl, isPlausibleAiBookInfo,
   isUsableAiCoverRule, correctAiCoverRuleFromHtml, materializeAgentRequest,
   prepareSourceAgentHtml, isLikelyAiLoginPage, isLikelyAiLoginResultPage,
   hasAiSearchResultMarkup_, hasAiSearchCardMetadata_, isUnevaluableSearchTemplate_,
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
   isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
   plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_,
-  buildAiVisibleNameRuleCandidates_
+  buildAiVisibleNameRuleCandidates_, extractSearchFormFromJsSource_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
-import { WebViewFetcher } from '../main/ets/engine/web/WebViewFetcher';
+import { WebViewFetcher, isSamePathMirrorUrl_ } from '../main/ets/engine/web/WebViewFetcher';
 import { AiSearchPageLink } from '../main/ets/model/AiSourceDiscovery';
 import { AiSourceDiscoveryService } from '../main/ets/service/AiSourceDiscoveryService';
-import { getHtmlParser } from '../main/ets/util/HtmlParser';
+import { getHtmlParser, HtmlElement } from '../main/ets/util/HtmlParser';
 import {
   buildOnlineSearchUrl, isOnlineSearchResultPage, normalizeOnlineSearchEngine
 } from '../main/ets/service/OnlineSearchEngineService';
@@ -398,6 +399,37 @@ export default function bookSourceManagementTest() {
         completedSearch + '<script>var _cf_chl_opt = {};</script>')).assertFalse();
     });
 
+    it('doesNotTreatTurnstileEmbeddedBookPageAsChallenge', 0, () => {
+      // 禁漫天堂等站点在正常详情页嵌入 Cloudflare Turnstile 脚本和挂载点
+      // （用于登录/注册弹窗）。完整渲染的详情页已含书籍 DOM，不能因页面
+      // 出现 cf-turnstile 就误判为未完成验证，否则每次进详情/目录都弹交互
+      // WebView，且弹窗加载原地址被 WAF 拒绝显示“无法访问地址”。
+      const albumWithTurnstile = '<html><head>' +
+        '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>' +
+        '</head><body><div id="login-modal"><div class="cf-turnstile" data-sitekey="xxx"></div></div>' +
+        '<div id="intro-block"><h1>隨心一聽</h1>' +
+        '<div class="intro-collapse-content">简介：短篇漫画集</div>' +
+        '<div class="btn-toolbar"><a href="/photo/1458662/?shunt=1">第1话</a></div>' +
+        '</div></body></html>';
+      expect(WebViewFetcher.isLikelyBookDocumentHtml(albumWithTurnstile)).assertTrue();
+      expect(WebViewFetcher.isInteractiveChallengeHtml(albumWithTurnstile)).assertFalse();
+      // 登录弹窗还带验证码输入框（如 id="code" + “验证码”文案）：此前仅靠
+      // 弹窗 id 白名单判断，这类弹窗会漏过并误判为独立验证页。有书籍 DOM
+      // 的页面一律不应触发交互验证。
+      const albumWithCaptchaModal = '<html><body>' +
+        '<div id="login-box"><form action="/login"><input type="text" name="code" placeholder="验证码">' +
+        '<img src="/captcha.png"></form></div>' +
+        '<div id="intro-block"><h1>隨心一聽</h1>' +
+        '<div class="btn-toolbar"><a href="/photo/1458662/?shunt=1">第1话</a></div>' +
+        '</div></body></html>';
+      expect(WebViewFetcher.isLikelyBookDocumentHtml(albumWithCaptchaModal)).assertTrue();
+      expect(WebViewFetcher.isInteractiveChallengeHtml(albumWithCaptchaModal)).assertFalse();
+      // 真正的 Turnstile 挑战页（无书籍 DOM）仍应判为需要交互验证。
+      const realChallenge = '<html><body><div class="cf-turnstile" data-sitekey="xxx"></div>' +
+        '<p>正在检查您的浏览器...</p></body></html>';
+      expect(WebViewFetcher.isInteractiveChallengeHtml(realChallenge)).assertTrue();
+    });
+
     it('detectsGuardAutoJsChallengePage', 0, () => {
       // zqb88.cn 等站点使用 _guard/auto.js 做 JS 挑战：首次请求只返回一个
       // 极短的 <script src="/_guard/auto.js">，必须用 WebView 执行脚本写入
@@ -452,6 +484,38 @@ export default function bookSourceManagementTest() {
       const emptyKeywordPage = '<html><head><title>没有搜索到相关的内容</title></head>' +
         '<body><p>没有搜索到相关的内容</p></body></html>';
       expect(searchRateLimitWaitMs_(emptyKeywordPage)).assertEqual(0);
+    });
+
+    it('detectsJieqiSearchRateLimitPage', 0, () => {
+      // 天籁小说网（picdg.com/wxc8.com）回归：jieqi 系站点用 cookie 记录上次
+      // 搜索时间，两次搜索间隔不足 10 秒时返回 title="出现错误！"、正文
+      // "错误原因：对不起，两次搜索的间隔时间不得少于 10 秒"的 1-2KB 错误页。
+      // AI Agent 取证成功后会种下 jieqiVisitTime cookie，SrcEx 验证 3 秒后
+      // 再次 POST 即触发限频，此前被误判成"内容过短"烧完所有轮次。修复：
+      // 识别该文案并等待窗口结束再重试。
+      const jieqiRateLimit = '<!DOCTYPE html><html><head><meta http-equiv="content-type" ' +
+        'content="text/html; charset=gbk" /><title>出现错误！</title>' +
+        '<link rel="stylesheet" type="text/css" media="all" href="https://www.picdg.com/themes/17mb/style.css" />' +
+        '<script language="javascript" type="text/javascript" src="https://www.picdg.com/scripts/common.js"></script>' +
+        '</head><body><div style="width:100%; text-align:center;">' +
+        '<div style="width:500px; margin-top:150px;"><div class="block">' +
+        '<div class="blocktitle">出现错误！</div><div class="blockcontent">' +
+        '<div style="padding:10px"><br />错误原因：对不起，两次搜索的间隔时间不得少于 10 秒<br /><br />' +
+        '请 <a href="javascript:history.back(1)">返 回</a> 并修正<br /><br /></div>' +
+        '<div style="width:100%; text-align: right; line-height:200%; padding-right:10px;">' +
+        '[<a href="javascript:window.close()">关闭本窗口</a>]</div></div>' +
+        '<div class="blocknote">版权所有&copy; <a href="https://www.picdg.com/">天籁小说网</a></div>' +
+        '</div></div></div></body></html>';
+      expect(jieqiRateLimit.length > 500).assertTrue();
+      expect(searchRateLimitWaitMs_(jieqiRateLimit)).assertEqual(10000);
+      // Agent 取证路径（prepareSourceAgentHtml 清理脚本/样式后）同样识别。
+      expect(plainRateLimitWaitMs_(jieqiRateLimit)).assertEqual(10000);
+      // 正常搜索结果页（含 .html 书籍链接）不误判。
+      const normalSearch = '<html><head><title>四合院 搜索结果</title></head>' +
+        '<body><div class="result-list"><div class="result-item result-game-item">' +
+        '<a href="/60_60141/">深空彼岸</a></div></div></body></html>';
+      expect(searchRateLimitWaitMs_(normalSearch)).assertEqual(0);
+      expect(plainRateLimitWaitMs_(normalSearch)).assertEqual(0);
     });
 
     it('detectsSearchKeywordTooShortAlert', 0, () => {
@@ -730,6 +794,155 @@ export default function bookSourceManagementTest() {
       expect(needsWebViewDocument(detail, 'https://example.com/bookbook/167031.html')).assertFalse();
     });
 
+    it('doesNotTreatDiscuzMangaPlayPageAsLogin', 0, () => {
+      // antbyw 等 Discuz 系漫画站：每个页面 header 都预渲染标准快速登录框
+      // （lsform/ls_password，action 含 login），但页面主体是漫画播放页。
+      // 不能因为带密码框就误判为登录门禁，否则每次取目录都弹验证窗。
+      const playPage = '<html><head><title>战斗吧！！闪耀英雄★漫画_天野リサ</title></head><body>' +
+        '<div id="hd"><div class="hdc cl"><h2><a href="./">ant搬运网</a></h2></div>' +
+        '<form method="post" id="lsform" action="member.php?mod=logging&amp;action=login">' +
+        '<input type="password" name="password" id="ls_password" class="px vm">' +
+        '<button type="submit"><em>登录</em></button></form></div>' +
+        '<div class="pg_jameson_manhua" id="jameson_manhua">' +
+        '<a href="./plugin.php?id=jameson_manhua&amp;a=read&amp;zjid=1595049&amp;kuid=198930" class="uk-button uk-button-danger">阅读</a>' +
+        '</div><div class="uk-breadcrumb"><a href="./plugin.php?id=jameson_manhua&amp;c=index&amp;a=bofang&amp;kuid=146322">阅读426</a></div>' +
+        '</body></html>';
+      expect(WebViewFetcher.isLikelyBookDocumentHtml(playPage)).assertTrue();
+      expect(isLoginDocument(playPage,
+        'https://www.antbyw.com/plugin.php?id=jameson_manhua&c=index&a=bofang&kuid=198930')).assertFalse();
+      expect(needsWebViewDocument(playPage,
+        'https://www.antbyw.com/plugin.php?id=jameson_manhua&c=index&a=bofang&kuid=198930')).assertFalse();
+      // URL 不含内容参数时仍要能识别页面主体：播放标记+章节导航兜底。
+      expect(isLoginDocument(playPage, 'https://www.antbyw.com/')).assertFalse();
+      // 真实登录页（无书籍内容）仍应判定为登录门禁。
+      const realLogin = '<html><head><title>会员登录</title></head><body>' +
+        '<form id="loginform" action="/member.php?mod=logging&amp;action=login">' +
+        '<input type="password" name="password"></form></body></html>';
+      expect(isLoginDocument(realLogin, 'https://www.example.com/member.php?mod=logging&action=login')).assertTrue();
+    });
+
+    it('doesNotTreatJmComicAlbumDetailAsLogin', 0, () => {
+      // 禁漫天堂（jmcomic-zzz.one）专辑详情页：头部预渲染登录/验证码弹窗，
+      // 但页面主体是 `id="intro-block"` 的书籍信息和 `class="btn-toolbar"` 的
+      // 目录（/photo/<bookId>/?shunt=… 章节链接）。若被误判为登录门禁，
+      // 每次取详情/目录都会被路由进 WebView，白等一轮 60s 超时。
+      const album = '<html><head><title>难缠姐妹偏要和我同居-家教住我家-無碼版</title></head><body>' +
+        '<div id="navbar"><form id="login-regist" action="/login"><input type="password"></form></div>' +
+        '<div id="intro-block"><h1>难缠姐妹偏要和我同居</h1>' +
+        '<div class="intro-collapse-content">简介：姐妹两人与家教同居的故事</div>' +
+        '<div data-type="tags"><a>純愛</a></div></div>' +
+        '<div class="btn-toolbar"><a href="/photo/1255565/?shunt=1">第1话</a>' +
+        '<a href="/photo/1255565/?shunt=1">第2话</a></div>' +
+        '</body></html>';
+      expect(WebViewFetcher.isLikelyBookDocumentHtml(album)).assertTrue();
+      expect(WebViewFetcher.isInteractiveChallengeHtml(album)).assertFalse();
+      expect(isLoginDocument(album, 'https://jmcomic-zzz.one/album/1255565/难缠姐妹')).assertFalse();
+      expect(needsWebViewDocument(album, 'https://jmcomic-zzz.one/album/1255565/难缠姐妹')).assertFalse();
+    });
+
+    it('allowsSamePathMirrorRedirect', 0, () => {
+      // 禁漫天堂把 jmcomic-zzz.one 302 到 jm18c-dfg.cc，album 路径完全一致。
+      // 这类站点自身 CDN/镜像跳转必须放行，否则 WebView 导航被拦截后收不到
+      // onPageEnd，整轮 fetch 卡到总超时。
+      expect(isSamePathMirrorUrl_(
+        'https://jm18c-dfg.cc/album/1255565/%E9%9A%BE%E7%BC%A0%E5%A7%90%E5%A6%B9',
+        'https://jmcomic-zzz.one/album/1255565/难缠姐妹')).assertTrue();
+      // 目标带尾斜杠/分流参数，路径剥掉后仍一致。
+      expect(isSamePathMirrorUrl_(
+        'https://jm18c-dfg.cc/album/1255565/?shunt=1',
+        'https://jmcomic-zzz.one/album/1255565/')).assertTrue();
+      // 路径不同（广告/验证码跳转）不视为镜像。
+      expect(isSamePathMirrorUrl_(
+        'https://ads.example.com/promo?url=album/1255565',
+        'https://jmcomic-zzz.one/album/1255565/难缠姐妹')).assertFalse();
+      expect(isSamePathMirrorUrl_(
+        'https://jm18c-dfg.cc/album/other/2',
+        'https://jmcomic-zzz.one/album/1255565/难缠姐妹')).assertFalse();
+    });
+
+    it('seedsWebViewCookieForSearch', 0, () => {
+      // 58小说网 搜索走 /api/search XHR：直接访问 /user/search.html 时 SID
+      // cookie 的 Path=/user/，POST 不带 cookie 被服务器以“搜索太频繁”拒绝。
+      // 同源预访问书源首页可种下 Path=/ 的会话 cookie（复现真实浏览器流程）。
+      // 同域不同路径：返回源 URL 用于预访问。
+      expect(seedWebViewCookieUrl_(
+        'https://m.xbfdc.net', 'https://m.xbfdc.net/user/search.html?q=%E5%9B%9B%E5%90%88%E9%99%A2')).assertEqual(
+        'https://m.xbfdc.net');
+      // 路径剥掉 www/端口差异后同域，仍应预访问。
+      expect(seedWebViewCookieUrl_(
+        'https://www.m.xbfdc.net:443', 'https://m.xbfdc.net/user/search.html?q=x')).assertEqual(
+        'https://www.m.xbfdc.net:443');
+      // 跨域（书源主页与搜索页不同站）：预访问无意义，不返回。
+      expect(seedWebViewCookieUrl_(
+        'https://m.xbfdc.net', 'https://other.example.com/user/search.html?q=x')).assertEqual('');
+      // 源 URL 与搜索页路径相同：首页即搜索页，无需预访问。
+      expect(seedWebViewCookieUrl_(
+        'https://m.xbfdc.net/user/search.html', 'https://m.xbfdc.net/user/search.html?q=x')).assertEqual('');
+    });
+
+    it('substitutesJavaGetStringInJsRules', 0, () => {
+      // Android Legado 的 java.getString('rule') 在 QuickJS 沙箱中不存在，
+      // 求值前必须替换为用当前文档提取的字面量，否则整段 @js: 规则抛
+      // TypeError。生产路径先 normalizeCssRule（@[ 链式→后代）再提取；
+      // 这里用 normalize 后的选择器验证替换语义（禁漫天堂详情 kind 规则）。
+      const album = '<html><head><title>难缠姐妹偏要和我同居-家教住我家-無碼版</title></head><body>' +
+        '<div id="intro-block"><h1>难缠姐妹偏要和我同居</h1>' +
+        '<div data-type="tags"><a>純愛</a></div></div></body></html>';
+      const parser = getHtmlParser();
+      const doc = parser.parse(album);
+      // 原始 Legado 链式规则（normalize 后为后代选择器）。
+      const rawChain = '#intro-block@[data-type=tags]@a@text';
+      const normalizedChain = '#intro-block [data-type="tags"] a@text';
+      const substituted = substituteJavaGetStringCall_('java.getString(\'' + rawChain + '\')',
+        (cssRule: string): string => parser.extractAttr(doc, normalizedChain));
+      // 替换后是字面量（JSON 字符串），不再是函数调用；提取值落入其中。
+      expect(substituted.indexOf('java.getString')).assertEqual(-1);
+      expect(substituted).assertContain('純愛');
+      // 含引号/中文的规则名也要能替换（JSON 转义一致）。
+      const quoted = substituteJavaGetStringCall_(
+        'var k = java.getString("div[data-type=tags]@text")',
+        (cssRule: string): string => parser.extractAttr(doc, 'div[data-type="tags"] a@text'));
+      expect(quoted.indexOf('java.getString')).assertEqual(-1);
+      // 无 getString 调用的规则保持原样。
+      const plain = 'baseUrl + "/album/1255565"';
+      expect(substituteJavaGetStringCall_(plain,
+        (cssRule: string): string => parser.extractAttr(doc, normalizedChain))).assertEqual(plain);
+    });
+
+    it('staticizesJavaGetElementInFieldRules', 0, () => {
+      // 可乐小说等移动站卡片把跳转写在 onclick（URL 编码的 base64），书源用
+      // <js> 块 + java.getElement 取详情 URL。QuickJS 没有 DOM，必须静态化为
+      // ArkTS HtmlParser 提取的字面量，其余 JS 逻辑（base64 解码）才能执行。
+      const html = '<html><body><div class="book-card">' +
+        '<a href="/book/AII0G0A.html">在四合院当大哥</a>' +
+        '<div class="book-card__title">四合院：在四合院当大哥</div>' +
+        '</div></body></html>';
+      const parser = getHtmlParser();
+      const doc = parser.parse(html);
+      const item = parser.querySelectorAll(doc, '.book-card')[0] as HtmlElement;
+      // 双参数 java.getElement(result, 'sel')：在搜索结果元素内查询。
+      const dual = substituteJavaGetElementCall_(
+        'java.getElement(result, \'a\').getAttribute(\'href\')', parser, doc, item);
+      expect(dual.indexOf('java.getElement')).assertEqual(-1);
+      expect(dual).assertContain('/book/AII0G0A.html');
+      // 单参数 java.getElement('sel')：按 Android 语义查询整个文档。
+      const single = substituteJavaGetElementCall_(
+        'java.getElement(\'div.book-card__title\').text()', parser, doc, item);
+      expect(single).assertContain('四合院：在四合院当大哥');
+      // attr 别名与 getAttr 同样支持。
+      const alias = substituteJavaGetElementCall_(
+        'java.getElement(result, \'a\').attr(\'href\')', parser, doc, item);
+      expect(alias.indexOf('java.getElement')).assertEqual(-1);
+      expect(alias).assertContain('/book/AII0G0A.html');
+      // 元素不存在替换为 null（Android getElement 语义）。
+      const missing = substituteJavaGetElementCall_(
+        'java.getElement(result, \'a.missing\').attr(\'href\')', parser, doc, item);
+      expect(missing).assertEqual('null');
+      // 无 getElement 调用的代码保持原样。
+      const plain = 'Base64.decode(result)';
+      expect(substituteJavaGetElementCall_(plain, parser, doc, item)).assertEqual(plain);
+    });
+
     it('patchesGbkCharsetIntoSearchRule', 0, () => {
       // shoujix.com 是 GBK 站点：<meta charset="GBK">。从外部 JS 提取的搜索
       // 表单没有 charset 声明，关键词按 UTF-8 提交会被 GBK 解码成乱码，
@@ -798,6 +1011,76 @@ export default function bookSourceManagementTest() {
       expect(agent.body).assertEqual('searchkey=%E7%A9%BF%E8%B6%8A');
     });
 
+    it('patchesModelGeneratedGbkSearchUrlEndToEnd', 0, () => {
+      // 天籁小说网（picdg.com/wxc8.com）回归：模型直接生成 GET 搜索 URL
+      // modules/article/search.php?searchkey={{key}}，未带 charset 选项。
+      // 该站是 GBK 编码，关键词按 UTF-8 提交会被站点按 GBK 解码成乱码并返回
+      // 空结果页（.result-list 为空），模型在空页上只能生成无效规则（如
+      // .result-list .book / .result-list .item），验证轮次全部失败后 Agent
+      // 终止。修复：生成搜索 URL 后按页面 charset 补全，取证请求再按 GBK 编码。
+      const homepageHtml = '<html><head><meta http-equiv="Content-Type" ' +
+        'content="text/html; charset=gbk"></head><body>' +
+        '<div class="navitor"><a href="/">首页</a></div></body></html>';
+      // 模型生成的 GET 规则（无 charset）→ 补全后带上 charset 选项。
+      const modelRule = 'https://www.picdg.com/modules/article/search.php?searchkey={{key}}';
+      const patched = patchSearchRuleCharset_(modelRule, homepageHtml);
+      expect(patched).assertEqual(
+        'https://www.picdg.com/modules/article/search.php?searchkey={{key}},{"charset":"gbk"}');
+      // 取证路径按书源 charset 编码关键词（单测 mock 环境无 GBK 映射表时
+      // 回退 UTF-8，真机上输出 %CB%C4%BA%CF%D4%BA；断言编码与
+      // NetUtil.encodeUrlComponent 一致即可证明走了 charset 编码路径）。
+      const spec = materializeAgentRequest(patched, '四合院', 1, 'https://www.picdg.com');
+      expect(spec.charset).assertEqual('gbk');
+      const encodedKey = NetUtil.encodeUrlComponent('四合院', 'gbk');
+      expect(encodedKey.length > 0).assertTrue();
+      expect(spec.url).assertEqual(
+        'https://www.picdg.com/modules/article/search.php?searchkey=' + encodedKey);
+      // 真实执行路径（SourceExecutor.buildUrl）同样按 charset 编码。
+      const exec = buildUrl(patched, '四合院', 1, 'https://www.picdg.com');
+      expect(exec.charset).assertEqual('gbk');
+      expect(exec.url).assertEqual(
+        'https://www.picdg.com/modules/article/search.php?searchkey=' + encodedKey);
+    });
+
+    it('extractsSearchFormFromWritelnFragmentsInExternalJs', 0, () => {
+      // 天籁小说网（picdg.com/wxc8.com）第二种失败模式：首页 HTML 没有静态
+      // <form>，搜索框由外部 header.js 用多条 document.writeln 分片拼接渲染。
+      // 新建书源时此前只对 repairMode 走外部脚本提取，模型看不到表单就猜了
+      // /search.php?keyword= 这个 404 路径。修复：从 JS 源码按出现顺序拼接
+      // writeln 片段（反转义 \" 等）还原出完整表单，得到真实 POST 接口
+      // modules/article/search.php + searchkey 字段。
+      const headerJs = 'function login(){document.write(\'<form name="mylogin" action="/login.php">' +
+        '<input name="username" type="text"></form>\');}\n' +
+        'function panel(){\n' +
+        '    document.writeln("<div class=\\"search\\"><form action=\'/modules/article/search.php\' method=\'post\'>");\n' +
+        '    document.writeln("<input type=\\"hidden\\" name=\\"action\\" value=\\"login\\">");\n' +
+        '    document.writeln("<input type=\\"hidden\\" name=\\"ie\\" value=\\"gbk\\">");\n' +
+        '    document.writeln("<input name=\\"searchkey\\" id=\\"keyword\\" type=\\"text\\" value=\\"输入需要搜索的小说\\"/>");\n' +
+        '    document.writeln("</form></div>");\n' +
+        '}\n';
+      const request = extractSearchFormFromJsSource_(
+        headerJs, 'https://www.picdg.com', '四合院', '');
+      expect(request !== null).assertTrue();
+      expect(request!.method).assertEqual('POST');
+      // 拼接还原后 action 指向真实搜索接口，而不是 /search.php?keyword= 这种 404。
+      expect(request!.ruleSearchUrl).assertContain('/modules/article/search.php');
+      expect(request!.ruleSearchUrl.indexOf('/search.php?keyword=')).assertEqual(-1);
+      expect(request!.ruleSearchUrl).assertContain('searchkey={{key}}');
+      // 拼接还原后的表单能正常物化成可请求的规则（含 hidden 固定参数）。
+      const spec = materializeAgentRequest(
+        request!.ruleSearchUrl, '四合院', 1, 'https://www.picdg.com');
+      expect(spec.method).assertEqual('POST');
+      expect(spec.url).assertEqual('https://www.picdg.com/modules/article/search.php');
+      expect(spec.body.indexOf('searchkey=')).assertEqual(0);
+      expect(spec.body).assertContain('action=login');
+      expect(spec.body).assertContain('ie=gbk');
+      // 登录表单（无搜索字段）分数低；与搜索表单同源时 inferSearchRequest
+      // 必须选择分数更高的搜索表单（上面已断言）。这里仅验证不抛异常。
+      extractSearchFormFromJsSource_(
+        'document.write(\'<form name="mylogin" action="/login.php"><input name="username"></form>\');',
+        'https://www.picdg.com', '四合院', '');
+    });
+
     it('normalizesCssBackgroundImageForBookCover', 0, () => {
       expect(normalizeMediaUrlValue(
         "background-image: url('https://www.pinshuzhai.com/wp-content/uploads/cover.jpg')"))
@@ -833,10 +1116,10 @@ export default function bookSourceManagementTest() {
       const captchaPage = '<script>var url_search="/searchcode.php?t=1"</script>' +
         '<input id="__17mb_input" title="请输入验证码">' +
         '<table class="table"><tr><th>类型</th><th>书名</th></tr></table>';
-      expect(isLikelyImageCaptchaPage(captchaPage)).assertTrue();
-      expect(isLikelyImageCaptchaPage(
+      expect(WebViewFetcher.isLikelyImageCaptchaPage(captchaPage)).assertTrue();
+      expect(WebViewFetcher.isLikelyImageCaptchaPage(
         '<li class="dba_bookcase"><a href="/mybook.html">书架</a></li>' + captchaPage)).assertTrue();
-      expect(isLikelyImageCaptchaPage(
+      expect(WebViewFetcher.isLikelyImageCaptchaPage(
         '<table class="table"><tr><td><a href="/book/1">四合院</a></td></tr></table>' +
         '<input id="__17mb_input" title="请输入验证码">')).assertFalse();
       expect(supportedAiRuleContract('search')).assertContain('java.getVerificationCode');

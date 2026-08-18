@@ -25,6 +25,8 @@ import { SettingsStore } from '../data/preferences/SettingsStore';
 import { AppContextHolder } from '../util/AppContext';
 import { CloudLocalFileStore } from '../service/cloud/CloudLocalFileStore';
 import { SourceCheckService } from '../service/SourceCheckService';
+import { BookTable } from '../data/database/BookTable';
+import { BookDeleter } from '../service/BookDeleter';
 
 export default class MainAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -68,6 +70,13 @@ export default class MainAbility extends UIAbility {
       console.info('[MainAbility] Database initialized');
     } catch (err) {
       console.error('[MainAbility] Database init failed:', err);
+    }
+    // 对齐安卓：启动时清理不在书架的临时阅读书（is_shelf=0），
+    // 避免其残留进备份/恢复导致“以前删除的书”复活。
+    try {
+      await this.cleanupNotShelfBooks_();
+    } catch (err) {
+      console.warn('[MainAbility] cleanup notShelf books failed:', err);
     }
     try {
       await AppTheme.getInstance().init(this.context, systemDark);
@@ -122,6 +131,35 @@ export default class MainAbility extends UIAbility {
     this.syncProgressFromCloud();
     // 启动检测云端是否有更新备份
     this.checkNewCloudBackupOnLaunch();
+  }
+
+  /**
+   * 启动时清理不在书架的临时阅读书（对齐安卓 MainViewModel.deleteNotShelfBook：
+   * `DELETE FROM books WHERE type & notShelf > 0`）。
+   *
+   * 这类书（is_shelf=0）是从搜索打开但从未加入书架的临时阅读书；安卓每次启动
+   * 都会删除它们，避免残留进备份/恢复导致“以前删除的书”复活。
+   */
+  private async cleanupNotShelfBooks_(): Promise<void> {
+    try {
+      const db = AppDatabase.getInstance().rdbStore;
+      if (!db) return;
+      const bookTable = new BookTable(db);
+      const notShelf = await bookTable.getNotShelfBooks();
+      if (notShelf.length === 0) return;
+      let removed = 0;
+      for (const book of notShelf) {
+        try {
+          await BookDeleter.deleteBook(book);
+          removed++;
+        } catch (e) {
+          console.warn('[MainAbility] cleanup notShelf book failed:', book.id, (e as Error).message);
+        }
+      }
+      console.info('[MainAbility] cleanupNotShelfBooks removed:', removed);
+    } catch (e) {
+      console.warn('[MainAbility] cleanupNotShelfBooks error:', (e as Error).message);
+    }
   }
 
   private checkNewCloudBackupOnLaunch(): void {

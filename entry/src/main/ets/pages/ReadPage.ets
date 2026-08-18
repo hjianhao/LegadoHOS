@@ -2047,7 +2047,6 @@ struct ReadPage {
   private async onNextChapter(): Promise<void> {
     const n = this.currentIndex + 1;
     if (n >= this.totalChapters_) return;
-    this.pageIndex = 0; // 新章从第 1 页开始
     const scrolled = this.flowMode === 'scrolled';
     if (scrolled) {
       if (this.switchingChapter_) return;
@@ -2059,12 +2058,21 @@ struct ReadPage {
     if (await this.tryUsePreloadedChapter_(n)) {
       if (scrolled) {
         this.applyPendingScrollPos_();
+      } else {
+        // 分页：内容就绪后再归零页码。若在加载前设置 pageIndex，PageView 会用
+        // 当前章的分页数组渲染出"本章第一页"，下一章异步到达前用户会误以为
+        // 翻回了本章开头（webView 兜底源尤其明显）。
+        this.pageIndex = 0;
       }
       return;
     }
     console.info('[ReadPage] Fallback loadChapter for:', n);
     this.loadChapter(n).then(() => {
-      if (scrolled) this.applyPendingScrollPos_();
+      if (scrolled) {
+        this.applyPendingScrollPos_();
+      } else {
+        this.pageIndex = 0; // 新章从第 1 页开始
+      }
     });
   }
 

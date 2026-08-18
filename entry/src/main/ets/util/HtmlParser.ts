@@ -346,10 +346,10 @@ export class HtmlParser {
       case 'text':
         result = this.cleanText(el.text);
         break;
-      case 'ownText':
+      case 'owntext':
         result = this.cleanText(el.ownText);
         break;
-      case 'textNodes':
+      case 'textnodes':
         result = this.collectTextNodes(el);
         break;
       case 'href':
@@ -476,10 +476,10 @@ export class HtmlParser {
         case 'text':
           result = this.cleanText(el.text);
           break;
-        case 'ownText':
+        case 'owntext':
           result = this.cleanText(el.ownText);
           break;
-        case 'textNodes':
+        case 'textnodes':
           result = this.collectTextNodes(el);
           break;
         case 'href':

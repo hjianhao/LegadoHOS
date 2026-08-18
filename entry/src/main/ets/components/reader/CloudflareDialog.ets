@@ -8,6 +8,7 @@
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../../theme/ThemeColors';
 import { WebViewFetcher } from '../../engine/web/WebViewFetcher';
+import { WebUserAgent } from '../../util/WebUserAgent';
 import { CookieStore } from '../../util/CookieStore';
 
 @CustomDialog
@@ -23,20 +24,41 @@ export struct CloudflareDialog {
   @State pageTitle: string = '页面加载中...';
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
+  /** 当前使用的视图模式；验证码/登录页多为移动版站点，默认移动 UA。 */
+  @State isDesktopMode: boolean = false;
   private loginPanelOpened_: boolean = false;
   private prefillTimer_: number = -1;
   private prefillApplied_: boolean = false;
   private prefillSubmitted_: boolean = false;
 
   aboutToAppear(): void {
-    // 与隐藏 WebViewFetcher 使用同一桌面 UA。部分站点对 HarmonyOS 默认 UA
-    // 返回错误页，用户看到“验证 WebView 加载失败”并不是验证码本身失败。
+    // 不再强制桌面模式：部分站点的验证码只有移动版页面能加载，桌面版
+    // 直接加载不出来。默认移动 UA（可被全局设置 webview_ua_mode 覆盖），
+    // 顶部可一键切换到桌面版（部分站点对 HarmonyOS 默认 UA 返回错误页，
+    // 这里用的是明确的 Android Chrome UA）。
+    // setCustomUserAgent 必须在 Web 组件 attach 后调用，aboutToAppear 阶段
+    // controller 尚未与组件关联，调用只会被静默忽略并抛异常。
+    this.isDesktopMode = WebUserAgent.isDesktopMode(false);
+  }
+
+  /** controller 关联后按当前视图模式设置 UA。 */
+  private applyUserAgent_(): void {
     try {
       this.webController.setCustomUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    } catch (_e) {
+        this.isDesktopMode ? WebUserAgent.DESKTOP : WebUserAgent.MOBILE);
+    } catch (e) {
       console.warn('[CloudflareDialog] 设置 WebView UA 失败');
+    }
+  }
+
+  /** 切换移动版/桌面版并重新加载当前页。 */
+  private toggleViewMode_(): void {
+    this.isDesktopMode = !this.isDesktopMode;
+    this.applyUserAgent_();
+    try {
+      this.webController.refresh();
+    } catch (e) {
+      console.warn('[CloudflareDialog] 切换视图模式重载失败');
     }
   }
 
@@ -50,6 +72,13 @@ export struct CloudflareDialog {
           Text(this.reason || '请完成页面要求的操作').fontSize(11)
             .fontColor(ThemeColors.secondaryText(this.isDark)).maxLines(1)
         }.layoutWeight(1)
+        if (!this.hasError) {
+          Button(this.isDesktopMode ? '移动版' : '桌面版')
+            .fontSize(12).fontColor(ThemeColors.onSurface(this.isDark))
+            .height(40).padding({ left: 10, right: 10 })
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).borderRadius(16)
+            .onClick(() => { this.toggleViewMode_(); })
+        }
         if (!this.hasError) {
           Button($r('app.string.ui_94eb3aea29')).fontSize(13).fontColor(ThemeColors.onPrimary(this.isDark))
             .height(40).padding({ left: 12, right: 12 })
@@ -84,6 +113,9 @@ export struct CloudflareDialog {
             .domStorageAccess(true)
             .zoomAccess(false)
             .overviewModeAccess(true)
+            .onControllerAttached(() => {
+              this.applyUserAgent_();
+            })
             .onPageBegin(() => {
               this.isLoading = true;
               this.clearPrefillTimer_();
@@ -99,8 +131,10 @@ export struct CloudflareDialog {
               if (WebViewFetcher.interactivePurpose === 'login') {
                 this.pageTitle = '登录页面（登录后点击"验证完成"）';
                 void this.openLoginPanel_();
-              } else if (this.reason && this.reason.includes('图片验证码')) {
+              } else if (WebViewFetcher.interactivePurpose === 'imageCaptcha') {
                 this.pageTitle = '请完成图片验证码后点击"验证完成"';
+              } else if (WebViewFetcher.interactivePurpose === 'searchSubmit') {
+                this.pageTitle = '搜索提交页面（提交后点击"验证完成"）';
               } else {
                 this.pageTitle = '验证页面（验证后点击"验证完成"）';
               }

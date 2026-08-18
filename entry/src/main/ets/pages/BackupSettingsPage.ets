@@ -97,16 +97,23 @@ export struct BackupSettingsPage {
 
   private async hydratePasswordFromSecureStore_(): Promise<void> {
     try {
-      if (this.webDavPwd) {
-        this.applyWebDavConfig();
-        return;
-      }
       const ctx = UiUtil.getHostContext(this.getUIContext()) as common.Context;
       const s = SettingsStore.getInstance();
       if (ctx) await s.init(ctx);
-      const pwd = await s.getWebDavPassword();
-      if (pwd) {
-        this.webDavPwd = pwd;
+      // 密码：优先 PersistentStorage（@StorageLink 已恢复），缺失时从 SettingsStore 兜底
+      if (!this.webDavPwd) {
+        const pwd = await s.getWebDavPassword();
+        if (pwd) {
+          this.webDavPwd = pwd;
+        }
+      }
+      // 用户名：旧版本与密码一起存在 SettingsStore；迁移到 PersistentStorage 后
+      // 仅读 AppStorage 会丢数据，这里同样从 SettingsStore 兜底恢复。
+      if (!this.webDavUser) {
+        const user = await s.getWebDavUser();
+        if (user) {
+          this.webDavUser = user;
+        }
       }
       this.applyWebDavConfig();
     } catch (e) {
@@ -145,6 +152,22 @@ export struct BackupSettingsPage {
     this.applyWebDavConfig();
   }
 
+  /** 用户名同样落盘到 SettingsStore，保证与密码一致地跨版本恢复。 */
+  private async persistWebDavUser_(): Promise<void> {
+    const user = AppStorage.get<string>('webdav_user') || this.webDavUser || '';
+    try {
+      const ctx = UiUtil.getHostContext(this.getUIContext()) as common.Context;
+      const s = SettingsStore.getInstance();
+      if (ctx) {
+        await s.init(ctx);
+      }
+      await s.setWebDavUser(user);
+    } catch (e) {
+      console.warn('[BackupSettings] save webdav user failed:', (e as Error).message);
+    }
+    this.applyWebDavConfig();
+  }
+
   private showToast(msg: string): void {
     UiUtil.showToast(this.getUIContext(), { message: msg, duration: 1500 });
   }
@@ -174,7 +197,10 @@ export struct BackupSettingsPage {
   private async testConnection(): Promise<void> {
     this.isBusy = true;
     this.statusText = '测试连接中...';
+    // 确保用户名/密码已从 SettingsStore 恢复（aboutToAppear 的异步恢复可能未完成）
+    await this.hydratePasswordFromSecureStore_();
     await this.persistWebDavPassword_();
+    await this.persistWebDavUser_();
     try {
       const ok = await WebDavService.getInstance().testConnection();
       this.statusText = ok ? '连接成功 ✓' : '连接失败 ✗';
@@ -332,7 +358,10 @@ export struct BackupSettingsPage {
             .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))
             .backgroundColor(ThemeColors.outlineVariant(this.isDark))
             .width('100%').margin({ bottom: 6 })
-            .onChange((v: string) => { this.webDavUser = v; this.applyWebDavConfig(); })
+            .onChange((v: string) => {
+              this.webDavUser = v;
+              this.persistWebDavUser_();
+            })
           TextInput({ placeholder: '密码', text: this.webDavPwd })
             .height(48).fontSize(14).borderRadius(12).padding({ left: 12 })
             .fontColor(ThemeColors.onSurface(this.isDark)).placeholderColor(ThemeColors.secondaryText(this.isDark))

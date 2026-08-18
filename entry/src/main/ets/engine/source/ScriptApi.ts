@@ -9,6 +9,25 @@
  */
 
 /**
+ * QuickJS 沙箱没有 console 对象，带日志的 polyfill（getPolyfillScript 等）
+ * 里的 console.log 会抛 ReferenceError 中断注入。必须先注入此 shim。
+ * 幂等（typeof 保护），主线程 ScriptEngine 与 Worker 共用。
+ */
+export const CONSOLE_SHIM: string = `
+(function() {
+  if (typeof console === 'undefined') {
+    globalThis.console = {
+      log: function() {},
+      info: function() {},
+      warn: function() {},
+      error: function() {},
+      debug: function() {}
+    };
+  }
+})();
+`;
+
+/**
  * java.ajax 实现（Worker 线程内使用 NAPI http.get/post）
  * 独立函数，不影响主 polyfill 加载
  */
@@ -620,7 +639,11 @@ export function getPolyfillScript(): string {
     }
 	    if (!_j.ajax) {
 	      _j.ajax = function(url) {
-	        console.log('[Polyfill] java.ajax called: ' + String(url).substring(0, 80));
+	        // 主线程同步求值路径没有 http 对象（Worker 才会用 getAjaxPolyfill
+	        // 替换为真实实现）。返回值空串与 Android 失败语义一致，warn 便于
+	        // 区分规则写错与路径不支持。
+	        console.warn('[Polyfill] java.ajax called in sync context, returning "" ' +
+	          '(url=' + String(url).substring(0, 80) + ')');
 	        return '';
 	      };
 	      _j.ajax._isMock = true; // 标记为 mock，让 getAjaxPolyfill 替换为真实实现
@@ -640,6 +663,16 @@ export function getPolyfillScript(): string {
 	        return store[key] !== undefined ? store[key] : '';
 	      };
 	      _j.get._isVariableStore = true;
+	    }
+	    if (!_j.getString) {
+	      // 兜底：正常路径在求值前已用 HtmlParser 把 java.getString('rule')
+	      // 替换为字面量。这里仅防止漏网的运行时调用（如变量参数形式）抛
+	      // TypeError 导致整段 @js: 规则失败，返回空串由规则自身兜底。
+	      _j.getString = function(rule) {
+	        console.warn('[Polyfill] java.getString: runtime extraction unavailable for ' +
+	          String(rule).substring(0, 60));
+	        return '';
+	      };
 	    }
 	    if (!_j.getVerificationCode) {
 	      _j.getVerificationCode = function(imgUrl) {

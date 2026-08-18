@@ -14,7 +14,7 @@ import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists, toJsRege
 import { NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { ContentCleaner } from '../../util/ContentCleaner';
-import { getHtmlParser, HtmlElement } from '../../util/HtmlParser';
+import { getHtmlParser, HtmlElement, HtmlParser } from '../../util/HtmlParser';
 import { CryptoUtil } from '../../util/CryptoUtil';
 import { WebViewFetcher } from '../web/WebViewFetcher';
 import { AppDatabase } from '../../data/database/AppDatabase';
@@ -58,6 +58,34 @@ function isAllowedWebViewFinalUrl_(url: string, allowedHosts: string[]): boolean
   if (!match || !match[1]) return true;
   const host = match[1].toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
   return allowedHosts.indexOf(host) >= 0;
+}
+
+/**
+ * WebView 搜索前的同源首页预访问地址（种会话 cookie 用）。
+ *
+ * 部分站点把会话 cookie 限定在部分路径下：如 58小说网搜索页
+ * /user/search.html 的 Set-Cookie 无 Path 属性，按浏览器规则默认落在
+ * /user/，而页面内 XHR（POST /api/search）因 cookie path 不匹配带不上
+ * 会话，搜索被站点拒绝（返回"搜索太频繁"之类的误导性错误）。真实用户
+ * 流程是"先开首页再搜索"，首页的 cookie 以根路径种下才能被 /api/ 携带。
+ * 这里在加载搜索页前先同源访问一次源首页，复刻该流程；非同源或搜索页
+ * 本身就在首页时返回空串跳过预访问。
+ */
+export function seedWebViewCookieUrl_(sourceUrl: string, searchUrl: string): string {
+  const hostOf = (value: string): string => {
+    const match = (value || '').match(/^https?:\/\/([^\/?#]+)/i);
+    if (!match || !match[1]) return '';
+    return match[1].toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+  };
+  const sourceHost = hostOf(sourceUrl);
+  const searchHost = hostOf(searchUrl);
+  if (!sourceHost || sourceHost !== searchHost) return '';
+  const pathOf = (value: string): string =>
+    (value || '').replace(/^https?:\/\/[^\/?#]+/i, '').replace(/[?#].*$/, '');
+  const sourcePath = pathOf(sourceUrl);
+  const searchPath = pathOf(searchUrl);
+  if (sourcePath === searchPath) return '';
+  return sourceUrl;
 }
 
 /** 防止异常宽泛规则或超大搜索页在主线程同步解析数千条结果。 */
@@ -368,12 +396,19 @@ export function isLoginDocument(html: string, url: string = ''): boolean {
   const text = html.trim();
   const passwordForm = /<input\b[^>]*type=["']?password/i.test(text);
   if (!passwordForm) return false;
+  // 页面主体是书籍/漫画/章节内容（详情容器、目录、播放器标记等）时，导航栏
+  // 预渲染的隐藏登录下拉框只是装饰，不构成登录门禁。内容检测必须优先——
+  // 不能只凭 URL 路径（如 /book/1、/album/…）就放行，真实登录页也可能挂在
+  // 内容路径下。
+  if (WebViewFetcher.isLikelyBookDocumentHtml(text)) return false;
+  // 无内容页：密码框位于登录/注册容器内、标题/主标题是登录、或页面只有
+  // 登录文案（密码框+登录按钮）时，按独立登录门禁处理。
   const titleOrHeading = text.match(/<(?:title|h1|h2|h3)\b[^>]*>[\s\S]{0,160}<\/(?:title|h1|h2|h3)>/i);
-  const formMarker = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["']/i.test(text);
-  const loginMarker = titleOrHeading ? /登录|注册|sign\s*in|log\s*in/i.test(titleOrHeading[0]) : false;
+  const headingIsLogin = titleOrHeading ? /登录|注册|sign\s*in|log\s*in|passport/i.test(titleOrHeading[0]) : false;
+  const passwordInLoginContainer = /<(?:form|div)\b[^>]*(?:id|class|action)=["'][^"']*(?:login|signin|passport)[^"']*["'][^>]*>[\s\S]{0,2000}?<input\b[^>]*type=["']?password/i
+    .test(text);
   const loginText = /登录|注册|sign\s*in|log\s*in/i.test(text);
-  const bookMarkup = WebViewFetcher.isLikelyBookDocumentHtml(text);
-  return (loginMarker || formMarker || loginText) && !bookMarkup;
+  return passwordInLoginContainer || headingIsLogin || loginText;
 }
 
 /**
@@ -400,6 +435,24 @@ export function isExplicitlyDisabledSearchTemplate(template: string): boolean {
 /** GET 请求遇到上游网关瞬时错误时允许安全重试一次。 */
 export function isTransientGetFailure(message: string): boolean {
   return /\bHTTP\s+(?:502|503|504)\b/i.test(message || '');
+}
+
+/**
+ * 交互验证后返回的页面是否值得作为最终结果交给解析器。
+ *
+ * 验证弹窗加载的往往就是原请求地址（书源没有独立 loginUrl 时），页面可能
+ * 保留隐藏登录框而仍被 isLoginDocument 误判为登录页；此时不能再做一次
+ * needsWebViewDocument 二次拦截，否则用户手动验证的成果会被丢弃，回退到
+ * 未经浏览器会话的直连 HTML。只要交互结果有一定内容量且与直连响应不同，
+ * 就说明浏览器会话拿到了新内容，应直接采用。
+ */
+function isSubstantiveWebViewResult_(rendered: string, directHtml: string): boolean {
+  if (!rendered || rendered.length < 200) return false;
+  // 交互验证关闭后页面仍停留在 WAF/验证码挑战页时，不能把挑战页交给解析器。
+  // 普通页面即使带隐藏登录框也不含 captcha/verification 标记，不会被误判。
+  if (WebViewFetcher.isInteractiveChallengeHtml(rendered)) return false;
+  if (rendered.length > 1000) return true;
+  return rendered !== directHtml;
 }
 
 function getBaseUrl(rawUrl: string): string {
@@ -441,6 +494,13 @@ export function searchRateLimitWaitMs_(body: string): number {
   if (plainMatch && !/<a\b[^>]*href\s*=\s*["'][^"']+\.(?:html?|shtml)["']/i.test(body)) {
     return Math.min(parseInt(plainMatch[1], 10) * 1000, 35000);
   }
+  // jieqi 系统（17mb/酷点模板）限频页文案：title="出现错误！"，正文
+  // "错误原因：对不起，两次搜索的间隔时间不得少于 10 秒"。同样只有
+  // javascript: 返回链接、没有 .html 内容链接，不会与真实结果页混淆。
+  const jieqiMatch = body.match(/(?:两次|每次)搜索的?间隔(?:时间)?(?:不得|不能)少于\s*(\d+)\s*秒/i);
+  if (jieqiMatch && !/<a\b[^>]*href\s*=\s*["'][^"']+\.(?:html?|shtml)["']/i.test(body)) {
+    return Math.min(parseInt(jieqiMatch[1], 10) * 1000, 35000);
+  }
   if (body.length > 500) return 0;
   // alert("搜索间隔: 30 秒") / alert('请30秒后再试') / 操作频繁。
   // 中文站点文案常用全角冒号（"搜索间隔：30 秒"），两种冒号都要解析。
@@ -460,6 +520,72 @@ let putGetStore: Record<string, string> = {};
 
 function initPutGetStore(): void {
   putGetStore = {};
+}
+
+/**
+ * 在 @js: 规则执行前，把 `java.getString('cssRule')` 调用替换为用当前页面
+ * 文档提取出的字面量。
+ *
+ * Android Legado 的 java.getString 语义是「用 CSS 规则在当前页面提取字符串」，
+ * 但 QuickJS 沙箱没有 DOM/CSS 引擎，调用会抛 TypeError: not a function。
+ * 各 @js: 求值路径（详情、目录、正文、搜索字段）统一在此预处理，替换后的
+ * 规则完全不再依赖运行时 java API。提取通过 ArkTS HtmlParser 完成，与
+ * getContent/compileOne 的既有补丁语义一致。
+ */
+export function substituteJavaGetStringCall_(jsCode: string,
+  extract: (rule: string) => string): string {
+  if (!jsCode || !jsCode.includes('java.getString')) return jsCode;
+  return jsCode.replace(/java\.getString\(\s*['"]([^'"]+)['"]\s*\)/g,
+    (_m: string, rule: string): string => {
+      const val = extract(rule);
+      return JSON.stringify(val || '');
+    });
+}
+
+/**
+ * 字段规则 <js> 块中的 java.getElement(s) DOM 访问静态化。
+ *
+ * Android 字段规则可访问 DOM（如 java.getElement('div.book-card')
+ * .getAttribute('onclick')），QuickJS 沙箱没有 DOM/CSS 引擎，调用会抛
+ * ReferenceError 被调用方静默吞掉，字段解析为空（典型：搜索卡片把跳转
+ * 写在 onclick 里、书源用 <js> 块 + getElement 取详情 URL）。
+ *
+ * 仿照列表规则的 reduceJsListRule 思路：把「字面量选择器 + 链式
+ * attr/text」调用替换为 ArkTS HtmlParser 实际提取出的字符串字面量，
+ * 其余 JS 逻辑（base64 解码、正则处理）照常执行。语义对齐 Android
+ * AnalyzeRule.getElement：
+ *   - 双参数 java.getElement(result|item, 'sel')：在搜索结果元素内查询
+ *     （result 即当前元素）
+ *   - 单参数 java.getElement('sel')：查询整个文档
+ * 元素不存在替换为 null（Android 同义），attr 缺失替换为空串。
+ * 无法静态化的调用保持原样，JS 侧抛错由调用方兜底为空。
+ */
+export function substituteJavaGetElementCall_(jsCode: string,
+  parser: HtmlParser, doc: HtmlElement | null, item: HtmlElement): string {
+  if (!jsCode || !/java\.getElements?\s*\(/.test(jsCode)) return jsCode;
+  const firstBy = (selector: string, insideItem: boolean): HtmlElement | null => {
+    const root = insideItem ? item : doc;
+    if (!root) return null;
+    const found = parser.querySelectorAll(root, selector);
+    return found && found.length > 0 ? found[0] : null;
+  };
+  // .getAttribute('name') / .getAttr('name') / .attr('name') 链
+  let out = jsCode.replace(
+    /java\.getElements?\(\s*((?:result|item)\s*,\s*)?(['"`])([^'"`]+)\2\s*\)\s*\.(?:getAttribute|getAttr|attr)\(\s*(['"`])([^'"`]+)\4\s*\)/g,
+    (_m: string, scope: string, _q1: string, selector: string, _q2: string, attrName: string): string => {
+      const el = firstBy(selector, !!scope);
+      if (!el) return 'null';
+      return JSON.stringify(parser.getAttr(el, attrName) || '');
+    });
+  // .text() 链
+  out = out.replace(
+    /java\.getElements?\(\s*((?:result|item)\s*,\s*)?(['"`])([^'"`]+)\2\s*\)\s*\.text\(\s*\)/g,
+    (_m: string, scope: string, _q1: string, selector: string): string => {
+      const el = firstBy(selector, !!scope);
+      if (!el) return 'null';
+      return JSON.stringify(el.text.trim());
+    });
+  return out;
 }
 
 function processPutGet(rule: string, evalFn: (r: string) => string): string {
@@ -526,6 +652,16 @@ export function buildUrl(template: string, keyword: string, page: number, baseUr
   const charsetHintMatch = (template || '').match(/["']charset["']\s*:\s*["']([^"']*)["']/i);
   const templateCharset = charsetHintMatch && charsetHintMatch.length > 1 ? charsetHintMatch[1] : '';
   let url = template || '';
+
+  // 未求值的 <js> 块 / @js: 前缀必须先剥离再做 URL 解析：下方 pageGroup 的
+  // <选项> 正则会把 <js> 误当页码分组替换成 js，脚本内容随后被当 URL 路径
+  // 请求（可乐小说 404 /jsvar keyStr=...）。正常路径调用方已预先求值，
+  // 这里仅是兜底。
+  if (/<js>[\s\S]*?<\/js>/i.test(url)) {
+    console.warn('[buildUrl] Un-evaluated <js> block found in URL, stripping. Caller should evaluate via JsExpressionEvaluator first.');
+    url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
+  }
+  url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
 
   // 处理页码分组 <选项1,选项2,...>（必须在 JSON 选项拆分之前，避免分组内
   // 的逗号干扰 URL 与选项的切分）
@@ -607,13 +743,6 @@ export function buildUrl(template: string, keyword: string, page: number, baseUr
   url = replaceSearchTemplateVars(url, keyword, page, templateCharset);
   // 移除剩余未处理的 {{}} JS 表达式
   url = url.replace(/\{\{[^}]*\}\}/g, '');
-
-  // 处理 <js>...</js> 和 @js: — 提醒调用方应预先评估
-  if (/<js>[\s\S]*?<\/js>/i.test(url)) {
-    console.warn('[buildUrl] Un-evaluated <js> block found in URL, stripping. Caller should evaluate via JsExpressionEvaluator first.');
-    url = url.replace(/<js>[\s\S]*?<\/js>/gi, '');
-  }
-  url = url.replace(/@js:[\s\S]*?(?=,|\{|$)/gi, '');
 
   // 检查是否有第二层 ,{"webView": true} — 去掉它
   const secondJsonMatch = url.match(/^(https?:\/\/[^#]+?),(\{[\s\S]*\})$/);
@@ -1077,29 +1206,36 @@ export class SourceExecutor {
     let searchUrlTemplate = source.ruleSearchUrl;
     const jsBlockMatch = searchUrlTemplate.match(/<js>([\s\S]*?)<\/js>/i);
     if (jsBlockMatch) {
+      // 求值失败时中止搜索而不是继续拼接：<js> 块若保留在模板里，buildUrl
+      // 会把脚本内容当 URL 路径请求（可乐小说 404 /jsvar keyStr=...）。
+      // 与下方 @js: 前缀的失败行为保持一致。
+      let jsResult = '';
       try {
         if (this.engineInitialized) {
           const jsCode = jsBlockMatch[1];
           console.info('[SrcEx] Evaluating JS in searchUrl for', source.sourceName,
             '(jsCode len=' + jsCode.length + ')');
-          const jsResult = await JsExpressionEvaluator.evaluate(jsCode, {
+          jsResult = await JsExpressionEvaluator.evaluate(jsCode, {
             key: keyword,
             page: page,
             baseUrl: baseUrl,
             source: source,
             variableBlob: source.variableComment || '',
           });
-          if (jsResult && jsResult.trim()) {
-            searchUrlTemplate = searchUrlTemplate.replace(/<js>[\s\S]*?<\/js>/gi, jsResult.trim());
-            console.info('[SrcEx] JS evaluated OK, result:', jsResult.trim().substring(0, 120));
-          } else {
-            console.warn('[SrcEx] JS evaluation returned empty for', source.sourceName);
-          }
         } else {
           console.warn('[SrcEx] Engine not initialized, cannot evaluate JS for', source.sourceName);
         }
       } catch (e) {
         console.warn('[SrcEx] JS evaluation failed for', source.sourceName, ':', (e as Error).message);
+      }
+      if (jsResult && jsResult.trim()) {
+        searchUrlTemplate = searchUrlTemplate.replace(/<js>[\s\S]*?<\/js>/gi, jsResult.trim());
+        console.info('[SrcEx] JS evaluated OK, result:', jsResult.trim().substring(0, 120));
+      } else {
+        const reason = jsResult.trim() || 'empty result';
+        console.warn('[SrcEx] searchUrl JS evaluation failed for', source.sourceName, ':', reason.substring(0, 120));
+        if (throwOnFailure) throw new Error('搜索 URL JS 执行失败：' + reason);
+        return [];
       }
     }
 
@@ -1193,7 +1329,7 @@ export class SourceExecutor {
       if (WebViewFetcher.interactiveFetcher) {
         try {
           console.info('[SrcEx] POST search requires interactive WebView for', source.sourceName);
-          const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge',
+          const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'searchSubmit',
             '搜索需要浏览器提交', { method: 'POST', body: finalBody || '' });
           if (interactiveHtml && interactiveHtml.length > 200) {
             const interactiveResults = await this.parseResponse(
@@ -1229,6 +1365,21 @@ export class SourceExecutor {
       if (WebViewFetcher.isReady()) {
         console.info('[SrcEx] WebView request (source config) for', source.sourceName);
         try {
+          // 部分站点（如 58小说网）把会话 cookie 限定在部分路径，搜索页内
+          // XHR（/api/search）带不上这种 cookie 会被站点拒绝。先同源预访问
+          // 一次首页让 cookie 以根路径种下（真实浏览器"先开首页再搜索"的
+          // 流程），预访问失败不阻断搜索。
+          const seedUrl = seedWebViewCookieUrl_(source.sourceUrl, finalUrl);
+          if (seedUrl) {
+            try {
+              await WebViewFetcher.fetch(seedUrl, 10000, {}, [], true);
+              console.info('[SrcEx] Root-path cookie seeded via', seedUrl.substring(0, 60),
+                'for', source.sourceName);
+            } catch (seedError) {
+              console.warn('[SrcEx] WebView cookie seeding failed for', source.sourceName, ':',
+                (seedError as Error).message || String(seedError));
+            }
+          }
           // 校验时隐藏 WebView 若卡在 WAF 探针页，不能占满整个校验期限；
           // 及时回到 HTTP 分支后才能识别探针并弹出人工验证窗口。正常阅读
           // 仍使用书源网络超时，避免影响慢站点正文加载。
@@ -1338,6 +1489,48 @@ export class SourceExecutor {
       if (httpResults.length === 0 && WebViewFetcher.isInteractiveChallengeHtml(parsedBody)) {
         const challengeMessage = '搜索页返回验证码/人工验证页面，未完成验证或书源缺少验证码提交规则';
         console.warn('[SrcEx] ' + challengeMessage + ':', source.sourceName);
+        // 图片验证码门禁 → 优先弹验证码输入对话框（CaptchaDialog），与 Android
+        // 的验证码对话框体验一致；输入成功后站点会话 Cookie 通常放行，重放
+        // 原请求即可拿到真实结果。未输入或重放仍被拦截时降级到完整 WebView。
+        if (WebViewFetcher.isLikelyImageCaptchaPage(parsedBody)) {
+          const captchaImgUrl = WebViewFetcher.extractCaptchaImageUrl(parsedBody, finalUrl);
+          if (captchaImgUrl && JsExpressionEvaluator.captchaHandler) {
+            console.info('[SrcEx] 图片验证码门禁，弹出验证码输入对话框 for', source.sourceName);
+            const code = await JsExpressionEvaluator.requestCaptchaInput(captchaImgUrl);
+            if (code) {
+              try {
+                let retriedBody = finalMethod === 'POST'
+                  ? await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout)
+                  : await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
+                const retryWaitMs = searchRateLimitWaitMs_(retriedBody);
+                if (retryWaitMs > 0) {
+                  console.info('[SrcEx] 验证码输入后重放触发搜索间隔，等待', retryWaitMs, 'ms');
+                  await new Promise<void>((resolve: () => void): void => {
+                    setTimeout((): void => resolve(), retryWaitMs);
+                  });
+                  retriedBody = finalMethod === 'POST'
+                    ? await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout)
+                    : await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
+                }
+                if (retriedBody && !WebViewFetcher.isInteractiveChallengeHtml(retriedBody)) {
+                  const retriedResults = await this.parseResponse(
+                    this.tryHexDecode_(retriedBody) || retriedBody, source, baseUrl, 0, finalUrl);
+                  if (retriedResults.length > 0) {
+                    console.info('[SrcEx] 验证码输入后重放得到', retriedResults.length,
+                      'results for', source.sourceName);
+                    return retriedResults;
+                  }
+                }
+                console.info('[SrcEx] 验证码输入后重放仍无结果，降级交互 WebView for', source.sourceName);
+              } catch (retryError) {
+                console.warn('[SrcEx] 验证码输入后重放失败：',
+                  (retryError as Error).message || String(retryError));
+              }
+            } else {
+              console.info('[SrcEx] 验证码对话框未输入，降级交互 WebView for', source.sourceName);
+            }
+          }
+        }
         if (WebViewFetcher.interactiveFetcher) {
           try {
             console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
@@ -2013,7 +2206,13 @@ export class SourceExecutor {
             } catch (retryError) {
               console.warn('[SrcEx] Retry after login failed:', (retryError as Error).message);
             }
-          } else if (!needsWebViewDocument(rendered, '')) {
+          } else if (isSubstantiveWebViewResult_(rendered, directHtml)) {
+            // 验证页与原请求地址相同（书源没有独立 loginUrl）：浏览器会话
+            // 已经拿到新内容就应直接采用。不能再次按 needsWebViewDocument
+            // 拦截——页面自带的隐藏登录框会把成功结果误判成登录页，导致
+            // 用户手动验证被丢弃，回退到未经浏览器会话的直连 HTML。
+            console.info('[SrcEx] Interactive verification produced a fresh document,'
+              + ' taking it for', source.sourceName);
             return rendered;
           }
         }
@@ -2150,7 +2349,12 @@ export class SourceExecutor {
             // 直接求值，baseUrl 按 Android 语义为当前详情页 URL；
             // 不能交给 extractAttr——空选择器会返回整页文本，污染后续拼接。
             if (!ruleBeforeJs && jsCode) {
-              const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, {
+              // 详情 @js: 规则可能用 java.getString('rule') 二次提取页面字段
+              // （如禁漫天堂 kind 规则）。QuickJS 沙箱没有该 API，求值前先
+              // 用当前详情文档提取并替换为字面量，否则整段规则抛 TypeError。
+              const processedJs = substituteJavaGetStringCall_(jsCode,
+                (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
+              const evalResult = JsExpressionEvaluator.evaluateSync(processedJs, {
                 source: source,
                 result: '',
                 baseUrl: noteUrl,
@@ -2169,6 +2373,26 @@ export class SourceExecutor {
             let processed = value;
             if (postRule) processed = this.postProcessRule(postRule, processed);
             if (!jsCode) return processed;
+            // 混合规则（CSS 部分 + @js: 后处理）同样可能用 java.getString：
+            // 先替换为字面量再求值，避免抛 TypeError 导致字段取空。
+            const processedJs = substituteJavaGetStringCall_(jsCode,
+              (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
+            if (processedJs !== jsCode) {
+              const evalResult = JsExpressionEvaluator.evaluateSync(processedJs, {
+                source: source,
+                result: processed,
+                baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
+              });
+              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+                try {
+                  const parsed = JSON.parse(evalResult);
+                  return typeof parsed === 'string' ? parsed : String(parsed);
+                } catch (_e) {
+                  return evalResult.replace(/^['"`]|['"`]$/g, '');
+                }
+              }
+              return processed;
+            }
             return JsExpressionEvaluator.processJsResult(singleRule, processed, {
               source: source,
               baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
@@ -2727,11 +2951,16 @@ export class SourceExecutor {
       }
 
 	      // @js: 规则处理：先提取 {{@CSS@attr}} 模板的值作为 result，再执行 JS 后处理
+	      // 仅「整段 @js: 规则」和「含 {{@}} 模板」在此提前返回——这类规则依赖
+	      // 异步 evaluate（java.ajax 等），无法走下方同步分页循环。普通 CSS+@js
+	      // 复合规则（如 #content@html@js:result.replace(...)）交给分页循环：
+	      // parseContentFromRules 已支持 ##/@js: 后处理，且 nextContentUrl 分页
+	      // 与 Android BookContent 行为一致，否则带 @js 的正文规则会跳过下一页。
 	      if (source.ruleBookContent) {
 	        const contentRule = source.ruleBookContent.trim();
 	        // 分离 @js: 后缀和前面的 CSS/模板规则
 	        const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(contentRule);
-	        if (jsCode) {
+	        if (jsCode && (!ruleBeforeJs || ruleBeforeJs.includes('{{'))) {
 	          // 确保 ScriptEngine 已初始化，否则 evaluateSync 会静默失败
 	          if (!this.engineInitialized) {
 	            await this.initialize();
@@ -2780,17 +3009,12 @@ export class SourceExecutor {
             baseUrl: contentUrl || '',
           };
           // java.getString('rule') 在 QuickJS 沙箱中不存在（调用会抛 TypeError 导致整段
-          // @js: 规则失败）。按 compileOne 同款方式，预先用当前章节 HTML 提取并替换为字面量。
-          let processedJs = jsCode;
-          if (processedJs.includes('java.getString')) {
-            const docParser = getHtmlParser();
-            const docRoot = docParser.parse(raw);
-            processedJs = processedJs.replace(/java\.getString\(\s*['"]([^'"]+)['"]\s*\)/g,
-              (_m: string, rule: string): string => {
-                const val = docParser.extractAttr(docRoot, this.normalizeCssRule(rule));
-                return JSON.stringify(val || '');
-              });
-          }
+          // @js: 规则失败）。预先用当前章节 HTML 提取并替换为字面量（与 getBookInfo/
+          // compileOne 共用同一替换工具）。
+          const docParser = getHtmlParser();
+          const docRoot = docParser.parse(raw);
+          const processedJs = substituteJavaGetStringCall_(jsCode,
+            (rule: string): string => docParser.extractAttr(docRoot, this.normalizeCssRule(rule)));
           const evalResult = await JsExpressionEvaluator.evaluate(processedJs, ctx);
           if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
             let content = evalResult;
@@ -2820,14 +3044,14 @@ export class SourceExecutor {
           if (visited.has(pageUrl)) break;
           visited.add(pageUrl);
 
-          let result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent });
+          let result = this.parseContentFromRules(pageHtml, { content: source.ruleBookContent }, source);
           if (isAiContentSource && isInvalidAiContentResult(result)) {
             console.warn('[SrcEx] getContent detected placeholder/transcode failure, retrying current page:',
               pageUrl.substring(0, 100));
             for (let retry = 0; retry < 2; retry++) {
               const retryHtml = await this.fetchContentHtml(pageUrl, headers, source, bookUrl || '');
               if (!retryHtml) continue;
-              const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent });
+              const retryResult = this.parseContentFromRules(retryHtml, { content: source.ruleBookContent }, source);
               if (!isInvalidAiContentResult(retryResult)) {
                 pageHtml = retryHtml;
                 result = retryResult;
@@ -2859,7 +3083,7 @@ export class SourceExecutor {
             if (source.ruleBookContentSubContent) {
               const subResult = this.parseContentFromRules(pageHtml, {
                 content: source.ruleBookContentSubContent,
-              });
+              }, source);
               if (subResult) {
                 const subCleaned = this.applyReplaceRegex(subResult, source.ruleBookContentReplaceRegex);
                 const subContent = preserveImages ? ContentCleaner.formatKeepImg(subCleaned, pageUrl) :
@@ -3466,8 +3690,10 @@ export class SourceExecutor {
         const cssRule = this.normalizeCssRule(source.ruleBookInfoTocUrl);
         const tocPageUrl = parser.extractAttr(doc, cssRule);
         if (tocPageUrl && tocPageUrl !== tocUrl) {
-          // 协议相对 URL 补全
-          const resolvedTocUrl = tocPageUrl.startsWith('//') ? 'https:' + tocPageUrl : tocPageUrl;
+          // 协议相对（//host/...）、根相对（/path/...）等相对地址统一解析为绝对 URL。
+          // 站点详情页常把完整目录放在根相对路径（如 悠久小说网 /read/{bookId}/），
+          // 只补全 // 会导致这类真实目录页被跳过、目录只剩详情页上的最近章节。
+          const resolvedTocUrl = this.resolvePageUrl(tocPageUrl, tocUrl);
           if (resolvedTocUrl.startsWith('http')) {
             console.info('[SrcEx] getToc resolve ruleBookInfoTocUrl CSS:', resolvedTocUrl.substring(0, 80));
           const altResp = await this.fetchWithOpts(resolvedTocUrl, {
@@ -3753,6 +3979,10 @@ export class SourceExecutor {
       if (afterAt.startsWith('#')) return ' ' + afterAt;
       return match;
     });
+    // 3.5. @后跟属性选择器 -> 空格 + 属性选择器（后代）
+    //    Legado 链式 #intro-block@[data-type=tags]@a@text 与 @tag/@class 一致，
+    //    表示逐级选取后代；不转换则 HtmlParser 无法解析含 @[ 的选择器。
+    normalized = normalized.replace(/@(?=\[)/g, ' ');
     return normalized;
   }
 
@@ -3892,6 +4122,13 @@ export class SourceExecutor {
     body: string, source: BookSource, baseUrl: string, ruleUrl: string = baseUrl
   ): Promise<SearchResult[]> {
     if (!body || !source.ruleSearchList) return [];
+
+    // 相对路径补全基准：优先取实际请求页面的域名（ruleUrl 的 origin）。
+    // 书源域名（baseUrl）与请求页面域名可能不同——可乐小说源注册在
+    // rrssk.com，但发现/分类页实际在 kelexs.com，卡片 <a href="/book/x.html">
+    // 是站内相对路径，用书源域名补全会生成 rrssk.com/book/x.html（404）。
+    const pageBase = ruleUrl && /^https?:\/\//i.test(ruleUrl)
+      ? ruleUrl.replace(/^(https?:\/\/[^/]+).*$/, '$1') : baseUrl;
 
     // 字段规则可使用 {{JS}} 动态模板；列表规则则按 Android 语义执行 @js:。
     let listRule = await this.resolveDynamicRuleTemplate(source.ruleSearchList, source, ruleUrl);
@@ -4047,19 +4284,38 @@ export class SourceExecutor {
           // 如果有 @js: 后处理，执行 JS
           if (jsCode) {
             try {
-              // 替换 java.getString('rule') 调用为实际提取的值
-              let processedCode = jsCode.replace(/java\.getString\(\s*['"]([^'"]+)['"]\s*\)/g,
-                (_m: string, rule: string): string => {
-                  const val = parser.extractAttr(item, this.normalizeCssRule(rule));
-                  return JSON.stringify(val || '');
-                });
+              // 替换 java.getString('rule') 调用为实际提取的值（与 getBookInfo/
+              // getContent 共用同一替换工具），再把 java.getElement(s) DOM 访问
+              // 静态化为提取结果（如卡片 onclick 属性），其余 JS 逻辑照常执行
+              const processedCode = substituteJavaGetElementCall_(
+                substituteJavaGetStringCall_(jsCode,
+                  (rule: string): string => parser.extractAttr(item, this.normalizeCssRule(rule))),
+                parser, doc, item);
               const ctx: JsEvalContext = {
-                result: result,
+                // 整段 <js> 规则（无 CSS 前缀）时，Android Legado 的 result 是
+                // 当前列表元素（jsoup Element，可 .attr('onclick') 等）；把元素
+                // 序列化后注入，由 buildContextScript 生成带方法的元素桥。
+                result: cssPart ? result : this.serializeDomForJs_(item),
                 baseUrl: baseUrl,
                 source: source,
                 jsLib: source.jsLib || '',
               } as unknown as JsEvalContext;
-              const evalResult = JsExpressionEvaluator.evaluateSync(processedCode, ctx);
+              // 诊断日志：整段 <js> 规则的元素桥注入链路（排查可乐小说等
+              // result.attr('onclick') 书源用，问题解决后可移除）。
+              if (!cssPart) {
+                console.info('[SrcEx] FieldJs whole-rule item tag=' + item.tagName +
+                  ' attrs=' + JSON.stringify(item.attributes).substring(0, 200));
+              }
+              // 整段 <js> 规则以 if/块语句结尾（无显式 return）时，QuickJS 的
+              // JS_Eval 不传播语句完成值，桥会把 undefined 序列化成 "undefined"
+              // 再被 unwrapJsResult 清空（Android Rhino 会传播完成值，故这类
+              // 书源在 Android 正常）。追加表达式语句把 result 作为返回值。
+              const jsToEval = cssPart ? processedCode : (processedCode + '\n;result;');
+              const evalResult = JsExpressionEvaluator.evaluateSync(jsToEval, ctx);
+              if (!cssPart) {
+                console.info('[SrcEx] FieldJs whole-rule evalResult="' +
+                  String(evalResult).substring(0, 100) + '"');
+              }
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {
                   const parsed = JSON.parse(evalResult);
@@ -4179,6 +4435,14 @@ export class SourceExecutor {
 
       // 详情页 URL
       let noteUrl = getNoteUrl(item);
+      // DEBUG: 显示归一化后的详情链接规则 + 提取值，便于判断 <js> 块的
+      // java.getElement DOM 访问是否被静态化、onclick 跳转是否被解开
+      if (idx < 3) {
+        const _htmlSnippet = item.innerHtml ? item.innerHtml.substring(0, 120).replace(/\n/g, '') : '(no html)';
+        console.info('[SrcEx] NoteUrl debug', source.sourceName,
+          'rule=' + noteUrlRule, 'got="' + noteUrl + '"',
+          'html="' + _htmlSnippet + '"');
+      }
       if (!noteUrl) {
         const links = parser.querySelectorAll(item, 'a');
         if (links.length > 0) {
@@ -4189,21 +4453,21 @@ export class SourceExecutor {
       // 提取出的属性值是 JS 调用而不是 URL，先解开再按相对地址拼接。
       noteUrl = unwrapJsCallUrlValue_(noteUrl);
 
-      // 相对路径转绝对
+      // 相对路径转绝对（基准用实际请求页面域名 pageBase，见函数头注释）
       if (coverUrl && coverUrl.startsWith('//')) {
-        coverUrl = (baseUrl ? 'https:' : 'https:') + coverUrl;
+        coverUrl = (pageBase ? 'https:' : 'https:') + coverUrl;
       }
       if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
-        coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
+        coverUrl = (pageBase || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
       }
       if (coverUrl && !coverUrl.startsWith('http://') && !coverUrl.startsWith('https://') && !coverUrl.startsWith('data:')) {
-        coverUrl = (baseUrl || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
+        coverUrl = (pageBase || '') + (coverUrl.startsWith('/') ? coverUrl : '/' + coverUrl);
       }
       if (noteUrl && noteUrl.startsWith('//')) {
         noteUrl = 'https:' + noteUrl;
       }
       if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
-        noteUrl = (baseUrl || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
+        noteUrl = (pageBase || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
       }
       // 表格表头、加载占位符等通常有文字但没有详情链接，不能作为书籍结果返回。
       if (!hasUsableSearchIdentity(name, noteUrl)) continue;
@@ -4728,7 +4992,8 @@ export class SourceExecutor {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  private parseContentFromRules(html: string, rules: Record<string, string>): string {
+  private parseContentFromRules(html: string, rules: Record<string, string>,
+    source?: Partial<BookSource>): string {
     const rule = rules['content'] || '';
     if (rule) {
       // 内容规则可能匹配多个元素（如 .chapter_content_box p@html），
@@ -4781,7 +5046,12 @@ export class SourceExecutor {
           // 应用 @js: 后处理
           if (jsCode) {
             try {
-              const ctx: JsEvalContext = { result: result, baseUrl: '' } as unknown as JsEvalContext;
+              const ctx: JsEvalContext = {
+                result: result,
+                baseUrl: '',
+                source: source,
+                jsLib: source?.jsLib || '',
+              } as unknown as JsEvalContext;
               const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {
@@ -5194,10 +5464,16 @@ export class SourceExecutor {
       tocRule.trim().match(/^@js:([\s\S]*)$/i);
     if (pureJsMatch) {
       const jsCode = pureJsMatch[1].trim();
-      const resultCode = jsCode + '\n;typeof list !== "undefined" ? list : ' +
-        '(typeof result !== "undefined" ? result : "");';
+      // QuickJS 的 JS_Eval 返回脚本完成值（最后一条表达式语句的值），与
+      // Android Rhino 语义一致。书源有两种写法：
+      //   a) 最后一行直接写结果变量/表达式（如可乐小说 ruleToc 结尾是
+      //      `elements`），此时直接执行原始 jsCode 即可拿到数组；
+      //   b) 把结果赋给 list 或 result 变量（`<js>...list</js>` 形式）。
+      // 先直接执行（覆盖写法 a），为空再追加兼容表达式（覆盖写法 b），
+      // 避免追加表达式把输入 HTML 的 result 当成返回值（JSON.parse 失败）。
+      let evaluated = '';
       try {
-        const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+        evaluated = await JsExpressionEvaluator.evaluate(jsCode, {
           source: source,
           jsLib: source?.jsLib || '',
           variableBlob: source?.variableComment || '',
@@ -5205,23 +5481,34 @@ export class SourceExecutor {
           result: html,
           src: html,
         });
-        if (!evaluated) return [];
-        const parsed = JSON.parse(evaluated) as unknown;
-        if (!Array.isArray(parsed)) return [];
-        const jsonRules: Record<string, string> = {
-          toc: '*',
-          tocTitle: rules['tocTitle'] || '',
-          tocUrlItem: rules['tocUrlItem'] || '',
-          isVolume: rules['isVolume'] || '',
-          isVip: rules['isVip'] || '',
-          isPay: rules['isPay'] || '',
-          updateTime: rules['updateTime'] || '',
-        };
-        return await this.parseJsonToc(parsed as Object, jsonRules, tocUrl);
-      } catch (error) {
-        console.warn('[SrcEx] Pure TOC JS failed:', error instanceof Error ? error.message : String(error));
-        return [];
+      } catch (_directError) { /* fall through to compat append */ }
+      if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+        const compatCode = jsCode + '\n;typeof list !== "undefined" ? list : ' +
+          '(typeof result !== "undefined" ? result : "");';
+        try {
+          evaluated = await JsExpressionEvaluator.evaluate(compatCode, {
+            source: source,
+            jsLib: source?.jsLib || '',
+            variableBlob: source?.variableComment || '',
+            baseUrl: tocUrl,
+            result: html,
+            src: html,
+          });
+        } catch (_compatError) { /* leave empty */ }
       }
+      if (!evaluated) return [];
+      const parsed = JSON.parse(evaluated) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      const jsonRules: Record<string, string> = {
+        toc: '*',
+        tocTitle: rules['tocTitle'] || '',
+        tocUrlItem: rules['tocUrlItem'] || '',
+        isVolume: rules['isVolume'] || '',
+        isVip: rules['isVip'] || '',
+        isPay: rules['isPay'] || '',
+        updateTime: rules['updateTime'] || '',
+      };
+      return await this.parseJsonToc(parsed as Object, jsonRules, tocUrl);
     }
 
     const parser = getHtmlParser();
