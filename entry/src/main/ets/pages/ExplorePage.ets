@@ -35,6 +35,8 @@ interface ExploreCategory {
   ruleExploreLastChapter: string;
   ruleExploreIntroduce: string;
   parent: string;
+  /** 动态两级发现：点击该项目会去抓取其 url 返回的子分类列表展开（而非书籍列表）。 */
+  isSubNav: boolean;
   // 布局属性（从 style JSON 解析）
   flexBasisPercent: number;
   flexGrow: number;
@@ -63,6 +65,12 @@ export struct ExplorePage {
   @State sourceActionBusy: boolean = false;
   @State loadError: string = '';
   @State categoryError: string = '';
+  /** 动态两级发现：当前展开的一级发现项 url（空表示全部收起）。 */
+  @State dynamicExpandedUrl: string = '';
+  /** 一级发现项 url → 其二级分类列表缓存。 */
+  @State subCategoryCache: Record<string, ExploreCategory[]> = {};
+  /** 正在加载子分类的一级发现项 url。 */
+  @State subLoadingUrl: string = '';
 
   private sourceRequestId: number = 0;
   private categoryRequestId: number = 0;
@@ -388,6 +396,9 @@ export struct ExplorePage {
       ruleExploreLastChapter: String(item['ruleExploreLastChapter'] || item['lastChapterRule'] || ''),
       ruleExploreIntroduce: String(item['ruleExploreIntroduce'] || item['introRule'] || ''),
       parent: String(item['parent'] || item['parentTitle'] || ''),
+      // “dynamic”: true 表示该发现项是动态两级的一级：点击后抓取其 url 返回的子分类展开。
+      isSubNav: item['dynamic'] === true || item['dynamic'] === 'true' ||
+        item['isSubNav'] === true || item['expand'] === true,
       flexBasisPercent: flexBasisPercent,
       flexGrow: flexGrow,
       wrapBefore: wrapBefore,
@@ -477,7 +488,7 @@ export struct ExplorePage {
           keyword: '', style: '', bookUrl: '',
           ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '', ruleExploreCover: '',
           ruleExploreNoteUrl: '', ruleExploreKind: '', ruleExploreWordCount: '',
-          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '',
+          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '', isSubNav: false,
           flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
         });
       } else {
@@ -485,7 +496,7 @@ export struct ExplorePage {
           name: trimmed, url: '', keyword: '', style: '', bookUrl: '',
           ruleExploreList: '', ruleExploreName: '', ruleExploreAuthor: '', ruleExploreCover: '',
           ruleExploreNoteUrl: '', ruleExploreKind: '', ruleExploreWordCount: '',
-          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '',
+          ruleExploreLastUpdateTime: '', ruleExploreLastChapter: '', ruleExploreIntroduce: '', parent: '', isSubNav: false,
           flexBasisPercent: 0, flexGrow: 0, wrapBefore: false,
         });
       }
@@ -678,6 +689,79 @@ export struct ExplorePage {
       this.resolvedCategories = [];
       this.loadingKinds = false;
     }
+  }
+
+  /** 解析任意文本为分类（复用 JSON/文本/JS 的兼容规则）。 */
+  private toCategories_(text: string): ExploreCategory[] {
+    const jsonParsed = this.parseExploreJson(text);
+    if (jsonParsed.length > 0) return jsonParsed;
+    return this.parseExploreLines(text);
+  }
+
+  /**
+   * 动态两级发现：展开/收起一个一级发现项。
+   * 点击一级（平台）→ 抓取其 url 返回的二级分类列表并内联展开；
+   * 再点另一个一级 → 切换（收起旧的、加载/展开新的）。
+   */
+  async toggleDynamicSubNav(source: BookSource, parent: ExploreCategory): Promise<void> {
+    // 再次点击当前已展开项 → 收起
+    if (this.dynamicExpandedUrl === parent.url) {
+      this.dynamicExpandedUrl = '';
+      this.subLoadingUrl = '';
+      return;
+    }
+    if (!parent.url || parent.url.trim() === '') return;
+    this.dynamicExpandedUrl = parent.url;
+    // 已缓存则直接展开，不重复请求
+    if (this.subCategoryCache[parent.url]) {
+      this.subLoadingUrl = '';
+      return;
+    }
+    this.subLoadingUrl = parent.url;
+    let cats: ExploreCategory[] = [];
+    try {
+      if (/^<js>|^@js:/.test(parent.url)) {
+        let jsCode = parent.url;
+        if (parent.url.startsWith('<js>')) {
+          const match = parent.url.match(/<js>([\s\S]*?)<\/js>/i);
+          jsCode = match ? match[1] : '';
+        } else {
+          jsCode = parent.url.substring(4).trim();
+        }
+        if (jsCode) {
+          const baseUrl = this.getBaseUrl_(source.sourceUrl);
+          const ctx: JsEvalContext = {
+            source: source,
+            jsLib: source.jsLib || '',
+            baseUrl: baseUrl,
+            variableBlob: source.variableComment || '',
+          };
+          const result = await JsExpressionEvaluator.evaluate(jsCode, ctx);
+          if (result && result.trim()) cats = this.toCategories_(result);
+        }
+      } else if (/^https?:\/\//i.test(parent.url)) {
+        const body = await this.httpGet(parent.url, source.header || '');
+        if (body) cats = this.toCategories_(body);
+      }
+    } catch (e) {
+      console.error('[Explore] load sub-categories failed for ' + parent.name + ': ' + String(e));
+      this.subLoadingUrl = '';
+      this.dynamicExpandedUrl = '';
+      return;
+    }
+    this.subLoadingUrl = '';
+    if (cats.length === 0) {
+      // 没有二级分类时保持收起态，避免显示空区域
+      this.dynamicExpandedUrl = '';
+      return;
+    }
+    const next: Record<string, ExploreCategory[]> = {};
+    const keys = Object.keys(this.subCategoryCache);
+    for (let i = 0; i < keys.length; i++) {
+      next[keys[i]] = this.subCategoryCache[keys[i]];
+    }
+    next[parent.url] = cats;
+    this.subCategoryCache = next;
   }
 
   openCategory(source: BookSource, category: ExploreCategory): void {
@@ -948,7 +1032,10 @@ export struct ExplorePage {
 
   @Builder
   buildKindGrid(source: BookSource) {
-    Column() {
+    if (this.resolvedCategories.some((cat: ExploreCategory): boolean => cat.isSubNav)) {
+      this.buildDynamicSubNav(source)
+    } else {
+      Column() {
       ForEach(this.calculateKindRows(this.resolvedCategories, 6), (row: ExploreCategory[]) => {
         Row() {
           ForEach(row, (cat: ExploreCategory) => {
@@ -967,7 +1054,68 @@ export struct ExplorePage {
         }.width('100%').padding({ left: 12, right: 12 })
       })
       Row().height(8)
+      }
     }
+  }
+
+  /** 动态两级发现：判断某个一级发现项是否处于展开态。 */
+  private isDynamicExpanded_(url: string): boolean {
+    return this.dynamicExpandedUrl === url;
+  }
+
+  /**
+   * 动态两级发现：一级是若干"平台/分类目录"项，点击展开该目录下的二级分类；
+   * 再点另一个一级则切换。二级分类点击后进入书籍列表页。
+   */
+  @Builder
+  buildDynamicSubNav(source: BookSource) {
+    Column({ space: 6 }) {
+      ForEach(this.resolvedCategories, (parent: ExploreCategory) => {
+        Button((this.isDynamicExpanded_(parent.url) ? '▾ ' : '▸ ') + parent.name)
+          .width('100%').height(44).fontSize(14)
+          .fontColor(ThemeColors.onSurface(this.isDark))
+          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+          .borderRadius(8)
+          .layoutWeight(1)
+          .accessibilityText('展开分类：' + parent.name)
+          .onClick((): void => { void this.toggleDynamicSubNav(source, parent); })
+        if (this.isDynamicExpanded_(parent.url)) {
+          if (this.subLoadingUrl === parent.url) {
+            Row({ space: 8 }) {
+              LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
+              Text('加载分类中…').fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+            }.width('100%').padding({ left: 16, top: 6, bottom: 6 })
+          } else {
+            if ((this.subCategoryCache[parent.url] || []).length > 0) {
+              Column({ space: 6 }) {
+                ForEach(this.calculateKindRows(this.subCategoryCache[parent.url] || [], 6), (row: ExploreCategory[]) => {
+                  Row() {
+                    ForEach(row, (child: ExploreCategory) => {
+                      Button(child.name)
+                        .fontSize(12)
+                        .fontColor(ThemeColors.onBackground(this.isDark))
+                        .height(38)
+                        .padding({ left: 4, right: 4 })
+                        .backgroundColor(ThemeColors.surface(this.isDark))
+                        .borderRadius(7)
+                        .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
+                        .layoutWeight(1)
+                        .margin({ left: 3, right: 3, bottom: 4 })
+                        .accessibilityText('打开分类：' + child.name)
+                        .onClick((): void => { this.openCategory(source, child); })
+                    })
+                  }.width('100%').padding({ left: 22, right: 12 })
+                })
+              }.width('100%')
+            } else {
+              Text('该分类下暂无子分类').fontSize(12)
+                .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4, bottom: 4 })
+            }
+          }
+        }
+      }, (parent: ExploreCategory): string => parent.url || parent.name)
+      Row().height(8)
+    }.width('100%').padding({ left: 12, right: 12 })
   }
 
   @Builder
