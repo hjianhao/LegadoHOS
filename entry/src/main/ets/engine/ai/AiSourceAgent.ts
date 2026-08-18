@@ -278,6 +278,47 @@ export function inferContentHomeUrl_(html: string, pageUrl: string): string {
   while ((btn = btnRe.exec(value)) !== null) {
     pushUrl(btn[1] || '', (btn[0] || ''));
   }
+  // 内容首页导航常写在页面脚本里（用户中心页只有 JS 里一处 /online_search，
+  // 静态 HTML 没有任何链接）。扫描脚本中引用的同站内容路径作为兜底。
+  const contentPathToken = /(['"`])(\/[a-zA-Z0-9_/\-.]{0,80}(?:online_search|online-search|onlinesearch|book_shelf|bookshelf|reader|readmode|reader|home|index|novel|search)[a-zA-Z0-9_/\-.]{0,40})\1/gi;
+  let pathToken: RegExpExecArray | null;
+  const seenPaths = new Set<string>();
+  while ((pathToken = contentPathToken.exec(value)) !== null) {
+    const path = (pathToken[2] || '').split(/[?#]/)[0].trim();
+    if (!path || seenPaths.has(path)) continue;
+    seenPaths.add(path);
+    // 用路径关键词给候选打分：在线阅读/书架/reader 最像内容首页，home/index/novel 次之。
+    let score = 0;
+    if (/online_search|online-search|onlinesearch|book_shelf|bookshelf|reader|readmode/i.test(path)) score = 3;
+    else if (/search/.test(path)) score = 3;
+    else if (/home|index|novel/i.test(path)) score = 1;
+    if (score === 0) continue;
+    pushUrl(path, '');
+    // pushUrl 通过 textScore/pathScore 判定；路径本身已含内容关键词，补一条
+    // 带高分文本的候选确保被采纳。
+    candidates.push({ url: origin + path, score: score + 4 });
+  }
+  // 用户中心落地页常用函数跳转到相对路径且无前导斜杠：
+  //   function online(){window.location.href='online_search';}
+  //   function mysj(){window.location.href='book_shelf';}
+  // 只补抓这几个意为“内容首页/书架/阅读”的强路径令牌，避免把普通字符串当网址。
+  const bareToken = /(['"`])(online_search|online-search|onlinesearch|book_shelf|bookshelf|reader|readmode)[a-zA-Z0-9_/\-.]{0,40}\1/gi;
+  let bareMatch: RegExpExecArray | null;
+  while ((bareMatch = bareToken.exec(value)) !== null) {
+    const token = (bareMatch[2] || '').trim();
+    if (!token) continue;
+    let abs = '';
+    try {
+      abs = absoluteUrl_(token, pageUrl);
+    } catch (_e) {
+      continue;
+    }
+    if (!abs || !/^https?:\/\//i.test(abs)) continue;
+    const bareScore = /online_search|online-search|onlinesearch|search/i.test(token)
+      ? 9 : /reader|readmode/i.test(token)
+        ? 8 : 7;
+    candidates.push({ url: abs, score: bareScore });
+  }
   if (candidates.length === 0) return '';
   candidates.sort((left: { url: string; score: number }, right: { url: string; score: number }): number =>
     right.score - left.score);
@@ -1906,7 +1947,11 @@ export class AiSourceAgent {
     const hasContentSignal = hasAiSearchOrBookMarkup_(html) ||
       (evidence.scriptEndpointHints || []).some((hint: string): boolean =>
         /search|discovesty?le|discover|categor|cate|sort|rank|fenlei|class|genre|category|list/i.test(hint));
-    if (hasContentSignal) return evidence;
+    // 登录/用户中心/个人中心这类账号落地页即使偶带搜索脚本片段，也不是内容首页，
+    // 仍需跟随“在线阅读/进入书架”到真正的内容首页。
+    const isAccountOrLanding = /\/(?:user|user_center|usercenter|account|member|profile|my|login|passport|register)(?:[\/?#.]|$)/i.test(pageUrl) ||
+      /用户中心|个人中心|会员中心|我的账户|我的账号|账户中心|登录页|我的书架/i.test(html.substring(0, 4000));
+    if (hasContentSignal && !isAccountOrLanding) return evidence;
     const contentHome = inferContentHomeUrl_(html, pageUrl);
     if (!contentHome || !isSafeAiImportUrl(contentHome)) return evidence;
     this.log_('  首页可能是登录/用户中心落地页，切换到内容首页取证：' +
