@@ -1086,7 +1086,6 @@ export struct ExplorePage {
           .fontColor(ThemeColors.onSurface(this.isDark))
           .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
           .borderRadius(8)
-          .layoutWeight(1)
           .accessibilityText('展开分类：' + parent.name)
           .onClick((): void => { void this.toggleDynamicSubNav(source, parent); })
         if (this.isDynamicExpanded_(parent.url)) {
