@@ -740,7 +740,10 @@ export struct ExplorePage {
           if (result && result.trim()) cats = this.toCategories_(result);
         }
       } else if (/^https?:\/\//i.test(parent.url)) {
-        const body = await this.httpGet(parent.url, source.header || '');
+        // 平台参数常含中文（如 source=番茄），http 模块不自动编码，先转义。
+        const encodedUrl = parent.url.replace(/[^\x00-\x7F]+/g, (part: string): string =>
+          encodeURIComponent(part)).replace(/ /g, '%20').replace(/%20/g, '%20');
+        const body = await this.httpGet(encodedUrl, source.header || '');
         if (body) cats = this.toCategories_(body);
       }
     } catch (e) {
