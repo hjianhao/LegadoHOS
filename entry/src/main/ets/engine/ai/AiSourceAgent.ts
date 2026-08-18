@@ -130,6 +130,11 @@ interface PageEvidence {
   // fetch('/search?title=...')）没有静态表单，而 prepareHtmlForAi 会移除
   // <script>，模型看不到任何搜索线索；这些候选作为提示词补充交给模型确认。
   scriptEndpointHints: string[];
+  // 清洗前内联脚本的正文（不含 src 引用）。用户中心页的“在线阅读/书架”跳转
+  // 写在脚本里（window.location.href='online_search'），脚本被移除后无从识别
+  // 内容首页，因此保留脚本原文供 resolveContentHomePage_ 匹配。只用于内部
+  // 取证，绝不随 evidence.html 一起发送给模型。
+  rawInlineScript: string;
 }
 
 interface StageFieldSet {
@@ -887,6 +892,22 @@ function normalizeScriptEndpointHint_(raw: string): string {
   if (!value.includes('?') && !/\.(?:php|json|do|action|aspx?|jsp)$/i.test(value) &&
     !/\/api\//i.test(value)) return '';
   return value;
+}
+
+/** 拼接页面内联脚本正文（供 content-home 等内部取证，不发送给模型）。 */
+function extractInlineScriptText_(html: string): string {
+  const scriptPattern = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  let scriptMatch: RegExpExecArray | null;
+  const bodies: string[] = [];
+  let count = 0;
+  while ((scriptMatch = scriptPattern.exec(html || '')) !== null) {
+    const body = scriptMatch[1] || '';
+    if (body.trim().length > 0) {
+      bodies.push(body);
+      if (++count >= 6) break;
+    }
+  }
+  return bodies.join('\n');
 }
 
 /** 保留 DOM 结构，同时移除认证值、脚本和提示注入常见载体。 */
@@ -1952,7 +1973,9 @@ export class AiSourceAgent {
     const isAccountOrLanding = /\/(?:user|user_center|usercenter|account|member|profile|my|login|passport|register)(?:[\/?#.]|$)/i.test(pageUrl) ||
       /用户中心|个人中心|会员中心|我的账户|我的账号|账户中心|登录页|我的书架/i.test(html.substring(0, 4000));
     if (hasContentSignal && !isAccountOrLanding) return evidence;
-    const contentHome = inferContentHomeUrl_(html, pageUrl);
+    // evidence.html 已移除 <script>，内容首页跳转（window.location.href='online_search'）
+    // 只在脚本里；把原始内联脚本拼回去再做链接推断。
+    const contentHome = inferContentHomeUrl_(html + '\n' + (evidence.rawInlineScript || ''), pageUrl);
     if (!contentHome || !isSafeAiImportUrl(contentHome)) return evidence;
     this.log_('  首页可能是登录/用户中心落地页，切换到内容首页取证：' +
       contentHome.substring(0, 100));
@@ -4819,7 +4842,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         html: prepareSourceAgentHtml(html),
         usedWebView: false,
         scriptSrcs: [],
-        scriptEndpointHints: extractScriptEndpointHints_(html)
+        scriptEndpointHints: extractScriptEndpointHints_(html),
+        rawInlineScript: extractInlineScriptText_(html)
       };
     }
     return await this.fetchPage_(spec.url, label);
@@ -4863,6 +4887,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       usedWebView: true,
       scriptSrcs: scriptSrcs,
       scriptEndpointHints: extractScriptEndpointHints_(html),
+      rawInlineScript: extractInlineScriptText_(html),
     };
   }
 
@@ -5085,7 +5110,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       if (srcMatch[1]) scriptSrcs.push(srcMatch[1]);
     }
     return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView, scriptSrcs,
-      scriptEndpointHints: extractScriptEndpointHints_(html) };
+      scriptEndpointHints: extractScriptEndpointHints_(html),
+      rawInlineScript: extractInlineScriptText_(html) };
   }
 
   private ensureSearchWebViewOption_(): void {
