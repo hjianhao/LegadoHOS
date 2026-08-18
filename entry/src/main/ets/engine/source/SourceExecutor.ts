@@ -2512,7 +2512,14 @@ export class SourceExecutor {
         }
       }
       if (!tocUrl && !/^\s*@js:/i.test(tocRule)) {
-        tocUrl = this.resolveRuleTemplate(tocRule, root, '');
+        // ruleBookInfoTocUrl 既支持 {{$.字段}} 模板，也支持与其它 JSON 字段
+        // 一致的裸 JSONPath（如 $.data.catalog_url）。取到真实值后再把相对
+        // 地址（如 /catalog?book_id=...）按当前详情页补全为绝对 URL；否则
+        // Agent 会把这串相对路径误判成“非安全公网地址”而中断目录阶段。
+        tocUrl = this.extractJsonRuleValue(tocRule, root);
+        if (tocUrl) {
+          tocUrl = this.resolvePageUrl(tocUrl, noteUrl);
+        }
       }
       const info: BookSourceBookInfo = {
         name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
@@ -5337,18 +5344,21 @@ export class SourceExecutor {
           const v = this.getPath(itemObj as Record<string, unknown>, '$.' + path);
           return v !== undefined ? String(v) : '';
         });
-      }
-      if (!url) {
-        url = String(
-          itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || itemObj['chapter_url'] ||
-          itemObj['content_url'] || itemObj['path'] || itemObj['href'] ||
-          itemObj['id'] || itemObj['chapterId'] || itemObj['chapter_id'] || itemObj['cid'] ||
-          itemObj['item_id'] || ''
-        );
-        if (url && !url.startsWith('http') && !url.startsWith('//')) {
-          const prefix = baseUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
-          url = prefix + (url.startsWith('/') ? '' : '/') + url;
+        // ruleTocUrlItem 用裸 JSONPath（如 $.data[*].content_url）取到的是站点的
+        // 相对地址（如 /content?item_id=...），必须按目录页域名补全为绝对 URL，
+        // 否则 Agent 会把它判成非法地址或打不开章节。已绝对/脚本/内部协议跳过。
+        if (!url) {
+          url = String(
+            itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || itemObj['chapter_url'] ||
+            itemObj['content_url'] || itemObj['path'] || itemObj['href'] ||
+            itemObj['id'] || itemObj['chapterId'] || itemObj['chapter_id'] || itemObj['cid'] ||
+            itemObj['item_id'] || ''
+          );
         }
+      }
+      if (url && !/^https?:\/\//i.test(url) && !/^\/\/|data:|javascript:|\s*@js:/i.test(url) &&
+        !url.startsWith('#')) {
+        url = this.resolvePageUrl(url, baseUrl);
       }
 
       const volumeRule = rules['isVolume'] || '';
