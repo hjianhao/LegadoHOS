@@ -24,6 +24,8 @@ export struct CloudflareDialog {
   @State pageTitle: string = '页面加载中...';
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
+  /** 当前页面是否被 WAF/Cloudflare 以 403 硬拦截（交互窗口内没有可操作的验证控件）。 */
+  @State hasWafBlock: boolean = false;
   /** 当前使用的视图模式；验证码/登录页多为移动版站点，默认移动 UA。 */
   @State isDesktopMode: boolean = false;
   private loginPanelOpened_: boolean = false;
@@ -165,7 +167,20 @@ export struct CloudflareDialog {
               } catch (_e) {
                 // 旧版本 Web API 可能不支持 isMainFrame，按主框架处理。
               }
-              if (code && (code >= 500 || code === 404 || code === 410)) {
+              // 403 是 Cloudflare/WAF 拦截的典型状态码。它不在 4xx/5xx 常规错误分支内，
+              // 此前被静默当成子资源记录，用户只会看到空白 Not Found 壳而不
+              // 知道为什么验证不了。只有主框架 403 才意味着整页被拒（可判定为
+              // WAF 硬拦截）；子资源 403（图片/脚本防盗链）仍按普通状态记录，
+              // 不能因为页面引用了被拦的统计脚本就把整个交互判定为无法验证。
+              if (code === 403) {
+                console.warn('[CloudflareDialog] HTTP 403:', 'mainFrame=', String(isMainFrame), 'url=', this.url);
+                if (isMainFrame) {
+                  this.hasWafBlock = true;
+                  this.pageTitle = '网站被 Cloudflare/WAF 拦截（403）· 当前网络/WebView 环境可能无法通过验证';
+                } else {
+                  console.info('[CloudflareDialog] Subresource 403:', this.url);
+                }
+              } else if (code && (code >= 500 || code === 404 || code === 410)) {
                 console.warn('[CloudflareDialog] HTTP error:', code,
                   'mainFrame=', String(isMainFrame), 'url=', this.url);
                 if (isMainFrame) {
@@ -376,6 +391,20 @@ export struct CloudflareDialog {
       if (html && typeof html === 'string' && html.length > 200) {
         const clean = WebViewFetcher.decodeJavaScriptString(html);
         if (WebViewFetcher.isInteractiveChallengeHtml(clean)) {
+          // 硬拦截兜底判定：即使 onHttpErrorReceive 未标记 hasWafBlock（主框架
+          // 403 在部分 Web 版本走 onErrorReceive），只要提取到的仍是带 403/
+          // Not Found/CF 挑战脚本特征的短壳页，就说明交互窗口里没有可操作的
+          // 验证控件，继续等待也无法完成。直接关闭并让调用方拿到空结果，
+          // 由 Agent 给出"站点无法适配"的明确错误。
+          const looksHardBlockedShell = this.hasWafBlock || (
+            clean.length < 2000 &&
+            /not found|http error 404|403[^<]{0,20}|__CF\$cv\$params|challenge-platform/i.test(clean) &&
+            !/<(?:input|form)\b[^>]*(?:captcha|verification|verify|验证码)[^>]*>/i.test(clean));
+          if (looksHardBlockedShell) {
+            this.pageTitle = '站点被 Cloudflare/WAF 硬拦截，无法通过验证';
+            this.doClose();
+            return;
+          }
           this.pageTitle = '验证尚未完成，请输入验证码并等待结果出现';
           return;
         }

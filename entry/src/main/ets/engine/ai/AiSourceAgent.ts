@@ -5150,6 +5150,10 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     // 用户已勾选“网站需要登录”并完成前置登录后，后续阶段不再重复弹出登录
     // WebView；若某页仍返回登录页，说明登录未生效，直接失败并给出明确提示。
     const shouldPromptLogin = loginRequired && !this.loginPromptSuppressed_;
+    // 是否已经弹出过交互 WebView 请用户人工验证；若弹过且最终仍拿到挑战壳，
+    // 说明该站点被 Cloudflare/WAF 硬拦截、交互窗口内没有可操作的验证入口，
+    // 失败原因不能继续归咎于“请用户完成操作”。
+    let interactiveAttempted = false;
     if ((challengeForInteraction || shouldPromptLogin) &&
       (this.callback_.onRequestWebView || WebViewFetcher.interactiveFetcher)) {
       const reason = loginRequired
@@ -5159,6 +5163,7 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       let interactive = '';
       // 页面级回调负责显示弹窗；统一入口同时保留交互页面缓存，避免
       // 同一搜索请求在模型重试时重复打开限频页面。
+      interactiveAttempted = true;
       interactive = await this.requestInteractivePage_(finalUrl, purpose, reason, interactiveRequest);
       if (interactive && interactive.length > 300) {
         html = WebViewFetcher.decodeJavaScriptString(interactive);
@@ -5191,7 +5196,14 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         ? '仍停留在图片验证码页，请输入验证码并等待真实搜索结果出现后再点击完成'
         : this.loginPromptSuppressed_
           ? '网站仍要求登录（登录可能已失效或未生效），请确认账号已登录后重新运行'
-          : '仍被登录或人工验证拦截，请完成操作后再继续'));
+          // 交互 WebView 已经弹过、用户即使点“验证完成”也拿不到真实内容：
+          // 页面被 Cloudflare/WAF 以 403 直接拒绝（如 twkan.com 的 JSD 静默
+          // 挑战），交互窗口里只有 Not Found 壳而没有可点击的验证控件。
+          // 这种站点无法通过人工验证途径适配，应明确告知用户而非暗示其
+          // 操作未完成。
+          : interactiveAttempted && !captchaSolvedByDialog
+            ? '站点被 Cloudflare/WAF 硬拦截（403），交互验证页中无可操作验证入口，无法完成验证。这类站点通常无法适配，建议更换书源网站'
+            : '仍被登录或人工验证拦截，请完成操作后再继续'));
     }
     // 检测"关键字太短"提示页：站点返回 alert("关键字最少 10 个字符")，
     // prepareHtmlForAi 移除 <script> 后会变成空页面。在清理前检测并抛出
