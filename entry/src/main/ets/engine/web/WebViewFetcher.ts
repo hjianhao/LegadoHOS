@@ -89,6 +89,15 @@ export class WebViewFetcher {
   private static loadCount: number = 0;
   /** 最近一次页面结束时间；重载时重置，用于避免过早提取 WAF 探针页。 */
   private static lastPageEndAt: number = 0;
+  /**
+   * Cloudflare JSD 静默挑战的自动完成等待预算：JSD 挑战脚本在页面加载后
+   * 数秒内完成 JS 指纹并自动重载出真实页面（readyState=complete 不代表
+   * 挑战结束）。等待期内提取到挑战壳时不结算，继续等待重载；预算耗尽仍
+   * 为壳才按原样返回，由调用方弹交互验证或明确报错。
+   */
+  private static readonly CHALLENGE_WAIT_BUDGET_MS: number = 10000;
+  /** 当前 fetch 首次检测到挑战壳的时刻；0 表示尚未检测到挑战壳。 */
+  private static challengeWaitStartedAt: number = 0;
   /** 当前 fetch 已确认属于本次导航的 URL，防止队列切换后接收上一页迟到的 onPageEnd。 */
   private static activeNavigationUrls: Set<string> = new Set();
   /** 当前 fetch 允许的站点域名；为空表示保留原有的跨域重定向行为。 */
@@ -366,6 +375,7 @@ export class WebViewFetcher {
       WebViewFetcher.fetchStartedAt = Date.now();
       WebViewFetcher.loadCount = 0;
       WebViewFetcher.lastPageEndAt = 0;
+      WebViewFetcher.challengeWaitStartedAt = 0;
       WebViewFetcher.initialRequestUrl = url;
       WebViewFetcher.redirectCount = 0;
       WebViewFetcher.activeNavigationUrls = new Set([WebViewFetcher.normalizeNavigationUrl(url)]);
@@ -679,6 +689,26 @@ export class WebViewFetcher {
       .test(html);
     if (hasStrongChallengeMarker && !hasSearchResultMarkup) return true;
 
+    // Cloudflare JSD（JavaScript Detections）静默挑战：不显示复选框/文案，
+    // 只在页面注入 __CF$cv$params 并加载 /cdn-cgi/challenge-platform/scripts/jsd/main.js，
+    // 通过 JS 指纹自动完成并发起重载。旧标记（_cf_chl_opt、just a moment 等）
+    // 不覆盖该壳，导致提取到 403 空壳后被当作正常首页。该标记专属于挑战
+    // 脚本，正常页面引用 Cloudflare 统计脚本（如 /cdn-cgi/scripts/...）不会命中。
+    const hasJsdChallengeMarker = /__CF\$cv\$params|cdn-cgi\/challenge-platform\/scripts\/jsd\/main\.js/i
+      .test(html);
+    if (hasJsdChallengeMarker && !hasSearchResultMarkup) return true;
+
+    // 极短的“Not Found/404”错误壳：部分 WAF（如 Cloudflare JSD 指纹未通过、
+    // 或拦截后仅返回 404 文案）在浏览器中只渲染一个没有书籍 DOM 的短错误页，
+    // 挑战脚本可能不保留 __CF$cv$params 标记（脚本执行后已移除）。这类页面
+    // 既不是可解析的首页，也不是搜索结果，按挑战壳处理：等待重载或交给
+    // 交互 WebView 由用户完成验证，而不是把它当作正常首页交给模型解析。
+    const hasShortErrorShell = html.length < 1200 &&
+      /not found|http error 404|404[^<]{0,20}|请求的资源不存在|页面不存在|找不到(?:所请求的)?(?:资源|页面)/i
+        .test(html);
+    if (hasShortErrorShell && !hasSearchResultMarkup &&
+      !/<(?:form|a\b[^>]*href=)[^>]*>/i.test(html)) return true;
+
     // 起点等站点的 WAF 会先返回一个很短的 probe.js 探针页，页面没有
     // Cloudflare 文案，也没有 onPageEnd 后的真实结果。若不识别它，校验会
     // 把探针页当成普通空搜索页，随后一直等待隐藏 WebView 超时。
@@ -907,6 +937,30 @@ export class WebViewFetcher {
     WebViewFetcher.controller.runJavaScript('document.documentElement.outerHTML')
       .then((html: string) => {
         const decodedHtml = WebViewFetcher.decodeJavaScriptString(html);
+        // Cloudflare JSD 静默挑战：readyState=complete 只代表挑战壳加载完成，
+        // 挑战脚本随后完成 JS 指纹并自动重载出真实页面。此时提取会把 403
+        // 空壳交给调用方（表现为 AI 生成书源时拿到 611 字符的“Not Found”页）。
+        // 检测到挑战壳时推迟结算，等待重载后的真实 DOM；预算耗尽仍为壳才
+        // 按原样返回，由调用方弹交互验证或明确报错。
+        if (WebViewFetcher.isInteractiveChallengeHtml(decodedHtml)) {
+          const now = Date.now();
+          if (WebViewFetcher.challengeWaitStartedAt === 0) {
+            WebViewFetcher.challengeWaitStartedAt = now;
+          }
+          if (now - WebViewFetcher.challengeWaitStartedAt < WebViewFetcher.CHALLENGE_WAIT_BUDGET_MS) {
+            console.info('[WebViewFetcher] 挑战壳未完成，延迟提取等待重载：' +
+              decodedHtml.length + ' chars（已等待 ' +
+              Math.round((now - WebViewFetcher.challengeWaitStartedAt) / 1000) + 's）');
+            // 不重启轮询：仅保留低频复查计时器，避免每 500ms 重复提取。
+            // 挑战完成后页面会触发新的 onPageEnd，由它重新武装正常提取路径。
+            WebViewFetcher.timeoutId = setTimeout(() => {
+              WebViewFetcher.extractAndResolve();
+            }, 2000);
+            return;
+          }
+          console.info('[WebViewFetcher] 挑战等待预算耗尽，返回挑战壳：' +
+            decodedHtml.length + ' chars');
+        }
         const resolve = WebViewFetcher.pendingResolve;
         WebViewFetcher.pendingResolve = null;
         WebViewFetcher.pendingReject = null;
