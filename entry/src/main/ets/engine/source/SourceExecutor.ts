@@ -1105,11 +1105,44 @@ export class SourceExecutor {
   }
 
   /**
+   * 从数据库重读书源最新变量并回流到内存中的 source.variableComment。
+   * 登录面板按钮（如「评论开启/关闭」）和动态换线都会持久化变量，
+   * 而内存中的 BookSource 对象是打开书源时加载的旧快照；不重读的话，
+   * 后续搜索/目录/正文的 JS 上下文仍按旧变量执行。
+   */
+  private async refreshSourceVariablesFromDb(source: BookSource): Promise<void> {
+    if (!source || (!source.id && !source.sourceUrl)) return;
+    try {
+      await AppDatabase.getInstance().waitForInit();
+      const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
+      const rows = await dao.getSourcesByUrl(source.sourceUrl || '');
+      if (rows && rows.length > 0) {
+        const fresh = rows[0];
+        if (fresh && typeof fresh.variableComment === 'string' &&
+          fresh.variableComment !== (source.variableComment || '')) {
+          console.info('[SrcEx] Refreshed source variable from DB for', source.sourceName,
+            'old=' + JSON.stringify(source.variableComment || '').substring(0, 40) +
+            ' new=' + JSON.stringify(fresh.variableComment).substring(0, 40));
+          source.variableComment = fresh.variableComment;
+        }
+      }
+    } catch (e) {
+      console.warn('[SrcEx] refreshSourceVariablesFromDb failed for', source.sourceName,
+        ':', (e as Error).message);
+    }
+  }
+
+  /**
    * 如果书源变量未初始化但 loginUrl 存在，执行 loginUrl 初始化变量
    * （禁漫天堂等源依赖 loginUrl 设置 $$$ 变量，Get('url') 才能返回正确线路）
    * 在 searchSingle 和 getToc 中调用
    */
   private async ensureSourceVariables(source: BookSource, baseUrl: string): Promise<void> {
+    // 登录面板 / 动态换线通过 setVariable 持久化到 DB 的变量必须回流到内存，
+    // 否则之后的搜索/目录/正文 JS 上下文（variableBlob）仍用旧值——
+    // 例如本书源的「💬 评论: 开启/关闭」切到关闭后，正文规则里的
+    // CMTOFF() 依旧按旧变量判断，评论照常拉取。
+    await this.refreshSourceVariablesFromDb(source);
     if (!this.engineInitialized || !source.loginUrl || source.variableComment) return;
     try {
       console.info('[SrcEx] Initializing source variables from loginUrl for', source.sourceName);
@@ -2915,6 +2948,9 @@ export class SourceExecutor {
 
   async getContent(source: BookSource, contentUrl: string, bookUrl?: string, preserveImages: boolean = false,
     nextChapterUrl?: string): Promise<string> {
+    // 正文规则里的 CMTOFF()/getVariable() 依赖最新书源变量（评论开关等），
+    // 登录面板的修改持久化在 DB——先回流到内存再构造 JS 上下文。
+    await this.refreshSourceVariablesFromDb(source);
     console.info('[SrcEx] getContent input - chapterUrl len=' + (contentUrl || '').length + ':', (contentUrl || '').substring(0, 160));
     console.info('[SrcEx] getContent bookUrl:', ((bookUrl || '')).substring(0, 80));
 
