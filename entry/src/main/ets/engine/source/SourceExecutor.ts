@@ -121,6 +121,30 @@ function unwrapPreJsonResponse_(body: string): string {
   return /^[\[{]/.test(candidate) ? candidate : value;
 }
 
+/**
+ * 解码 JS 求值返回值：Worker/原生桥总是对脚本完成值再做一次
+ * JSON.stringify，字符串值会被加上引号。此处解一层 JSON，恢复
+ * 原始字符串；数字/布尔转字符串；对象/数组保留原始 JSON 文本。
+ */
+function decodeJsEvalValue_(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return '';
+  if (/^(?:SyntaxError|TypeError|ReferenceError|RangeError|EvalError|URIError|Error):/i.test(trimmed)) {
+    console.warn('[SrcEx] JS eval returned error:', trimmed.substring(0, 120));
+    return '';
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed === null || parsed === undefined) return '';
+    if (typeof parsed === 'string') return parsed;
+    if (typeof parsed === 'number' || typeof parsed === 'boolean') return String(parsed);
+    return trimmed; // 对象/数组：保留原始 JSON 文本
+  } catch (_e) {
+    return trimmed;
+  }
+}
+
 /** 判断响应是否为成功的 JSON API；错误码响应不能覆盖浏览器会话结果。 */
 function isUsableJsonApiResponse_(body: string): boolean {
   const candidate = unwrapPreJsonResponse_(body).replace(/^\uFEFF/, '').trim();
@@ -1796,7 +1820,7 @@ export class SourceExecutor {
     // JSON 直接解析（API 类书源）
     try {
       const jsonObj = JSON.parse(jsonBody) as Record<string, unknown>;
-      const results = await this.parseJsonResults(jsonObj, source, baseUrl, duration);
+      const results = await this.parseJsonResults(jsonObj, source, baseUrl, duration, jsonBody);
       if (results.length > 0) {
         console.info('[SrcEx] JSON OK:', results.length, 'from', source.sourceName);
         return results;
@@ -4502,11 +4526,147 @@ export class SourceExecutor {
 
   // ============ JSON 解析 ============
 
-  private async parseJsonResults(json: Record<string, unknown>, source: BookSource, baseUrl: string, duration: number): Promise<SearchResult[]> {
+  /**
+   * 执行 Android Legado 的 @js: 搜索列表规则（JSON 聚合书源）。
+   *
+   * 规则以 result=原始 JSON 响应体 运行，返回书籍数组（元素可能是
+   * JSON 字符串或对象）。与 Android AnalyzeRule.getElements 的
+   * Mode.Js 语义一致，目录解析 parseTocFromRules 已采用同样模式。
+   */
+  private async evalJsSearchList_(
+    rule: string, bodyText: string, source: BookSource, baseUrl: string
+  ): Promise<unknown[]> {
+    const code = rule.trimStart().replace(/^@js:/i, '').trim();
+    if (!code || !bodyText) return [];
+    const ctx: JsEvalContext = {
+      source: source,
+      jsLib: source.jsLib || '',
+      baseUrl: baseUrl,
+      variableBlob: source.variableComment || '',
+      result: bodyText,
+      src: bodyText,
+    };
+    let evaluated = '';
+    try {
+      // 直接执行：书源以 result = books; 结尾（或最后一行直接写数组
+      // 表达式）时，QuickJS 返回脚本完成值，即为序列化后的数组。
+      evaluated = await JsExpressionEvaluator.evaluate(code, ctx);
+    } catch (_directError) { /* fall through to compat append */ }
+    if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+      // 兼容写法：结果赋给 list/result 变量但完成值未被返回时，显式读取
+      // 变量（与目录解析 parseTocFromRules 相同的兜底）。
+      try {
+        evaluated = await JsExpressionEvaluator.evaluate(
+          code + '\n;typeof list !== "undefined" ? list : ' +
+          '(typeof result !== "undefined" ? result : "");',
+          ctx);
+      } catch (_compatError) { /* leave empty */ }
+    }
+    if (!evaluated) return [];
+    const trimmed = evaluated.trim();
+    if (/^(?:SyntaxError|TypeError|ReferenceError|RangeError|Error):/i.test(trimmed)) {
+      console.warn('[SrcEx] @js: search list eval error:', trimmed.substring(0, 160));
+      return [];
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (_e) {
+      // 偶发情况下数组被整体当作字符串再次序列化（双重引号），尝试解一层。
+      try {
+        parsed = JSON.parse(decodeJsEvalValue_(trimmed));
+      } catch (_e2) {
+        console.warn('[SrcEx] @js: search list result not JSON, first120=' + trimmed.substring(0, 120));
+        return [];
+      }
+    }
+    if (!Array.isArray(parsed)) {
+      return (parsed && typeof parsed === 'object') ? [parsed] : [];
+    }
+    // 元素可能是 JSON 字符串（books.push(JSON.stringify(book)) 写法）
+    const items: unknown[] = [];
+    for (const el of parsed) {
+      if (typeof el === 'string') {
+        try {
+          const obj = JSON.parse(el) as unknown;
+          items.push((obj && typeof obj === 'object') ? obj : el);
+        } catch (_s) {
+          items.push(el);
+        }
+      } else {
+        items.push(el);
+      }
+    }
+    console.info('[SrcEx] @js: search list rule returned', items.length, 'items for', source.sourceName);
+    return items;
+  }
+
+  /**
+   * 提取 JSON 搜索结果单项字段。
+   *
+   * 支持 Android Legado 的 @js: 字段规则：result 绑定到当前列表项，
+   * 与 Android getSearchItem 对 item 执行 evalJS 的语义一致；支持
+   * || 分隔的多个 @js: 备选（只在 @js: 前缀处切分，避免误拆 JS 代码
+   * 内部的 || 运算符）。普通 JSONPath/键名规则沿用 firstStr。
+   */
+  private async extractSearchField(
+    rule: string | undefined, item: Record<string, unknown>,
+    source: BookSource, baseUrl: string
+  ): Promise<string> {
+    if (!rule || !rule.trim()) return '';
+    for (const part of rule.split(/\|\|(?=@js:)/i)) {
+      const p = part.trim();
+      if (!p) continue;
+      const jsIdx = p.indexOf('@js:');
+      if (jsIdx >= 0) {
+        const prefix = p.substring(0, jsIdx).trim();
+        const code = p.substring(jsIdx + 4).trim();
+        if (!code) continue;
+        const fallback = this.firstStr(item, prefix);
+        const ctx: JsEvalContext = {
+          source: source,
+          jsLib: source.jsLib || '',
+          baseUrl: baseUrl,
+          variableBlob: source.variableComment || '',
+          result: item,
+        };
+        let evaluated = '';
+        try {
+          evaluated = await JsExpressionEvaluator.evaluate(code, ctx);
+        } catch (_directError) { /* fall through to compat append */ }
+        if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+          // 完成值未被返回时显式读取标量 result（避免把整个列表项对象
+          // 当字段值返回）。
+          try {
+            evaluated = await JsExpressionEvaluator.evaluate(
+              code + '\n;' +
+              '(typeof result === "string" || typeof result === "number" || typeof result === "boolean") ? result : "";',
+              ctx);
+          } catch (_compatError) { /* leave empty */ }
+        }
+        const out = decodeJsEvalValue_(evaluated);
+        if (out) return out;
+        if (fallback) return fallback;
+      } else {
+        const v = this.firstStr(item, p);
+        if (v) return v;
+      }
+    }
+    return '';
+  }
+
+  private async parseJsonResults(json: Record<string, unknown>, source: BookSource, baseUrl: string, duration: number, bodyText: string = ''): Promise<SearchResult[]> {
     let list: unknown[] = [];
     if (source.ruleSearchList) {
-      const raw = this.getPath(json, source.ruleSearchList);
-      if (Array.isArray(raw)) list = raw;
+      const listRule = source.ruleSearchList.trimStart();
+      if (/^@js:/i.test(listRule)) {
+        // JSON 聚合书源：ruleSearchList 是整段 @js: 脚本，运行后返回
+        // 书籍数组（元素可能是 JSON 字符串或对象）。
+        list = await this.evalJsSearchList_(source.ruleSearchList, bodyText, source, baseUrl);
+      } else {
+        const raw = this.getPath(json, source.ruleSearchList);
+        if (Array.isArray(raw)) list = raw;
+      }
     }
     if (list.length === 0) {
       if (Array.isArray(json)) { list = json; } else {
@@ -4516,33 +4676,49 @@ export class SourceExecutor {
         }
       }
     }
-    return await Promise.all(list.map(async (item: unknown) => {
+    // 过滤非对象条目（@js 列表里混入的裸字符串等），避免污染结果
+    list = list.filter((el: unknown): boolean =>
+      el !== null && el !== undefined && typeof el === 'object' && !Array.isArray(el));
+    return await Promise.all(list.map(async (item: unknown): Promise<SearchResult> => {
       const itemObj = item as Record<string, unknown>;
-      const rawName = this.firstStr(itemObj, source.ruleSearchName, 'novelName', 'name', 'title', 'bookName');
-      const name = rawName;
-      const author = this.cleanAuthorName(this.firstStr(itemObj, source.ruleSearchAuthor, 'authorName', 'author'));
+      const [
+        rawName, rawAuthor, rawCover, rawKind, rawWordCount,
+        rawIntroduce, rawLastUpdateTime, rawLatestChapterTitle
+      ] = await Promise.all([
+        this.extractSearchField(source.ruleSearchName, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchAuthor, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchCover, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchKind, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchWordCount, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchIntroduce, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchLastUpdateTime, itemObj, source, baseUrl),
+        this.extractSearchField(source.ruleSearchLastChapter, itemObj, source, baseUrl),
+      ]);
+      const name = rawName || this.firstStr(itemObj, 'novelName', 'name', 'title', 'bookName', 'book_name');
+      const author = this.cleanAuthorName(
+        rawAuthor || this.firstStr(itemObj, 'authorName', 'author', 'author_name'));
       if (!author) {
         console.info('[SrcEx] Author debug JSON', source.sourceName,
           'rule=' + (source.ruleSearchAuthor || ''), 'name="' + name.substring(0, 20) + '"');
       }
-      let rawCover = this.firstStr(itemObj, source.ruleSearchCover, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img');
+      let rawCover0 = rawCover || this.firstStr(itemObj, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img', 'thumb_url', 'thumbUrl', 'book_cover', 'bookCover');
       // 过滤非 URL 的封面值（数字 ID 等）
-      const coverUrl = (rawCover && /^(https?:\/\/|\/\/|data:)/.test(rawCover)) ? rawCover : '';
-      if (!coverUrl && rawCover) {
-        console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover, 'rule:', source.ruleSearchCover);
+      const coverUrl = (rawCover0 && /^(https?:\/\/|\/\/|data:)/.test(rawCover0)) ? rawCover0 : '';
+      if (!coverUrl && rawCover0) {
+        console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover0, 'rule:', source.ruleSearchCover);
       }
       let noteUrl = await this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl, source) ||
-        this.firstStr(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id');
+        this.firstStr(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id', 'bookid');
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
       }
-     const kind = this.firstStr(itemObj, source.ruleSearchKind || '', 'kind', 'type', 'category');
-     const wordCount = this.firstStr(itemObj, source.ruleSearchWordCount || '', 'wordCount', 'wordNum', 'words');
-     const introduce = this.firstStr(itemObj, source.ruleSearchIntroduce || '', 'introduce', 'intro', 'summary');
-     const lastUpdateTime = this.firstStr(itemObj, source.ruleSearchLastUpdateTime || '', 'lastUpdateTime', 'updateTime', 'last_update_time');
-     const latestChapterTitle = this.firstStr(itemObj, source.ruleSearchLastChapter || '', 'lastChapter', 'latestChapter', 'latestChapterTitle', 'last_update_chapter');
-     return {
+      const kind = rawKind || this.firstStr(itemObj, 'kind', 'type', 'category', 'category_name');
+      const wordCount = rawWordCount || this.firstStr(itemObj, 'wordCount', 'wordNum', 'words', 'word_number');
+      const introduce = rawIntroduce || this.firstStr(itemObj, 'introduce', 'intro', 'summary', 'abstract', 'book_abstract', 'book_abstract_v2');
+      const lastUpdateTime = rawLastUpdateTime || this.firstStr(itemObj, 'lastUpdateTime', 'updateTime', 'last_update_time', 'last_publish_time');
+      const latestChapterTitle = rawLatestChapterTitle || this.firstStr(itemObj, 'lastChapter', 'latestChapter', 'latestChapterTitle', 'last_update_chapter', 'last_chapter_title', 'last_chapter');
+      return {
        key: (source.sourceUrl || '') + '|' + noteUrl,
        name: name || '未知书名', author: author || '', coverUrl: coverUrl || '',
        noteUrl: noteUrl || '', origin: source.sourceName || '未知',
@@ -4750,20 +4926,35 @@ export class SourceExecutor {
         // Legado 书源常以 `url = ...` 作为脚本最后一条语句，而 QuickJS
         // 的全局脚本求值不一定把赋值语句的完成值返回给 N-API。显式读取
         // 常见结果变量，保持 Android 端“最后得到 URL”的语义。
-        const resultCode = code + '\n;typeof url !== "undefined" ? url : ' +
-          '(typeof result !== "undefined" ? result : (typeof bookUrl !== "undefined" ? bookUrl : ""));';
+        // 纯访问式规则（@js:result.book_id）的完成值也要捕获；末尾统一
+        // 解一层 JSON 字符串包装（Worker/桥返回二次序列化）。
+        const codeTrim = code.trim();
+        const simpleExpr = !/[\n;]/.test(codeTrim) &&
+          /^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*|\[['"][^'"]+['"]\])*$/.test(codeTrim);
+        const resultCode = code + '\n;' +
+          (simpleExpr
+            ? 'var __noteUrlVal=' + codeTrim + ';' +
+              'typeof url !== "undefined" ? url : ' +
+              '(typeof __noteUrlVal !== "undefined" && __noteUrlVal !== null ? __noteUrlVal : ' +
+              '(typeof result === "string" || typeof result === "number" ? result : ""));'
+            : 'typeof url !== "undefined" ? url : ' +
+              '(typeof result === "string" || typeof result === "number" ? result : ' +
+              '(typeof bookUrl !== "undefined" ? bookUrl : ""));');
         const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
           source: source,
           jsLib: source.jsLib || '',
           baseUrl: baseUrl,
           variableBlob: source.variableComment || '',
-          result: fallback,
+          // 纯 @js: 规则（无前缀）时 result 绑定列表项本身，对齐 Android
+          // setContent(item) 后再 evalJS 的语义；有前缀时绑定前缀提取值。
+          result: (fallback !== '' ? fallback : item),
         });
         console.info('[SrcEx] Search note URL JS', source.sourceName,
           'bookId=', String(item['bookId'] || item['bid'] || ''),
-          'resultLen=', evaluated.length, 'prefix=', evaluated.substring(0, 100));
+          'resultLen=', evaluated.length, 'prefix=', decodeJsEvalValue_(evaluated).substring(0, 100));
         if (evaluated && !/^(?:SyntaxError|TypeError|ReferenceError|Error:)/i.test(evaluated.trim())) {
-          return evaluated.trim();
+          const noteUrl = decodeJsEvalValue_(evaluated);
+          if (noteUrl) return noteUrl;
         }
       }
       if (fallback) return this.postProcessRule(rule, fallback);
