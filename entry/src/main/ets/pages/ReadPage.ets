@@ -1197,8 +1197,13 @@ struct ReadPage {
 
   /** 预加载相邻章节（上一章 + 下一章），用于无缝翻页 */
   private preloadAdjacentChapters_(currentIdx: number): void {
+    // 相邻章节错峰预载：聚合类 API（番茄等）正文接口并发请求易触发限流，
+    // 只回第一页（正文被截断一半以上）。下一章先预载，上一章延迟 1.5s 再发，
+    // 同一时段最多一个正文请求，明显降低被截断概率。
     this.preloadChapterAt_(currentIdx + 1, false);
-    this.preloadChapterAt_(currentIdx - 1, true);
+    setTimeout((): void => {
+      this.preloadChapterAt_(currentIdx - 1, true);
+    }, 1500);
   }
 
   /** 兼容旧调用点 */

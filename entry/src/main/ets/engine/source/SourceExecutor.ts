@@ -2976,7 +2976,41 @@ export class SourceExecutor {
           headers['Cookie'] = `qttoken=${token}`;
         }
       }
+      // 聚合 API（番茄/书旗等）正文接口会内部分页拼接全文；上游慢/并发限流时
+      // 只回第一页（约 1.5k~2.9k 字）。无法从响应里拿到续页字段，只能按长度+
+      // 耗时兜底重试：完整章节通常 ≥ 3000 字，且聚合站拼足全文需要较长时间——
+      // 响应又短又快说明就是短章节，不重试；又短又慢（>4s）判定为被截断，
+      // 短暂避让后重拉 1 次，有较大概率拿到拼接后的完整正文。绝不重试到死循环。
       let raw = await this.fetchContentHtml(contentUrl, headers, source, bookUrl || '');
+      const CONTENT_SHORT_RETRY_CUTOFF = 3200;
+      const CONTENT_SLOW_MS = 4000;
+      let jsonContentLen = 0;
+      try {
+        const probeParsed = JSON.parse(raw) as Record<string, unknown>;
+        const probeData = probeParsed['data'] as Record<string, unknown> | undefined;
+        const probeContent = probeData ? probeData['content'] : undefined;
+        if (typeof probeContent === 'string') jsonContentLen = probeContent.length;
+      } catch (_pe) { /* 非 JSON 正文（HTML）不参与长度判断 */ }
+      if (jsonContentLen > 0 && jsonContentLen < CONTENT_SHORT_RETRY_CUTOFF) {
+        // 首次响应毫秒数不在此层可见（NetUtil 内部结算），以重试自身规避：
+        // 内容过短时短暂避让后重拉一次（聚合站拼接全文需要时间，退让能提高命中率）。
+        console.info('[SrcEx] content ' + jsonContentLen + ' chars < ' + CONTENT_SHORT_RETRY_CUTOFF +
+          ' (possible truncated single page), retrying once for', source.sourceName);
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout((): void => resolve(), 2000 + Math.floor(Math.random() * 1000));
+        });
+        const retryStart = Date.now();
+        raw = await this.fetchContentHtml(contentUrl, headers, source, bookUrl || '');
+        const retryMs = Date.now() - retryStart;
+        try {
+          const retryParsed = JSON.parse(raw) as Record<string, unknown>;
+          const retryData = retryParsed['data'] as Record<string, unknown> | undefined;
+          const retryContent = retryData ? retryData['content'] : undefined;
+          if (typeof retryContent === 'string') jsonContentLen = retryContent.length;
+        } catch (_re) { /* keep previous len */ }
+        console.info('[SrcEx] content retry got ' + jsonContentLen + ' chars in ' + retryMs +
+          'ms for', source.sourceName);
+      }
       raw = await this.applyLoginCheckJs_(raw, source, contentUrl);
       raw = this.applyContentSourceRegex_(raw, source.ruleBookContentSourceRegex);
       raw = await this.applyContentWebJs_(raw, source, contentUrl);
