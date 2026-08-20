@@ -2517,21 +2517,32 @@ export class SourceExecutor {
         const jsIndex = expanded.indexOf('@js:');
         const jsCode = jsIndex >= 0 ? expanded.substring(jsIndex + 4).trim() : '';
         if (jsCode) {
-          // 书源脚本通常以 `url = ...` 结束。显式读取赋值后的变量，避免
-          // QuickJS 将赋值语句的完成值当作 undefined 返回。
-          const resultCode = jsCode + '\n;typeof url !== "undefined" ? url : ' +
-            '(typeof result !== "undefined" ? result : (typeof bookUrl !== "undefined" ? bookUrl : ""));';
-          const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+          // 先直接执行：规则（如 baseUrl.split('detail').join('book') + ...）
+          // 的完成值就是 toc URL（与目录解析 parseTocFromRules 一致）。
+          const ctx: JsEvalContext = {
             source: source,
             jsLib: source.jsLib || '',
             baseUrl: noteUrl,
             variableBlob: source.variableComment || '',
             result: '',
-          });
+          };
+          let evaluated = '';
+          try {
+            evaluated = await JsExpressionEvaluator.evaluate(jsCode, ctx);
+          } catch (_directError) { /* fall through to compat append */ }
+          if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+            // 兜底：完成值未被 N-API 返回时，显式读取常见结果变量。
+            const resultCode = jsCode + '\n;typeof url !== "undefined" ? url : ' +
+              '(typeof result === "string" || typeof result === "number" ? result : ' +
+              '(typeof bookUrl !== "undefined" ? bookUrl : ""));';
+            try {
+              evaluated = await JsExpressionEvaluator.evaluate(resultCode, ctx);
+            } catch (_compatError) { /* leave empty */ }
+          }
           console.info('[SrcEx] BookInfo toc JS result source=' + source.sourceName +
-            ' len=' + evaluated.length + ' prefix=' + evaluated.substring(0, 120));
+            ' len=' + evaluated.length + ' prefix=' + decodeJsEvalValue_(evaluated).substring(0, 120));
           if (evaluated && !/^(?:SyntaxError|TypeError|ReferenceError|Error:)/i.test(evaluated.trim())) {
-            tocUrl = evaluated.trim().replace(/^['"`]|['"`]$/g, '');
+            tocUrl = decodeJsEvalValue_(evaluated);
           }
         }
       }
@@ -2545,19 +2556,28 @@ export class SourceExecutor {
           tocUrl = this.resolvePageUrl(tocUrl, noteUrl);
         }
       }
+      const infoName = await this.extractJsonFieldValue(source.ruleBookInfoName, root, body, source, noteUrl);
+      const infoAuthor = await this.extractJsonFieldValue(source.ruleBookInfoAuthor, root, body, source, noteUrl);
+      const infoCover = await this.extractJsonFieldValue(source.ruleBookInfoCover, root, body, source, noteUrl);
+      const infoIntro = await this.extractJsonFieldValue(source.ruleBookInfoIntroduce, root, body, source, noteUrl);
+      const infoKind = await this.extractJsonFieldValue(source.ruleBookInfoKind, root, body, source, noteUrl);
+      const infoWordCount = await this.extractJsonFieldValue(source.ruleBookInfoWordCount, root, body, source, noteUrl);
+      const infoLastUpdate = await this.extractJsonFieldValue(source.ruleBookInfoLastUpdateTime, root, body, source, noteUrl);
+      const infoLastChapter = await this.extractJsonFieldValue(source.ruleBookInfoLastChapter, root, body, source, noteUrl);
+      const infoCanReName = source.ruleBookInfoCanReName
+        ? await this.extractJsonFieldValue(source.ruleBookInfoCanReName, root, body, source, noteUrl) : '';
+      const infoDownload = await this.extractJsonFieldValue(source.ruleBookInfoDownloadUrls, root, body, source, noteUrl);
       const info: BookSourceBookInfo = {
-        name: this.extractJsonRuleValue(source.ruleBookInfoName, root),
-        author: this.cleanAuthorName(this.extractJsonRuleValue(source.ruleBookInfoAuthor, root)),
-        coverUrl: this.resolveMediaUrl_(
-          this.extractJsonRuleValue(source.ruleBookInfoCover, root), noteUrl),
-        introduce: HtmlUtil.toPlainText(this.extractJsonRuleValue(source.ruleBookInfoIntroduce, root)),
-        kind: this.extractJsonRuleValue(source.ruleBookInfoKind, root),
-        wordCount: this.extractJsonRuleValue(source.ruleBookInfoWordCount, root),
-        lastUpdateTime: this.extractJsonRuleValue(source.ruleBookInfoLastUpdateTime, root),
-        latestChapterTitle: this.extractJsonRuleValue(source.ruleBookInfoLastChapter, root),
-        canReName: source.ruleBookInfoCanReName
-          ? !!this.extractJsonRuleValue(source.ruleBookInfoCanReName, root) : undefined,
-        downloadUrls: this.extractJsonRuleValue(source.ruleBookInfoDownloadUrls, root)
+        name: infoName,
+        author: this.cleanAuthorName(infoAuthor),
+        coverUrl: this.resolveMediaUrl_(infoCover, noteUrl),
+        introduce: HtmlUtil.toPlainText(infoIntro),
+        kind: infoKind,
+        wordCount: infoWordCount,
+        lastUpdateTime: infoLastUpdate,
+        latestChapterTitle: infoLastChapter,
+        canReName: source.ruleBookInfoCanReName ? !!infoCanReName : undefined,
+        downloadUrls: infoDownload
           .split(/[\r\n,，]+/).map((v: string): string => v.trim()).filter((v: string): boolean => !!v),
         relatedBooks: this.parseJsonArrayRuleValue_(source.ruleBookInfoRelatedBooks, root),
         tocUrl: tocUrl,
@@ -2581,6 +2601,44 @@ export class SourceExecutor {
     if (!rule) return '';
     if (rule.includes('{{')) return this.resolveRuleTemplate(rule, item, '');
     return this.firstStr(item, rule);
+  }
+
+  /**
+   * 提取 JSON 详情字段。整段 @js: 规则时以 result=原始响应体执行脚本
+   * （对齐 Android analyzeBookInfo 对 item 执行 evalJS 后取值的语义，
+   * 如本书源 ruleBookInfo.intro 用 d = JSON.parse(result) 组装信息串）；
+   * 普通 JSONPath/键名规则走 extractJsonRuleValue。
+   */
+  private async extractJsonFieldValue(
+    rule: string, root: Record<string, unknown>, body: string,
+    source: BookSource, baseUrl: string
+  ): Promise<string> {
+    if (!rule) return '';
+    if (/^\s*@js:/i.test(rule.trimStart())) {
+      const code = rule.trimStart().replace(/^@js:/i, '').trim();
+      if (!code) return '';
+      const ctx: JsEvalContext = {
+        source: source,
+        jsLib: source.jsLib || '',
+        baseUrl: baseUrl,
+        variableBlob: source.variableComment || '',
+        result: body,
+        src: body,
+      };
+      let evaluated = '';
+      try {
+        evaluated = await JsExpressionEvaluator.evaluate(code, ctx);
+      } catch (_directError) { /* fall through to compat append */ }
+      if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+        try {
+          evaluated = await JsExpressionEvaluator.evaluate(
+            code + '\n;(typeof result === "string" || typeof result === "number" || typeof result === "boolean") ? result : "";',
+            ctx);
+        } catch (_compatError) { /* leave empty */ }
+      }
+      return decodeJsEvalValue_(evaluated);
+    }
+    return this.extractJsonRuleValue(rule, root);
   }
 
   private parseJsonArrayRuleValue_(rule: string, item: Record<string, unknown>): Object[] {
@@ -3527,7 +3585,7 @@ export class SourceExecutor {
           try {
             const jsonObj = this.tryParseJsonBody_(pageBody);
             if (jsonObj !== null) {
-              pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl);
+              pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl, source);
             }
           } catch (_progressJsonError) { /* 使用 HTML 规则继续解析 */ }
         }
@@ -3673,7 +3731,7 @@ export class SourceExecutor {
           if (this.shouldTryJsonToc_(tocRules.toc, pageBody)) {
             try {
               const jsonObj = this.tryParseJsonBody_(pageBody);
-              if (jsonObj !== null) pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl);
+              if (jsonObj !== null) pageChapters = await this.parseJsonToc(jsonObj, tocRules, pageUrl, source);
             } catch (_je) { /* fallback to CSS */ }
           }
           if (pageChapters.length === 0) {
@@ -3738,7 +3796,7 @@ export class SourceExecutor {
               try {
                 const jsonObj = this.tryParseJsonBody_(altResp);
                 if (jsonObj !== null) {
-                  altChapters = await this.parseJsonToc(jsonObj, tocRules, tocPageUrl);
+                  altChapters = await this.parseJsonToc(jsonObj, tocRules, tocPageUrl, source);
                 }
               } catch (_je2) { /* fallback */ }
             }
@@ -3770,7 +3828,7 @@ export class SourceExecutor {
               try {
                 const jsonObj = this.tryParseJsonBody_(wvHtml);
                 if (jsonObj !== null) {
-                  wvChapters = await this.parseJsonToc(jsonObj, tocRules, wvResult.finalUrl || tocUrl);
+                  wvChapters = await this.parseJsonToc(jsonObj, tocRules, wvResult.finalUrl || tocUrl, source);
                 }
               } catch (_wvJson) { /* HTML fallback */ }
             }
@@ -3829,7 +3887,7 @@ export class SourceExecutor {
                 try {
                   const jsonObj = this.tryParseJsonBody_(retryBodyText);
                   if (jsonObj !== null) {
-                    retryChapters = await this.parseJsonToc(jsonObj, retryTocRules, tocUrl);
+                    retryChapters = await this.parseJsonToc(jsonObj, retryTocRules, tocUrl, source);
                   }
                 } catch (_je3) { /* fallback */ }
               }
@@ -4923,24 +4981,10 @@ export class SourceExecutor {
       const fallback = prefix ? this.firstStr(item, prefix) : '';
       const code = expanded.substring(expandedJsIndex + 4).trim();
       if (code) {
-        // Legado 书源常以 `url = ...` 作为脚本最后一条语句，而 QuickJS
-        // 的全局脚本求值不一定把赋值语句的完成值返回给 N-API。显式读取
-        // 常见结果变量，保持 Android 端“最后得到 URL”的语义。
-        // 纯访问式规则（@js:result.book_id）的完成值也要捕获；末尾统一
-        // 解一层 JSON 字符串包装（Worker/桥返回二次序列化）。
-        const codeTrim = code.trim();
-        const simpleExpr = !/[\n;]/.test(codeTrim) &&
-          /^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*|\[['"][^'"]+['"]\])*$/.test(codeTrim);
-        const resultCode = code + '\n;' +
-          (simpleExpr
-            ? 'var __noteUrlVal=' + codeTrim + ';' +
-              'typeof url !== "undefined" ? url : ' +
-              '(typeof __noteUrlVal !== "undefined" && __noteUrlVal !== null ? __noteUrlVal : ' +
-              '(typeof result === "string" || typeof result === "number" ? result : ""));'
-            : 'typeof url !== "undefined" ? url : ' +
-              '(typeof result === "string" || typeof result === "number" ? result : ' +
-              '(typeof bookUrl !== "undefined" ? bookUrl : ""));');
-        const evaluated = await JsExpressionEvaluator.evaluate(resultCode, {
+        // 先直接执行：规则是表达式（如 'https://...' + result）或赋值语句
+        // （url = ...）时，QuickJS 返回脚本完成值即为目标 URL（与目录解析
+        // parseTocFromRules 直接取完成值的语义一致）。
+        const ctx: JsEvalContext = {
           source: source,
           jsLib: source.jsLib || '',
           baseUrl: baseUrl,
@@ -4948,7 +4992,21 @@ export class SourceExecutor {
           // 纯 @js: 规则（无前缀）时 result 绑定列表项本身，对齐 Android
           // setContent(item) 后再 evalJS 的语义；有前缀时绑定前缀提取值。
           result: (fallback !== '' ? fallback : item),
-        });
+        };
+        let evaluated = '';
+        try {
+          evaluated = await JsExpressionEvaluator.evaluate(code, ctx);
+        } catch (_directError) { /* fall through to compat append */ }
+        if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+          // 兜底：完成值未被 N-API 返回时，显式读取 url/result 等常见结果变量
+          //（保持 Android 端“最后得到 URL”的语义）。
+          const resultCode = code + '\n;typeof url !== "undefined" ? url : ' +
+            '(typeof result === "string" || typeof result === "number" ? result : ' +
+            '(typeof bookUrl !== "undefined" ? bookUrl : ""));';
+          try {
+            evaluated = await JsExpressionEvaluator.evaluate(resultCode, ctx);
+          } catch (_compatError) { /* leave empty */ }
+        }
         console.info('[SrcEx] Search note URL JS', source.sourceName,
           'bookId=', String(item['bookId'] || item['bid'] || ''),
           'resultLen=', evaluated.length, 'prefix=', decodeJsEvalValue_(evaluated).substring(0, 100));
@@ -5436,7 +5494,7 @@ export class SourceExecutor {
    * - 非 $. 前缀字段：data / list / rows
    * - 根数组
    */
-  private async parseJsonToc(json: Object | null, rules: Record<string, string>, baseUrl: string): Promise<BookSourceChapter[]> {
+  private async parseJsonToc(json: Object | null, rules: Record<string, string>, baseUrl: string, source?: BookSource): Promise<BookSourceChapter[]> {
     const tocRule = rules['toc'] || '';
     if (!tocRule || json === null || json === undefined) return [];
 
@@ -5520,15 +5578,54 @@ export class SourceExecutor {
 
       let url = '';
       if (urlItemRule) {
-        // 检查是否是复杂模板（如 method/body/headers JSON 格式）
-        if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
-          url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
-        } else {
-          const cleanUrlRule = this.cleanRule(urlItemRule);
-          const val = this.getPath(itemObj as Record<string, unknown>, cleanUrlRule);
-          if (val !== undefined && val !== null) {
-            url = String(val);
-            url = await this.postProcessRuleAsync(urlItemRule, url);
+        // 整段 @js: 章节 URL 规则：result 绑定当前章节对象、baseUrl 绑定目录页
+        // URL，对齐 Android getToc 对每章执行 evalJS 的语义（本书源
+        // ruleToc.chapterUrl 即用 baseUrl.match(/book_id=(\d+)/) 拼内容 API）。
+        // 分卷行（isVolume）规则显式返回空串，此时不得再走通用 fallback，
+        // 否则会把整个章节对象 String() 成 "[object Object]"。
+        const urlItemTrim = urlItemRule.trimStart();
+        let jsTried = false;
+        if (/^@js:/i.test(urlItemTrim) && source) {
+          const jsCode = urlItemTrim.replace(/^@js:/i, '').trim();
+          if (jsCode) {
+            jsTried = true;
+            const chapterJson = typeof item === 'string' ? item : JSON.stringify(item);
+            const ctx: JsEvalContext = {
+              source: source,
+              jsLib: source.jsLib || '',
+              baseUrl: baseUrl,
+              variableBlob: source.variableComment || '',
+              result: chapterJson,
+              src: chapterJson,
+            };
+            let evaluated = '';
+            try {
+              evaluated = await JsExpressionEvaluator.evaluate(jsCode, ctx);
+            } catch (_directError) { /* fall through to compat append */ }
+            if (!evaluated || evaluated === 'null' || evaluated === 'undefined') {
+              try {
+                evaluated = await JsExpressionEvaluator.evaluate(
+                  jsCode + '\n;(typeof result === "string" || typeof result === "number") ? result : "";',
+                  ctx);
+              } catch (_compatError) { /* leave empty */ }
+            }
+            const decoded = decodeJsEvalValue_(evaluated);
+            if (decoded && decoded !== 'null') {
+              url = decoded;
+            }
+          }
+        }
+        if (!url && !jsTried) {
+          // 检查是否是复杂模板（如 method/body/headers JSON 格式）
+          if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
+            url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
+          } else {
+            const cleanUrlRule = this.cleanRule(urlItemRule);
+            const val = this.getPath(itemObj as Record<string, unknown>, cleanUrlRule);
+            if (val !== undefined && val !== null) {
+              url = String(val);
+              url = await this.postProcessRuleAsync(urlItemRule, url);
+            }
           }
         }
         url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
@@ -5700,6 +5797,22 @@ export class SourceExecutor {
       if (!evaluated) return [];
       const parsed = JSON.parse(evaluated) as unknown;
       if (!Array.isArray(parsed)) return [];
+      // 章节列表元素可能是 JSON 字符串（arr.push(JSON.stringify(ch)) 写法），
+      // 先统一解成对象再交给 parseJsonToc 按字段规则提取。
+      const normalized = parsed
+        .map((el: unknown): unknown => {
+          if (typeof el === 'string') {
+            try {
+              const obj = JSON.parse(el) as unknown;
+              return (obj && typeof obj === 'object') ? obj : el;
+            } catch (_s) {
+              return el;
+            }
+          }
+          return el;
+        })
+        .filter((el: unknown): boolean =>
+          el !== null && el !== undefined && typeof el === 'object' && !Array.isArray(el));
       const jsonRules: Record<string, string> = {
         toc: '*',
         tocTitle: rules['tocTitle'] || '',
@@ -5709,7 +5822,7 @@ export class SourceExecutor {
         isPay: rules['isPay'] || '',
         updateTime: rules['updateTime'] || '',
       };
-      return await this.parseJsonToc(parsed as Object, jsonRules, tocUrl);
+      return await this.parseJsonToc(normalized as Object, jsonRules, tocUrl, source);
     }
 
     const parser = getHtmlParser();
