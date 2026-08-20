@@ -5610,38 +5610,43 @@ export class SourceExecutor {
               } catch (_compatError) { /* leave empty */ }
             }
             const decoded = decodeJsEvalValue_(evaluated);
-            if (decoded && decoded !== 'null') {
+            // 只接受可用的 HTTP(S) URL：分卷行（isVolume）规则显式返回空串，
+            // 而兼容兜底可能把 result 输入（整个章节 JSON 串）原样返回，
+            // 必须用协议前缀挡住，否则会把 `https://站点/api/` + JSON 拼成 404 地址。
+            if (decoded && /^(https?:\/\/|\/\/)/i.test(decoded) && decoded !== 'null') {
               url = decoded;
             }
           }
         }
-        if (!url && !jsTried) {
-          // 检查是否是复杂模板（如 method/body/headers JSON 格式）
-          if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
-            url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
-          } else {
-            const cleanUrlRule = this.cleanRule(urlItemRule);
-            const val = this.getPath(itemObj as Record<string, unknown>, cleanUrlRule);
-            if (val !== undefined && val !== null) {
-              url = String(val);
-              url = await this.postProcessRuleAsync(urlItemRule, url);
+        if (!jsTried) {
+          if (!url) {
+            // 检查是否是复杂模板（如 method/body/headers JSON 格式）
+            if (urlItemRule.includes('{\n') || urlItemRule.includes('"method"')) {
+              url = this.resolveTocUrlTemplate(urlItemRule, baseUrl);
+            } else {
+              const cleanUrlRule = this.cleanRule(urlItemRule);
+              const val = this.getPath(itemObj as Record<string, unknown>, cleanUrlRule);
+              if (val !== undefined && val !== null) {
+                url = String(val);
+                url = await this.postProcessRuleAsync(urlItemRule, url);
+              }
             }
           }
-        }
-        url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
-          const v = this.getPath(itemObj as Record<string, unknown>, '$.' + path);
-          return v !== undefined ? String(v) : '';
-        });
-        // ruleTocUrlItem 用裸 JSONPath（如 $.data[*].content_url）取到的是站点的
-        // 相对地址（如 /content?item_id=...），必须按目录页域名补全为绝对 URL，
-        // 否则 Agent 会把它判成非法地址或打不开章节。已绝对/脚本/内部协议跳过。
-        if (!url) {
-          url = String(
-            itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || itemObj['chapter_url'] ||
-            itemObj['content_url'] || itemObj['path'] || itemObj['href'] ||
-            itemObj['id'] || itemObj['chapterId'] || itemObj['chapter_id'] || itemObj['cid'] ||
-            itemObj['item_id'] || ''
-          );
+          url = url.replace(/\{\{\$\.([^}]+)\}\}/g, (_m: string, path: string) => {
+            const v = this.getPath(itemObj as Record<string, unknown>, '$.' + path);
+            return v !== undefined ? String(v) : '';
+          });
+          // ruleTocUrlItem 用裸 JSONPath（如 $.data[*].content_url）取到的是站点的
+          // 相对地址（如 /content?item_id=...），必须按目录页域名补全为绝对 URL，
+          // 否则 Agent 会把它判成非法地址或打不开章节。已绝对/脚本/内部协议跳过。
+          if (!url) {
+            url = String(
+              itemObj['url'] || itemObj['link'] || itemObj['chapterUrl'] || itemObj['chapter_url'] ||
+              itemObj['content_url'] || itemObj['path'] || itemObj['href'] ||
+              itemObj['id'] || itemObj['chapterId'] || itemObj['chapter_id'] || itemObj['cid'] ||
+              itemObj['item_id'] || ''
+            );
+          }
         }
       }
       if (url && !/^https?:\/\//i.test(url) && !/^\/\/|data:|javascript:|\s*@js:/i.test(url) &&

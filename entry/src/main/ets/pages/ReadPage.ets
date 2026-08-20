@@ -652,7 +652,7 @@ struct ReadPage {
 	      }
       this.allChapters_ = chapters;
       this.totalChapters_ = chapters.length;
-      this.currentIndex = this.targetIdx_ >= 0 && this.targetIdx_ < chapters.length ? this.targetIdx_ : 0;
+      this.currentIndex = this.resolveInitialChapterIdx_(this.targetIdx_);
       this.chapters = chapters;
       if (ChapterCache.bookUrl !== this.bookUrl || ChapterCache.chapters.length === 0) {
         ChapterCache.chapters = chapters;
@@ -671,7 +671,7 @@ struct ReadPage {
         }
       } catch (_) { /* ignore */ }
       if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
-        this.currentIndex = this.targetIdx_;
+        this.currentIndex = this.resolveInitialChapterIdx_(this.targetIdx_);
       }
       console.info('[ReadPage] pos: targetIdx_=' + this.targetIdx_ + ' pageIdx=' + this.pageIndex + ' chapters=' + this.allChapters_.length);
       // 打开书时加载一次替换净化规则（书不换则规则集合不变；换源时会重新加载）
@@ -679,7 +679,7 @@ struct ReadPage {
       // 本地进度基准已就绪，再与云端同步（可能改写 targetIdx_/pendingCharPos_）
       await this.syncFromCloud();
       if (this.targetIdx_ >= 0 && this.targetIdx_ < this.allChapters_.length) {
-        this.currentIndex = this.targetIdx_;
+        this.currentIndex = this.resolveInitialChapterIdx_(this.targetIdx_);
       }
       await this.loadChapter(this.currentIndex);
     } catch (e) {
@@ -714,14 +714,36 @@ struct ReadPage {
    * @param forceFetch 强制走网络/文件，不用预读缓存
    * @param fromToc 用户从目录明确点选：不自动跳过空章，避免跳到错误章节
    */
+  /** 卷标题行（isVolume）不是可读章节：回退到卷内第一章（目标越界时回到第 0 章）。 */
+  private resolveInitialChapterIdx_(targetIdx: number): number {
+    const chapters = this.allChapters_;
+    if (!chapters || chapters.length === 0) return -1;
+    let idx = (targetIdx >= 0 && targetIdx < chapters.length) ? targetIdx : 0;
+    if (idx >= chapters.length) idx = 0;
+    while (idx < chapters.length && chapters[idx].isVolume) idx++;
+    if (idx >= chapters.length) idx = 0;
+    while (idx < chapters.length && chapters[idx].isVolume) idx++;
+    return idx < chapters.length ? idx : 0;
+  }
+
   private async loadChapter(idx: number, forceFetch: boolean = false, fromToc: boolean = false): Promise<void> {
     if (idx < 0 || idx >= this.allChapters_.length) return;
+    const ch = this.allChapters_[idx];
+    // 卷标题行不可读：跳到卷内第一章（避免把卷 JSON 当正文 URL 请求 404）
+    if (ch.isVolume) {
+      let nextIdx = idx + 1;
+      while (nextIdx < this.allChapters_.length && this.allChapters_[nextIdx].isVolume) nextIdx++;
+      if (nextIdx < this.allChapters_.length) {
+        console.info('[ReadPage] Skipping volume marker at', idx, '->', nextIdx, '(', this.allChapters_[nextIdx]?.title, ')');
+        return this.loadChapter(nextIdx, forceFetch, fromToc);
+      }
+      return;
+    }
     const rebuildScroll = this.flowMode === 'scrolled';
     if (rebuildScroll && !this.pendingScrollPos_) {
       this.pendingScrollPos_ = 'start';
     }
     const previousIndex = this.currentIndex;
-    const ch = this.allChapters_[idx];
     // 先试缓存/内存：命中则原地换文，不卸 Scroll、不进全屏 loading
     // 目录跳转时，短缓存可能是旧的空内容，仍强制从文件重读
     if (!forceFetch && !fromToc) {
