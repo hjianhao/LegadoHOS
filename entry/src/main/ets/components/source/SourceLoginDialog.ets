@@ -279,10 +279,15 @@ export struct SourceLoginDialog {
               .margin({ bottom: 10 })
           }
 
-          Row() {
+          // 登录按钮按 loginUi 配置竖排、每个按钮独占一行全宽：
+          // 原先塞进同一行 Row 且每个按钮 layoutWeight(1)，8 个按钮被压到约
+          // 60px 宽，长名称（如「💬 评论: 开启/关闭」）被省略成空白，
+          // 用户看到的是一排没有文字的蓝色方块。
+          Column({ space: 8 }) {
             ForEach(this.buttonRows, (row: LoginUiRow) => {
-              Button(this.busy ? '执行中...' : row.name).fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
-                .height(44).layoutWeight(1).margin({ right: 8 })
+              Button(this.busy ? '执行中...' : row.name)
+                .fontSize(14).fontColor(ThemeColors.onPrimary(this.isDark))
+                .height(44).width('100%')
                 .backgroundColor(ThemeColors.primary(this.isDark)).borderRadius(8)
                 .enabled(!this.busy)
                 .onClick(() => { void this.runLoginAction(row); })
