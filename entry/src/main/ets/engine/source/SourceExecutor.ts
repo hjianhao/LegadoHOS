@@ -1118,13 +1118,19 @@ export class SourceExecutor {
       const rows = await dao.getSourcesByUrl(source.sourceUrl || '');
       if (rows && rows.length > 0) {
         const fresh = rows[0];
-        if (fresh && typeof fresh.variableComment === 'string' &&
-          fresh.variableComment !== (source.variableComment || '')) {
+        const freshVar = (fresh && typeof fresh.variableComment === 'string') ? fresh.variableComment : '';
+        // 无论是否变化都记录，便于排查登录面板/动态线路修改的变量是否回流成功
+        console.info('[SrcEx] source variable check for', source.sourceName,
+          'mem=' + JSON.stringify(source.variableComment || '') +
+          ' db=' + JSON.stringify(freshVar));
+        if (freshVar !== (source.variableComment || '')) {
           console.info('[SrcEx] Refreshed source variable from DB for', source.sourceName,
             'old=' + JSON.stringify(source.variableComment || '').substring(0, 40) +
-            ' new=' + JSON.stringify(fresh.variableComment).substring(0, 40));
-          source.variableComment = fresh.variableComment;
+            ' new=' + JSON.stringify(freshVar).substring(0, 40));
+          source.variableComment = freshVar;
         }
+      } else {
+        console.warn('[SrcEx] source variable check: no DB record for', source.sourceName);
       }
     } catch (e) {
       console.warn('[SrcEx] refreshSourceVariablesFromDb failed for', source.sourceName,
