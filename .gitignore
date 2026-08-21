@@ -33,7 +33,7 @@
 *.log
 /full_dump_hos_*.json
 /simple_dump_hos_*.txt
-/screenshot
+/screenshot/
 
 # Codex workspace config
 /.codex
