@@ -3168,6 +3168,9 @@ export class SourceExecutor {
             // 注入 source（含 header 字段），java.ajax 默认请求头依赖它
             source: source,
             jsLib: source.jsLib || '',
+            // 书源变量（评论开关 CMTOFF/getVariable、模式等）必须传入，
+            // 否则正文规则里的 source.getVariable() 读到空串，开关永不生效
+            variableBlob: source.variableComment || '',
             // 对齐 Android：正文规则 JS 中的 baseUrl 是当前章节页 URL（而非源站根域）。
             // 得奇等源靠 baseUrl 匹配出 aid/cid 拼 ajax 接口，给根域会导致正则不命中、
             // 整段取数逻辑被静默跳过。
@@ -4464,6 +4467,7 @@ export class SourceExecutor {
                 baseUrl: baseUrl,
                 source: source,
                 jsLib: source.jsLib || '',
+                variableBlob: source.variableComment || '',
               } as unknown as JsEvalContext;
               // 诊断日志：整段 <js> 规则的元素桥注入链路（排查可乐小说等
               // result.attr('onclick') 书源用，问题解决后可移除）。
@@ -5383,6 +5387,7 @@ export class SourceExecutor {
                 baseUrl: '',
                 source: source,
                 jsLib: source?.jsLib || '',
+                variableBlob: source?.variableComment || '',
               } as unknown as JsEvalContext;
               const evalResult = JsExpressionEvaluator.evaluateSync(jsCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
