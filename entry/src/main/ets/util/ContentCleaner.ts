@@ -1,3 +1,5 @@
+import { HtmlEntityUtil } from './HtmlEntityUtil';
+
 /**
  * 内容清洗工具
  *
@@ -19,10 +21,10 @@ export class ContentCleaner {
   /** 简单版 HTML 格式化：移除所有标签，整理空白 */
   static formatHtml(html: string): string {
     if (!html) return '';
-    return this.removeNavText(html
+    const formatted = this.removeNavText(html
       .replace(/&nbsp;/g, ' ')
       .replace(/&ensp;|&emsp;/g, ' ')
-      .replace(/&thinsp;|&zwnj;|&zwj;|\u2009|\u200C|\u200D/g, '')
+      .replace(/&thinsp;|&zwnj;|&zwj;|[\u2009\u200C\u200D]/g, '')
       .replace(/<\/?(?:div|p|br|hr|h\d|article|dd|dl)[^>]*>/gi, '\n')
       .replace(/<!--[^>]*-->/g, '')
       .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -32,6 +34,9 @@ export class ContentCleaner {
       .replace(/^[\n\s]+/, '　　')
       .replace(/[\n\s]+$/, '')
       .trim());
+    // 与 Android Legado 的 HtmlFormatter + unescapeHtml4 保持一致：
+    // 标签清洗完成后再解码，避免转义的 <tag> 被误当成真实 HTML 标签。
+    return HtmlEntityUtil.decode(formatted);
   }
 
   /** 保留 <img> 标签的 HTML 格式化 */
@@ -40,7 +45,7 @@ export class ContentCleaner {
     let s = html
       .replace(/&nbsp;/g, ' ')
       .replace(/&ensp;|&emsp;/g, ' ')
-      .replace(/&thinsp;|&zwnj;|&zwj;|\u2009|\u200C|\u200D/g, '')
+      .replace(/&thinsp;|&zwnj;|&zwj;|[\u2009\u200C\u200D]/g, '')
       .replace(/<\/?(?:div|p|br|hr|h\d|article|dd|dl)[^>]*>/gi, '\n')
       .replace(/<!--[^>]*-->/g, '')
       .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -82,7 +87,7 @@ export class ContentCleaner {
           return match.replace(url, baseOrigin + baseDir + url);
         });
     }
-    return this.removeNavText(s);
+    return HtmlEntityUtil.decode(this.removeNavText(s));
   }
 
   /**

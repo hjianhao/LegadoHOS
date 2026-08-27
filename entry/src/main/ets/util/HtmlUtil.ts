@@ -1,3 +1,5 @@
+import { HtmlEntityUtil } from './HtmlEntityUtil';
+
 /**
  * HTML 工具
  * 提供文本净化、HTML 标签剥离等能力
@@ -74,21 +76,9 @@ export class HtmlUtil {
     if (!html) return '';
     let t = html;
 
-    // 先解码 HTML 实体（转义的 &lt;style&gt; 等必须先解码才能被识别）
-    t = t
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&ensp;/g, ' ')
-      .replace(/&emsp;/g, ' ')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&#x27;/g, "'")
-      .replace(/&#x2F;/g, '/')
-      .replace(/&#\d+;/g, (m: string): string =>
-        String.fromCharCode(parseInt(m.substring(2, m.length - 1)))
-      );
+    // 先解码 HTML 实体（转义的 &lt;style&gt; 等必须先解码才能被识别）。
+    // 使用集中维护的命名实体表，避免 &ldquo;/&rdquo; 等 HTML4 实体漏进正文。
+    t = HtmlEntityUtil.decode(t);
 
 	    // 移除 <style>、<script>、<title>（不应出现在正文中）
 	    t = t.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
