@@ -1223,6 +1223,7 @@ export struct SearchPage {
       name: item.name, author: item.author, coverUrl: item.coverUrl,
       noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
       introduce: item.introduce || '', kind: item.kind || '',
+      lastUpdateTime: item.lastUpdateTime || '',
       sourceCount: item.sourceCount, sourceOrigins: JSON.stringify(item.sourceOrigins || []),
       sourceOriginUrls: JSON.stringify(item.sourceOriginUrls || []),
       sourceNoteUrls: JSON.stringify(item.sourceNoteUrls || []),
@@ -2115,6 +2116,13 @@ export struct SearchPage {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1)
           }
+          if (item.lastUpdateTime) {
+            Text(' · 更新: ' + item.lastUpdateTime)
+              .fontSize(12)
+              .fontColor(this.subTextColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
         }
         .width('100%')
         .margin({ top: 3 })
@@ -2207,6 +2215,24 @@ export struct SearchPage {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width(96)
         .margin({ top: 2 })
+      if (item.kind) {
+        Text(this.splitKind(item.kind).join(' · '))
+          .fontSize(9)
+          .fontColor(this.subTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width(96)
+          .margin({ top: 2 })
+      }
+      if (item.lastUpdateTime) {
+        Text('更新 ' + item.lastUpdateTime)
+          .fontSize(9)
+          .fontColor(this.subTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width(96)
+          .margin({ top: 2 })
+      }
     }
     .width(108)
     .margin({ right: 8 })
@@ -2785,6 +2811,14 @@ export struct SearchPage {
               .margin({ top: 8 })
             if (this.previewItem.latestChapterTitle) {
               Text('最新: ' + this.previewItem.latestChapterTitle)
+                .fontSize(12)
+                .fontColor(this.subTextColor())
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 6 })
+            }
+            if (this.previewItem.lastUpdateTime) {
+              Text('更新: ' + this.previewItem.lastUpdateTime)
                 .fontSize(12)
                 .fontColor(this.subTextColor())
                 .maxLines(1)

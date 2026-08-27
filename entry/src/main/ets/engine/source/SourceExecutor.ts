@@ -4431,8 +4431,10 @@ export class SourceExecutor {
     const fullNameRule = isAiSource
       ? (aiTitleAttributeRule(noteUrlRule) || aiTitleAttributeRule(nameRule)) : '';
 
-    // 编译 || && 后的子规则
-    const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
+    // 编译 || && 后的子规则。
+    // 搜索分类在 Android Legado 中使用 getStringList，必须保留同一张卡片
+    // 中所有匹配元素（例如话本小说的多个标签）；其他字段仍取首个元素。
+    const compileFieldRule = (rule: string, collectAll: boolean = false): ((item: HtmlElement) => string) => {
       if (!rule) return (_item: HtmlElement): string => '';
       const { rules, connector } = splitConnectorRules(rule.trim());
       const compileOne = (rawRule: string): ((item: HtmlElement) => string) => {
@@ -4448,7 +4450,11 @@ export class SourceExecutor {
         const cssRule = hashIndex >= 0 ? cssPart.substring(0, hashIndex).trim() : cssPart;
         return (item: HtmlElement): string => {
           // 先执行 CSS 提取
-          let result = processPutGet(cssRule, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+          let result = processPutGet(cssRule, (subRule: string): string => {
+            const normalized = this.normalizeCssRule(subRule);
+            if (!collectAll) return parser.extractAttr(item, normalized);
+            return parser.extractAttrAll(item, normalized).join(',');
+          });
           // 如果有 @js: 后处理，执行 JS
           if (jsCode) {
             try {
@@ -4457,7 +4463,11 @@ export class SourceExecutor {
               // 静态化为提取结果（如卡片 onclick 属性），其余 JS 逻辑照常执行
               const processedCode = substituteJavaGetElementCall_(
                 substituteJavaGetStringCall_(jsCode,
-                  (rule: string): string => parser.extractAttr(item, this.normalizeCssRule(rule))),
+                  (rule: string): string => {
+                    const normalized = this.normalizeCssRule(rule);
+                    if (!collectAll) return parser.extractAttr(item, normalized);
+                    return parser.extractAttrAll(item, normalized).join(',');
+                  }),
                 parser, doc, item);
               const ctx: JsEvalContext = {
                 // 整段 <js> 规则（无 CSS 前缀）时，Android Legado 的 result 是
@@ -4520,7 +4530,7 @@ export class SourceExecutor {
     const getAuthor = compileFieldRule(authorRule);
     const getCover = compileFieldRule(coverRule);
     const getNoteUrl = compileFieldRule(noteUrlRule);
-    const getKind = compileFieldRule(kindRule);
+    const getKind = compileFieldRule(kindRule, true);
     const getWordCount = compileFieldRule(wordCountRule);
     const getIntro = compileFieldRule(introRule);
     const getLastChapter = compileFieldRule(lastChapterRule);

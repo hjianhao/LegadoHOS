@@ -118,6 +118,16 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
       if ((r.introduce || '').length > (existing.introduce || '').length) {
         existing.introduce = r.introduce;
       }
+      // 分页/多源合并时不能丢掉后续源提供的分类、字数和更新时间。
+      if (r.kind && !existing.kind) {
+        existing.kind = r.kind;
+      }
+      if (r.wordCount && !existing.wordCount) {
+        existing.wordCount = r.wordCount;
+      }
+      if (r.lastUpdateTime && !existing.lastUpdateTime) {
+        existing.lastUpdateTime = r.lastUpdateTime;
+      }
       if (r.latestChapterTitle && !existing.latestChapterTitle) {
         existing.latestChapterTitle = r.latestChapterTitle;
       }
