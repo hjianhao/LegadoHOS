@@ -1220,6 +1220,20 @@ export class SourceExecutor {
     }
   }
 
+  /**
+   * 判断搜索地址是否依赖书源 loginUrl 提供的动态 url 变量。
+   *
+   * 只有同时满足「loginUrl 定义 url()」和「搜索规则读取 url 变量」时，
+   * 404/410 才应触发换线；普通书源的固定 404 不应被额外请求登录脚本。
+   */
+  private hasDynamicSearchLineRule_(source: BookSource): boolean {
+    if (!source || !source.loginUrl || !/function\s+url\s*\(/.test(source.loginUrl)) {
+      return false;
+    }
+    const searchRule = source.ruleSearchUrl || '';
+    return /\b(?:get|getVariable)\s*\(\s*['"]url['"]\s*\)/i.test(searchRule);
+  }
+
   private async searchSingle(
     keyword: string, source: BookSource, page: number = 1,
     allowLineRetry: boolean = true, throwOnFailure: boolean = false
@@ -1668,10 +1682,17 @@ export class SourceExecutor {
       return httpResults;
     } catch (err) {
       const msg = (err as Error).message;
-      if (allowLineRetry && /(SSL connect error|Internal error|connection reset|1007900035)/i.test(msg)) {
+      const transientLineError = /(SSL connect error|Internal error|connection reset|1007900035)/i.test(msg || '');
+      // 禁漫天堂等动态线路书源会把旧线路保存在 variableComment 中；线路
+      // 失效时站点直接返回 404/410，而不是网络异常。此时执行书源自带的
+      // url() 动作刷新线路并重试一次，避免把空结果误判成规则解析问题。
+      const staleDynamicLineError = this.hasDynamicSearchLineRule_(source) &&
+        /\bHTTP\s+(?:404|410)\b/i.test(msg || '');
+      if (allowLineRetry && (transientLineError || staleDynamicLineError)) {
         const switched = await this.switchDynamicSourceLine(source, baseUrl);
         if (switched) {
-          console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName);
+          console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName,
+            staleDynamicLineError ? '(stale line response)' : '');
           return await this.searchSingle(keyword, source, page, false, throwOnFailure);
         }
       }
