@@ -110,6 +110,20 @@ interface WorkerEvalResult {
 
 export class JsExpressionEvaluator {
   /**
+   * 阻塞型脚本的静态识别（与 evaluate() 的 requiresWorker 判定同一语义）。
+   * 命中意味着该脚本在主线程 QuickJS 中同步执行时，可能触发 napi_bridge 的
+   * 同步等待轮询（ajax/http 最长 30s、cookie 5s、验证码 120s），造成
+   * THREAD_BLOCK_6S 主线程冻结——必须派发到 Worker。
+   */
+  private static readonly BLOCKING_API_RE_: RegExp =
+    /java\.(ajax|post|connect)\s*\(|java\.get\s*\([^,\)]*,|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(|(?:java\.)?getVerificationCode\s*\(|__captchaOp\s*\(/;
+
+  /** 脚本是否包含可能在主线程同步阻塞的 API 调用。 */
+  static containsBlockingApiCall(script: string): boolean {
+    return JsExpressionEvaluator.BLOCKING_API_RE_.test(script);
+  }
+
+  /**
    * 验证码输入回调：Worker 请求时调用，返回 Promise<string> 等待用户输入。
    * image 为通过应用 HTTP 栈（带 Cookie）抓取的验证码图片，
    * 保证取图会话与后续提交会话一致；抓取失败时为 null，调用方可退回 URL 加载。
@@ -474,7 +488,7 @@ export class JsExpressionEvaluator {
     const fullScript = `${setupCode}\n${safeCode}`;
     // java.get() 无第二参数时是书源局部变量读取；带请求参数时是同步网络调用，
     // 必须进入 Worker，避免主线程求值拿不到异步 HTTP 结果或被慢请求阻塞。
-    const requiresWorker = /java\.(ajax|post|connect)\s*\(|java\.get\s*\([^,\)]*,|cookie\.(getCookie|setCookie|replaceCookie|removeCookie)\s*\(|(?:java\.)?getVerificationCode\s*\(|__captchaOp\s*\(/.test(fullScript);
+    const requiresWorker = JsExpressionEvaluator.containsBlockingApiCall(fullScript);
 
     // 原生主线程引擎可用时，普通表达式直接执行；Worker 即使已经创建也不抢占它们。
     if (!requiresWorker && isNativeLoaded()) {
@@ -523,6 +537,44 @@ export class JsExpressionEvaluator {
   }
 
   /**
+   * 字段级脚本求值：一律进入 Worker 队列执行，绝不使用主线程 QuickJS 引擎。
+   *
+   * 书源作者编写的字段 <js>/@js: 是任意代码，可能内联 java.ajax/cookie 等
+   * 同步阻塞调用——搜索字段规则曾在主引擎同步执行此类脚本时被桥接层的
+   * 30s 同步轮询占住主线程，触发 THREAD_BLOCK_6S 应用冻结。此入口保证
+   * 无论脚本内容如何，主线程只做消息等待，执行与阻塞全部发生在 Worker。
+   */
+  static async evaluateFieldScript(code: string, ctx: JsEvalContext): Promise<string> {
+    if (!code || !code.trim()) return '';
+    if (ctx.source) JsExpressionEvaluator.applyCachedLoginHeader(ctx.source);
+    const setupCode = JsExpressionEvaluator.buildContextScript(ctx, false);
+    const safeCode = normalizeSourceScript(code);
+    const fullWorkerScript = `${setupCode}\n${safeCode}`;
+    let jsLibStr = ctx.jsLib || '';
+    if (!jsLibStr && ctx.source) {
+      const src = ctx.source as Record<string, unknown>;
+      jsLibStr = (src.jsLib as string) || '';
+    }
+    jsLibStr = normalizeSourceScript(jsLibStr);
+    const srcObj = ctx.source as Record<string, unknown> | undefined;
+    const jsLibKey = jsLibStr && jsLibStr.trim()
+      ? String(srcObj?.['sourceUrl'] || srcObj?.['bookSourceUrl'] || ctx.baseUrl || '') : '';
+    const jsLibChanged = jsLibKey !== JsExpressionEvaluator.lastWorkerJsLibKey_;
+    // 含验证码输入的脚本要留给用户操作时间（__captchaOp 阻塞上限 120s）
+    const evalTimeout = /getVerificationCode|__captchaOp/.test(fullWorkerScript) ? 125000 : 65000;
+    try {
+      const workerResult = await this.enqueueWorkerEvaluation(evalTimeout, fullWorkerScript,
+        jsLibKey, jsLibChanged ? (jsLibStr || '') : undefined);
+      this.applyLoginHeader_(ctx, unwrapJsResult(workerResult.loginHeader).trim());
+      return unwrapJsResult(workerResult.value);
+    } catch (e) {
+      console.warn('[JsEval] Field worker eval failed:', e?.toString()?.substring(0, 100),
+        'code=', code.substring(0, 80));
+      return '';
+    }
+  }
+
+  /**
    * 同步求值（用于无法 await 的上下文）
    * 仅用于简单表达式，不会触发 java.ajax()
    */
@@ -540,6 +592,14 @@ export class JsExpressionEvaluator {
     const setupCode = JsExpressionEvaluator.buildContextScript(ctx);
     const safeCode = normalizeSourceScript(code);
     const fullScript = `${setupCode}\n${safeCode}`;
+    // 兜底拦截：字段级脚本的正式路径已迁移到 evaluateFieldScript（Worker）。
+    // 若仍有调用方在主线程同步求值中携带阻塞 API，宁可返回空值，也不允许
+    // napi_bridge 的 30s/120s 同步轮询占住主线程触发 THREAD_BLOCK_6S。
+    if (JsExpressionEvaluator.containsBlockingApiCall(fullScript)) {
+      console.warn('[JsEval] evaluateSync refused blocking-API script (should use worker path):',
+        code.substring(0, 80));
+      return '';
+    }
     try {
       const result = globalScriptEngine.evaluateJsSync(fullScript);
       // 原生桥会把 JS 异常作为普通字符串返回（如 "ReferenceError: cover is not defined"），
