@@ -2574,7 +2574,7 @@
     },
     "ruleContent": {
       "contentUrl": "",
-      "content": ".readcon p@textNodes",
+      "content": ".chapterbo p@textNodes",
       "subContent": "",
       "title": "h2@text",
       "nextContentUrl": "",
