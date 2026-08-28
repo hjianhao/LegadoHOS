@@ -28,8 +28,12 @@ export struct CloudflareDialog {
   @State isDesktopMode: boolean = false;
   private loginPanelOpened_: boolean = false;
   private prefillTimer_: number = -1;
-  private prefillApplied_: boolean = false;
-  private prefillSubmitted_: boolean = false;
+  /** ArkUI 重建组件时也要保留预填状态，避免 onPageEnd 重复派发输入事件。 */
+  @State private prefillApplied_: boolean = false;
+  @State private prefillSubmitted_: boolean = false;
+  private prefillInFlight_: boolean = false;
+  /** 同一弹窗内跨页面重载去重；新弹窗会生成新的 key。 */
+  private prefillSessionKey_: string = '__legado_prefill_' + Date.now().toString();
 
   aboutToAppear(): void {
     // 不再强制桌面模式：部分站点的验证码只有移动版页面能加载，桌面版
@@ -128,7 +132,7 @@ export struct CloudflareDialog {
             .onPageEnd(() => {
               this.isLoading = false;
               // 只在首次搜索页同步输入框。提交后结果页也可能保留搜索
-              // 表单，不能再次派发 keyup 导致站点重复提交/重新限频。
+              // 表单，不能再次派发输入事件导致站点重复提交/重新限频。
               if (!this.prefillApplied_) {
                 void this.prefillRequest_();
                 this.schedulePrefill_();
@@ -234,16 +238,30 @@ export struct CloudflareDialog {
   /**
    * 交互验证打开的是 GET 页面，而触发验证的请求可能是 POST；如果不把
    * 原始表单体回填，用户看到的搜索框就是空的，点击“验证完成”也只会
-   * 返回空搜索页。搜索表单回填后自动提交，等价于用户重新输入并点击搜索；
-   * WAF 页面没有匹配的搜索字段时不会提交，仍由用户手动完成验证。
+   * 返回空搜索页。只有明确的 searchSubmit 用途才自动提交。Cloudflare
+   * challenge 的原始 POST 会在验证完成后由 SourceExecutor 重放；在验证
+   * WebView 中提交表单会再次触发 WAF/验证码，山丽文学网尤其会因 keyup
+   * 事件形成提交循环。
    */
   private async prefillRequest_(): Promise<void> {
     const body = (this.requestBody || '').trim();
-    if (!body) return;
+    if (!body || this.prefillInFlight_) return;
+    this.prefillInFlight_ = true;
     const bodyLiteral = JSON.stringify(body) || '""';
+    const allowSubmitLiteral = WebViewFetcher.interactivePurpose === 'searchSubmit' ? 'true' : 'false';
+    const sessionKeyLiteral = JSON.stringify(this.prefillSessionKey_) || '"__legado_prefill"';
     try {
-      const result = await this.webController.runJavaScript(`(function(raw) {
+      const result = await this.webController.runJavaScript(`(function(raw, allowSubmit, markerKey) {
         try {
+          // 页面提交后会完整重载，普通 JS 变量会丢失；sessionStorage 在同源
+          // 重载间保持不变，用它保证同一弹窗不会再次回填/提交同一请求。
+          var markerStore = null;
+          try {
+            markerStore = window.sessionStorage;
+            if (markerStore && markerKey && markerStore.getItem(markerKey) === '1') {
+              return '0:0:0';
+            }
+          } catch (e) {}
           var fields = document.querySelectorAll('input,textarea,select');
           var pairs = String(raw || '').split('&');
           var values = [];
@@ -256,8 +274,9 @@ export struct CloudflareDialog {
             catch (e) { return String(value || ''); }
           };
           // 不能只给 element.value 赋值：Vue/React 及不少老站点的搜索脚本
-          // 会维护自己的状态，必须通过原生 setter + 输入/键盘事件同步状态，
-          // 才等价于用户重新输入同一个关键词。
+          // 会维护自己的状态，使用原生 setter + input/change 事件同步状态。
+          // 不派发 keydown/keyup：老站点常把 keyup 绑定为立即搜索，会造成
+          // 验证页重载和验证码弹窗循环。
           var setNativeValue = function(element, value) {
             try {
               var proto = element instanceof HTMLTextAreaElement
@@ -270,18 +289,15 @@ export struct CloudflareDialog {
             try { element.defaultValue = value; } catch (e) {}
           };
           var notifyInput = function(element) {
-            var eventNames = ['input', 'change', 'keydown', 'keyup'];
+            // challenge 只需要把关键词显示给用户，不能触发站点的搜索监听器；
+            // 否则某些老站会在 input/change 事件中再次提交。searchSubmit
+            // 才需要同步框架状态并自动提交表单。
+            if (!allowSubmit) return;
+            var eventNames = ['input', 'change'];
             for (var eIndex = 0; eIndex < eventNames.length; eIndex++) {
               var eventName = eventNames[eIndex];
               try {
-                var event;
-                if (eventName === 'keydown' || eventName === 'keyup') {
-                  event = new KeyboardEvent(eventName, {
-                    bubbles: true, cancelable: true, key: 'Unidentified', code: '', keyCode: 0, which: 0
-                  });
-                } else {
-                  event = new Event(eventName, { bubbles: true, cancelable: true });
-                }
+                var event = new Event(eventName, { bubbles: true, cancelable: true });
                 element.dispatchEvent(event);
                 dispatched++;
               } catch (e) {}
@@ -330,10 +346,15 @@ export struct CloudflareDialog {
             }
           }
           var submitted = 0;
-          if (filled > 0 && values.length > 0 && explicitSearchField) {
+          if (filled > 0 && markerStore && markerKey) {
+            try { markerStore.setItem(markerKey, '1'); } catch (e) {}
+          }
+          // challenge 用途只回填，不提交；验证通过后调用方会用原始 POST
+          // body 重放。只有 webView=true 的 searchSubmit 流程允许自动提交。
+          if (allowSubmit && filled > 0 && values.length > 0 && explicitSearchField) {
             try {
               // 只有明确找到请求体中的搜索字段，或控件本身明确标注为搜索框，
-              // 才自动提交；挑战页通常没有这些特征，因此不会误提交验证码表单。
+              // 才自动提交，避免误提交验证码表单。
               if (submitField && submitField.form) {
                 var submitForm = submitField.form;
                 if (typeof submitForm.requestSubmit === 'function') {
@@ -351,11 +372,14 @@ export struct CloudflareDialog {
           }
           return String(filled) + ':' + String(dispatched) + ':' + String(submitted);
         } catch (e) { return '0'; }
-      })(${bodyLiteral})`);
+      })(${bodyLiteral}, ${allowSubmitLiteral}, ${sessionKeyLiteral})`);
       const resultText = String(result || '0');
       const filledText = resultText.split(':')[0];
       const submittedText = resultText.split(':')[2] || '0';
-      if (Number(filledText) > 0) this.prefillApplied_ = true;
+      if (Number(filledText) > 0) {
+        this.prefillApplied_ = true;
+        this.clearPrefillTimer_();
+      }
       if (Number(submittedText) > 0) {
         this.prefillSubmitted_ = true;
         this.clearPrefillTimer_();
@@ -363,13 +387,15 @@ export struct CloudflareDialog {
       console.info('[CloudflareDialog] POST 搜索关键词预填结果=' + resultText);
     } catch (e) {
       console.warn('[CloudflareDialog] 预填 POST 搜索关键词失败：', (e as Error).message);
+    } finally {
+      this.prefillInFlight_ = false;
     }
   }
 
   /** 页面脚本可能在 onPageEnd 之后才绑定搜索监听器，延迟再同步一次。 */
   private schedulePrefill_(): void {
     this.clearPrefillTimer_();
-    if (!(this.requestBody || '').trim() || this.prefillSubmitted_) return;
+    if (!(this.requestBody || '').trim() || this.prefillApplied_ || this.prefillSubmitted_) return;
     this.prefillTimer_ = setTimeout((): void => {
       this.prefillTimer_ = -1;
       void this.prefillRequest_();
