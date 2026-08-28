@@ -1679,7 +1679,14 @@ export class SourceExecutor {
                   retriedPost = await NetUtil.httpPost(
                     finalUrl, finalBody, requestHeaders, requestTimeout);
                 }
-                if (retriedPost && !WebViewFetcher.isInteractiveChallengeHtml(retriedPost)) {
+                // Cloudflare 放行后，原始 POST 可能先返回站点自己的图片验证码页
+                // （山丽文学网用 searchcode.php 门禁）。该页面同时会被
+                // isInteractiveChallengeHtml 识别为挑战壳，但必须继续交给
+                // parseResponse 执行书源的 java.getVerificationCode + java.ajax
+                // 规则；只跳过仍是 Cloudflare/WAF 挑战的响应。
+                const retriedPostIsChallenge = WebViewFetcher.isInteractiveChallengeHtml(retriedPost);
+                const retriedPostIsImageCaptcha = WebViewFetcher.isLikelyImageCaptchaPage(retriedPost);
+                if (retriedPost && (!retriedPostIsChallenge || retriedPostIsImageCaptcha)) {
                   const retriedResults = await this.parseResponse(
                     this.tryHexDecode_(retriedPost) || retriedPost, source, baseUrl, 0, finalUrl);
                   if (retriedResults.length > 0) {
