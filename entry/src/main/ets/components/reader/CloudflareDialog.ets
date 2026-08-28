@@ -3,7 +3,7 @@
  *
  * 当请求被反爬保护拦截时，弹出此窗口让用户手动验证或查看错误。
  * - Cloudflare/JS 挑战：用户手动点击验证，通过后提取页面 HTML
- * - 403/404 等硬错误：显示错误信息，自动关闭
+ * - 真实硬错误：保留页面并显示状态，用户可重试或关闭
  */
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../../theme/ThemeColors';

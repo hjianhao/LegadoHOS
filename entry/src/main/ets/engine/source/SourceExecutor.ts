@@ -1773,6 +1773,35 @@ export class SourceExecutor {
             console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
             const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
               finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
+            // 外层 catch 代表原始 HTTP 请求直接以 403/5xx 抛错。交互 WebView
+            // 完成 Cloudflare 后，不能只解析它打开的 GET 页面；POST 搜索必须
+            // 用原始 body 重放，否则山丽会再次返回验证页或空搜索页。
+            if (finalMethod === 'POST' && finalBody) {
+              try {
+                const replayHeaders = SourceNetworkPolicy.headers(source, headers);
+                if (!replayHeaders['Content-Type'] && !replayHeaders['content-type']) {
+                  const bodyStr = finalBody.trim();
+                  replayHeaders['Content-Type'] = bodyStr.startsWith('{') || bodyStr.startsWith('[')
+                    ? 'application/json' : 'application/x-www-form-urlencoded';
+                }
+                const retriedPost = await NetUtil.httpPost(
+                  finalUrl, finalBody, replayHeaders, requestTimeout);
+                const retriedPostIsChallenge = WebViewFetcher.isInteractiveChallengeHtml(retriedPost);
+                const retriedPostIsImageCaptcha = WebViewFetcher.isLikelyImageCaptchaPage(retriedPost);
+                if (retriedPost && (!retriedPostIsChallenge || retriedPostIsImageCaptcha)) {
+                  const retriedResults = await this.parseResponse(
+                    this.tryHexDecode_(retriedPost) || retriedPost, source, baseUrl, 0, finalUrl);
+                  if (retriedResults.length > 0) {
+                    console.info('[SrcEx] Catch 分支交互验证后 POST 重放得到',
+                      retriedResults.length, 'results for', source.sourceName);
+                    return retriedResults;
+                  }
+                }
+              } catch (retryError) {
+                console.warn('[SrcEx] Catch 分支交互验证后 POST 重放失败：',
+                  (retryError as Error).message || String(retryError));
+              }
+            }
             if (interactiveHtml && interactiveHtml.length > 200) {
               console.info('[SrcEx] Interactive WebView got', interactiveHtml.length, 'bytes for', source.sourceName);
               return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
