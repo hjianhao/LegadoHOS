@@ -275,7 +275,12 @@ export class ReadAloudEngine {
                 onComplete: (reqId: string) => {
                   this.buildSystemChunk_(reqId);
                 },
-                onStop: () => {},
+                // 系统生命周期（例如切后台）也可能主动停止一次 speak。
+                // 如果忽略该回调，请求会一直留在 systemChunkPcm_，synthCount_ 也不会归零，
+                // 后续预合成会永久停在“有任务进行中”的状态。
+                onStop: (reqId: string) => {
+                  this.handleSystemTtsStop_(reqId);
+                },
                 onError: (reqId: string, code: number, errorMessage: string) => {
                   this.handleSystemTtsError_(reqId, code, errorMessage);
                 },
@@ -706,6 +711,41 @@ export class ReadAloudEngine {
     const msg = '系统朗读合成失败: ' + code + (errorMessage ? ' ' + errorMessage : '');
     if (this.hasPlayableAudio_()) {
       console.warn('[Aloud] ' + msg);
+      this.speakNext_();
+    } else {
+      this.callback_.onError?.(msg);
+    }
+  }
+
+  /** 系统 TTS 被生命周期/系统服务停止时，清理请求并在播放中补发一次。 */
+  private handleSystemTtsStop_(requestId: string): void {
+    const text = this.systemChunkText_.get(requestId);
+    const chunkOffset = this.systemChunkOffset_.get(requestId);
+    const retryCount = this.systemChunkRetry_.get(requestId) ?? 0;
+    if (text === undefined || chunkOffset === undefined) return;
+
+    const sessionId = this.playbackSessionId_;
+    this.cleanupSystemRequest_(requestId);
+    if (this.state_ !== AloudState.PLAYING || sessionId !== this.playbackSessionId_) return;
+
+    if (retryCount < 1) {
+      // 不在 TTS 原生回调栈内立即再次 speak，避免与 stop 的 IPC 收尾交错。
+      this.synthCount_++;
+      this.synthPending_ = true;
+      setTimeout((): void => {
+        if (sessionId !== this.playbackSessionId_ || this.state_ !== AloudState.PLAYING) {
+          this.synthCount_ = Math.max(0, this.synthCount_ - 1);
+          this.synthPending_ = this.synthCount_ > 0;
+          return;
+        }
+        this.synthesizeWithSystem_(text, chunkOffset, retryCount + 1);
+      }, 0);
+      return;
+    }
+
+    const msg = '系统朗读合成被停止';
+    if (this.hasPlayableAudio_()) {
+      console.warn('[Aloud] ' + msg + ', request=' + requestId);
       this.speakNext_();
     } else {
       this.callback_.onError?.(msg);

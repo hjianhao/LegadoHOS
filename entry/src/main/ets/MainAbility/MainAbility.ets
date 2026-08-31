@@ -27,8 +27,12 @@ import { CloudLocalFileStore } from '../service/cloud/CloudLocalFileStore';
 import { SourceCheckService } from '../service/SourceCheckService';
 import { BookTable } from '../data/database/BookTable';
 import { BookDeleter } from '../service/BookDeleter';
+import { AloudState, getGlobalAloudState } from '../service/ReadAloudEngine';
 
 export default class MainAbility extends UIAbility {
+  /** 朗读期间不启动自动备份，避免 ZIP/JSON 构建阻塞 AudioRenderer 实时供数。 */
+  private autoBackupDeferred_: boolean = false;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[MainAbility] onCreate');
     // 通过「打开方式/分享」冷启动：解析文件并广播给页面
@@ -314,10 +318,24 @@ export default class MainAbility extends UIAbility {
   onForeground(): void {
     console.info('[MainAbility] onForeground');
     this.syncProgressFromCloud();
+    // 后台期间若因朗读而延后备份，回前台后在不播放时补做一次。
+    if (this.autoBackupDeferred_ && getGlobalAloudState() !== AloudState.PLAYING) {
+      this.autoBackupDeferred_ = false;
+      this.runAutoBack_();
+    }
   }
 
   onBackground(): void {
     console.info('[MainAbility] onBackground');
+    if (getGlobalAloudState() === AloudState.PLAYING) {
+      this.autoBackupDeferred_ = true;
+      console.info('[MainAbility] autoBack deferred while aloud is playing');
+      return;
+    }
+    this.runAutoBack_();
+  }
+
+  private runAutoBack_(): void {
     // 对齐安卓：生命周期机会点触发自动备份（24h 节流）
     try {
       BackupService.autoBack()
