@@ -172,13 +172,17 @@ export class SourceCheckService {
       });
       await BackgroundRunningManager.acquire(context, 'source-check');
     } catch (error) {
-      console.warn('[SourceCheckService] background start:', JSON.stringify(error));
+      const err = error as Error;
+      console.warn('[SourceCheckService] background start:', err.message || String(error));
     }
   }
 
   private async stopBackground_(context: common.Context): Promise<void> {
     try { await BackgroundRunningManager.release(context, 'source-check'); }
-    catch (error) { console.warn('[SourceCheckService] background stop:', JSON.stringify(error)); }
+    catch (error) {
+      const err = error as Error;
+      console.warn('[SourceCheckService] background stop:', err.message || String(error));
+    }
     this.stopWantAgent_ = null;
   }
 }
