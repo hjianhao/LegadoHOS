@@ -764,7 +764,12 @@ struct ReaderPage {
     const text = this.isMobi_ ? await this.getMobiChapterText_(nextIdx) : this.getEpubChapterText_(nextIdx);
     if (!text || text.trim().length === 0) return null;
     this.lastAloudProviderIdx_ = nextIdx;
-    return { text, offset: 0, chapterIndex: nextIdx };
+    return {
+      text,
+      offset: 0,
+      chapterIndex: nextIdx,
+      title: this.chapters_[nextIdx]?.title || '',
+    };
   }
 
   private goToAloudPosition_(charIndex: number, chapterIndex?: number): void {

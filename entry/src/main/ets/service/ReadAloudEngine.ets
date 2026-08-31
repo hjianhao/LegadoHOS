@@ -8,7 +8,13 @@ import { ITtsBackend, TtsSynthRequest } from './tts/ITtsBackend';
 
 export enum AloudState { IDLE = 0, PLAYING = 1, PAUSED = 2, STOPPED = 3 }
 
-export interface AloudChapterText { text: string; offset: number; chapterIndex: number; }
+export interface AloudChapterText {
+  text: string;
+  offset: number;
+  chapterIndex: number;
+  /** 章节标题，用于同步系统媒体通知的标题。 */
+  title?: string;
+}
 
 let globalChapterProvider_: (() => Promise<AloudChapterText | null>) | null = null;
 
@@ -38,7 +44,7 @@ export interface AloudCallback {
   /** 引擎需要下一章文本时回调 */
   onNeedNextChapter?: () => Promise<AloudChapterText | null>;
   /** 引擎成功加载新章节时回调 */
-  onChapterChange?: (chapterIndex: number) => void;
+  onChapterChange?: (chapterIndex: number, title?: string, totalChars?: number) => void;
   /** 蓝牙耳机断开导致引擎自动暂停时回调 */
   onAutoPause?: (reason: string) => void;
 }
@@ -153,6 +159,7 @@ export class ReadAloudEngine {
   private playedChars_: number = 0;
   private startTextOffset_: number = 0;
   private startChapterIdx_: number = 0;
+  private currentChapterTitle_: string = '';
   private totalPcmWritten_: number = 0;
   private callback_: AloudCallback;
   // 每段 TTS 合成后，onData 小块按 requestId 拼成完整 ArrayBuffer
@@ -201,6 +208,8 @@ export class ReadAloudEngine {
   get state(): AloudState { return this.state_; }
   get startOffset(): number { return this.startTextOffset_; }
   get startChapter(): number { return this.startChapterIdx_; }
+  get currentChapterTitle(): string { return this.currentChapterTitle_; }
+  get totalChars(): number { return this.totalChars_; }
   /** 基于实际播出字节数估算的字符位置 */
   get playbackPosition(): number { return this.activeChunkOffset_ + this.startTextOffset_; }
   get playedChars(): number { return this.playedChars_; }
@@ -316,9 +325,11 @@ export class ReadAloudEngine {
     console.info('[Aloud] init OK, sampleRate=' + sampleRate + ' backend=' + (this.backend_ ? this.backend_.name : 'system'));
   }
 
-  async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0): Promise<void> {
+  async speak(text: string, speed: number = 1.0, startOffset: number = 0, startChapter: number = 0,
+    chapterTitle: string = ''): Promise<void> {
     const sessionId = ++this.playbackSessionId_;
     this.startChapterIdx_ = startChapter;
+    this.currentChapterTitle_ = chapterTitle;
     // 需要 audioRenderer_，还需要合成能力（系统 TTS 引擎或扩展后端）
     if (!this.audioRenderer_ || (!this.ttsEngine_ && !this.backend_)) { this.callback_.onError?.('引擎未初始化'); return; }
     
@@ -333,7 +344,11 @@ export class ReadAloudEngine {
     this.synthPending_ = false; this.synthCount_ = 0; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1; this.totalPcmWritten_ = 0;
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
-    this.currentTextIdx_ = 0; this.totalChars_ = text.length; this.playedChars_ = 0;
+    this.currentTextIdx_ = 0;
+    // speak 接收的是从 startOffset 截取后的文本，但回调位置使用章节绝对字符偏移。
+    // 将起始偏移计入总数，避免从章节中间开始朗读时通知进度超过 100%。
+    this.totalChars_ = text.length + startOffset;
+    this.playedChars_ = 0;
     console.info('[Aloud] ' + text.length + ' chars → ' + this.textQueue_.length + ' chunks');
     this.setState_(AloudState.PLAYING);
     this.speakNext_(sessionId);
@@ -569,7 +584,8 @@ export class ReadAloudEngine {
             this.textQueue_ = this.splitText_(next.text); this.currentTextIdx_ = 0;
             this.totalChars_ = next.text.length; this.playedChars_ = 0; this.startTextOffset_ = next.offset;
             this.startChapterIdx_ = next.chapterIndex;
-            this.callback_.onChapterChange?.(next.chapterIndex || 0);
+            this.currentChapterTitle_ = next.title || '';
+            this.callback_.onChapterChange?.(next.chapterIndex || 0, this.currentChapterTitle_, next.text.length);
             this.speakNext_(sessionId);
           } else { this.chapterEnded_ = true; }
         });
@@ -899,6 +915,8 @@ export async function releaseGlobalAloudEngine(): Promise<void> {
     await globalEngine_.release();
     globalEngine_ = null;
   }
+  // 面板可能已因隐藏而保留监听，以便后台更新媒体通知；引擎释放后解除引用。
+  globalListener_ = null;
 }
 
 // ---- 全局监听（面板注册监听器，不管理引擎生命周期） ----
@@ -908,7 +926,7 @@ export interface AloudGlobalListener {
   onProgress?: (charIndex: number, total: number) => void;
   onChapterEnd?: () => void;
   onError?: (msg: string) => void;
-  onChapterChange?: (chapterIndex: number) => void;
+  onChapterChange?: (chapterIndex: number, title?: string, totalChars?: number) => void;
   onAutoPause?: (reason: string) => void;
 }
 
@@ -926,7 +944,9 @@ function makeCallbackForGlobal_(): AloudCallback {
     onStateChange: (s: AloudState) => { if (globalListener_) globalListener_.onState?.(s); },
     onProgress: (ci: number, t: number) => { if (globalListener_) globalListener_.onProgress?.(ci, t); },
     onChapterEnd: () => { if (globalListener_) globalListener_.onChapterEnd?.(); },
-    onChapterChange: (chapterIndex: number) => { if (globalListener_) globalListener_.onChapterChange?.(chapterIndex); },
+    onChapterChange: (chapterIndex: number, title?: string, totalChars?: number) => {
+      if (globalListener_) globalListener_.onChapterChange?.(chapterIndex, title, totalChars);
+    },
     onAutoPause: (reason: string) => { if (globalListener_) globalListener_.onAutoPause?.(reason); },
     onError: (msg: string) => { if (globalListener_) globalListener_.onError?.(msg); },
     onNeedNextChapter: async (): Promise<AloudChapterText | null> => {

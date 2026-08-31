@@ -58,6 +58,10 @@ export struct ReadAloudPanel {
   isPaused_(): boolean { const s = getGlobalEngineRef()?.state; return s === AloudState.PAUSED; }
   private avSession_: avSession.AVSession | null = null;
   private wantAgent_: object | null = null;
+  /** 媒体通知使用独立快照，面板隐藏后后台朗读仍可继续更新。 */
+  private mediaTitle_: string = '';
+  private mediaChapter_: number = -1;
+  private mediaTotalChars_: number = 0;
 
   aboutToAppear(): void {
     this.loadVoicePreference_();
@@ -69,12 +73,43 @@ export struct ReadAloudPanel {
       this.isPlaying = ref.state === AloudState.PLAYING;
       this.isPaused = ref.state === AloudState.PAUSED;
       if (ref.startChapter > 0) this.curAloudChapter_ = ref.startChapter;
+      this.mediaTitle_ = ref.currentChapterTitle || this.chapterTitle;
+      this.mediaChapter_ = ref.startChapter;
+      this.mediaTotalChars_ = ref.totalChars;
+    } else {
+      this.mediaTitle_ = this.chapterTitle;
+      this.mediaChapter_ = this.currentChapterIndex;
+      this.mediaTotalChars_ = this.text.length;
     }
     // 注册全局监听，追踪朗读进度
     setAloudGlobalListener({
-      onState: (s: AloudState) => { this.isPlaying = s === AloudState.PLAYING; this.isPaused = s === AloudState.PAUSED; if (s === AloudState.PLAYING) this.errorText = ''; if (s === AloudState.PAUSED) this.stopBgTask_(); },
-      onProgress: (ci: number, t: number) => { this.curCharIdx_ = ci; this.progress = t > 0 ? Math.round((ci / t) * 100) : 0; this.progressText = ci + '/' + t; },
-      onChapterChange: (chapterIdx: number) => { this.curAloudChapter_ = chapterIdx; this.progress = 0; this.progressText = ''; this.curCharIdx_ = 0; this.textOffset = 0; },
+      onState: (s: AloudState) => {
+        this.isPlaying = s === AloudState.PLAYING;
+        this.isPaused = s === AloudState.PAUSED;
+        if (s === AloudState.PLAYING) this.errorText = '';
+        if (s === AloudState.PAUSED) this.stopBgTask_();
+        this.updateAvPlaybackState_(s, this.curCharIdx_, this.mediaTotalChars_);
+      },
+      onProgress: (ci: number, t: number) => {
+        this.curCharIdx_ = ci;
+        this.mediaTotalChars_ = t;
+        this.progress = t > 0 ? Math.min(100, Math.round((ci / t) * 100)) : 0;
+        this.progressText = ci + '/' + t;
+        const state = this.isPaused ? AloudState.PAUSED : AloudState.PLAYING;
+        this.updateAvPlaybackState_(state, ci, t);
+      },
+      onChapterChange: (chapterIdx: number, title?: string, totalChars?: number) => {
+        this.curAloudChapter_ = chapterIdx;
+        this.mediaChapter_ = chapterIdx;
+        this.mediaTitle_ = title || this.chapterTitle || '朗读中';
+        this.mediaTotalChars_ = totalChars || 0;
+        this.progress = 0;
+        this.progressText = '';
+        this.curCharIdx_ = 0;
+        this.textOffset = 0;
+        this.updateAvMetadata_();
+        this.updateAvPlaybackState_(AloudState.PLAYING, 0, this.mediaTotalChars_);
+      },
       onChapterEnd: () => { this.progress = 100; this.onNextChapter?.(); },
       onError: (msg: string) => { this.errorText = msg; },
       onAutoPause: (reason: string) => { this.errorText = reason; UiUtil.showToast(this.getUIContext(), { message: reason, duration: 2000 }); },
@@ -82,7 +117,11 @@ export struct ReadAloudPanel {
   }
 
   aboutToDisappear(): void {
-    setAloudGlobalListener(null);
+    // 面板只是控制层，隐藏后朗读仍可能在后台继续；全局监听由引擎释放时清理。
+    const state = getGlobalEngineRef()?.state;
+    if (state !== AloudState.PLAYING && state !== AloudState.PAUSED) {
+      setAloudGlobalListener(null);
+    }
   }
 
   private async loadVoicePreference_(): Promise<void> {
@@ -346,14 +385,9 @@ export struct ReadAloudPanel {
       }
       this.avSession_.setLaunchAbility(this.wantAgent_);
       await this.avSession_.activate();
-      // 设置元数据
-      const meta: avSession.AVMetadata = {
-        assetId: '0',
-        title: this.chapterTitle || '朗读中',
-        artist: 'AI阅读',
-        duration: -1,
-      };
-      this.avSession_.setAVMetadata(meta);
+      this.updateAvMetadata_();
+      const ref = getGlobalEngineRef();
+      this.updateAvPlaybackState_(ref?.state ?? AloudState.IDLE, this.curCharIdx_, this.mediaTotalChars_);
       // 监听播控命令
       this.avSession_.on('play', () => { if (!this.isPlaying) this.togglePlay(); });
       this.avSession_.on('pause', () => { if (this.isPlaying_()) this.togglePlay(); });
@@ -363,6 +397,61 @@ export struct ReadAloudPanel {
       console.info('[Aloud] AVSession created');
     } catch (e) {
       console.error('[Aloud] AVSession failed: ' + (e as Error).message);
+    }
+  }
+
+  /** 以章节字符数估算媒体时长，使系统媒体通知可以显示可推进的进度。 */
+  private estimateMediaDuration_(totalChars: number): number {
+    const chars = Math.max(1, totalChars);
+    const charsPerSecond = Math.max(1, 5 * this.speed);
+    return Math.max(1000, Math.round(chars / charsPerSecond * 1000));
+  }
+
+  private updateAvMetadata_(): void {
+    const session = this.avSession_;
+    if (!session) return;
+    const title = this.mediaTitle_ || this.chapterTitle || '朗读中';
+    const chapter = this.mediaChapter_ >= 0 ? this.mediaChapter_ : this.currentChapterIndex;
+    const metadata: avSession.AVMetadata = {
+      // 章节变化时 assetId 也变化，避免播控中心继续复用上一章的缓存元数据。
+      assetId: 'legado_tts_' + chapter,
+      title: title,
+      artist: 'AI阅读',
+      duration: this.estimateMediaDuration_(this.mediaTotalChars_),
+    };
+    try {
+      session.setAVMetadata(metadata).catch((e: Error) => {
+        console.warn('[Aloud] AVSession metadata update failed: ' + e.message);
+      });
+    } catch (e) {
+      console.warn('[Aloud] AVSession metadata update failed: ' + (e as Error).message);
+    }
+  }
+
+  private updateAvPlaybackState_(state: AloudState, charIndex: number, totalChars: number): void {
+    const session = this.avSession_;
+    if (!session) return;
+    const total = Math.max(1, totalChars || this.mediaTotalChars_);
+    const current = Math.max(0, Math.min(total, charIndex || 0));
+    const duration = this.estimateMediaDuration_(total);
+    let playbackState: avSession.PlaybackState = avSession.PlaybackState.PLAYBACK_STATE_INITIAL;
+    if (state === AloudState.PLAYING) playbackState = avSession.PlaybackState.PLAYBACK_STATE_PLAY;
+    else if (state === AloudState.PAUSED) playbackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
+    else if (state === AloudState.STOPPED) playbackState = avSession.PlaybackState.PLAYBACK_STATE_STOP;
+    const playback: avSession.AVPlaybackState = {
+      state: playbackState,
+      speed: this.speed,
+      position: {
+        elapsedTime: Math.round(duration * current / total),
+        updateTime: Date.now(),
+      },
+    };
+    try {
+      session.setAVPlaybackState(playback).catch((e: Error) => {
+        console.warn('[Aloud] AVSession playback update failed: ' + e.message);
+      });
+    } catch (e) {
+      console.warn('[Aloud] AVSession playback update failed: ' + (e as Error).message);
     }
   }
 
@@ -443,6 +532,9 @@ export struct ReadAloudPanel {
     if (!voiceReady) return;
     this.errorText = '';
     this.curAloudChapter_ = this.currentChapterIndex;
+    this.mediaTitle_ = this.chapterTitle || '朗读中';
+    this.mediaChapter_ = this.currentChapterIndex;
+    this.mediaTotalChars_ = this.text.length;
 
     // 使用全局引擎，不覆盖回调（由 aboutToAppear 的 setAloudGlobalListener 管理）
     let eng = getGlobalEngineRef();
@@ -476,7 +568,7 @@ export struct ReadAloudPanel {
       await this.createAvSession_();
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
-      await eng.speak(startText, this.speed, this.textOffset, this.currentChapterIndex);
+      await eng.speak(startText, this.speed, this.textOffset, this.currentChapterIndex, this.chapterTitle);
       // 以引擎最终状态再同步一次，避免首次播放时状态回调早于面板订阅，
       // 导致按钮仍停留在“播放”图标。
       this.isPlaying = eng.state === AloudState.PLAYING;
@@ -527,6 +619,7 @@ export struct ReadAloudPanel {
 
   async changeSpeed(v: number): Promise<void> {
     this.speed = v;
+    this.updateAvMetadata_();
     try {
       const s = SettingsStore.getInstance();
       await s.init(UiUtil.getHostContext(this.getUIContext()));

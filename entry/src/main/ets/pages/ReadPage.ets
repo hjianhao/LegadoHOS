@@ -2993,7 +2993,12 @@ struct ReadPage {
         // 预加载内容为原文，朗读前补一遍展示处理（简繁 + 用户规则替换）
         const text = this.processForDisplay_(raw);
         console.info('[ReadPage] provider: using preloaded ch=' + n + ' len=' + text.length);
-        return { text: text, offset: 0, chapterIndex: n };
+        return {
+          text: text,
+          offset: 0,
+          chapterIndex: n,
+          title: this.purifyTitle_(this.allChapters_[n]?.title || ''),
+        };
       }
       if (!this.preloadingChapterPromises_.has(n)) {
         const ch = this.allChapters_[n];
@@ -3011,7 +3016,16 @@ struct ReadPage {
         }
       }
       const promise = this.preloadingChapterPromises_.get(n);
-      if (promise) { const content = await promise; this.preloadingChapterPromises_.delete(n); return content ? { text: this.processForDisplay_(content), offset: 0, chapterIndex: n } : null; }
+      if (promise) {
+        const content = await promise;
+        this.preloadingChapterPromises_.delete(n);
+        return content ? {
+          text: this.processForDisplay_(content),
+          offset: 0,
+          chapterIndex: n,
+          title: this.purifyTitle_(this.allChapters_[n]?.title || ''),
+        } : null;
+      }
       return null;
     })();
   }
