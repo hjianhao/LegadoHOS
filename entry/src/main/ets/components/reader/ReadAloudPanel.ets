@@ -50,6 +50,8 @@ export struct ReadAloudPanel {
   curCharIdx_: number = 0;
   private curAloudChapter_: number = -1;  // 引擎当前朗读的章节(-1表示从startPlay设置)
   private bgTaskActive_: boolean = false;
+  /** 朗读专属连续任务 ID，停止时只释放自己的音频任务。 */
+  private bgTaskId_: number = -1;
 
   /** 直接查询引擎状态，不自己维护 */
   isPlaying_(): boolean { const s = getGlobalEngineRef()?.state; return s === AloudState.PLAYING; }
@@ -395,11 +397,24 @@ export struct ReadAloudPanel {
       }
       // 必须使用 UIAbilityContext，普通 Context 会导致任务启动失败
       const ctx = UiUtil.getHostContext(this.getUIContext()) as common.UIAbilityContext;
-      // 申请 AUDIO_PLAYBACK 后台模式，保证音频播放不被限制
-      await backgroundTaskManager.startBackgroundRunning(
-        ctx, backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, this.wantAgent_);
+      // API 21+ 使用独立的 ContinuousTaskRequest，使朗读与缓存任务拥有不同的 taskId。
+      // 接入 AVSession 后使用 AVSESSION_AUDIO_PLAYBACK 子模式，不额外发布后台通知。
+      const taskRequest = new backgroundTaskManager.ContinuousTaskRequest();
+      taskRequest.backgroundTaskModes = [
+        backgroundTaskManager.BackgroundTaskMode.MODE_AV_PLAYBACK_AND_RECORD,
+      ];
+      taskRequest.backgroundTaskSubmodes = [
+        backgroundTaskManager.BackgroundTaskSubmode.SUBMODE_AVSESSION_AUDIO_PLAYBACK,
+      ];
+      const agent = this.wantAgent_;
+      if (!agent) throw new Error('创建后台任务所需的 WantAgent 为空');
+      taskRequest.wantAgent = agent;
+      taskRequest.combinedTaskNotification = false;
+      const result = await backgroundTaskManager.startBackgroundRunning(ctx, taskRequest);
+      this.bgTaskId_ = result.continuousTaskId ?? -1;
       this.bgTaskActive_ = true;
-      console.info('[Aloud] bgTask started');
+      console.info('[Aloud] bgTask started, taskId=' + this.bgTaskId_ +
+        ', notificationId=' + result.notificationId);
     } catch (e) {
       console.warn('[Aloud] bgTask not available: ' + (e as Error).message);
     }
@@ -408,9 +423,18 @@ export struct ReadAloudPanel {
   async stopBgTask_(): Promise<void> {
     if (!this.bgTaskActive_) return;
     try {
-      await backgroundTaskManager.stopBackgroundRunning(UiUtil.getHostContext(this.getUIContext()));
+      const ctx = UiUtil.getHostContext(this.getUIContext()) as common.UIAbilityContext;
+      if (this.bgTaskId_ >= 0) {
+        // 只停止朗读申请的连续任务，不影响书籍缓存的 DATA_TRANSFER 任务。
+        await backgroundTaskManager.stopBackgroundRunning(ctx, this.bgTaskId_);
+      } else {
+        // 兼容极旧系统未返回 continuousTaskId 的情况；当前 target/compatible SDK 应走上面的分支。
+        console.warn('[Aloud] bgTask has no taskId, fallback to stop all tasks');
+        await backgroundTaskManager.stopBackgroundRunning(ctx);
+      }
     } catch (_e) { /* ignore */ }
     this.bgTaskActive_ = false;
+    this.bgTaskId_ = -1;
   }
 
   async startPlay(): Promise<void> {
