@@ -1,5 +1,5 @@
 /**
- * 朗读引擎 — 纯 writeData 驱动，onComplete 不参与调度
+ * 朗读引擎 — writeData 负责实时供数，合成回调只负责入队和触发下一段预合成
  */
 import { textToSpeech } from '@kit.CoreSpeechKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -41,6 +41,12 @@ export interface AloudCallback {
   onChapterChange?: (chapterIndex: number) => void;
   /** 蓝牙耳机断开导致引擎自动暂停时回调 */
   onAutoPause?: (reason: string) => void;
+}
+
+/** 扩展 TTS 后端的有序合成结果。网络请求允许并行，但播放必须按文本顺序。 */
+interface OrderedBackendChunk {
+  pcm: Uint8Array;
+  textOffset: number;
 }
 
 export class TtsVoiceManager {
@@ -166,6 +172,10 @@ export class ReadAloudEngine {
   private activeOffset_: number = 0;
   private pendingQueue_: Uint8Array[] = [];
   private pendingOffsetQueue_: number[] = []; // 队列替代单个 pending，防止覆盖
+  // Azure 等网络后端允许并行合成，结果可能乱序返回；先按序号暂存，再按顺序放入播放队列。
+  private backendReadyChunks_: Map<number, OrderedBackendChunk | null> = new Map();
+  private nextSynthesisSeq_: number = 0;
+  private nextBackendSeqToPlay_: number = 0;
   private synthPending_: boolean = false;
   private synthCount_: number = 0; // 正在合成的任务数量（支持并行预合成）
   private static readonly MAX_SYNTH_CONCURRENCY = 3; // 最大并行合成数量
@@ -179,6 +189,9 @@ export class ReadAloudEngine {
   private outputWasBluetooth_: boolean = false;  // 最近一次记录时，输出设备是否为蓝牙
   // 预合成配置：熄屏后需要更多预合成来保证流畅播放
   private static readonly PRELOAD_COUNT = 15; // 预合成15句音频（熄屏后合成慢，需要更多缓冲）
+  private refillTimer_: number = -1;
+  private chapterEndTimer_: number = -1;
+  private bufferUnderrunLogged_: boolean = false;
 
   constructor(callback: AloudCallback, voice?: ReadAloudVoiceConfig) {
     this.callback_ = callback;
@@ -246,7 +259,14 @@ export class ReadAloudEngine {
             if (err) { reject(new Error('TTS: ' + err.code)); }
             else {
               engine.setListener({
-                onStart: () => {},
+                onStart: (requestId: string, response: textToSpeech.StartResponse) => {
+                  // 系统 TTS 会在这里返回真实采样率。当前默认音色应为 16 kHz，
+                  // 若设备返回其它采样率，按 16 kHz 播放会表现为变速或跳音，需从日志确认。
+                  if (response.sampleRate > 0 && response.sampleRate !== this.currentRendererRate_) {
+                    console.warn('[Aloud] system TTS sample rate=' + response.sampleRate +
+                      ', renderer=' + this.currentRendererRate_ + ', request=' + requestId);
+                  }
+                },
                 onData: (reqId: string, audioData: ArrayBuffer) => {
                   const chunks = this.systemChunkPcm_.get(reqId);
                   if (!chunks) return;
@@ -281,7 +301,7 @@ export class ReadAloudEngine {
         rendererInfo: { usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK, rendererFlags: 0 },
       });
       this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
-        this.writeData_(buffer);
+        return this.writeData_(buffer);
       });
       this.currentRendererRate_ = sampleRate;
     } catch (err) {
@@ -299,9 +319,12 @@ export class ReadAloudEngine {
     
     this.startTextOffset_ = startOffset;
     this.speed_ = speed;
+    this.cancelChapterEnd_();
     this.systemSessionId_++;
     this.resetSystemSynthesisState_();
     this.activeChunk_ = null; this.activeOffset_ = 0; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
+    this.backendReadyChunks_.clear(); this.nextSynthesisSeq_ = 0; this.nextBackendSeqToPlay_ = 0;
+    this.bufferUnderrunLogged_ = false;
     this.synthPending_ = false; this.synthCount_ = 0; this.firstChunkReady_ = false; this.pendingChapterFetch_ = ""; this.lastChapterIdx_ = -1; this.totalPcmWritten_ = 0;
     this.chapterEnded_ = false; this.chapterEndFired_ = false;
     this.textQueue_ = this.splitText_(text);
@@ -332,6 +355,9 @@ export class ReadAloudEngine {
     const sessionId = ++this.playbackSessionId_;
     this.systemSessionId_++;
     this.activeChunk_ = null; this.pendingQueue_ = []; this.pendingOffsetQueue_ = [];
+    this.backendReadyChunks_.clear(); this.nextSynthesisSeq_ = 0; this.nextBackendSeqToPlay_ = 0;
+    this.cancelRefill_();
+    this.cancelChapterEnd_();
     this.resetSystemSynthesisState_();
     this.synthPending_ = false; this.synthCount_ = 0;
     this.firstChunkReady_ = false; this.chapterEnded_ = false; this.chapterEndFired_ = false;
@@ -383,7 +409,7 @@ export class ReadAloudEngine {
     }
     try {
       this.audioRenderer_.on('writeData', (buffer: ArrayBuffer) => {
-        this.writeData_(buffer);
+        return this.writeData_(buffer);
       });
     } catch (err) {
       try {
@@ -551,11 +577,12 @@ export class ReadAloudEngine {
     const chunkOffset = this.playedChars_ - text.length;
     this.synthPending_ = true;
     this.synthCount_++; // 增加合成任务计数
+    const synthesisSeq = this.nextSynthesisSeq_++;
     console.info('[Aloud] synth chunk ' + (this.currentTextIdx_) + ': ' + text.length + ' chars, pending=' + this.pendingQueue_.length + ', synthCount=' + this.synthCount_);
 
     if (this.backend_) {
-      // 扩展 TTS 后端：异步合成 → 直接 push 到 pendingQueue_
-      this.synthesizeWithBackend_(text, chunkOffset, sessionId);
+      // 扩展 TTS 后端：异步合成，结果按 synthesisSeq 排序后再进入播放队列。
+      this.synthesizeWithBackend_(text, chunkOffset, sessionId, synthesisSeq);
     } else {
       // 系统 TTS：speak + onData/onComplete 回调流
       this.synthesizeWithSystem_(text, chunkOffset, 0);
@@ -588,7 +615,8 @@ export class ReadAloudEngine {
   }
 
   /** 离线后端合成：async synthesize → 直接 push 到 pendingQueue_ */
-  private async synthesizeWithBackend_(text: string, chunkOffset: number, sessionId: number): Promise<void> {
+  private async synthesizeWithBackend_(text: string, chunkOffset: number, sessionId: number,
+    synthesisSeq: number): Promise<void> {
     const backend = this.backend_;
     if (!backend || sessionId !== this.playbackSessionId_) return;
     try {
@@ -603,16 +631,33 @@ export class ReadAloudEngine {
       console.info('[Aloud] backend chunk ready: ' + result.pcm.byteLength + ' bytes PCM, ' +
         audioSec.toFixed(1) + 's audio, synth=' + synthMs + 'ms, RTF=' + rtf.toFixed(2));
       const pcm = new Uint8Array(result.pcm);
-      this.pendingQueue_.push(pcm);
-      this.pendingOffsetQueue_.push(chunkOffset);
-      if (!this.firstChunkReady_) this.firstChunkReady_ = true;
+      this.backendReadyChunks_.set(synthesisSeq, { pcm: pcm, textOffset: chunkOffset });
+      this.flushBackendChunks_();
     } catch (e) {
-      if (sessionId === this.playbackSessionId_) this.callback_.onError?.('合成失败: ' + (e as Error).message);
+      if (sessionId === this.playbackSessionId_) {
+        // 标记失败的序号，避免前面的请求失败后把后续音频永久卡在排序队列中。
+        this.backendReadyChunks_.set(synthesisSeq, null);
+        this.flushBackendChunks_();
+        this.callback_.onError?.('合成失败: ' + (e as Error).message);
+      }
     } finally {
       if (sessionId !== this.playbackSessionId_) return;
       this.synthCount_ = Math.max(0, this.synthCount_ - 1); // 减少合成任务计数
       this.synthPending_ = this.synthCount_ > 0;
       if (this.state_ === AloudState.PLAYING) this.speakNext_();  // 预合成下一句
+    }
+  }
+
+  /** 将并行后端已完成的 PCM 按文本顺序转移到 AudioRenderer 播放队列。 */
+  private flushBackendChunks_(): void {
+    while (this.backendReadyChunks_.has(this.nextBackendSeqToPlay_)) {
+      const seq = this.nextBackendSeqToPlay_++;
+      const ready = this.backendReadyChunks_.get(seq);
+      this.backendReadyChunks_.delete(seq);
+      if (!ready || ready.pcm.byteLength === 0) continue;
+      this.pendingQueue_.push(ready.pcm);
+      this.pendingOffsetQueue_.push(ready.textOffset);
+      if (!this.firstChunkReady_) this.firstChunkReady_ = true;
     }
   }
 
@@ -689,6 +734,42 @@ export class ReadAloudEngine {
     return this.activeChunk_ !== null || this.pendingQueue_.length > 0 || this.firstChunkReady_;
   }
 
+  /** writeData 是实时回调，不能在其中直接做合成调度或触发 UI 回调。 */
+  private scheduleRefill_(): void {
+    if (this.refillTimer_ >= 0) return;
+    const sessionId = this.playbackSessionId_;
+    this.refillTimer_ = setTimeout((): void => {
+      this.refillTimer_ = -1;
+      this.speakNext_(sessionId);
+    }, 0);
+  }
+
+  private cancelRefill_(): void {
+    if (this.refillTimer_ >= 0) {
+      clearTimeout(this.refillTimer_);
+      this.refillTimer_ = -1;
+    }
+  }
+
+  /** 章节结束回调可能触发翻页和 UI 更新，不能在 AudioRenderer 实时回调中同步执行。 */
+  private scheduleChapterEnd_(): void {
+    if (this.chapterEndTimer_ >= 0) return;
+    const sessionId = this.playbackSessionId_;
+    this.chapterEndTimer_ = setTimeout((): void => {
+      this.chapterEndTimer_ = -1;
+      if (sessionId !== this.playbackSessionId_ || !this.chapterEndFired_) return;
+      this.setState_(AloudState.STOPPED);
+      this.callback_.onChapterEnd?.();
+    }, 0);
+  }
+
+  private cancelChapterEnd_(): void {
+    if (this.chapterEndTimer_ >= 0) {
+      clearTimeout(this.chapterEndTimer_);
+      this.chapterEndTimer_ = -1;
+    }
+  }
+
   /** writeData: 从 active 缓冲读取，耗尽时从 pending 换入 */
   private writeData_(buffer: ArrayBuffer): audio.AudioDataCallbackResult {
     if (this.state_ !== AloudState.PLAYING) return audio.AudioDataCallbackResult.INVALID;
@@ -700,30 +781,37 @@ export class ReadAloudEngine {
           this.activeChunk_ = this.pendingQueue_[0];
           if (this.pendingOffsetQueue_.length > 0) {
             const off = this.pendingOffsetQueue_[0];
-            console.info("[Engine] swap active: offset=" + off + ", pending=" + (this.pendingQueue_.length - 1));
             this.activeChunkOffset_ = off;
             this.pendingOffsetQueue_.splice(0, 1);
           }
           this.pendingQueue_.splice(0, 1);
           this.firstChunkReady_ = false;
-          // 从pendingQueue换入后，触发预合成，保持足够的预合成数量
-          this.speakNext_();
+          this.bufferUnderrunLogged_ = false;
+          // 从 pendingQueue 换入后异步触发预合成，避免阻塞音频实时回调。
+          if (this.synthCount_ === 0) this.scheduleRefill_();
         }
         if (!this.activeChunk_) {
           for (let i = written; i < bufLen; i++) dst[i] = 0;
           if (this.chapterEnded_ && !this.synthPending_ && this.synthCount_ === 0 && !this.chapterEndFired_) {
             this.chapterEndFired_ = true;
-            // 章节已经结束时先切出 PLAYING，防止渲染器的后续回调再次触发
-            // onChapterEnd，或在页面切章期间继续消费已经清空的旧队列。
-            this.setState_(AloudState.STOPPED);
-            this.callback_.onChapterEnd?.();
+            // 章节已经结束时先切出 PLAYING，防止渲染器的后续回调再次触发；
+            // 状态通知和切章回调放到事件循环，避免阻塞音频实时回调。
+            this.state_ = AloudState.STOPPED;
+            this.scheduleChapterEnd_();
             return audio.AudioDataCallbackResult.INVALID;
+          }
+          // 合成回调偶尔晚于音频拉取时，异步补一次调度，避免在实时回调里直接启动 TTS。
+          if (this.synthCount_ === 0) this.scheduleRefill_();
+          if (!this.bufferUnderrunLogged_) {
+            this.bufferUnderrunLogged_ = true;
+            console.warn('[Aloud] audio buffer underrun: pending=' + this.pendingQueue_.length +
+              ', synth=' + this.synthCount_ + ', chapterEnded=' + this.chapterEnded_);
           }
           return audio.AudioDataCallbackResult.VALID;
         }
       }
       const src = this.activeChunk_!; const avail = src.byteLength - this.activeOffset_; const copy = Math.min(bufLen - written, avail);
-      dst.set(src.slice(this.activeOffset_, this.activeOffset_ + copy), written); this.activeOffset_ += copy; written += copy; this.totalPcmWritten_ += copy;
+      dst.set(src.subarray(this.activeOffset_, this.activeOffset_ + copy), written); this.activeOffset_ += copy; written += copy; this.totalPcmWritten_ += copy;
     }
     return audio.AudioDataCallbackResult.VALID;
   }

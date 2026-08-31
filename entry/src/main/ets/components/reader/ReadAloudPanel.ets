@@ -447,7 +447,8 @@ export struct ReadAloudPanel {
       console.info('[Aloud] calling init...');
       await eng.init();
       this.curCharIdx_ = this.textOffset;
-      this.startBgTask_();
+      // 先拿到音频长时任务，再激活 AVSession 和启动渲染器，避免熄屏切后台时序竞争。
+      await this.startBgTask_();
       await this.createAvSession_();
       console.info('[Aloud] calling speak...');
       const startText = this.textOffset > 0 ? this.text.substring(this.textOffset) : this.text;
@@ -468,7 +469,7 @@ export struct ReadAloudPanel {
     console.info('[Aloud] togglePlay playing=' + this.isPlaying + ' paused=' + this.isPaused);
     if (this.isPlaying) {
       const e = this.engine_ ?? getGlobalEngineRef(); await e?.pause();
-      this.stopBgTask_();
+      await this.stopBgTask_();
     } else if (this.isPaused) {
       await this.startBgTask_();
       const e = this.engine_ ?? getGlobalEngineRef(); await e?.resume();
