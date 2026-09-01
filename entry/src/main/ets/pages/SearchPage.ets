@@ -520,7 +520,9 @@ export struct SearchPage {
             + ' available=' + JSON.stringify(Array.from(available)));
         }
       }
-      const searchable = this.sources.filter((source: BookSource): boolean => !!(source.ruleSearchUrl || '').trim());
+      // qysg 源没有 ruleSearchUrl，统一通过 SourceGateway 能力判断，避免日志
+      // 显示 searchable=0 但实际搜索已包含 qysg 的矛盾信息。
+      const searchable = this.sources.filter((source: BookSource): boolean => globalSourceGateway.canSearch(source));
       console.info('[SearchPage] sources loaded total=' + this.sources.length.toString()
         + ' searchable=' + searchable.length.toString()
         + ' scoped=' + (this.scopeBySource ? 'source' : 'group')
