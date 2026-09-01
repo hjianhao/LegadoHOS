@@ -260,7 +260,12 @@ export struct ChapterListPage {
         tag: chapter.tag,
       })) : this.chapters_;
       const normalized = normalizeQysgChapters(input);
-      if (normalized.length === this.chapters_.length) return;
+      const changed = normalized.length !== this.chapters_.length || normalized.some((chapter: BookSourceChapter, index: number): boolean => {
+        const current = this.chapters_[index];
+        return !current || current.title !== chapter.title || current.url !== chapter.url ||
+          current.index !== chapter.index || current.isVolume !== chapter.isVolume;
+      });
+      if (!changed) return;
       this.chapters_ = normalized;
       ChapterCache.chapters = normalized;
       ChapterCache.bookUrl = this.bookUrl;
