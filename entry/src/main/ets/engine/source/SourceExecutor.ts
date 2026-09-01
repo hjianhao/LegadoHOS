@@ -4602,14 +4602,14 @@ export class SourceExecutor {
                 jsLib: source.jsLib || '',
                 variableBlob: source.variableComment || '',
               } as unknown as JsEvalContext;
-              // 整段 <js> 规则以 if/块语句结尾（无显式 return）时，QuickJS 的
-              // JS_Eval 不传播语句完成值，桥会把 undefined 序列化成 "undefined"
-              // 再被 unwrapJsResult 清空（Android Rhino 会传播完成值，故这类
-              // 书源在 Android 正常）。追加表达式语句把 result 作为返回值。
-              const jsToEval = cssPart ? processedCode : (processedCode + '\n;result;');
+              // QuickJS 的 JS_Eval 会返回脚本最后一个表达式的完成值。整段
+              // @js: 规则（如禁漫天堂的 `text;`）必须保留该值；不能追加
+              // `result` 作为兜底，否则 result 是当前 DOM 元素时会把作者等
+              // 字段错误地序列化成 `[object Object]`。没有完成值时让字段为空，
+              // 与 Android 端脚本语义一致。
               // 字段 JS 是书源作者的任意代码（可能内联 java.ajax 等），必须走
               // Worker 求值；主线程同步执行曾造成 THREAD_BLOCK_6S 冻结。
-              const evalResult = await JsExpressionEvaluator.evaluateFieldScript(jsToEval, ctx);
+              const evalResult = await JsExpressionEvaluator.evaluateFieldScript(processedCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {
                   const parsed = JSON.parse(evalResult);
