@@ -132,6 +132,9 @@ export class AudioPlayer {
     this.avPlayer_.on('stateChange', (state: media.AVPlayerState, reason: media.StateChangeReason) => {
       console.info(`[AudioPlayer] State: ${state}`);
       switch (state) {
+        case 'idle':
+          this.state_ = PlayState.IDLE;
+          break;
         case 'initialized':
           this.state_ = PlayState.INITIALIZED;
           break;
@@ -184,9 +187,13 @@ export class AudioPlayer {
     this.currentTrack_ = track;
 
     try {
-      // 切换章节时必须先回到 idle，否则 AVPlayer 会拒绝重新设置源。
-      if (this.state_ !== PlayState.IDLE && this.state_ !== PlayState.INITIALIZED) {
-        try { await this.avPlayer_.stop(); } catch (_e) { /* already stopped */ }
+      // setMediaSource 只允许在 AVPlayer 的 idle 状态调用。部分系统在刚创建
+      // AVPlayer 后会先报告 initialized，即使还没有设置过资源，因此这里也要
+      // 显式 reset；切换章节则先停止再复位。
+      if (this.state_ !== PlayState.IDLE) {
+        if (this.state_ !== PlayState.INITIALIZED) {
+          try { await this.avPlayer_.stop(); } catch (_e) { /* already stopped */ }
+        }
         try { await this.avPlayer_.reset(); } catch (_e) { /* some devices reset implicitly */ }
       }
 
