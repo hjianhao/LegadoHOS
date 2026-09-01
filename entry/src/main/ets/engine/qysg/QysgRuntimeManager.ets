@@ -296,7 +296,12 @@ export struct QysgRuntimeHostComponent {
           this.controllerAttached_ = true;
           this.bridge_ = new QysgNativeBridge(this.getUIContext().getHostContext() || null, this.pending_);
           try {
-            this.controller_.registerJavaScriptProxy(this.bridge_!, 'qysgNative', [], ['callHandler', 'complete']);
+            // callHandler 必须注册为同步方法：qysg 的桥接 shim 需要拿到它返回的
+            // Promise 并继续 .then()。ArkWeb 的 asyncMethodList 明确不返回值，若
+            // 把 callHandler 放进去，网页端会得到 undefined，所有 HTTP/缓存调用
+            // 都会报“...then is not a function”。complete 只负责回调 pending，
+            // 不需要返回值，放在异步列表即可。
+            this.controller_.registerJavaScriptProxy(this.bridge_!, 'qysgNative', ['callHandler'], ['complete']);
           } catch (error) {
             console.error('[Qysg] registerJavaScriptProxy failed:', error);
           }
