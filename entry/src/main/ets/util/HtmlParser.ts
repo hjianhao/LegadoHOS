@@ -10,6 +10,7 @@
  * 非完整 HTML/CSS 规范实现，仅覆盖书源规则常见的模式。
  */
 import { toJsRegexReplacement } from '../engine/source/RuleAnalyzer';
+import { HtmlEntityUtil } from './HtmlEntityUtil';
 
 // ============= 模型 =============
 
@@ -56,7 +57,10 @@ export class HtmlParser {
         if (text.trim()) {
           const current = stack[stack.length - 1];
           if (current) {
-            current.ownText += text;
+            // Jsoup/Android Legado 的 Element.text() 会返回实体解码后的文本，
+            // 但 innerHtml/outerHtml 仍应保留源码形式。因此 ownText/text 使用
+            // 解码值，textParts 继续保存原始片段供 HTML 重建。
+            current.ownText += HtmlEntityUtil.decode(text);
             current.textParts.push(text);
             current.contentOrder.push(-current.textParts.length);
           }
@@ -574,7 +578,7 @@ export class HtmlParser {
     }
     for (const index of el.contentOrder) {
       if (index < 0) {
-        el.text += el.textParts[-index - 1] || '';
+        el.text += HtmlEntityUtil.decode(el.textParts[-index - 1] || '');
       } else {
         const child = el.children[index - 1];
         if (child) el.text += child.text || child.ownText;

@@ -7,6 +7,7 @@
  */
 import { SettingsStore } from '../../data/preferences/SettingsStore';
 import { migrateLegacySourceUrl, NetUtil, registerSourceOriginAlias } from '../../util/NetUtil';
+import { HtmlEntityUtil } from '../../util/HtmlEntityUtil';
 import {
   BookSource, BookSourceBookInfo, BookSourceChapter, createEmptyBookSource,
   serializeBookSource
@@ -1082,7 +1083,7 @@ export function prepareSourceAgentHtml(html: string): string {
 }
 
 function normalizeAiBookName_(value: string): string {
-  return (value || '').toLowerCase()
+  return HtmlEntityUtil.decode(value || '').toLowerCase()
     .replace(/[\s\u3000《》〈〉「」『』【】\[\]（）()·•:：,，。.!！?？_\-—]/g, '');
 }
 
@@ -2039,6 +2040,7 @@ export class AiSourceAgent {
     // 只替换完整旧 origin，不改动选择器、查询参数中的普通文本。
     const urlFields: string[] = [
       'ruleSearchUrl', 'ruleBookInfoInit', 'ruleBookInfoTocUrl',
+      'ruleSearchNoteUrl', 'ruleExploreNoteUrl',
       'ruleBookInfoDownloadUrls', 'ruleTocUrl', 'ruleTocUrlItem',
       'ruleTocNextTocUrl', 'ruleBookContentUrl', 'ruleBookContentNext',
       'ruleBookContentWebJs', 'ruleBookContentPayAction',

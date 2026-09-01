@@ -11,7 +11,7 @@ import { JsExpressionEvaluator, JsEvalContext } from './JsExpressionEvaluator';
 import { getPolyfillScript, getAjaxPolyfill, buildRuleExecutorScriptWithHtml } from './ScriptApi';
 import { RuleParser } from './RuleParser';
 import { splitConnectorRules, firstNonEmpty, mergeAll, interleaveLists, toJsRegexReplacement } from './RuleAnalyzer';
-import { NetUtil } from '../../util/NetUtil';
+import { migrateLegacySourceUrl, NetUtil } from '../../util/NetUtil';
 import { HtmlUtil } from '../../util/HtmlUtil';
 import { ContentCleaner } from '../../util/ContentCleaner';
 import { getHtmlParser, HtmlElement, HtmlParser } from '../../util/HtmlParser';
@@ -4776,6 +4776,7 @@ export class SourceExecutor {
       if (noteUrl && !noteUrl.startsWith('http://') && !noteUrl.startsWith('https://')) {
         noteUrl = (pageBase || '') + (noteUrl.startsWith('/') ? noteUrl : '/' + noteUrl);
       }
+      noteUrl = migrateLegacySourceUrl(noteUrl);
       // 表格表头、加载占位符等通常有文字但没有详情链接，不能作为书籍结果返回。
       if (!hasUsableSearchIdentity(name, noteUrl)) continue;
 
@@ -4989,6 +4990,7 @@ export class SourceExecutor {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
       }
+      noteUrl = migrateLegacySourceUrl(noteUrl);
       const kind = rawKind || (await this.firstStrAsync(itemObj, 'kind', 'type', 'category', 'category_name'));
       const wordCount = rawWordCount || (await this.firstStrAsync(itemObj, 'wordCount', 'wordNum', 'words', 'word_number'));
       const introduce = rawIntroduce || (await this.firstStrAsync(itemObj, 'introduce', 'intro', 'summary', 'abstract', 'book_abstract', 'book_abstract_v2'));
@@ -5701,12 +5703,14 @@ export class SourceExecutor {
     if (!url) return '';
     let nextUrl = unwrapJsCallUrlValue_(url.trim());
     if (!nextUrl || nextUrl.startsWith('#') || nextUrl.startsWith('javascript:')) return '';
-    if (nextUrl.startsWith('//')) return 'https:' + nextUrl;
-    if (nextUrl.startsWith('http://') || nextUrl.startsWith('https://')) return nextUrl;
+    if (nextUrl.startsWith('//')) return migrateLegacySourceUrl('https:' + nextUrl);
+    if (nextUrl.startsWith('http://') || nextUrl.startsWith('https://')) {
+      return migrateLegacySourceUrl(nextUrl);
+    }
     const origin = currentUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
-    if (nextUrl.startsWith('/')) return origin + nextUrl;
+    if (nextUrl.startsWith('/')) return migrateLegacySourceUrl(origin + nextUrl);
     const base = currentUrl.replace(/[#?].*$/, '').replace(/\/[^\/]*$/, '/');
-    return base + nextUrl;
+    return migrateLegacySourceUrl(base + nextUrl);
   }
 
   /** 解析详情页提取的封面/图片地址，保留 data/blob URI。 */

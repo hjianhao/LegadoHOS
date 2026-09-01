@@ -704,6 +704,11 @@ export default function bookSourceManagementTest() {
       expect(authors[0]).assertEqual('傅延年');
       // 带 @ 的规则仍按 CSS 查找（text@text 不应取 root 自身）
       expect(parser.extractAttr(cards[0], 'text@text')).assertEqual('');
+
+      // 漫蛙详情页使用 &#x...; 返回书名；文本提取应与 Android/Jsoup 一样
+      // 解码实体，避免 AI 把同一本书误判为详情书名不一致。
+      const encodedDoc = parser.parse('<h2 id="page-title">&#x6551;&#x8D4E;&#x6211;&#xFF0C;&#x6740;&#x6B7B;&#x6211;</h2>');
+      expect(parser.extractAttr(encodedDoc, '#page-title@text')).assertEqual('救赎我，杀死我');
     });
 
     it('supportsCssNotPseudoClassForListRule', 0, () => {
@@ -1185,6 +1190,7 @@ export default function bookSourceManagementTest() {
 
     it('requiresSearchAndDetailBookNamesToDescribeTheSameBook', 0, () => {
       expect(isAiBookNameConsistent('马可瓦尔多 - 品书斋', '《马可瓦尔多》')).assertTrue();
+      expect(isAiBookNameConsistent('&#x9A6C;&#x53EF;&#x74E6;&#x5C14;&#x591A;', '马可瓦尔多')).assertTrue();
       expect(isAiBookNameConsistent('书香文库', '马可瓦尔多')).assertFalse();
       expect(isAiBookNameConsistent(
         '马可瓦尔多 - 作者 - 无广告阅读 - 很长的网站名称', '马可瓦尔多')).assertFalse();
