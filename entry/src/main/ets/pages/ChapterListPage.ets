@@ -16,9 +16,9 @@ import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookmarkTable } from '../data/database/BookmarkTable';
 import { Bookmark } from '../model/Bookmark';
-import { BookSource, BookSourceChapter } from '../model/BookSource';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { BookSource, BookSourceChapter, BookSourceFormat } from '../model/BookSource';
 import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { normalizeQysgChapters } from '../engine/qysg/QysgResultMapper';
 import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { ChapterCache } from '../util/ChapterCache';
@@ -218,6 +218,7 @@ export struct ChapterListPage {
         console.info('[ChapterList] first:', this.chapters_[0].title.substring(0, 30));
         console.info('[ChapterList] last:', this.chapters_[this.chapters_.length - 1].title.substring(0, 30));
       }
+      await this.normalizeCachedQysgChapters_();
       this.ensureAscendingOrder();
       // ensureAscendingOrder 可能修正分页合并造成的局部乱序；同步内存缓存，
       // 这样从目录进入阅读页时“上一章/下一章”也使用同一份已排序目录。
@@ -228,6 +229,40 @@ export struct ChapterListPage {
       this.isLoading = false;
       this.isRefreshingToc = false;
       this.scheduleScrollToCurrentChapter_();
+    }
+  }
+
+  /**
+   * 兼容升级前已经缓存的 qysg 重复目录。网络刷新经过 mapper 后本身已去重，
+   * 这里只处理内存/数据库旧数据，避免用户必须先手动刷新才能看到正确目录。
+   */
+  private async normalizeCachedQysgChapters_(): Promise<void> {
+    if (this.chapters_.length === 0 || (!this.originUrl && !this.origin)) return;
+    try {
+      const source = await BookSourceResolver.resolveByIdentity(
+        this.bookId_, this.bookUrl, this.originUrl, this.origin);
+      if (!source || source.sourceFormat !== BookSourceFormat.QYSG) return;
+      const normalized = normalizeQysgChapters(this.chapters_);
+      if (normalized.length === this.chapters_.length) return;
+      this.chapters_ = normalized;
+      ChapterCache.chapters = normalized;
+      ChapterCache.bookUrl = this.bookUrl;
+      if (this.bookId_ > 0) {
+        const db = AppDatabase.getInstance().rdbStore;
+        const replaced = await new ChapterTable(db).replaceTocPreserveContent(this.bookId_, normalized);
+        if (replaced) {
+          const book = await new BookTable(db).getBookById(this.bookId_);
+          if (book) {
+            book.totalChapterNum = normalized.length;
+            book.chapterCount = normalized.length;
+            book.latestChapterTitle = normalized[normalized.length - 1]?.title || '';
+            await new BookTable(db).updateBook(book);
+          }
+        }
+      }
+      console.info('[ChapterList] normalized cached qysg chapters to', normalized.length);
+    } catch (error) {
+      console.warn('[ChapterList] qysg cache normalization failed:', String(error));
     }
   }
 

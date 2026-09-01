@@ -86,7 +86,7 @@ export function mapQysgInfo(raw: string, source: BookSource, requestedUrl: strin
 }
 
 export function mapQysgChapters(raw: string, source: BookSource): BookSourceChapter[] {
-  return decodeQysgArray(raw).map((value: Object, index: number): BookSourceChapter => {
+  const mapped = decodeQysgArray(raw).map((value: Object, index: number): BookSourceChapter => {
     const item = (value && typeof value === 'object' ? value : {}) as Record<string, Object>;
     const itemIndex = Number(item['index']);
     return {
@@ -100,6 +100,41 @@ export function mapQysgChapters(raw: string, source: BookSource): BookSourceChap
       tag: valueOfChapter(item, 'tag'),
     };
   }).filter((item: BookSourceChapter): boolean => !!item.url || !!item.isVolume);
+  return normalizeQysgChapters(mapped);
+}
+
+/**
+ * qysg 漫画源经常通过 WebView 扫描整页锚点。拷贝漫画等站点同时保留桌面、
+ * 移动两份 DOM，并把“开始阅读/更新内容”快捷链接放在章节列表外，导致同一
+ * chapterId 返回 2～3 次。它们不是不同章节，进入统一目录前应稳定去重并重排
+ * index；否则阅读页会显示重复卷名、重复番外，且缓存会把错误目录持久化。
+ */
+export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSourceChapter[] {
+  const seenUrls = new Set<string>();
+  const result: BookSourceChapter[] = [];
+  chapters.forEach((chapter: BookSourceChapter): void => {
+    const title = (chapter.title || '').replace(/\s+/g, ' ').trim();
+    // 这些是详情页快捷入口，不属于目录项；如果源确实将其作为章节返回，
+    // 后续真实的同 URL 章节仍会被保留。
+    if (/^(?:开始阅读|開始閱讀|更新内容|更新內容)$/i.test(title)) return;
+    const url = (chapter.url || '').trim();
+    if (url && seenUrls.has(url)) return;
+    if (url) seenUrls.add(url);
+    result.push({
+      title: title || chapter.title || ('第' + (result.length + 1) + '章'),
+      url: chapter.url,
+      index: result.length,
+      isVolume: chapter.isVolume,
+      isVip: chapter.isVip,
+      isPay: chapter.isPay,
+      updateTime: chapter.updateTime,
+      tag: chapter.tag,
+    });
+  });
+  if (result.length !== chapters.length) {
+    console.info('[QysgMapper] normalized chapters ' + chapters.length + ' -> ' + result.length);
+  }
+  return result;
 }
 
 function valueOfChapter(object: Record<string, Object>, ...keys: string[]): string {

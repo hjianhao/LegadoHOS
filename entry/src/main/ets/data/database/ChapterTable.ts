@@ -121,7 +121,18 @@ export class ChapterTable {
   async replaceTocPreserveContent(bookId: number, chapters: BookSourceChapter[]): Promise<boolean> {
     const oldChapters = await this.getChaptersByBookId(bookId);
     // 目录骤减保护：新目录不足旧目录一半通常是书源解析失败/网站改版，直接覆盖会丢掉缓存内容
-    if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length) {
+    // 但 qysg/部分漫画源可能把同一 chapter URL 从桌面、移动 DOM 各返回一次；
+    // 若新目录规模已经覆盖旧目录的去重后规模，则这是安全的重复折叠，不应被
+    // “目录骤减”保护拦截，否则修复后的目录只会停留在内存，重启又恢复重复项。
+    const oldUniqueUrls = new Set<string>();
+    oldChapters.forEach((chapter: BookChapter): void => {
+      const key = (chapter.url || '').replace(/#.*$/, '');
+      if (key) oldUniqueUrls.add(key);
+    });
+    const duplicateCollapse = oldUniqueUrls.size >= 10 && chapters.length >= 10 &&
+      oldUniqueUrls.size * 4 <= oldChapters.length * 3 &&
+      chapters.length >= Math.floor(oldUniqueUrls.size * 0.9);
+    if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length && !duplicateCollapse) {
       console.warn('[ChapterTable] toc shrink rejected: bookId=' + bookId
         + ' old=' + oldChapters.length + ' new=' + chapters.length);
       return false;
