@@ -36,23 +36,31 @@ interface ParsedAudioUrl {
  */
 function parseAudioUrl(value: string): ParsedAudioUrl {
   const raw = (value || '').trim();
-  const comma = raw.lastIndexOf(',');
-  if (comma <= 0) return { url: raw, headers: {} };
-  const suffix = raw.substring(comma + 1).trim();
-  if (!suffix.startsWith('{')) return { url: raw, headers: {} };
-  try {
-    const parsed: Object = JSON.parse(suffix);
-    const candidate = (parsed as Record<string, Object>)['headers'];
-    if (!candidate || typeof candidate !== 'object') return { url: raw, headers: {} };
-    const headers: Record<string, string> = {};
-    Object.keys(candidate as Record<string, Object>).forEach((key: string): void => {
-      const item = (candidate as Record<string, Object>)[key];
-      if (item !== undefined && item !== null) headers[key] = String(item);
-    });
-    return { url: raw.substring(0, comma).trim(), headers: headers };
-  } catch (_e) {
-    return { url: raw, headers: {} };
+  // JSON.stringify(headers) 本身可能含逗号（念音的 Referer + User-Agent 就是
+  // 这种情况），不能用最后一个逗号切分。逐个尝试“逗号后的 JSON”并验证
+  // headers 字段，既能保留 URL 查询参数中的逗号，也兼容多请求头。
+  let comma = raw.indexOf(',');
+  while (comma > 0) {
+    const suffix = raw.substring(comma + 1).trim();
+    if (suffix.startsWith('{')) {
+      try {
+        const parsed: Object = JSON.parse(suffix);
+        const candidate = (parsed as Record<string, Object>)['headers'];
+        if (candidate && typeof candidate === 'object') {
+          const headers: Record<string, string> = {};
+          Object.keys(candidate as Record<string, Object>).forEach((key: string): void => {
+            const item = (candidate as Record<string, Object>)[key];
+            if (item !== undefined && item !== null) headers[key] = String(item);
+          });
+          return { url: raw.substring(0, comma).trim(), headers: headers };
+        }
+      } catch (_e) {
+        // 可能是 URL 中的普通逗号，继续尝试后续位置。
+      }
+    }
+    comma = raw.indexOf(',', comma + 1);
   }
+  return { url: raw, headers: {} };
 }
 
 export class AudioPlayer {
