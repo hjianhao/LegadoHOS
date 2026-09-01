@@ -3203,6 +3203,19 @@ export class SourceExecutor {
           if (typeof data === 'string') return data;
         }
 
+        // JSON/API 正文规则直接使用 JSONPath。AI 可能输出标准的
+        // $.data.images[*].url，也可能带兼容旧书源的外层方括号。
+        const jsonContentPath = this.normalizeJsonContentPath_(source.ruleBookContent || '');
+        if (jsonContentPath) {
+          const value = RuleParser.parseJsonPath(jsonParsed, jsonContentPath);
+          const content = this.formatJsonContentValue_(value, preserveImages, contentUrl,
+            source.ruleBookContentReplaceRegex || '');
+          console.info('[SrcEx] getContent JSONPath:', jsonContentPath,
+            'valueType=' + (Array.isArray(value) ? 'array' : typeof value),
+            'returned=' + content.length);
+          return content;
+        }
+
         // 如果有 ruleBookContent，解析其中的 {{$.xxx}} 模板
         if (source.ruleBookContent && source.ruleBookContent.includes('{{')) {
           let content = source.ruleBookContent;
@@ -5787,6 +5800,46 @@ export class SourceExecutor {
 
   private stripHtml(html: string): string {
     return HtmlUtil.stripHtml(html);
+  }
+
+  /** 识别正文规则中的独立 JSONPath（兼容 [$.path] 写法）。 */
+  private normalizeJsonContentPath_(rule: string): string {
+    const trimmed = (rule || '').trim();
+    if (!trimmed || trimmed.includes('##') || /@js\s*:/i.test(trimmed)) return '';
+    const wrapped = trimmed.match(/^\[\s*(\$[\s\S]*?)\s*\]$/);
+    const candidate = wrapped ? wrapped[1].trim() : trimmed;
+    return candidate.startsWith('$') ? candidate : '';
+  }
+
+  /** 将 JSONPath 结果转成阅读器可消费的正文，数组值按行连接。 */
+  private formatJsonContentValue_(value: any, preserveImages: boolean, baseUrl: string,
+    replaceRule: string): string {
+    if (value === null || value === undefined) return '';
+    const values: string[] = [];
+    const collect = (item: any): void => {
+      if (item === null || item === undefined) return;
+      if (Array.isArray(item)) {
+        for (const child of item) collect(child);
+        return;
+      }
+      if (typeof item === 'object') {
+        const objectValue = item as Record<string, any>;
+        for (const key of ['url', 'src', 'image', 'imageUrl', 'pic', 'content', 'text']) {
+          if (typeof objectValue[key] === 'string') {
+            values.push(objectValue[key]);
+            return;
+          }
+        }
+        values.push(JSON.stringify(item));
+        return;
+      }
+      values.push(String(item));
+    };
+    collect(value);
+    let content = values.filter((item: string): boolean => !!item.trim()).join('\n');
+    if (!content) return '';
+    content = this.applyReplaceRegex(content, replaceRule);
+    return (preserveImages ? ContentCleaner.formatKeepImg(content, baseUrl) : this.stripHtml(content)).trim();
   }
 
   /**

@@ -129,36 +129,48 @@ export class RuleParser {
    * 支持: $.key, $.arr[*].key, $.arr[0].key
    */
   static parseJsonPath(json: any, path: string): any {
-    const parts = path.replace(/^\$\.?/, '').split(/\./);
-    let current = json;
+    let normalized = (path || '').trim();
+    // 部分书源/AI 规则会把 JSONPath 写成 [$.data.items[*].url]，
+    // 这仍然是 JSONPath 而不是 CSS 属性选择器，兼容其外层括号。
+    const wrapped = normalized.match(/^\[\s*(\$[\s\S]*?)\s*\]$/);
+    if (wrapped) normalized = wrapped[1].trim();
+    if (!normalized.startsWith('$')) return null;
 
-    for (const part of parts) {
-      if (current === null || current === undefined) return null;
-
-      // 数组索引: key[0] 或 [*]
-      const arrayMatch = part.match(/^(\w+)?\[(\d+|\*)\]$/);
-      if (arrayMatch) {
-        const arrayName = arrayMatch[1];
-        const index = arrayMatch[2];
-
-        if (arrayName) current = current[arrayName];
-        if (!Array.isArray(current)) return null;
-
-        if (index === '*') {
-          return current;
-        }
-        current = current[parseInt(index)];
-        continue;
-      }
-
-      if (typeof current === 'object' && part in current) {
-        current = current[part];
-      } else {
-        return null;
-      }
+    // 将点路径和数组下标拆成统一 token，使 $.items[*].url 能继续遍历
+    // 通配符后的字段，而不是在遇到 [*] 时提前返回对象数组。
+    const tokens: string[] = [];
+    const body = normalized.replace(/^\$\.?/, '');
+    const tokenPattern = /([^.[\]]+)|\[(\d+|\*)\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = tokenPattern.exec(body)) !== null) {
+      tokens.push(match[1] !== undefined ? match[1] : match[2]);
     }
+    if (tokens.length === 0) return json;
 
-    return current;
+    const flatten = (values: any[]): any[] => {
+      const result: any[] = [];
+      for (const value of values) {
+        if (Array.isArray(value)) result.push(...flatten(value));
+        else if (value !== null && value !== undefined) result.push(value);
+      }
+      return result;
+    };
+    const read = (value: any, index: number): any => {
+      if (index >= tokens.length) return value;
+      if (value === null || value === undefined) return null;
+      const token = tokens[index];
+      if (token === '*') {
+        if (!Array.isArray(value)) return null;
+        return flatten(value.map((item: any): any => read(item, index + 1)));
+      }
+      if (Array.isArray(value)) {
+        if (!/^\d+$/.test(token)) return null;
+        return read(value[parseInt(token)], index + 1);
+      }
+      if (typeof value !== 'object' || !(token in value)) return null;
+      return read(value[token], index + 1);
+    };
+    return read(json, 0);
   }
 
   /**

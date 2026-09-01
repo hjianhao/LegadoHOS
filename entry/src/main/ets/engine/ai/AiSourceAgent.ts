@@ -4689,8 +4689,10 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
 }`;
         const parsed = await this.askRules_(prompt, evidence.html);
         this.applyStringFields_(this.draft_, parsed, CONTENT_FIELDS);
+        this.promoteImageSourceType_(evidence.html);
       }
       if (preparedEvidenceHtml) {
+        this.promoteImageSourceType_(preparedEvidenceHtml);
         this.generateExplicitContentReplaceRule_(preparedEvidenceHtml);
       }
       if (optimizeTextRule && this.isOuterHtmlContentRule_(this.draft_.ruleBookContent)) {
@@ -4711,7 +4713,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       let checked = 0;
       for (const sample of samples) {
         checked++;
-        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl,
+          this.shouldPreserveAiContentImages_());
         if (isUsableAiExtractedContent(content)) {
           this.done_(AiStep.CONTENT, '正文样本提取 ' + content.length + ' 字', {
             sampleChapter: sample.title,
@@ -4758,6 +4761,32 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     const sourceType = Number(this.draft_.sourceType);
     const isTextSource = !Number.isFinite(sourceType) || sourceType === 0;
     return isTextSource && !(this.draft_.ruleBookContentReplaceRegex || '').trim();
+  }
+
+  /**
+   * AI 正文取证需要与实际阅读模式保持一致。漫画正文通常不是 HTML 文本，
+   * 而是返回 {data:{images:[{url:...}]}} 的 JSON；若按文本源清洗，生成的
+   * <img> 会被 stripHtml 删除，导致同一条正确规则被误判为空。
+   */
+  private shouldPreserveAiContentImages_(): boolean {
+    if (!this.draft_) return false;
+    if (Number(this.draft_.sourceType) === 2) return true;
+    const rule = this.draft_.ruleBookContent || '';
+    return /<img\b|\bimages?\b|@(?:src|data-src|data-original)\b/i.test(rule);
+  }
+
+  /**
+   * 新建 AI 书源默认是文本类型；在章节真实响应中确认图片正文后，
+   * 将类型提升为漫画，使后续校验和最终 ComicReadPage 都保留图片。
+   */
+  private promoteImageSourceType_(html: string): void {
+    if (!this.draft_ || Number(this.draft_.sourceType) !== 0 || !html) return;
+    const imageTagCount = (html.match(/<img\b/gi) || []).length;
+    const imageJson = /["']images["']\s*:\s*\[[\s\S]*?["'](?:url|src|image|imageUrl)["']\s*:/i.test(html);
+    if (imageTagCount > 0 || imageJson) {
+      this.draft_.sourceType = 2;
+      this.log_('  章节响应确认图片正文，已将书源类型设为漫画');
+    }
   }
 
   /**
@@ -4813,7 +4842,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       seen.add(candidate);
       this.draft_.ruleBookContent = candidate;
       for (const sample of samples) {
-        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl,
+          this.shouldPreserveAiContentImages_());
         if (isUsableAiExtractedContent(content)) {
           this.log_('  已验证段落正文规则：' + candidate);
           return { sample: sample, length: content.length };
@@ -4849,7 +4879,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       seen.add(candidateRule);
       this.draft_.ruleBookContent = candidateRule;
       for (const sample of samples) {
-        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl);
+        const content = await globalSourceExecutor.getContent(this.draft_, sample.url, bookUrl,
+          this.shouldPreserveAiContentImages_());
         if (isUsableAiExtractedContent(content)) {
           this.log_('  正文规则候选验证通过：' + candidateRule);
           return { sample: sample, length: content.length };
