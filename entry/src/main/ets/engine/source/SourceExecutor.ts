@@ -650,6 +650,55 @@ function resolveFieldRule(rule: string, fn: (subRule: string) => string): string
   return values[0] || '';
 }
 
+/**
+ * 字段规则需要执行 JS（Worker 求值）时的异步版 processPutGet。
+ * 与同步版逻辑逐行对应；@put 变量仍以字符串形式存入 putGetStore，
+ * 只是求值本身被 await（阻塞型脚本会串行等待 Worker 结果）。
+ */
+async function processPutGetAsync(rule: string,
+  evalFn: (r: string) => Promise<string>): Promise<string> {
+  if (!rule) return '';
+  let remaining = rule;
+  // 处理 @get:varName — 获取之前 put 的变量值
+  if (rule.startsWith('@get:')) {
+    const varName = rule.slice(5).trim();
+    return putGetStore[varName] || '';
+  }
+  // 处理内嵌 @put:{varName:"subRule"}
+  const putMatch = remaining.match(/@put\s*:\s*\{\s*(\w+)\s*:\s*("[^"]*"|'[^']*'|[^}]+)\s*\}/);
+  if (putMatch) {
+    const varName = putMatch[1].trim();
+    let varRule = putMatch[2];
+    if ((varRule.startsWith('"') && varRule.endsWith('"')) || (varRule.startsWith("'") && varRule.endsWith("'"))) {
+      varRule = varRule.slice(1, -1);
+    }
+    putGetStore[varName] = await evalFn(varRule);
+    remaining = remaining.replace(putMatch[0], '');
+  }
+  if (remaining.trim()) {
+    return await evalFn(remaining.trim());
+  }
+  return '';
+}
+
+/**
+ * 连接操作符（|| &&）+ 异步字段求值。与同步版语义一致：
+ * 所有子规则都会求值（保持 @put 副作用与合并结果不变），仅顺序 await。
+ */
+async function resolveFieldRuleAsync(rule: string,
+  fn: (subRule: string) => Promise<string>): Promise<string> {
+  if (!rule) return '';
+  const { rules, connector } = splitConnectorRules(rule.trim());
+  if (!connector || rules.length === 1) return processPutGetAsync(rules[0], fn);
+  const values: string[] = [];
+  for (const r of rules) {
+    values.push(await processPutGetAsync(r, fn));
+  }
+  if (connector === '||') return firstNonEmpty(values);
+  if (connector === '&&') return mergeAll(values);
+  return values[0] || '';
+}
+
 function replaceSearchTemplateVars(template: string, keyword: string, page: number,
   charset: string = ''): string {
   // URL 中的 {{key}} 按书源 charset 编码：GBK 站点按 UTF-8 编码的关键词会
@@ -1220,6 +1269,20 @@ export class SourceExecutor {
     }
   }
 
+  /**
+   * 判断搜索地址是否依赖书源 loginUrl 提供的动态 url 变量。
+   *
+   * 只有同时满足「loginUrl 定义 url()」和「搜索规则读取 url 变量」时，
+   * 404/410 才应触发换线；普通书源的固定 404 不应被额外请求登录脚本。
+   */
+  private hasDynamicSearchLineRule_(source: BookSource): boolean {
+    if (!source || !source.loginUrl || !/function\s+url\s*\(/.test(source.loginUrl)) {
+      return false;
+    }
+    const searchRule = source.ruleSearchUrl || '';
+    return /\b(?:get|getVariable)\s*\(\s*['"]url['"]\s*\)/i.test(searchRule);
+  }
+
   private async searchSingle(
     keyword: string, source: BookSource, page: number = 1,
     allowLineRetry: boolean = true, throwOnFailure: boolean = false
@@ -1616,7 +1679,14 @@ export class SourceExecutor {
                   retriedPost = await NetUtil.httpPost(
                     finalUrl, finalBody, requestHeaders, requestTimeout);
                 }
-                if (retriedPost && !WebViewFetcher.isInteractiveChallengeHtml(retriedPost)) {
+                // Cloudflare 放行后，原始 POST 可能先返回站点自己的图片验证码页
+                // （山丽文学网用 searchcode.php 门禁）。该页面同时会被
+                // isInteractiveChallengeHtml 识别为挑战壳，但必须继续交给
+                // parseResponse 执行书源的 java.getVerificationCode + java.ajax
+                // 规则；只跳过仍是 Cloudflare/WAF 挑战的响应。
+                const retriedPostIsChallenge = WebViewFetcher.isInteractiveChallengeHtml(retriedPost);
+                const retriedPostIsImageCaptcha = WebViewFetcher.isLikelyImageCaptchaPage(retriedPost);
+                if (retriedPost && (!retriedPostIsChallenge || retriedPostIsImageCaptcha)) {
                   const retriedResults = await this.parseResponse(
                     this.tryHexDecode_(retriedPost) || retriedPost, source, baseUrl, 0, finalUrl);
                   if (retriedResults.length > 0) {
@@ -1668,10 +1738,17 @@ export class SourceExecutor {
       return httpResults;
     } catch (err) {
       const msg = (err as Error).message;
-      if (allowLineRetry && /(SSL connect error|Internal error|connection reset|1007900035)/i.test(msg)) {
+      const transientLineError = /(SSL connect error|Internal error|connection reset|1007900035)/i.test(msg || '');
+      // 禁漫天堂等动态线路书源会把旧线路保存在 variableComment 中；线路
+      // 失效时站点直接返回 404/410，而不是网络异常。此时执行书源自带的
+      // url() 动作刷新线路并重试一次，避免把空结果误判成规则解析问题。
+      const staleDynamicLineError = this.hasDynamicSearchLineRule_(source) &&
+        /\bHTTP\s+(?:404|410)\b/i.test(msg || '');
+      if (allowLineRetry && (transientLineError || staleDynamicLineError)) {
         const switched = await this.switchDynamicSourceLine(source, baseUrl);
         if (switched) {
-          console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName);
+          console.info('[SrcEx] Retrying search with refreshed line for', source.sourceName,
+            staleDynamicLineError ? '(stale line response)' : '');
           return await this.searchSingle(keyword, source, page, false, throwOnFailure);
         }
       }
@@ -1696,6 +1773,35 @@ export class SourceExecutor {
             console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
             const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
               finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
+            // 外层 catch 代表原始 HTTP 请求直接以 403/5xx 抛错。交互 WebView
+            // 完成 Cloudflare 后，不能只解析它打开的 GET 页面；POST 搜索必须
+            // 用原始 body 重放，否则山丽会再次返回验证页或空搜索页。
+            if (finalMethod === 'POST' && finalBody) {
+              try {
+                const replayHeaders = SourceNetworkPolicy.headers(source, headers);
+                if (!replayHeaders['Content-Type'] && !replayHeaders['content-type']) {
+                  const bodyStr = finalBody.trim();
+                  replayHeaders['Content-Type'] = bodyStr.startsWith('{') || bodyStr.startsWith('[')
+                    ? 'application/json' : 'application/x-www-form-urlencoded';
+                }
+                const retriedPost = await NetUtil.httpPost(
+                  finalUrl, finalBody, replayHeaders, requestTimeout);
+                const retriedPostIsChallenge = WebViewFetcher.isInteractiveChallengeHtml(retriedPost);
+                const retriedPostIsImageCaptcha = WebViewFetcher.isLikelyImageCaptchaPage(retriedPost);
+                if (retriedPost && (!retriedPostIsChallenge || retriedPostIsImageCaptcha)) {
+                  const retriedResults = await this.parseResponse(
+                    this.tryHexDecode_(retriedPost) || retriedPost, source, baseUrl, 0, finalUrl);
+                  if (retriedResults.length > 0) {
+                    console.info('[SrcEx] Catch 分支交互验证后 POST 重放得到',
+                      retriedResults.length, 'results for', source.sourceName);
+                    return retriedResults;
+                  }
+                }
+              } catch (retryError) {
+                console.warn('[SrcEx] Catch 分支交互验证后 POST 重放失败：',
+                  (retryError as Error).message || String(retryError));
+              }
+            }
             if (interactiveHtml && interactiveHtml.length > 200) {
               console.info('[SrcEx] Interactive WebView got', interactiveHtml.length, 'bytes for', source.sourceName);
               return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
@@ -2096,7 +2202,7 @@ export class SourceExecutor {
           requests.set(url, request);
         }
         const body = await request;
-        if (body) values[index] = this.cleanAuthorName(this.postProcessRule(postRule, body));
+        if (body) values[index] = this.cleanAuthorName(await this.postProcessRuleAsync(postRule, body));
       }
     };
     const workerCount = Math.min(8, Math.max(1, urls.length));
@@ -2403,98 +2509,115 @@ export class SourceExecutor {
         resolvedTocUrl = v ? v.replace(/^['"`]|['"`]$/g, '') : '';
       }
 
-      const extractField = (rule: string): string => {
-        if (!rule) return '';
-        return resolveFieldRule(rule, (subRule: string) => {
-          const extractSingle = (singleRule: string): string => {
-            const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(singleRule);
-            // 整段规则都是 @js:（无 CSS 部分，如 tocUrl: "@js:baseUrl.replace(...) + '/1/'"）：
-            // 直接求值，baseUrl 按 Android 语义为当前详情页 URL；
-            // 不能交给 extractAttr——空选择器会返回整页文本，污染后续拼接。
-            if (!ruleBeforeJs && jsCode) {
-              // 详情 @js: 规则可能用 java.getString('rule') 二次提取页面字段
-              // （如禁漫天堂 kind 规则）。QuickJS 沙箱没有该 API，求值前先
-              // 用当前详情文档提取并替换为字面量，否则整段规则抛 TypeError。
-              const processedJs = substituteJavaGetStringCall_(jsCode,
-                (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
-              const evalResult = JsExpressionEvaluator.evaluateSync(processedJs, {
-                source: source,
-                result: '',
-                baseUrl: noteUrl,
-              });
-              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
-                return evalResult.replace(/^['"`]|['"`]$/g, '');
-              }
-              return '';
+      const hostBase = noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1');
+      // 字段 <js>/@js: 属于书源作者的任意代码，统一走 Worker 求值，
+      // 避免主线程同步执行触发 THREAD_BLOCK_6S（与搜索字段处理一致）。
+      const extractSingle = async (singleRule: string): Promise<string> => {
+        const { rule: ruleBeforeJs, jsCode } = JsExpressionEvaluator.stripJsSuffix(singleRule);
+        // 整段规则都是 @js:（无 CSS 部分，如 tocUrl: "@js:baseUrl.replace(...) + '/1/'"）：
+        // 直接求值，baseUrl 按 Android 语义为当前详情页 URL；
+        // 不能交给 extractAttr——空选择器会返回整页文本，污染后续拼接。
+        if (!ruleBeforeJs && jsCode) {
+          // 详情 @js: 规则可能用 java.getString('rule') 二次提取页面字段
+          // （如禁漫天堂 kind 规则）。QuickJS 沙箱没有该 API，求值前先
+          // 用当前详情文档提取并替换为字面量，否则整段规则抛 TypeError。
+          const processedJs = substituteJavaGetStringCall_(jsCode,
+            (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
+          const evalResult = await JsExpressionEvaluator.evaluateFieldScript(processedJs, {
+            source: source,
+            result: '',
+            baseUrl: noteUrl,
+          });
+          if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+            return evalResult.replace(/^['"`]|['"`]$/g, '');
+          }
+          return '';
+        }
+        const hashIndex = ruleBeforeJs.indexOf('##');
+        const postRule = hashIndex >= 0 ? ruleBeforeJs.substring(hashIndex) : '';
+        const cssRule = hashIndex >= 0 ? ruleBeforeJs.substring(0, hashIndex).trim() : ruleBeforeJs;
+        const normalized = this.normalizeCssRule(cssRule);
+        const value = parser.extractAttr(doc, normalized);
+        if (!value) return value;
+        let processed = value;
+        if (postRule) processed = await this.postProcessRuleAsync(postRule, processed);
+        if (!jsCode) return processed;
+        // 混合规则（CSS 部分 + @js: 后处理）同样可能用 java.getString：
+        // 先替换为字面量再求值，避免抛 TypeError 导致字段取空。
+        const processedJs = substituteJavaGetStringCall_(jsCode,
+          (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
+        if (processedJs !== jsCode) {
+          const evalResult = await JsExpressionEvaluator.evaluateFieldScript(processedJs, {
+            source: source,
+            result: processed,
+            baseUrl: hostBase,
+          });
+          if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
+            try {
+              const parsed = JSON.parse(evalResult);
+              return typeof parsed === 'string' ? parsed : String(parsed);
+            } catch (_e) {
+              return evalResult.replace(/^['"`]|['"`]$/g, '');
             }
-            const hashIndex = ruleBeforeJs.indexOf('##');
-            const postRule = hashIndex >= 0 ? ruleBeforeJs.substring(hashIndex) : '';
-            const cssRule = hashIndex >= 0 ? ruleBeforeJs.substring(0, hashIndex).trim() : ruleBeforeJs;
-            const normalized = this.normalizeCssRule(cssRule);
-            const value = parser.extractAttr(doc, normalized);
-            if (!value) return value;
-            let processed = value;
-            if (postRule) processed = this.postProcessRule(postRule, processed);
-            if (!jsCode) return processed;
-            // 混合规则（CSS 部分 + @js: 后处理）同样可能用 java.getString：
-            // 先替换为字面量再求值，避免抛 TypeError 导致字段取空。
-            const processedJs = substituteJavaGetStringCall_(jsCode,
-              (rule: string): string => parser.extractAttr(doc, this.normalizeCssRule(rule)));
-            if (processedJs !== jsCode) {
-              const evalResult = JsExpressionEvaluator.evaluateSync(processedJs, {
-                source: source,
-                result: processed,
-                baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
-              });
-              if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
-                try {
-                  const parsed = JSON.parse(evalResult);
-                  return typeof parsed === 'string' ? parsed : String(parsed);
-                } catch (_e) {
-                  return evalResult.replace(/^['"`]|['"`]$/g, '');
-                }
-              }
-              return processed;
-            }
-            return JsExpressionEvaluator.processJsResult(singleRule, processed, {
-              source: source,
-              baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
-            });
-          };
+          }
+          return processed;
+        }
+        return await JsExpressionEvaluator.processJsResultAsync(singleRule, processed, {
+          source: source,
+          baseUrl: hostBase,
+        });
+      };
 
+      const extractField = async (rule: string): Promise<string> => {
+        if (!rule) return '';
+        return resolveFieldRuleAsync(rule, async (subRule: string): Promise<string> => {
           // Android Legado 支持 `{{提取规则}}固定文本`，模板内也可放简单 JS 表达式。
           if (subRule.includes('{{')) {
-            return subRule.replace(/\{\{([\s\S]*?)\}\}/g, (_match: string, expression: string): string => {
-              const expr = expression.trim();
+            const tmplRe = /\{\{([\s\S]*?)\}\}/g;
+            const templates: string[] = [];
+            let mm: RegExpExecArray | null;
+            while ((mm = tmplRe.exec(subRule)) !== null) {
+              templates.push(mm[0]);
+            }
+            let expanded = subRule;
+            for (const tmpl of templates) {
+              const expr = tmpl.slice(2, -2).trim();
+              let replacement = '';
               const looksLikeRule = expr.startsWith('@@') || expr.startsWith('.') || expr.startsWith('#') ||
                 expr.startsWith('[') || expr.startsWith('//') || expr.startsWith('class.') ||
                 expr.startsWith('id.') || expr.startsWith('tag.') || /@(text|html|ownText|textNodes|href|src|value)$/i.test(expr);
-              if (looksLikeRule) return extractSingle(expr);
-              const value = JsExpressionEvaluator.evaluateSync(expr, {
-                source: source,
-                baseUrl: noteUrl.replace(/^(https?:\/\/[^\/]+).*$/, '$1'),
-              });
-              return value && value !== 'null' && value !== 'undefined' ? value.replace(/^['"`]|['"`]$/g, '') : '';
-            });
+              if (looksLikeRule) {
+                replacement = await extractSingle(expr);
+              } else {
+                const value = await JsExpressionEvaluator.evaluateFieldScript(expr, {
+                  source: source,
+                  baseUrl: hostBase,
+                });
+                replacement = value && value !== 'null' && value !== 'undefined'
+                  ? value.replace(/^['"`]|['"`]$/g, '') : '';
+              }
+              expanded = expanded.replace(tmpl, replacement);
+            }
+            return expanded;
           }
           // @js: 是字段提取后的处理器，不能作为 CSS/正则替换文本交给 HtmlParser。
           return extractSingle(subRule);
         });
       };
 
-      let infoName = extractField(source.ruleBookInfoName) || '';
+      let infoName = (await extractField(source.ruleBookInfoName)) || '';
       if (isAiSource) {
         const fullNameRule = aiTitleAttributeRule(source.ruleBookInfoName || '');
         if (fullNameRule) {
-          infoName = preferCompleteBookName(infoName, extractField(fullNameRule));
+          infoName = preferCompleteBookName(infoName, await extractField(fullNameRule));
         }
       }
 
-      const rawCoverUrl = extractField(source.ruleBookInfoCover) || '';
-      const latestChapterTitle = extractField(source.ruleBookInfoLastChapter) || '';
-      const canReNameValue = extractField(source.ruleBookInfoCanReName) || '';
-      const downloadValue = extractField(source.ruleBookInfoDownloadUrls) || '';
-      const relatedValue = extractField(source.ruleBookInfoRelatedBooks) || '';
+      const rawCoverUrl = (await extractField(source.ruleBookInfoCover)) || '';
+      const latestChapterTitle = (await extractField(source.ruleBookInfoLastChapter)) || '';
+      const canReNameValue = (await extractField(source.ruleBookInfoCanReName)) || '';
+      const downloadValue = (await extractField(source.ruleBookInfoDownloadUrls)) || '';
+      const relatedValue = (await extractField(source.ruleBookInfoRelatedBooks)) || '';
       let relatedBooks: Object[] = [];
       if (relatedValue) {
         try {
@@ -2506,22 +2629,22 @@ export class SourceExecutor {
       }
       return {
         name: infoName,
-        author: this.cleanAuthorName(extractField(source.ruleBookInfoAuthor) || ''),
+        author: this.cleanAuthorName((await extractField(source.ruleBookInfoAuthor)) || ''),
         // 详情规则常提取到 /images/cover.jpg、//cdn... 或 style 中的 CSS url()；
         // 统一相对当前详情页解析，否则 BookInfoPage 会用错误地址覆盖搜索阶段的封面。
         coverUrl: this.resolveMediaUrl_(rawCoverUrl, noteUrl),
         // Android 详情简介允许用 <br> 表示换行；ArkUI Text 不解析 HTML，统一转为纯文本。
-        introduce: HtmlUtil.toPlainText(extractField(source.ruleBookInfoIntroduce) || ''),
-        kind: extractField(source.ruleBookInfoKind) || '',
-        wordCount: extractField(source.ruleBookInfoWordCount) || '',
-        lastUpdateTime: extractField(source.ruleBookInfoLastUpdateTime) || '',
+        introduce: HtmlUtil.toPlainText((await extractField(source.ruleBookInfoIntroduce)) || ''),
+        kind: (await extractField(source.ruleBookInfoKind)) || '',
+        wordCount: (await extractField(source.ruleBookInfoWordCount)) || '',
+        lastUpdateTime: (await extractField(source.ruleBookInfoLastUpdateTime)) || '',
         latestChapterTitle: latestChapterTitle,
         canReName: source.ruleBookInfoCanReName ? !!canReNameValue : undefined,
         downloadUrls: downloadValue ? downloadValue.split(/[\r\n,，]+/).map((v: string): string => v.trim())
           .filter((v: string): boolean => !!v) : [],
         relatedBooks: relatedBooks,
         tocUrl: this.resolvePageUrl(
-          resolvedTocUrl || extractField(source.ruleBookInfoTocUrl) || '', noteUrl),
+          resolvedTocUrl || (await extractField(source.ruleBookInfoTocUrl)) || '', noteUrl),
         chapters: [] as BookSourceChapter[],
       };
     } catch (_e) {
@@ -3825,7 +3948,7 @@ export class SourceExecutor {
             await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
           }
         }
-        chapters = this.finalizeTocList(chapters, source, tocUrl);
+        chapters = await this.finalizeTocList(chapters, source, tocUrl);
         console.info('[SrcEx] getToc final:', chapters.length, 'chapters (from', tocBodies.length, 'pages)',
           reverseToc ? 'reversed' : 'source-order');
         if (chapters.length > 0) {
@@ -3845,7 +3968,7 @@ export class SourceExecutor {
         // 如果书源有 ruleBookInfoTocUrl（CSS 选择器），说明可能存在完整的目录页
         // 仅当提取到的章节足够多时才视为完整，否则继续尝试从 CSS 选择器获取完整目录
         if (tocChapters.length >= 30 || !source.ruleBookInfoTocUrl) {
-          return this.finalizeTocList(tocChapters, source, tocUrl);
+          return await this.finalizeTocList(tocChapters, source, tocUrl);
         }
         console.info('[SrcEx] getToc fallbackHtml got only', tocChapters.length, 'chapters, will try CSS ruleBookInfoTocUrl');
       }
@@ -3884,7 +4007,7 @@ export class SourceExecutor {
             }
             if (altChapters.length > 0) {
               console.info('[SrcEx] AltToc got', altChapters.length, 'chapters from', resolvedTocUrl.substring(0, 60));
-              return this.finalizeTocList(altChapters, source, resolvedTocUrl);
+              return await this.finalizeTocList(altChapters, source, resolvedTocUrl);
             }
           }
           }
@@ -3919,7 +4042,7 @@ export class SourceExecutor {
             }
             if (wvChapters.length > 0) {
               console.info('[SrcEx] getToc configured WebView OK:', wvChapters.length, 'chapters');
-              return this.finalizeTocList(wvChapters, source, wvResult.finalUrl || tocUrl);
+              return await this.finalizeTocList(wvChapters, source, wvResult.finalUrl || tocUrl);
             }
           }
         } catch (wvError) {
@@ -3975,7 +4098,7 @@ export class SourceExecutor {
               }
               if (retryChapters.length > 0) {
                 console.info('[SrcEx] getToc retry OK:', retryChapters.length, 'chapters');
-                return this.finalizeTocList(retryChapters, source, tocUrl);
+                return await this.finalizeTocList(retryChapters, source, tocUrl);
               }
             }
           }
@@ -4002,7 +4125,7 @@ export class SourceExecutor {
             const wvChapters = await this.parseTocFromRules(wvHtml, wvTocRules, tocUrl, source);
             if (wvChapters.length > 0) {
               console.info('[SrcEx] getToc WebView OK:', wvChapters.length, 'chapters');
-              return this.finalizeTocList(wvChapters, source, tocUrl);
+              return await this.finalizeTocList(wvChapters, source, tocUrl);
             }
           }
         } catch (_wv) { /* WebView also failed */ }
@@ -4431,11 +4554,13 @@ export class SourceExecutor {
     const fullNameRule = isAiSource
       ? (aiTitleAttributeRule(noteUrlRule) || aiTitleAttributeRule(nameRule)) : '';
 
-    // 编译 || && 后的子规则
-    const compileFieldRule = (rule: string): ((item: HtmlElement) => string) => {
-      if (!rule) return (_item: HtmlElement): string => '';
+    // 编译 || && 后的子规则。
+    // 搜索分类在 Android Legado 中使用 getStringList，必须保留同一张卡片
+    // 中所有匹配元素（例如话本小说的多个标签）；其他字段仍取首个元素。
+    const compileFieldRule = (rule: string, collectAll: boolean = false): ((item: HtmlElement) => Promise<string>) => {
+      if (!rule) return async (_item: HtmlElement): Promise<string> => '';
       const { rules, connector } = splitConnectorRules(rule.trim());
-      const compileOne = (rawRule: string): ((item: HtmlElement) => string) => {
+      const compileOne = (rawRule: string): ((item: HtmlElement) => Promise<string>) => {
         // 分离 @js: 后缀
         const { rule: cssPart, jsCode } = JsExpressionEvaluator.stripJsSuffix(rawRule);
         const ajaxJs = /java\.ajax\s*\(\s*result\b/i.test(jsCode);
@@ -4446,9 +4571,13 @@ export class SourceExecutor {
         const ajaxPostRule = ajaxJs && hashIndex >= 0 ? cssPart : '';
         const postRule = hashIndex >= 0 ? cssPart.substring(hashIndex) : '';
         const cssRule = hashIndex >= 0 ? cssPart.substring(0, hashIndex).trim() : cssPart;
-        return (item: HtmlElement): string => {
+        return async (item: HtmlElement): Promise<string> => {
           // 先执行 CSS 提取
-          let result = processPutGet(cssRule, (subRule: string) => parser.extractAttr(item, this.normalizeCssRule(subRule)));
+          let result = processPutGet(cssRule, (subRule: string): string => {
+            const normalized = this.normalizeCssRule(subRule);
+            if (!collectAll) return parser.extractAttr(item, normalized);
+            return parser.extractAttrAll(item, normalized).join(',');
+          });
           // 如果有 @js: 后处理，执行 JS
           if (jsCode) {
             try {
@@ -4457,7 +4586,11 @@ export class SourceExecutor {
               // 静态化为提取结果（如卡片 onclick 属性），其余 JS 逻辑照常执行
               const processedCode = substituteJavaGetElementCall_(
                 substituteJavaGetStringCall_(jsCode,
-                  (rule: string): string => parser.extractAttr(item, this.normalizeCssRule(rule))),
+                  (rule: string): string => {
+                    const normalized = this.normalizeCssRule(rule);
+                    if (!collectAll) return parser.extractAttr(item, normalized);
+                    return parser.extractAttrAll(item, normalized).join(',');
+                  }),
                 parser, doc, item);
               const ctx: JsEvalContext = {
                 // 整段 <js> 规则（无 CSS 前缀）时，Android Legado 的 result 是
@@ -4469,22 +4602,14 @@ export class SourceExecutor {
                 jsLib: source.jsLib || '',
                 variableBlob: source.variableComment || '',
               } as unknown as JsEvalContext;
-              // 诊断日志：整段 <js> 规则的元素桥注入链路（排查可乐小说等
-              // result.attr('onclick') 书源用，问题解决后可移除）。
-              if (!cssPart) {
-                console.info('[SrcEx] FieldJs whole-rule item tag=' + item.tagName +
-                  ' attrs=' + JSON.stringify(item.attributes).substring(0, 200));
-              }
-              // 整段 <js> 规则以 if/块语句结尾（无显式 return）时，QuickJS 的
-              // JS_Eval 不传播语句完成值，桥会把 undefined 序列化成 "undefined"
-              // 再被 unwrapJsResult 清空（Android Rhino 会传播完成值，故这类
-              // 书源在 Android 正常）。追加表达式语句把 result 作为返回值。
-              const jsToEval = cssPart ? processedCode : (processedCode + '\n;result;');
-              const evalResult = JsExpressionEvaluator.evaluateSync(jsToEval, ctx);
-              if (!cssPart) {
-                console.info('[SrcEx] FieldJs whole-rule evalResult="' +
-                  String(evalResult).substring(0, 100) + '"');
-              }
+              // QuickJS 的 JS_Eval 会返回脚本最后一个表达式的完成值。整段
+              // @js: 规则（如禁漫天堂的 `text;`）必须保留该值；不能追加
+              // `result` 作为兜底，否则 result 是当前 DOM 元素时会把作者等
+              // 字段错误地序列化成 `[object Object]`。没有完成值时让字段为空，
+              // 与 Android 端脚本语义一致。
+              // 字段 JS 是书源作者的任意代码（可能内联 java.ajax 等），必须走
+              // Worker 求值；主线程同步执行曾造成 THREAD_BLOCK_6S 冻结。
+              const evalResult = await JsExpressionEvaluator.evaluateFieldScript(processedCode, ctx);
               if (evalResult && evalResult !== 'null' && evalResult !== 'undefined') {
                 try {
                   const parsed = JSON.parse(evalResult);
@@ -4496,9 +4621,9 @@ export class SourceExecutor {
             } catch (_e) { /* ignore JS error */ }
           }
           if (ajaxPostRule && result) {
-            result = this.postProcessRule(ajaxPostRule, result);
+            result = await this.postProcessRuleAsync(ajaxPostRule, result);
           } else if (postRule && result) {
-            result = this.postProcessRule(postRule, result);
+            result = await this.postProcessRuleAsync(postRule, result);
           }
           return result;
         };
@@ -4506,12 +4631,25 @@ export class SourceExecutor {
       if (!connector || rules.length === 1) {
         return compileOne(rules[0]);
       }
-      const compiled = rules.map(r => compileOne(r));
+      const compiled = rules.map((r: string) => compileOne(r));
+      // 多段子规则按顺序求值（保持 put 变量写入次序与 '||' 兜底语义一致）
       if (connector === '||') {
-        return (item: HtmlElement): string => firstNonEmpty(compiled.map(fn => fn(item)));
+        return async (item: HtmlElement): Promise<string> => {
+          for (const fn of compiled) {
+            const value = await fn(item);
+            if (value) return value;
+          }
+          return '';
+        };
       }
       if (connector === '&&') {
-        return (item: HtmlElement): string => mergeAll(compiled.map(fn => fn(item)));
+        return async (item: HtmlElement): Promise<string> => {
+          const values: string[] = [];
+          for (const fn of compiled) {
+            values.push(await fn(item));
+          }
+          return mergeAll(values);
+        };
       }
       return compiled[0];
     };
@@ -4520,7 +4658,7 @@ export class SourceExecutor {
     const getAuthor = compileFieldRule(authorRule);
     const getCover = compileFieldRule(coverRule);
     const getNoteUrl = compileFieldRule(noteUrlRule);
-    const getKind = compileFieldRule(kindRule);
+    const getKind = compileFieldRule(kindRule, true);
     const getWordCount = compileFieldRule(wordCountRule);
     const getIntro = compileFieldRule(introRule);
     const getLastChapter = compileFieldRule(lastChapterRule);
@@ -4542,9 +4680,9 @@ export class SourceExecutor {
       if (!item) continue;
 
       // 提取字段
-      let name = getName(item);
+      let name = await getName(item);
       if (fullNameRule) {
-        name = preferCompleteBookName(name, getFullName(item));
+        name = preferCompleteBookName(name, await getFullName(item));
       }
 
       // 书名兜底：取元素内的第一个 <a> 文本
@@ -4561,7 +4699,7 @@ export class SourceExecutor {
       if (!name || name.length < 1) continue;
 
       // 作者
-      const author = this.cleanAuthorName(ajaxAuthorValues[idx] || getAuthor(item));
+      const author = this.cleanAuthorName(ajaxAuthorValues[idx] || (await getAuthor(item)));
       // DEBUG: 显示归一化后的书名规则，便于 AI Agent 判断是否误取整张卡片文本
       const _normName = this.normalizeCssRule(nameRule);
       if (idx < 3) {
@@ -4580,7 +4718,7 @@ export class SourceExecutor {
      }
 
       // 封面
-      let coverUrl = getCover(item);
+      let coverUrl = await getCover(item);
       // 兜底: 饿狼小说等通过正则从 bookUrl 生成封面URL，IMPORTANT DEBUG
       if (coverUrl && idx < 3) {
         console.info('[SrcEx] Cover OK idx=' + idx + ' url=' + coverUrl.substring(0, 80));
@@ -4603,7 +4741,7 @@ export class SourceExecutor {
       }
 
       // 详情页 URL
-      let noteUrl = getNoteUrl(item);
+      let noteUrl = await getNoteUrl(item);
       // DEBUG: 显示归一化后的详情链接规则 + 提取值，便于判断 <js> 块的
       // java.getElement DOM 访问是否被静态化、onclick 跳转是否被解开
       if (idx < 3) {
@@ -4641,11 +4779,11 @@ export class SourceExecutor {
       // 表格表头、加载占位符等通常有文字但没有详情链接，不能作为书籍结果返回。
       if (!hasUsableSearchIdentity(name, noteUrl)) continue;
 
-      const cssKind = getKind(item);
-      const cssWordCount = getWordCount(item);
-      const cssIntro = getIntro(item);
-      const cssLastChapter = getLastChapter(item);
-      const cssLastUpdateTime = getLastUpdateTime(item);
+      const cssKind = await getKind(item);
+      const cssWordCount = await getWordCount(item);
+      const cssIntro = await getIntro(item);
+      const cssLastChapter = await getLastChapter(item);
+      const cssLastUpdateTime = await getLastUpdateTime(item);
 
       results.push({
         key: (source.sourceUrl || '') + '|' + noteUrl + '|' + idx,
@@ -4760,7 +4898,7 @@ export class SourceExecutor {
         const prefix = p.substring(0, jsIdx).trim();
         const code = p.substring(jsIdx + 4).trim();
         if (!code) continue;
-        const fallback = this.firstStr(item, prefix);
+        const fallback = await this.firstStrAsync(item, prefix);
         const ctx: JsEvalContext = {
           source: source,
           jsLib: source.jsLib || '',
@@ -4786,7 +4924,7 @@ export class SourceExecutor {
         if (out) return out;
         if (fallback) return fallback;
       } else {
-        const v = this.firstStr(item, p);
+        const v = await this.firstStrAsync(item, p);
         if (v) return v;
       }
     }
@@ -4832,30 +4970,30 @@ export class SourceExecutor {
         this.extractSearchField(source.ruleSearchLastUpdateTime, itemObj, source, baseUrl),
         this.extractSearchField(source.ruleSearchLastChapter, itemObj, source, baseUrl),
       ]);
-      const name = rawName || this.firstStr(itemObj, 'novelName', 'name', 'title', 'bookName', 'book_name');
+      const name = rawName || (await this.firstStrAsync(itemObj, 'novelName', 'name', 'title', 'bookName', 'book_name'));
       const author = this.cleanAuthorName(
-        rawAuthor || this.firstStr(itemObj, 'authorName', 'author', 'author_name'));
+        rawAuthor || (await this.firstStrAsync(itemObj, 'authorName', 'author', 'author_name')));
       if (!author) {
         console.info('[SrcEx] Author debug JSON', source.sourceName,
           'rule=' + (source.ruleSearchAuthor || ''), 'name="' + name.substring(0, 20) + '"');
       }
-      let rawCover0 = rawCover || this.firstStr(itemObj, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img', 'thumb_url', 'thumbUrl', 'book_cover', 'bookCover');
+      let rawCover0 = rawCover || (await this.firstStrAsync(itemObj, 'cover', 'coverUrl', 'cover_url', 'img', 'image', 'imageUrl', 'imgUrl', 'pic', 'thumbnail', 'poster', 'sImg', 'coverImg', 'cover_img', 'thumb_url', 'thumbUrl', 'book_cover', 'bookCover'));
       // 过滤非 URL 的封面值（数字 ID 等）
       const coverUrl = (rawCover0 && /^(https?:\/\/|\/\/|data:)/.test(rawCover0)) ? rawCover0 : '';
       if (!coverUrl && rawCover0) {
         console.info('[SrcEx] Bad coverUrl from', source.sourceName, ':', rawCover0, 'rule:', source.ruleSearchCover);
       }
       let noteUrl = await this.resolveSearchNoteUrl(itemObj, source.ruleSearchNoteUrl, baseUrl, source) ||
-        this.firstStr(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id', 'bookid');
+        (await this.firstStrAsync(itemObj, 'toc_url', 'book_id', 'noteUrl', 'bookUrl', 'novelId', 'id', 'url', 'bookId', 'novel_id', 'bookid'));
       if (noteUrl && !noteUrl.startsWith('http')) {
         const pathStr = /^\d+$/.test(noteUrl) ? '/book/' + noteUrl : '/novel/' + noteUrl;
         noteUrl = noteUrl.startsWith('/') ? (baseUrl || '') + noteUrl : (baseUrl || '') + pathStr;
       }
-      const kind = rawKind || this.firstStr(itemObj, 'kind', 'type', 'category', 'category_name');
-      const wordCount = rawWordCount || this.firstStr(itemObj, 'wordCount', 'wordNum', 'words', 'word_number');
-      const introduce = rawIntroduce || this.firstStr(itemObj, 'introduce', 'intro', 'summary', 'abstract', 'book_abstract', 'book_abstract_v2');
-      const lastUpdateTime = rawLastUpdateTime || this.firstStr(itemObj, 'lastUpdateTime', 'updateTime', 'last_update_time', 'last_publish_time');
-      const latestChapterTitle = rawLatestChapterTitle || this.firstStr(itemObj, 'lastChapter', 'latestChapter', 'latestChapterTitle', 'last_update_chapter', 'last_chapter_title', 'last_chapter');
+      const kind = rawKind || (await this.firstStrAsync(itemObj, 'kind', 'type', 'category', 'category_name'));
+      const wordCount = rawWordCount || (await this.firstStrAsync(itemObj, 'wordCount', 'wordNum', 'words', 'word_number'));
+      const introduce = rawIntroduce || (await this.firstStrAsync(itemObj, 'introduce', 'intro', 'summary', 'abstract', 'book_abstract', 'book_abstract_v2'));
+      const lastUpdateTime = rawLastUpdateTime || (await this.firstStrAsync(itemObj, 'lastUpdateTime', 'updateTime', 'last_update_time', 'last_publish_time'));
+      const latestChapterTitle = rawLatestChapterTitle || (await this.firstStrAsync(itemObj, 'lastChapter', 'latestChapter', 'latestChapterTitle', 'last_update_chapter', 'last_chapter_title', 'last_chapter'));
       return {
        key: (source.sourceUrl || '') + '|' + noteUrl,
        name: name || '未知书名', author: author || '', coverUrl: coverUrl || '',
@@ -4998,9 +5136,16 @@ export class SourceExecutor {
     if (!code) return '';
     try {
       const script = 'var result=' + JSON.stringify(currentResult) + ';\n' + code;
-      const r = globalScriptEngine.evaluateJsSync(script);
-      if (r && r !== 'null' && r !== 'undefined') {
-        return r.trim().replace(/^['"]|['"]$/g, '');
+      // 兜底拦截：含阻塞 API 的脚本不允许在主线程引擎同步执行（evaluateSync
+      // 的正式异步路径见 evaluateSimpleRuleJsAsync），宁可返回空也不冻结 UI。
+      if (JsExpressionEvaluator.containsBlockingApiCall(script)) {
+        console.warn('[SrcEx] evaluateSimpleRuleJs refused blocking-API script:',
+          code.substring(0, 80));
+      } else {
+        const r = globalScriptEngine.evaluateJsSync(script);
+        if (r && r !== 'null' && r !== 'undefined') {
+          return r.trim().replace(/^['"]|['"]$/g, '');
+        }
       }
     } catch (_e) {
       /* fallback below */
@@ -5022,13 +5167,116 @@ export class SourceExecutor {
     return '';
   }
 
+  /** evaluateSimpleRuleJs 的异步版：书源 <js> 后处理统一走 Worker 求值。 */
+  private async evaluateSimpleRuleJsAsync(jsCode: string, currentResult: string): Promise<string> {
+    const code = (jsCode || '').trim();
+    if (!code) return '';
+    try {
+      const r = await JsExpressionEvaluator.evaluateFieldScript(code, { result: currentResult });
+      if (r && r !== 'null' && r !== 'undefined') {
+        return r.trim().replace(/^['"]|['"]$/g, '');
+      }
+    } catch (_e) {
+      /* fall through to numeric fallback */
+    }
+    // 与同步版相同的纯计算兜底（parseInt(result)±N 页码算式），不涉及 JS 执行
+    const numericValue = parseInt(currentResult, 10);
+    if (isNaN(numericValue)) return '';
+    let match = code.match(/^(\d+)\s*([+-])\s*parseInt\s*\(\s*result\s*\)\s*;?$/);
+    if (match) {
+      const base = parseInt(match[1], 10);
+      return String(match[2] === '+' ? base + numericValue : base - numericValue);
+    }
+    match = code.match(/^parseInt\s*\(\s*result\s*\)\s*([+-])\s*(\d+)\s*;?$/);
+    if (match) {
+      const delta = parseInt(match[2], 10);
+      return String(match[1] === '+' ? numericValue + delta : numericValue - delta);
+    }
+    console.warn('[SrcEx] JS postprocess returned empty, rule=' + code.substring(0, 120));
+    return '';
+  }
+
+  /**
+   * postProcessRule 的异步版：与同步版逐段对应（## 正则 / @js: / <js> /
+   * {{result}} 模板），其中 JS 部分改走 Worker 求值，供已异步化的字段
+   * 提取链路使用（搜索卡片、详情字段、JSON 搜索结果、目录 formatJs）。
+   */
   private async postProcessRuleAsync(rule: string, value: string): Promise<string> {
     if (!rule || !value) return value;
+    // AES 解密快捷通道（历史行为保留）
     const aesMatch = rule.match(/java\.aesBase64DecodeToString\s*\(\s*result\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/);
     if (aesMatch) {
       return await CryptoUtil.aesBase64DecodeToString(value, aesMatch[1], aesMatch[2], aesMatch[3]);
     }
-    return this.postProcessRule(rule, value);
+    let result = value;
+    // 0. ## 正则替换（与同步版相同：净化 / OnlyOne）
+    const hashIdx = rule.indexOf('##');
+    if (hashIdx >= 0) {
+      const afterHash = rule.substring(hashIdx + 2);
+      const parts = afterHash.split('##');
+      const isOnlyOne = parts.length > 0 && parts[parts.length - 1] === '#';
+      const pairs = isOnlyOne ? parts.slice(0, -1) : parts;
+      if (isOnlyOne) {
+        const pattern = pairs[0];
+        const replacement = pairs.length > 1 ? pairs[1] : '';
+        if (pattern) {
+          try {
+            const regex = new RegExp(pattern);
+            const match = regex.exec(result);
+            if (match) {
+              result = replacement.replace(/\$(\d+)/g, (_m: string, idx: string) => match[parseInt(idx, 10)] || '');
+            } else {
+              result = '';
+            }
+          } catch (_e) {
+            console.warn('[SrcEx] ## regex error: ' + pattern);
+          }
+        }
+      } else {
+        for (let i = 0; i < pairs.length; i += 2) {
+          const pattern = pairs[i];
+          const replacement = i + 1 < pairs.length ? pairs[i + 1] : '';
+          try {
+            result = result.replace(new RegExp(pattern, 'g'), toJsRegexReplacement(replacement));
+          } catch (_e) {
+            console.warn('[SrcEx] ## regex error: ' + pattern);
+          }
+        }
+      }
+    }
+    // 1. @js: 处理（Worker 求值）
+    result = await JsExpressionEvaluator.processJsResultAsync(rule, result);
+    // 2. <js>...</js> 代码（Worker 求值）
+    const jsm = rule.match(/<js>([\s\S]*?)<\/js>/);
+    if (jsm) {
+      const r = await this.evaluateSimpleRuleJsAsync(jsm[1], result);
+      if (r) {
+        result = r;
+      }
+    }
+    // 3. {{result}} 模板
+    const tm = rule.match(/https?:\/\/[^\s\n]+\{\{result\}\}[^\s\n]*/);
+    if (tm) {
+      result = tm[0].replace(/\{\{result\}\}/g, result);
+      console.info('[SrcEx] PostRule tmpl: ' + result.substring(0, 100));
+    }
+    return result;
+  }
+
+  /** firstStr 的异步版：后处理统一走 postProcessRuleAsync（Worker 求值）。 */
+  private async firstStrAsync(item: Record<string, unknown>, ...paths: (string | undefined)[]): Promise<string> {
+    for (const p of paths) {
+      if (!p) continue;
+      const cleaned = this.cleanRule(p);
+      const val = this.getPath(item, cleaned);
+      let raw = '';
+      if (typeof val === 'string') raw = val;
+      else if (typeof val === 'number') raw = String(val);
+      else continue;
+      const processed = await this.postProcessRuleAsync(p, raw);
+      if (processed) return processed;
+    }
+    return '';
   }
 
   private firstStr(item: Record<string, unknown>, ...paths: (string | undefined)[]): string {
@@ -5058,7 +5306,7 @@ export class SourceExecutor {
       const expanded = rule.includes('{{') ? this.resolveRuleTemplate(rule, item, '') : rule;
       const expandedJsIndex = expanded.indexOf('@js:');
       const prefix = expandedJsIndex >= 0 ? expanded.substring(0, expandedJsIndex).trim() : '';
-      const fallback = prefix ? this.firstStr(item, prefix) : '';
+      const fallback = prefix ? (await this.firstStrAsync(item, prefix)) : '';
       const code = expanded.substring(expandedJsIndex + 4).trim();
       if (code) {
         // 先直接执行：规则是表达式（如 'https://...' + result）或赋值语句
@@ -5095,18 +5343,18 @@ export class SourceExecutor {
           if (noteUrl) return noteUrl;
         }
       }
-      if (fallback) return this.postProcessRule(rule, fallback);
+      if (fallback) return await this.postProcessRuleAsync(rule, fallback);
       return '';
     }
     const usesResultTemplate = /\{\{\s*result\s*\}\}/.test(rule);
     const hasPostProcessor = rule.includes('<js>') || rule.includes('@js:') || rule.includes('##');
     if (usesResultTemplate || hasPostProcessor) {
-      return this.firstStr(item, rule);
+      return await this.firstStrAsync(item, rule);
     }
     if (rule.includes('{{')) {
       return this.resolveRuleTemplate(rule, item, baseUrl);
     }
-    return this.firstStr(item, rule);
+    return await this.firstStrAsync(item, rule);
   }
 
   // ============ HTML 搜索结果提取（绕过损坏的 RuleParser） ============
@@ -6057,7 +6305,7 @@ export class SourceExecutor {
             for (const tmpl of matches) {
               const expr = tmpl.replace(/^\{\{/, '').replace(/\}\}$/, '');
               try {
-                const val = JsExpressionEvaluator.evaluateSync(expr, ctx);
+              const val = await JsExpressionEvaluator.evaluateFieldScript(expr, ctx);
                 if (val && val !== 'null' && val !== 'undefined') {
                   result = result.replace(tmpl, val);
                 } else {
@@ -6127,11 +6375,11 @@ export class SourceExecutor {
    * - ruleToc 以 "-" 开头时反转
    * - 不按章节号排序（保持源顺序）
    */
-  private finalizeTocList(
+  private async finalizeTocList(
     chapters: BookSourceChapter[],
     source: BookSource,
     baseTocUrl: string = ''
-  ): BookSourceChapter[] {
+  ): Promise<BookSourceChapter[]> {
     if (!chapters || chapters.length === 0) return [];
 
     let reverseToc = false;
@@ -6176,7 +6424,8 @@ export class SourceExecutor {
       for (let i = 0; i < deduped.length; i++) {
         const chapter = deduped[i];
         try {
-          const formatted = JsExpressionEvaluator.evaluateSync(formatJs +
+          // formatJs 是书源作者的任意 JS，必须走 Worker 求值避免主线程阻塞
+          const formatted = await JsExpressionEvaluator.evaluateFieldScript(formatJs +
             '\n;typeof title !== "undefined" ? title : result', {
             source: source,
             result: chapter.title,

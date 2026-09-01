@@ -142,7 +142,12 @@ export async function processMangaImageConcurrent(url: string, input: ArrayBuffe
       try {
         const sourceBuffer: ArrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
         imageSource = image.createImageSource(sourceBuffer);
-        pixelMap = await imageSource.createPixelMap();
+        // PixelMap 的默认格式由设备/解码器决定。WebP 在部分设备上会返回 BGRA，
+        // 如果后续按 RGBA 处理，重排后会出现明显的红蓝通道错位。统一解码为
+        // RGBA_8888，并在创建目标 PixelMap 时显式声明源格式，避免颜色被误解码。
+        pixelMap = await imageSource.createPixelMap({
+          desiredPixelFormat: image.PixelMapFormat.RGBA_8888,
+        } as image.DecodingOptions);
         const info: image.ImageInfo = await pixelMap.getImageInfo();
         const width: number = info.size.width;
         const height: number = info.size.height;
@@ -169,10 +174,17 @@ export async function processMangaImageConcurrent(url: string, input: ArrayBuffe
         }
 
         dstPixelMap = await image.createPixelMap(dstPixels.buffer,
-          { size: { width: width, height: height } } as image.InitializationOptions);
+          {
+            size: { width: width, height: height },
+            srcPixelFormat: image.PixelMapFormat.RGBA_8888,
+            pixelFormat: image.PixelMapFormat.RGBA_8888,
+            alphaType: info.alphaType,
+          } as image.InitializationOptions);
         imagePacker = image.createImagePacker();
         const packed: ArrayBuffer = await imagePacker.packToData(dstPixelMap,
-          { format: 'image/jpeg', quality: 90 } as image.PackingOption);
+          // Android 版这里使用 PNG；无损编码可避免 WebP 漫画的细线/文字因 JPEG
+          // 色度抽样产生色偏，同时确保输出格式与缓存文件后缀一致。
+          { format: 'image/png', quality: 100 } as image.PackingOption);
         return packed;
       } finally {
         try { if (imagePacker) imagePacker.release(); } catch (_) { /* ignore release error */ }

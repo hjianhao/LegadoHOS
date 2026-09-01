@@ -522,9 +522,10 @@ export struct BookSourceEditPage {
               }
               .onClick(() => { this.currentTab = idx; })
             })
-          }.width('100%')
+          }
         }
-        .width('100%').height(40).scrollBar(BarState.Off)
+        .width('100%').height(40)
+        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
 
         Divider().height(1).color(ThemeColors.outlineVariant(this.isDark)).width('100%')
 

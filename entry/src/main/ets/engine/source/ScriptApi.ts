@@ -861,7 +861,7 @@ export function getPolyfillScript(): string {
 	(function() {
 	  // 从 HTML 片段中按 CSS 选择器提取匹配的标签信息
 	  // 返回 [{tagMatch, fullTag, pos, innerHtml, innerText}, ...]
-	  function selectTags(html, css) {
+	  function selectTags(html, css, parent) {
 	    var items = [];
 	    if (!css) return items;
 	    // 支持 .class、tag、tag.class、#id、多选择器（逗号分隔）
@@ -873,9 +873,26 @@ export function getPolyfillScript(): string {
 	      var colonIdx = sel.indexOf(':');
 	      if (colonIdx > 0) sel = sel.substring(0, colonIdx).trim();
 
+	      // 支持书源常用的后代选择器（如 .avatar img、.talkcontent p）。
+	      // 这里只需递归拆分最后一级即可，元素本身仍由同一套选择器逻辑解析。
+	      var selectorParts = sel.split(/\\s+/);
+	      if (selectorParts.length > 1) {
+	        var descendantSelector = selectorParts.pop();
+	        var ancestorSelector = selectorParts.join(' ');
+	        var ancestors = selectTags(html, ancestorSelector, parent);
+	        for (var ai = 0; ai < ancestors.length; ai++) {
+	          var descendants = selectTags(ancestors[ai].html(), descendantSelector, ancestors[ai]);
+	          for (var di = 0; di < descendants.length; di++) items.push(descendants[di]);
+	        }
+	        continue;
+	      }
+
 	      var tagName = '', className = '', idName = '';
 	      // 解析选择器: tag.class#id
-	      var parts = sel.match(/^([a-zA-Z0-9]+)?(?:\.([a-zA-Z0-9_-]+))?(?:#([a-zA-Z0-9_-]+))?$/);
+	      // 该代码位于外层模板字符串中，点号前的反斜杠必须再转义一层；
+	      // 否则生成的正则会退化为点号通配符，#contentsource 会被误判为
+	      // class 选择器，导致话本正文规则直接返回整页 HTML。
+	      var parts = sel.match(/^([a-zA-Z0-9]+)?(?:\\.([a-zA-Z0-9_-]+))?(?:#([a-zA-Z0-9_-]+))?$/);
 	      if (parts) {
 	        tagName = parts[1] || '';
 	        className = parts[2] || '';
@@ -912,7 +929,7 @@ export function getPolyfillScript(): string {
 	        while ((m = re.exec(html)) !== null) {
 	          if (tagName && m[1].toLowerCase() !== tagName.toLowerCase()) continue;
 	            (function(tagMatch, fullTag, pos) {
-	              items.push(makeElement(html, tagMatch, fullTag, pos));
+	              items.push(makeElement(html, tagMatch, fullTag, pos, parent));
 	            })(m[1], m[0], m.index);
 	        }
 	      } catch(_) {}
@@ -920,12 +937,50 @@ export function getPolyfillScript(): string {
 	    return items;
 	  }
 
-	  // 获取当前元素的完整 innerHTML，正确处理 div 等同名标签嵌套。
-	  // 旧实现直接查找第一个 </tag>，会把 tag-container 截断到第一个子 div。
-	  function getInnerHtml(html, tagMatch, fullTag, pos) {
-	    var contentStart = pos + fullTag.length;
+	  // HTML 实体解码：Jsoup 的 Element.text() 会返回解码后的文本，
+	  // 兼容层也需要保持这一语义，尤其是话本正文中的引号实体。
+	  var entityValues = {
+	    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ensp: ' ', emsp: ' ',
+	    thinsp: '', zwnj: '', zwj: '', ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’',
+	    hellip: '…', mdash: '—', ndash: '–', middot: '·', bull: '•', copy: '©', reg: '®',
+	    trade: '™', laquo: '«', raquo: '»', plusmn: '±', times: '×', divide: '÷'
+	  };
+	  function decodeEntities(value) {
+	    var text = String(value || '');
+	    text = text.replace(/&([A-Za-z][A-Za-z0-9]+);/g, function(all, name) {
+	      if (entityValues[name] !== undefined) return entityValues[name];
+	      var lower = name.toLowerCase();
+	      return entityValues[lower] !== undefined ? entityValues[lower] : all;
+	    });
+	    text = text.replace(/&#x([0-9A-Fa-f]+);/g, function(all, hex) {
+	      var code = parseInt(hex, 16);
+	      return isFinite(code) && code >= 0 && code <= 0x10FFFF ? code <= 0xFFFF
+	        ? String.fromCharCode(code) : String.fromCharCode(0xD800 + ((code - 0x10000) >> 10),
+	          0xDC00 + ((code - 0x10000) & 0x3FF)) : all;
+	    });
+	    return text.replace(/&#([0-9]+);/g, function(all, decimal) {
+	      var code = parseInt(decimal, 10);
+	      return isFinite(code) && code >= 0 && code <= 0x10FFFF ? code <= 0xFFFF
+	        ? String.fromCharCode(code) : String.fromCharCode(0xD800 + ((code - 0x10000) >> 10),
+	          0xDC00 + ((code - 0x10000) & 0x3FF)) : all;
+	    });
+	  }
+
+	  var voidTags = {area:1, base:1, br:1, col:1, embed:1, hr:1, img:1, input:1, link:1,
+	    meta:1, param:1, source:1, track:1, wbr:1};
+
+	  // 查找元素范围，正确处理同名标签嵌套，并为 DOM 修改提供可替换区间。
+	  function findRange(html, tagMatch, fullTag, preferredPos) {
+	    // 优先使用正则匹配时记录的相对位置；同一标签重复出现时不能总取第一个。
+	    var start = preferredPos >= 0 && html.substring(preferredPos, preferredPos + fullTag.length) === fullTag
+	      ? preferredPos : html.indexOf(fullTag);
+	    if (start < 0) return null;
+	    var contentStart = start + fullTag.length;
 	    var lowerHtml = html.toLowerCase();
 	    var lowerTag = tagMatch.toLowerCase();
+	    if (voidTags[lowerTag] || fullTag.charAt(fullTag.length - 2) === '/') {
+	      return {start:start, innerStart:contentStart, innerEnd:contentStart, end:contentStart};
+	    }
 	    var openToken = '<' + lowerTag;
 	    var closeToken = '</' + lowerTag + '>';
 	    var cursor = contentStart;
@@ -933,107 +988,154 @@ export function getPolyfillScript(): string {
 	    while (cursor < html.length) {
 	      var nextOpen = lowerHtml.indexOf(openToken, cursor);
 	      var nextClose = lowerHtml.indexOf(closeToken, cursor);
-	      if (nextClose < 0) return html.substring(contentStart);
-	      // 避免把 <divider> 误判为 <div>。
+	      if (nextClose < 0) return {start:start, innerStart:contentStart, innerEnd:html.length, end:html.length};
 	      var validOpen = nextOpen >= 0;
 	      if (validOpen) {
 	        var boundary = lowerHtml.charAt(nextOpen + openToken.length);
-	        validOpen = boundary === '>' || boundary === '/' || boundary === ' ' || boundary === '\\t' || boundary === '\\r' || boundary === '\\n';
+	        validOpen = boundary === '>' || boundary === '/' || boundary === ' ' || boundary === '\\t' ||
+	          boundary === '\\r' || boundary === '\\n';
 	      }
 	      if (validOpen && nextOpen < nextClose) {
 	        var openEnd = lowerHtml.indexOf('>', nextOpen + openToken.length);
-	        if (openEnd < 0) return html.substring(contentStart);
+	        if (openEnd < 0) return {start:start, innerStart:contentStart, innerEnd:html.length, end:html.length};
 	        if (lowerHtml.charAt(openEnd - 1) !== '/') depth++;
 	        cursor = openEnd + 1;
 	      } else {
 	        depth--;
-	        if (depth === 0) return html.substring(contentStart, nextClose);
+	        if (depth === 0) return {start:start, innerStart:contentStart, innerEnd:nextClose, end:nextClose + closeToken.length};
 	        cursor = nextClose + closeToken.length;
 	      }
 	    }
-	    return html.substring(contentStart);
+	    return {start:start, innerStart:contentStart, innerEnd:html.length, end:html.length};
 	  }
 
-	  // 创建一个 Element 对象，支持 .select/.attr/.text/.html
-	  function makeElement(html, tagMatch, fullTag, pos) {
-	    return {
-	      attr: function(name) {
-	        var am = fullTag.match(new RegExp(name + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
+	  function getInnerHtml(html, tagMatch, fullTag, pos) {
+	    var range = findRange(html, tagMatch, fullTag, pos);
+	    return range ? html.substring(range.innerStart, range.innerEnd) : '';
+	  }
+
+	  function parentHtml(parent) {
+	    return parent && parent._isDocument ? parent._html : (parent ? parent._innerValue : '');
+	  }
+
+	  function setParentHtml(parent, value) {
+	    if (!parent) return;
+	    if (parent._isDocument) parent._html = value;
+	    else parent._innerValue = value;
+	  }
+
+	  function serializeElement(element) {
+	    var attrs = '';
+	    var attrMap = element._attrs || {};
+	    for (var key in attrMap) {
+	      if (!Object.prototype.hasOwnProperty.call(attrMap, key)) continue;
+	      attrs += ' ' + key + '=\"' + String(attrMap[key]).replace(/&/g, '&amp;').replace(/\"/g, '&quot;') + '\"';
+	    }
+	    var inner = element._children ? element._children.map(function(child) {
+	      return typeof child === 'string' ? child : serializeElement(child);
+	    }).join('') : element._innerValue || '';
+	    if (voidTags[element._tagMatch.toLowerCase()]) return '<' + element._tagMatch + attrs + '>';
+	    return '<' + element._tagMatch + attrs + '>' + inner + '</' + element._tagMatch + '>';
+	  }
+
+	  function replaceElement(element, replacement) {
+	    var parent = element._parent;
+	    if (!parent) return element;
+	    var html = parentHtml(parent);
+	    var start = html.indexOf(element._initialOuter);
+	    var end = start >= 0 ? start + element._initialOuter.length : -1;
+	    if (start < 0) {
+	      var range = findRange(html, element._tagMatch, element._fullTag, element._preferredPos);
+	      if (!range) return element;
+	      start = range.start;
+	      end = range.end;
+	    }
+	    setParentHtml(parent, html.substring(0, start) + replacement + html.substring(end));
+	    element._removed = true;
+	    return element;
+	  }
+
+	  function createDetachedElement(tagName) {
+	    var element = {
+	      _tagMatch: String(tagName || 'div'), _fullTag: '<' + String(tagName || 'div') + '>',
+	      _preferredPos: 0, _parent: null, _innerValue: '', _children: [], _attrs: {}, _detached: true,
+	      attr: function(name, value) {
+	        if (value !== undefined) { this._attrs[String(name).toLowerCase()] = String(value); return this; }
+	        return this._attrs[String(name).toLowerCase()] || '';
+	      },
+	      text: function() { return decodeEntities(this._children.join('').replace(/<[^>]+>/g, '')).trim(); },
+	      html: function() { return this._children.map(function(child) { return typeof child === 'string' ? child : serializeElement(child); }).join(''); },
+	      appendChild: function(child) { if (child) { child._parent = this; this._children.push(child); } return this; },
+	      appendText: function(value) {
+	        var text = String(value === undefined || value === null ? '' : value);
+	        this._children.push(text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+	        return this;
+	      },
+	      select: function(css) { return makeElements(this.html(), selectTags(this.html(), css, this), this); },
+	      replaceWith: function() { return this; }, remove: function() { return this; }
+	    };
+	    return element;
+	  }
+
+	  // 创建一个可读写的 Element 对象，支持书源常用的 DOM 修改 API。
+	  function makeElement(html, tagMatch, fullTag, pos, parent) {
+	    var innerValue = getInnerHtml(html, tagMatch, fullTag, pos);
+	    var element = {
+	      _tagMatch: tagMatch, _fullTag: fullTag, _preferredPos: pos, _parent: parent || null,
+	      _innerValue: innerValue, _initialOuter: fullTag + innerValue +
+	        (voidTags[tagMatch.toLowerCase()] ? '' : '</' + tagMatch + '>'), _attrs: null,
+	      attr: function(name, value) {
+	        if (value !== undefined) return this;
+	        var escaped = String(name);
+	        var am = fullTag.match(new RegExp(escaped + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
 	        if (am) return am[1];
-	        var am2 = fullTag.match(new RegExp(name + "\\\\s*=\\\\s*'([^']*)'", 'i'));
+	        var am2 = fullTag.match(new RegExp(escaped + "\\\\s*=\\\\s*'([^']*)'", 'i'));
 	        return am2 ? am2[1] : '';
 	      },
 	      text: function() {
-	        return getInnerHtml(html, tagMatch, fullTag, pos).replace(/<[^>]+>/g, '').trim();
+	        return decodeEntities(this._innerValue.replace(/<[^>]+>/g, '')).replace(/[\\s]+/g, ' ').trim();
 	      },
-	      html: function() {
-	        return getInnerHtml(html, tagMatch, fullTag, pos);
-	      },
-	      // 链式 select：在当前元素的 innerHTML 中查找
+	      html: function() { return this._innerValue; },
 	      select: function(css) {
 	        var inner = this.html();
-	        var subItems = selectTags(inner, css);
-	        return makeElements(inner, subItems);
-	      }
+	        return makeElements(inner, selectTags(inner, css, this), this);
+	      },
+	      remove: function() { return replaceElement(this, ''); },
+	      replaceWith: function(value) { return replaceElement(this, value && value._detached ? serializeElement(value) : String(value || '')); },
+	      appendChild: function(child) { if (child) this._innerValue += child._detached ? serializeElement(child) : child.outerHtml(); return this; },
+	      appendText: function(value) { this._innerValue += String(value === undefined || value === null ? '' : value); return this; },
+	      outerHtml: function() { return this._fullTag + this._innerValue + (voidTags[this._tagMatch.toLowerCase()] ? '' : '</' + this._tagMatch + '>'); }
 	    };
+	    return element;
 	  }
 
-	  // 创建 Elements 类数组对象（同时是真正的数组，支持 .at()/.toArray()/.select()）
-	  function makeElements(html, items) {
-	    // 用真数组作为基础，使 .at()/.forEach()/for...of 等原生方法可用
+	  // 创建 Elements 类数组对象（同时是真正的数组，支持 .at()/.toArray()/.select()）。
+	  function makeElements(html, items, parent) {
 	    var els = items.slice();
-	    // Elements 上的方法（非可枚举，不干扰 for...in）
-	    Object.defineProperty(els, 'attr', {
-	      value: function(name) { return items.length > 0 ? items[0].attr(name) : ''; }
-	    });
-	    Object.defineProperty(els, 'text', {
-	      value: function() {
-	        return items.length > 0 ? items[0].text() : '';
+	    Object.defineProperty(els, 'attr', { value: function(name) { return items.length > 0 ? items[0].attr(name) : ''; } });
+	    Object.defineProperty(els, 'text', { value: function() { return items.length > 0 ? items[0].text() : ''; } });
+	    Object.defineProperty(els, 'html', { value: function() { return items.length > 0 ? items[0].html() : ''; } });
+	    Object.defineProperty(els, 'eq', { value: function(i) { return items[i] || createDetachedElement('div'); } });
+	    Object.defineProperty(els, 'first', { value: function() { return items[0] || null; } });
+	    Object.defineProperty(els, 'last', { value: function() { return items[items.length - 1] || null; } });
+	    Object.defineProperty(els, 'isEmpty', { value: function() { return items.length === 0; } });
+	    Object.defineProperty(els, 'size', { value: function() { return items.length; } });
+	    Object.defineProperty(els, 'get', { value: function(i) { return items[i] || null; } });
+	    Object.defineProperty(els, 'toArray', { value: function() { return items.slice(); } });
+	    Object.defineProperty(els, 'each', { value: function(fn) { for (var i = 0; i < items.length; i++) fn(items[i]); } });
+	    Object.defineProperty(els, 'remove', { value: function() {
+	      for (var i = items.length - 1; i >= 0; i--) items[i].remove();
+	      return this;
+	    } });
+	    Object.defineProperty(els, 'select', { value: function(css) {
+	      var all = [];
+	      for (var i = 0; i < items.length; i++) {
+	        var inner = items[i].html();
+	        var sub = selectTags(inner, css, items[i]);
+	        for (var j = 0; j < sub.length; j++) all.push(sub[j]);
 	      }
-	    });
-	    Object.defineProperty(els, 'html', {
-	      value: function() {
-	        return items.length > 0 ? items[0].html() : '';
-	      }
-	    });
-	    Object.defineProperty(els, 'eq', {
-	      value: function(i) {
-	        return items[i] || { attr:function(){return '';}, text:function(){return '';}, html:function(){return '';}, select:function(){return makeElements('', []);} };
-	      }
-	    });
-	    Object.defineProperty(els, 'first', {
-	      value: function() { return items[0] || null; }
-	    });
-	    Object.defineProperty(els, 'last', {
-	      value: function() { return items[items.length - 1] || null; }
-	    });
-	    Object.defineProperty(els, 'isEmpty', {
-	      value: function() { return items.length === 0; }
-	    });
-	    Object.defineProperty(els, 'size', {
-	      value: function() { return items.length; }
-	    });
-	    Object.defineProperty(els, 'get', {
-	      value: function(i) { return items[i] || null; }
-	    });
-		    Object.defineProperty(els, 'toArray', {
-		      value: function() { return items.slice(); }
-		    });
-		    Object.defineProperty(els, 'each', {
-		      value: function(fn) { for (var i = 0; i < items.length; i++) fn(items[i]); }
-		    });
-	    Object.defineProperty(els, 'select', {
-	      value: function(css) {
-	        // 对所有元素的 innerHTML 做 select，合并结果
-	        var all = [];
-	        for (var i = 0; i < items.length; i++) {
-	          var inner = items[i].html();
-	          var sub = selectTags(inner, css);
-	          for (var j = 0; j < sub.length; j++) all.push(sub[j]);
-	        }
-	        return makeElements(html, all);
-	      }
-	    });
+	      return makeElements(html, all, parent);
+	    } });
 	    return els;
 	  }
 
@@ -1043,18 +1145,22 @@ export function getPolyfillScript(): string {
 		        Jsoup: {
 		          parse: function(html) {
 		            console.log('[Jsoup] parse called, html len=' + (html ? html.length : 0));
-		            return {
+		            var doc = {
+		              _isDocument: true,
+		              _html: String(html || ''),
 		              select: function(css) {
-		                var items = selectTags(html, css);
+		                var items = selectTags(this._html, css, this);
 		                console.log('[Jsoup] select "' + css + '" found ' + items.length + ' items');
-		                return makeElements(html, items);
+		                return makeElements(this._html, items, this);
 		              },
-	              text: function() { return html.replace(/<[^>]+>/g, '').trim(); },
+	              text: function() { return decodeEntities(this._html.replace(/<[^>]+>/g, '')).trim(); },
 	              attr: function(name) {
-	                var m2 = html.match(new RegExp(name + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
+	                var m2 = this._html.match(new RegExp(name + '\\\\s*=\\\\s*"([^"]*)"', 'i'));
 	                return m2 ? m2[1] : '';
-	              }
+	              },
+	              createElement: function(tagName) { return createDetachedElement(tagName); }
 	            };
+	            return doc;
 	          }
 	        }
 	      }

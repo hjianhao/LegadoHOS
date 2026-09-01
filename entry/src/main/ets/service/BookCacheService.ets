@@ -278,6 +278,10 @@ export class BookCacheService {
 
   private reportProgress(req: CacheBookRequest, done: number, total: number, title: string, notifId: number): void {
     if (req.onProgress) req.onProgress(done, total, title);
+    // DATA_TRANSFER 长时任务要求使用 startBackgroundRunning 返回的
+    // notificationId 更新实况窗；普通通知只用于兼容旧设备/展示书名，
+    // 不能替代系统进度通知。
+    BackgroundRunningManager.reportProgress('《' + req.bookName + '》', done, total);
     this.publishNotif(notifId, '离线缓存', '《' + req.bookName + '》 ' + done + '/' + total + ' 章');
   }
 
@@ -307,7 +311,8 @@ export class BookCacheService {
       await BackgroundRunningManager.acquire(context, 'book-cache-' + bookId);
       console.info('[BookCache] bg task started');
     } catch (e) {
-      console.warn('[BookCache] bg task fail:', JSON.stringify(e));
+      const err = e as Error;
+      console.warn('[BookCache] bg task fail:', err.message || String(e));
     }
   }
 
@@ -316,7 +321,8 @@ export class BookCacheService {
       await BackgroundRunningManager.release(context, 'book-cache-' + bookId);
       console.info('[BookCache] bg task stopped');
     } catch (e) {
-      console.warn('[BookCache] stopBgTask fail:', JSON.stringify(e));
+      const err = e as Error;
+      console.warn('[BookCache] stopBgTask fail:', err.message || String(e));
     }
   }
 }

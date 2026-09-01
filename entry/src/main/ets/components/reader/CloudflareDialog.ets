@@ -3,7 +3,7 @@
  *
  * 当请求被反爬保护拦截时，弹出此窗口让用户手动验证或查看错误。
  * - Cloudflare/JS 挑战：用户手动点击验证，通过后提取页面 HTML
- * - 403/404 等硬错误：显示错误信息，自动关闭
+ * - 真实硬错误：保留页面并显示状态，用户可重试或关闭
  */
 import web_webview from '@ohos.web.webview';
 import { ThemeColors } from '../../theme/ThemeColors';
@@ -24,14 +24,16 @@ export struct CloudflareDialog {
   @State pageTitle: string = '页面加载中...';
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
-  /** 当前页面是否被 WAF/Cloudflare 以 403 硬拦截（交互窗口内没有可操作的验证控件）。 */
-  @State hasWafBlock: boolean = false;
   /** 当前使用的视图模式；验证码/登录页多为移动版站点，默认移动 UA。 */
   @State isDesktopMode: boolean = false;
   private loginPanelOpened_: boolean = false;
   private prefillTimer_: number = -1;
-  private prefillApplied_: boolean = false;
-  private prefillSubmitted_: boolean = false;
+  /** ArkUI 重建组件时也要保留预填状态，避免 onPageEnd 重复派发输入事件。 */
+  @State private prefillApplied_: boolean = false;
+  @State private prefillSubmitted_: boolean = false;
+  private prefillInFlight_: boolean = false;
+  /** 同一弹窗内跨页面重载去重；新弹窗会生成新的 key。 */
+  private prefillSessionKey_: string = '__legado_prefill_' + Date.now().toString();
 
   aboutToAppear(): void {
     // 不再强制桌面模式：部分站点的验证码只有移动版页面能加载，桌面版
@@ -130,7 +132,7 @@ export struct CloudflareDialog {
             .onPageEnd(() => {
               this.isLoading = false;
               // 只在首次搜索页同步输入框。提交后结果页也可能保留搜索
-              // 表单，不能再次派发 keyup 导致站点重复提交/重新限频。
+              // 表单，不能再次派发输入事件导致站点重复提交/重新限频。
               if (!this.prefillApplied_) {
                 void this.prefillRequest_();
                 this.schedulePrefill_();
@@ -149,7 +151,35 @@ export struct CloudflareDialog {
             .onErrorReceive((event) => {
               if (event?.error?.getErrorCode() === -1) return;
               const errInfo = event?.error?.getErrorInfo() || '';
+              // Cloudflare Turnstile 会在挑战页内加载跨域 iframe；其脚本/媒体
+              // 请求失败时 ArkWeb 也会回调 onErrorReceive。此类子框架错误不等于
+              // 当前验证页无法使用，不能把整个 WebView 替换成错误页，否则用户
+              // 尚未完成验证就失去复选框/跳转页面（山丽文学网即会触发
+              // ERR_INTERNET_DISCONNECTED）。只有主框架失败才显示错误状态。
+              let isMainFrame = true;
+              try {
+                isMainFrame = event?.request?.isMainFrame() ?? true;
+              } catch (_e) {
+                // 旧版本 Web API 可能不支持 isMainFrame，按主框架处理。
+              }
               console.warn('[CloudflareDialog] WebView error:', errInfo);
+              if (!isMainFrame) {
+                console.info('[CloudflareDialog] Ignoring subframe WebView error:', errInfo);
+                return;
+              }
+              // 即使页面稍后因主框架网络错误无法执行 outerHTML，也尽早把挑战
+              // 期间写入的 cookie 交给 HTTP 层，供原始搜索请求重放。
+              void this.syncCookies_();
+              // Turnstile 的跨域资源在 ArkWeb 中偶发上报
+              // ERR_INTERNET_DISCONNECTED（部分系统版本会误标为主框架）。
+              // 这不是验证失败；保留交互页面，避免刚出现验证控件就切换到
+              // 错误页。用户仍可完成验证并点击“验证完成”。
+              if (/ERR_INTERNET_DISCONNECTED/i.test(errInfo) &&
+                WebViewFetcher.interactivePurpose !== 'login') {
+                this.isLoading = false;
+                this.pageTitle = '验证页面部分资源加载失败，仍可继续操作';
+                return;
+              }
               this.hasError = true;
               this.isLoading = false;
               this.pageTitle = '页面加载出错，可重试或关闭';
@@ -167,16 +197,17 @@ export struct CloudflareDialog {
               } catch (_e) {
                 // 旧版本 Web API 可能不支持 isMainFrame，按主框架处理。
               }
-              // 403 是 Cloudflare/WAF 拦截的典型状态码。它不在 4xx/5xx 常规错误分支内，
-              // 此前被静默当成子资源记录，用户只会看到空白 Not Found 壳而不
-              // 知道为什么验证不了。只有主框架 403 才意味着整页被拒（可判定为
-              // WAF 硬拦截）；子资源 403（图片/脚本防盗链）仍按普通状态记录，
-              // 不能因为页面引用了被拦的统计脚本就把整个交互判定为无法验证。
+              // 403 是 Cloudflare/WAF 常见状态码，但 Turnstile 挑战页本身也会
+              // 返回 403，不能仅凭状态码判定为硬拦截；子资源 403（图片/脚本
+              // 防盗链）同样只记录，不影响交互页面继续运行。
               if (code === 403) {
                 console.warn('[CloudflareDialog] HTTP 403:', 'mainFrame=', String(isMainFrame), 'url=', this.url);
                 if (isMainFrame) {
-                  this.hasWafBlock = true;
-                  this.pageTitle = '网站被 Cloudflare/WAF 拦截（403）· 当前网络/WebView 环境可能无法通过验证';
+                  // Cloudflare 的 Turnstile 挑战页本身通常就是 HTTP 403，不能
+                  // 仅凭状态码判定为“硬拦截”。保留 WebView 让用户完成挑战；
+                  // 真正的 403/Not Found 短壳会在 extractAndClose 中结合页面
+                  // 内容再判定，避免山丽文学网验证页被提前关闭。
+                  this.pageTitle = '网站返回 HTTP 403 · 请完成验证后点击"验证完成"';
                 } else {
                   console.info('[CloudflareDialog] Subresource 403:', this.url);
                 }
@@ -207,16 +238,30 @@ export struct CloudflareDialog {
   /**
    * 交互验证打开的是 GET 页面，而触发验证的请求可能是 POST；如果不把
    * 原始表单体回填，用户看到的搜索框就是空的，点击“验证完成”也只会
-   * 返回空搜索页。搜索表单回填后自动提交，等价于用户重新输入并点击搜索；
-   * WAF 页面没有匹配的搜索字段时不会提交，仍由用户手动完成验证。
+   * 返回空搜索页。只有明确的 searchSubmit 用途才自动提交。Cloudflare
+   * challenge 的原始 POST 会在验证完成后由 SourceExecutor 重放；在验证
+   * WebView 中提交表单会再次触发 WAF/验证码，山丽文学网尤其会因 keyup
+   * 事件形成提交循环。
    */
   private async prefillRequest_(): Promise<void> {
     const body = (this.requestBody || '').trim();
-    if (!body) return;
+    if (!body || this.prefillInFlight_) return;
+    this.prefillInFlight_ = true;
     const bodyLiteral = JSON.stringify(body) || '""';
+    const allowSubmitLiteral = WebViewFetcher.interactivePurpose === 'searchSubmit' ? 'true' : 'false';
+    const sessionKeyLiteral = JSON.stringify(this.prefillSessionKey_) || '"__legado_prefill"';
     try {
-      const result = await this.webController.runJavaScript(`(function(raw) {
+      const result = await this.webController.runJavaScript(`(function(raw, allowSubmit, markerKey) {
         try {
+          // 页面提交后会完整重载，普通 JS 变量会丢失；sessionStorage 在同源
+          // 重载间保持不变，用它保证同一弹窗不会再次回填/提交同一请求。
+          var markerStore = null;
+          try {
+            markerStore = window.sessionStorage;
+            if (markerStore && markerKey && markerStore.getItem(markerKey) === '1') {
+              return '0:0:0';
+            }
+          } catch (e) {}
           var fields = document.querySelectorAll('input,textarea,select');
           var pairs = String(raw || '').split('&');
           var values = [];
@@ -229,8 +274,9 @@ export struct CloudflareDialog {
             catch (e) { return String(value || ''); }
           };
           // 不能只给 element.value 赋值：Vue/React 及不少老站点的搜索脚本
-          // 会维护自己的状态，必须通过原生 setter + 输入/键盘事件同步状态，
-          // 才等价于用户重新输入同一个关键词。
+          // 会维护自己的状态，使用原生 setter + input/change 事件同步状态。
+          // 不派发 keydown/keyup：老站点常把 keyup 绑定为立即搜索，会造成
+          // 验证页重载和验证码弹窗循环。
           var setNativeValue = function(element, value) {
             try {
               var proto = element instanceof HTMLTextAreaElement
@@ -243,18 +289,15 @@ export struct CloudflareDialog {
             try { element.defaultValue = value; } catch (e) {}
           };
           var notifyInput = function(element) {
-            var eventNames = ['input', 'change', 'keydown', 'keyup'];
+            // challenge 只需要把关键词显示给用户，不能触发站点的搜索监听器；
+            // 否则某些老站会在 input/change 事件中再次提交。searchSubmit
+            // 才需要同步框架状态并自动提交表单。
+            if (!allowSubmit) return;
+            var eventNames = ['input', 'change'];
             for (var eIndex = 0; eIndex < eventNames.length; eIndex++) {
               var eventName = eventNames[eIndex];
               try {
-                var event;
-                if (eventName === 'keydown' || eventName === 'keyup') {
-                  event = new KeyboardEvent(eventName, {
-                    bubbles: true, cancelable: true, key: 'Unidentified', code: '', keyCode: 0, which: 0
-                  });
-                } else {
-                  event = new Event(eventName, { bubbles: true, cancelable: true });
-                }
+                var event = new Event(eventName, { bubbles: true, cancelable: true });
                 element.dispatchEvent(event);
                 dispatched++;
               } catch (e) {}
@@ -303,10 +346,15 @@ export struct CloudflareDialog {
             }
           }
           var submitted = 0;
-          if (filled > 0 && values.length > 0 && explicitSearchField) {
+          if (filled > 0 && markerStore && markerKey) {
+            try { markerStore.setItem(markerKey, '1'); } catch (e) {}
+          }
+          // challenge 用途只回填，不提交；验证通过后调用方会用原始 POST
+          // body 重放。只有 webView=true 的 searchSubmit 流程允许自动提交。
+          if (allowSubmit && filled > 0 && values.length > 0 && explicitSearchField) {
             try {
               // 只有明确找到请求体中的搜索字段，或控件本身明确标注为搜索框，
-              // 才自动提交；挑战页通常没有这些特征，因此不会误提交验证码表单。
+              // 才自动提交，避免误提交验证码表单。
               if (submitField && submitField.form) {
                 var submitForm = submitField.form;
                 if (typeof submitForm.requestSubmit === 'function') {
@@ -324,11 +372,14 @@ export struct CloudflareDialog {
           }
           return String(filled) + ':' + String(dispatched) + ':' + String(submitted);
         } catch (e) { return '0'; }
-      })(${bodyLiteral})`);
+      })(${bodyLiteral}, ${allowSubmitLiteral}, ${sessionKeyLiteral})`);
       const resultText = String(result || '0');
       const filledText = resultText.split(':')[0];
       const submittedText = resultText.split(':')[2] || '0';
-      if (Number(filledText) > 0) this.prefillApplied_ = true;
+      if (Number(filledText) > 0) {
+        this.prefillApplied_ = true;
+        this.clearPrefillTimer_();
+      }
       if (Number(submittedText) > 0) {
         this.prefillSubmitted_ = true;
         this.clearPrefillTimer_();
@@ -336,13 +387,15 @@ export struct CloudflareDialog {
       console.info('[CloudflareDialog] POST 搜索关键词预填结果=' + resultText);
     } catch (e) {
       console.warn('[CloudflareDialog] 预填 POST 搜索关键词失败：', (e as Error).message);
+    } finally {
+      this.prefillInFlight_ = false;
     }
   }
 
   /** 页面脚本可能在 onPageEnd 之后才绑定搜索监听器，延迟再同步一次。 */
   private schedulePrefill_(): void {
     this.clearPrefillTimer_();
-    if (!(this.requestBody || '').trim() || this.prefillSubmitted_) return;
+    if (!(this.requestBody || '').trim() || this.prefillApplied_ || this.prefillSubmitted_) return;
     this.prefillTimer_ = setTimeout((): void => {
       this.prefillTimer_ = -1;
       void this.prefillRequest_();
@@ -390,16 +443,21 @@ export struct CloudflareDialog {
       );
       if (html && typeof html === 'string' && html.length > 200) {
         const clean = WebViewFetcher.decodeJavaScriptString(html);
+        // 无论当前提取到的是挑战页、404 壳还是正常结果，都先同步浏览器
+        // 会话。Cloudflare 通行证往往会把 GET 挑战页重载成 404，而搜索随后
+        // 还需要用原始 POST 体重放；若在挑战判定前返回，cf_clearance 不会
+        // 进入 NetUtil 的 CookieStore，重放仍会再次收到 403。
+        await this.syncCookies_();
         if (WebViewFetcher.isInteractiveChallengeHtml(clean)) {
-          // 硬拦截兜底判定：即使 onHttpErrorReceive 未标记 hasWafBlock（主框架
-          // 403 在部分 Web 版本走 onErrorReceive），只要提取到的仍是带 403/
-          // Not Found/CF 挑战脚本特征的短壳页，就说明交互窗口里没有可操作的
-          // 验证控件，继续等待也无法完成。直接关闭并让调用方拿到空结果，
-          // 由 Agent 给出"站点无法适配"的明确错误。
-          const looksHardBlockedShell = this.hasWafBlock || (
-            clean.length < 2000 &&
-            /not found|http error 404|403[^<]{0,20}|__CF\$cv\$params|challenge-platform/i.test(clean) &&
-            !/<(?:input|form)\b[^>]*(?:captcha|verification|verify|验证码)[^>]*>/i.test(clean));
+          // 硬拦截兜底判定：提取到带 403/Not Found/CF 挑战脚本特征的短壳，
+          // 且没有验证码控件时，说明交互窗口里没有可操作的验证入口。直接
+          // 关闭并让调用方拿到空结果，由上层给出“站点无法适配”的明确错误。
+          // 有些站点的挑战壳很大（会内嵌整段 Cloudflare 脚本），不能再用
+          // 页面长度作为唯一条件。只要页面仍含 Turnstile iframe/验证码控件，
+          // 就保留给用户操作；带挑战标记但完全没有入口的页面才判为硬拦截。
+          const hasVerificationControl = /(?:cf-turnstile|cf-chl-widget|turnstile|challenge-form|challenges\.cloudflare\.com|captcha|验证码|<(?:input|form)\b[^>]*(?:verification|verify)[^>]*>)/i.test(clean);
+          const hasHardBlockMarker = /not found|http error 404|403[^<]{0,20}|__CF\$cv\$params|challenge-platform/i.test(clean);
+          const looksHardBlockedShell = hasHardBlockMarker && !hasVerificationControl;
           if (looksHardBlockedShell) {
             this.pageTitle = '站点被 Cloudflare/WAF 硬拦截，无法通过验证';
             this.doClose();
@@ -407,16 +465,6 @@ export struct CloudflareDialog {
           }
           this.pageTitle = '验证尚未完成，请输入验证码并等待结果出现';
           return;
-        }
-        try {
-          const webCookie = web_webview.WebCookieManager.fetchCookieSync(this.url);
-          if (webCookie && webCookie.trim()) {
-            await CookieStore.getInstance().setCookie(this.url, webCookie);
-            console.info('[CloudflareDialog] WebView Cookie 已同步，长度=' + webCookie.length);
-          }
-        } catch (cookieError) {
-          console.warn('[CloudflareDialog] 同步 WebView Cookie 失败：',
-            (cookieError as Error).message);
         }
         console.info('[CloudflareDialog] Extracted HTML:', clean.length, 'bytes');
         if (WebViewFetcher.interactiveResolve) {
@@ -430,6 +478,20 @@ export struct CloudflareDialog {
       console.warn('[CloudflareDialog] Extract error:', (e as Error).message);
     }
     this.doClose();
+  }
+
+  /** 将交互 WebView 的会话同步到 HTTP 层，供验证后的请求重放使用。 */
+  private async syncCookies_(): Promise<void> {
+    try {
+      const webCookie = web_webview.WebCookieManager.fetchCookieSync(this.url);
+      if (webCookie && webCookie.trim()) {
+        await CookieStore.getInstance().setCookie(this.url, webCookie);
+        console.info('[CloudflareDialog] WebView Cookie 已同步，长度=' + webCookie.length);
+      }
+    } catch (cookieError) {
+      console.warn('[CloudflareDialog] 同步 WebView Cookie 失败：',
+        (cookieError as Error).message);
+    }
   }
 
   private doClose(): void {

@@ -46,6 +46,13 @@ function md5Short(url: string): string {
 /** 从 URL 提取图片后缀 */
 function getImageSuffix(url: string): string {
   try {
+    // 禁漫天堂的 /photos/{bookId}/{imgId} 图片会经过像素重排并统一编码为 PNG。
+    // 缓存路径必须使用实际编码格式，否则 WebP URL 会得到“JPEG/PNG 内容 + .webp
+    // 后缀”，部分设备会按后缀选择解码器，进而出现颜色异常或加载失败。
+    const photoMatch: RegExpMatchArray | null = url.match(/photos\/(\d+)\/(\d+)/i);
+    if (photoMatch && parseInt(photoMatch[1], 10) >= 220980 && !url.toLowerCase().includes('.gif')) {
+      return 'png';
+    }
     const cleanUrl: string = url.split('?')[0].split('#')[0];
     const lastDot: number = cleanUrl.lastIndexOf('.');
     if (lastDot > 0) {
