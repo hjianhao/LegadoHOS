@@ -28,7 +28,7 @@ import {
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
   isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
   plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_,
-  buildAiVisibleNameRuleCandidates_, extractSearchFormFromJsSource_
+  buildAiVisibleNameRuleCandidates_, extractSearchFormFromJsSource_, resolveSourceRedirectUrl_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
@@ -41,7 +41,7 @@ import {
 } from '../main/ets/service/OnlineSearchEngineService';
 import {
   isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_, shouldKeepPostBodyOnRedirect_,
-  migrateLegacySourceUrl, NetUtil
+  migrateLegacySourceUrl, registerSourceOriginAlias, NetUtil
 } from '../main/ets/util/NetUtil';
 
 export default function bookSourceManagementTest() {
@@ -62,6 +62,24 @@ export default function bookSourceManagementTest() {
         .assertEqual('https://manwari.cc/comic/97606');
       expect(migrateLegacySourceUrl('https://example.com/comic/97606'))
         .assertEqual('https://example.com/comic/97606');
+    });
+
+    it('resolvesSourceOriginRedirectBeforeAgentFetch', 0, () => {
+      expect(resolveSourceRedirectUrl_('/new-home/', 'https://legacy.example/'))
+        .assertEqual('https://legacy.example/new-home/');
+      expect(resolveSourceRedirectUrl_('https://new.example/', 'https://legacy.example/'))
+        .assertEqual('https://new.example/');
+      expect(resolveSourceRedirectUrl_('', 'https://legacy.example/')).assertEqual('');
+    });
+
+    it('appliesVerifiedRuntimeSourceOriginAlias', 0, () => {
+      registerSourceOriginAlias('https://legacy.example', 'https://new.example');
+      expect(migrateLegacySourceUrl('https://legacy.example/book/1'))
+        .assertEqual('https://new.example/book/1');
+      expect(migrateLegacySourceUrl('https://www.legacy.example/book/1'))
+        .assertEqual('https://new.example/book/1');
+      expect(migrateLegacySourceUrl('https://legacy.example.evil/book/1'))
+        .assertEqual('https://legacy.example.evil/book/1');
     });
 
     it('sharesOnlineSearchEngineSemantics', 0, () => {

@@ -10,16 +10,54 @@ import { CookieStore } from './CookieStore';
 import { DISABLE_COOKIE_HEADER, REQUEST_GROUP_HEADER } from '../engine/source/SourceNetworkPolicy';
 
 /**
- * 漫蛙旧域名已停止提供服务，DNS 可能解析到拒绝连接的地址。
+ * 已验证的书源域名别名。内置别名解决已知站点迁移；AI Agent 在完成真实
+ * 页面/搜索验证后可注册运行时别名，让本轮会话中的旧书籍链接也随之迁移。
+ */
+const sourceOriginAliases: Map<string, string> = new Map<string, string>([
+  ['https://manware.cc', 'https://manwari.cc'],
+  ['http://manware.cc', 'http://manwari.cc'],
+]);
+
+function normalizedOrigin_(rawOrigin: string): string {
+  const value = (rawOrigin || '').trim().replace(/\/+$/, '');
+  return /^https?:\/\/[^/?#]+$/i.test(value) ? value : '';
+}
+
+/** 注册已验证的书源域名别名；拒绝非 HTTP(S) 或空 origin，避免扩大请求范围。 */
+export function registerSourceOriginAlias(legacyOrigin: string, canonicalOrigin: string): void {
+  const legacy = normalizedOrigin_(legacyOrigin);
+  const canonical = normalizedOrigin_(canonicalOrigin);
+  if (!legacy || !canonical || legacy.toLowerCase() === canonical.toLowerCase()) return;
+  sourceOriginAliases.set(legacy.toLowerCase(), canonical);
+  // HTTP/HTTPS 可能在书源不同字段中混用；同一主机的另一 scheme 也复用
+  // 已验证目标，避免旧书籍链接因只保存了 http 版本而漏迁移。
+  const parts = legacy.match(/^(https?):\/\/(.+)$/i);
+  if (parts) {
+    const alternate = (parts[1].toLowerCase() === 'https' ? 'http' : 'https') +
+      '://' + parts[2];
+    sourceOriginAliases.set(alternate.toLowerCase(), canonical);
+  }
+}
+
+/**
  * 书源数据库里可能还保留旧地址，因此在真正发起请求前统一切换到当前域名。
- * 只匹配完整主机名，避免误改查询参数或其他站点地址。
+ * 只匹配完整 origin，避免误改查询参数、路径文本或其他站点地址。
  */
 export function migrateLegacySourceUrl(rawUrl: string): string {
   if (!rawUrl) return rawUrl;
-  return rawUrl.replace(
-    /^(https?):\/\/(?:www\.)?manware\.cc(?=[:/?#]|$)/i,
-    '$1://manwari.cc'
-  );
+  let migrated = rawUrl;
+  for (const [legacyOrigin, canonicalOrigin] of sourceOriginAliases.entries()) {
+    const escaped = legacyOrigin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    migrated = migrated.replace(new RegExp('^' + escaped + '(?=[:/?#]|$)', 'i'), canonicalOrigin);
+    // 兼容用户手动录入的 www 别名；注册时仍只保存规范 origin。
+    const schemeHost = legacyOrigin.match(/^(https?):\/\/([^/?#]+)$/i);
+    if (schemeHost && !/^www\./i.test(schemeHost[2])) {
+      const www = schemeHost[1] + '://www.' + schemeHost[2];
+      const escapedWww = www.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      migrated = migrated.replace(new RegExp('^' + escapedWww + '(?=[:/?#]|$)', 'i'), canonicalOrigin);
+    }
+  }
+  return migrated;
 }
 
 /** RCP 有些版本把 Set-Cookie 放在 response.cookies，而不是 headers。 */

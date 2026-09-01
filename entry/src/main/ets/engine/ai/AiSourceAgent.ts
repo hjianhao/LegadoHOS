@@ -6,7 +6,7 @@
  * 修复模式从旧书源副本开始，只重写校验报告指出的规则组。
  */
 import { SettingsStore } from '../../data/preferences/SettingsStore';
-import { NetUtil } from '../../util/NetUtil';
+import { migrateLegacySourceUrl, NetUtil, registerSourceOriginAlias } from '../../util/NetUtil';
 import {
   BookSource, BookSourceBookInfo, BookSourceChapter, createEmptyBookSource,
   serializeBookSource
@@ -406,6 +406,18 @@ function inferPathSearchUrl_(html: string, pageUrl: string): string {
 function urlOrigin_(url: string): string {
   const match = (url || '').match(/^(https?:\/\/[^/?#]+)/i);
   return match ? match[1] : '';
+}
+
+/**
+ * 将 HTTP Location 头解析成绝对地址。
+ *
+ * 该函数保持纯函数，便于在不触发网络请求的情况下测试重定向解析；真正
+ * 是否接受目标域名由 AiSourceAgent 在取到目标页面并完成内容校验后决定。
+ */
+export function resolveSourceRedirectUrl_(location: string, pageUrl: string): string {
+  const value = (location || '').trim();
+  if (!value || !pageUrl) return '';
+  return absoluteUrl_(value, pageUrl);
 }
 
 /** 仅把 m/mip/wap/www 与同一注册域名之间的切换视为移动别名迁移。 */
@@ -1751,12 +1763,16 @@ export class AiSourceAgent {
     try {
       // 用户勾选“网站需要登录”时，先完成前置登录，保证后续搜索/详情/目录/
       // 正文取证都携带登录态；登录未完成直接失败，不做无登录态的后续操作。
+      // 已知旧域名（例如漫蛙的 manware.cc）在真正取证前就切到规范域名。
+      // 这样即使旧地址在当前网络上直接 DNS/TCP 失败，Agent 仍能进入正常的
+      // 首页分析流程，而不是等到拿不到 HTML 后才把失败误判成规则问题。
+      const entryUrl = this.prepareKnownSourceOrigin_(request.homepageUrl);
       if (this.requireLogin_) {
-        await this.loginFirst_(request.homepageUrl);
+        await this.loginFirst_(entryUrl);
       }
       // 一些已有书源是 API 源，sourceUrl 只是 API 域名根地址，并没有可供分析的 HTML 首页。
       // 修复时首页抓取失败不能直接终止，应优先用旧书源的搜索请求取得真实取证页面。
-      let homepage = await this.fetchRepairEntry_(request.homepageUrl, keyword);
+      let homepage = await this.fetchRepairEntry_(entryUrl, keyword);
       this.normalizeMobileSiteOrigin_(homepage);
       // 站点根路径可能只是登录/用户中心落地页（晴天聚合需点“在线阅读”才能到
       // https://v1.gyks.cf/online_search 内容首页）。修复模式用的是书源 sourceUrl
@@ -1859,6 +1875,70 @@ export class AiSourceAgent {
     return this.results_;
   }
 
+  /**
+   * 在取证前应用已经确认的旧域名别名（例如漫蛙 manware.cc → manwari.cc）。
+   * 返回后续应该实际访问的首页地址；修复模式仍保留 sourceUrl 身份。
+   */
+  private prepareKnownSourceOrigin_(homepageUrl: string): string {
+    const migratedUrl = migrateLegacySourceUrl(homepageUrl);
+    const legacyOrigin = urlOrigin_(homepageUrl);
+    const canonicalOrigin = urlOrigin_(migratedUrl);
+    if (!legacyOrigin || !canonicalOrigin ||
+      legacyOrigin.toLowerCase() === canonicalOrigin.toLowerCase()) {
+      return homepageUrl;
+    }
+    this.applySiteOriginMigration_(legacyOrigin, canonicalOrigin);
+    this.log_('  使用已登记的书源域名迁移：' + legacyOrigin + ' → ' + canonicalOrigin);
+    return migratedUrl;
+  }
+
+  /**
+   * 将已经验证的规范域名同步到所有可能发起后续请求的书源字段。
+   * sourceUrl 在修复模式中是数据库身份键，必须保留；新建书源则可以直接
+   * 使用规范域名作为正式地址。
+   */
+  private applySiteOriginMigration_(legacyOrigin: string, canonicalOrigin: string): void {
+    if (!this.draft_ || !legacyOrigin || !canonicalOrigin ||
+      legacyOrigin.toLowerCase() === canonicalOrigin.toLowerCase()) return;
+    this.canonicalOrigin_ = canonicalOrigin;
+    this.legacyOrigin_ = legacyOrigin;
+    this.siteOriginChanged_ = true;
+    registerSourceOriginAlias(legacyOrigin, canonicalOrigin);
+    const replaceOrigin = (value: string): string => {
+      if (!value) return value;
+      return value.split(legacyOrigin).join(canonicalOrigin)
+        .split(legacyOrigin.toLowerCase()).join(canonicalOrigin);
+    };
+
+    if (!this.repairMode_) {
+      this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
+    }
+
+    // 这些字段可能包含绝对 URL、相对 URL 前缀后的 JS，或 JSON 形式的发现规则。
+    // 只替换完整旧 origin，不改动选择器、查询参数中的普通文本。
+    const urlFields: string[] = [
+      'ruleSearchUrl', 'ruleBookInfoInit', 'ruleBookInfoTocUrl',
+      'ruleBookInfoDownloadUrls', 'ruleTocUrl', 'ruleTocUrlItem',
+      'ruleTocNextTocUrl', 'ruleBookContentUrl', 'ruleBookContentNext',
+      'ruleBookContentWebJs', 'ruleBookContentPayAction',
+      'ruleBookContentCallBackJs', 'ruleReviewUrl', 'ruleReviewQuoteUrl',
+      'exploreUrl', 'ruleExplores', 'loginUrl', 'script', 'jsLib'
+    ];
+    const draftRecord = this.draft_ as Object as Record<string, Object>;
+    for (const field of urlFields) {
+      const value = draftRecord[field];
+      if (typeof value === 'string') draftRecord[field] = replaceOrigin(value);
+    }
+
+    // 修复模式要保留 sourceUrl 身份，但相对搜索 action 不能再由 sourceUrl
+    // 解析，否则 SourceExecutor 会再次请求旧域名。
+    const searchRule = this.draft_.ruleSearchUrl;
+    if (this.repairMode_ && /^\/(?!\/)/.test(searchRule)) {
+      this.draft_.ruleSearchUrl = canonicalOrigin + searchRule;
+    }
+    this.log_('  已确认站点规范域名：' + canonicalOrigin);
+  }
+
   /** 将首页明确暴露的同站移动规范域名同步到后续 POST/详情请求。 */
   private normalizeMobileSiteOrigin_(evidence: PageEvidence): void {
     if (!this.draft_) return;
@@ -1866,29 +1946,7 @@ export class AiSourceAgent {
     const oldOrigin = urlOrigin_(pageUrl);
     const canonicalOrigin = inferMobileCanonicalOrigin_(evidence.html, pageUrl);
     if (!oldOrigin || !canonicalOrigin || oldOrigin.toLowerCase() === canonicalOrigin.toLowerCase()) return;
-    this.canonicalOrigin_ = canonicalOrigin;
-    this.legacyOrigin_ = oldOrigin;
-    this.siteOriginChanged_ = true;
-    const replaceOrigin = (value: string): string => {
-      if (!value) return value;
-      return value.split(oldOrigin).join(canonicalOrigin)
-        .split(oldOrigin.toLowerCase()).join(canonicalOrigin);
-    };
-    // sourceUrl 是书源在数据库中的身份键。修复已有书源时，即使站点把
-    // m.example.com 规范化跳转到 mip.example.com，也不能改写这个字段，
-    // 否则应用修复时会被 SourceRevisionService 判定为另一条书源。
-    // 新建书源没有既有身份，仍保存规范域名作为新源的正式地址。
-    if (!this.repairMode_) {
-      this.draft_.sourceUrl = replaceOrigin(this.draft_.sourceUrl);
-    }
-    const searchRule = replaceOrigin(this.draft_.ruleSearchUrl);
-    // 修复模式要保留 sourceUrl 身份，但相对搜索 action 不能再由旧域名
-    // 解析，否则 SourceExecutor 会再次 POST 到会丢请求体的 301 旧地址。
-    this.draft_.ruleSearchUrl = this.repairMode_ && /^\/(?!\/)/.test(searchRule)
-      ? canonicalOrigin + searchRule : searchRule;
-    this.draft_.exploreUrl = replaceOrigin(this.draft_.exploreUrl);
-    this.draft_.ruleExplores = replaceOrigin(this.draft_.ruleExplores);
-    this.draft_.loginUrl = replaceOrigin(this.draft_.loginUrl);
+    this.applySiteOriginMigration_(oldOrigin, canonicalOrigin);
     // 注意：不要改写 evidence.finalUrl。取证 HTML 实际来自旧域名（桌面版），
     // 把 finalUrl 伪造成规范域名会让 analyzeHomepage_ 误以为已经拿到移动版
     // 页面而跳过重新取证；桌面版页面的 JS 渲染搜索框（如必去小说的
@@ -4784,6 +4842,8 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     this.done_(AiStep.COMPILE, '生成 ' + rules.length + ' 个已验证规则字段', {
       sourceName: this.draft_.sourceName,
       sourceUrl: this.draft_.sourceUrl,
+      canonicalOrigin: this.canonicalOrigin_,
+      originMigration: this.siteOriginChanged_ ? 'verified' : '',
       mode: this.repairMode_ ? 'repair' : 'create',
     });
   }
@@ -4808,6 +4868,11 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
       return await this.fetchPage_(homepageUrl, '首页');
     } catch (e) {
       const homepageError = ((e as Error).message || String(e)).substring(0, 160);
+      // 首页在 DNS/TCP 阶段失败时没有 HTML 可供 canonical 解析。先尝试从
+      // HTTP Location 头或已登记别名恢复规范域名，再进入原有的搜索接口兜底。
+      // 候选地址必须实际取证成功；模型不会直接决定要访问哪个域名。
+      const recovered = await this.tryRecoverSourceOrigin_(homepageUrl, keyword);
+      if (recovered) return recovered;
       if (!this.repairMode_ || !this.draft_?.ruleSearchUrl) throw e;
 
       this.log_('  首页取证失败：' + homepageError);
@@ -4821,6 +4886,93 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         throw new Error('首页和现有搜索接口均无法取证：' + fallbackMessage);
       }
     }
+  }
+
+  /**
+   * 在首页取证失败后，从 HTTP 重定向中寻找规范域名，并用首页或既有搜索
+   * 规则进行一次真实验证。返回 null 表示没有足够证据，不改变当前书源。
+   */
+  private async tryRecoverSourceOrigin_(homepageUrl: string, keyword: string): Promise<PageEvidence | null> {
+    if (!this.draft_) return null;
+    const legacyOrigin = urlOrigin_(homepageUrl);
+    if (!legacyOrigin) return null;
+
+    let candidateUrl = '';
+    let evidenceKind = '';
+    const knownUrl = migrateLegacySourceUrl(homepageUrl);
+    const knownOrigin = urlOrigin_(knownUrl);
+    if (knownOrigin && knownOrigin.toLowerCase() !== legacyOrigin.toLowerCase()) {
+      candidateUrl = knownUrl;
+      evidenceKind = '已登记别名';
+    } else {
+      try {
+        // 关闭自动跟随重定向，保留 Location 头；普通 httpGet 会把 301
+        // 隐藏掉，Agent 便无法区分“站点迁移”和“规则失效”。
+        const response = await NetUtil.httpDetailed('GET', homepageUrl, '',
+          this.headerMap_(this.draft_.header || ''), 12000, false);
+        const location = this.firstHeader_(response.headers, 'location');
+        if (response.statusCode >= 300 && response.statusCode < 400 && location) {
+          const resolved = resolveSourceRedirectUrl_(location, homepageUrl);
+          const resolvedOrigin = urlOrigin_(resolved);
+          if (resolvedOrigin && resolvedOrigin.toLowerCase() !== legacyOrigin.toLowerCase() &&
+            isSafeAiImportUrl(resolved)) {
+            candidateUrl = resolved;
+            evidenceKind = 'HTTP Location ' + String(response.statusCode);
+          }
+        }
+      } catch (redirectError) {
+        this.log_('  域名迁移探测失败：' + conciseAiFetchError_(redirectError));
+      }
+    }
+    if (!candidateUrl) return null;
+
+    const candidateOrigin = urlOrigin_(candidateUrl);
+    if (!candidateOrigin || !isSafeAiImportUrl(candidateUrl)) return null;
+    this.log_('  发现域名迁移候选（' + evidenceKind + '）：' + candidateOrigin);
+
+    // 优先验证候选首页。首页可能只是 API 健康检查 JSON，过短时再验证旧
+    // 书源的搜索接口；两者都失败则拒绝迁移，避免误跟随广告/劫持跳转。
+    try {
+      const evidence = await this.fetchPage_(candidateUrl, '迁移候选首页');
+      this.applySiteOriginMigration_(legacyOrigin, candidateOrigin);
+      this.log_('  域名迁移候选首页验证成功');
+      return evidence;
+    } catch (candidateHomeError) {
+      this.log_('  迁移候选首页不可用：' + conciseAiFetchError_(candidateHomeError));
+    }
+
+    if (!this.draft_.ruleSearchUrl) return null;
+    let candidateRule = this.rewriteOrigin_(this.draft_.ruleSearchUrl,
+      legacyOrigin, candidateOrigin);
+    if (/^\/(?!\/)/.test(candidateRule)) candidateRule = candidateOrigin + candidateRule;
+    if (!candidateRule || candidateRule === this.draft_.ruleSearchUrl) return null;
+    try {
+      const evidence = await this.fetchRulePage_(candidateRule, keyword, '迁移后搜索接口');
+      if (!evidence.html || evidence.html.length < 120 ||
+        this.isChallengePage_(evidence.html)) return null;
+      this.applySiteOriginMigration_(legacyOrigin, candidateOrigin);
+      this.log_('  迁移后搜索接口验证成功');
+      return evidence;
+    } catch (candidateSearchError) {
+      this.log_('  迁移候选搜索接口不可用：' + conciseAiFetchError_(candidateSearchError));
+      return null;
+    }
+  }
+
+  private firstHeader_(headers: Record<string, string[]>, name: string): string {
+    const expected = (name || '').toLowerCase();
+    for (const key of Object.keys(headers || {})) {
+      if (key.toLowerCase() !== expected) continue;
+      const values = headers[key];
+      if (values && values.length > 0) return String(values[0]).trim();
+    }
+    return '';
+  }
+
+  private rewriteOrigin_(value: string, legacyOrigin: string, canonicalOrigin: string): string {
+    if (!value || !legacyOrigin || !canonicalOrigin) return value;
+    return value.split(legacyOrigin).join(canonicalOrigin)
+      .split(legacyOrigin.toLowerCase()).join(canonicalOrigin);
   }
 
   private async fetchRulePage_(template: string, keyword: string, label: string): Promise<PageEvidence> {
@@ -5226,6 +5378,19 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
     let srcMatch: RegExpExecArray | null;
     while ((srcMatch = scriptSrcPattern.exec(html || '')) !== null) {
       if (srcMatch[1]) scriptSrcs.push(srcMatch[1]);
+    }
+    // WebView 能提供真实最终 URL；普通 HTTP 栈只返回正文，不能暴露重定向链。
+    // 首页阶段若发现最终地址跨 origin，先记录为候选并继续走同样的内容校验，
+    // 让后续搜索/详情规则统一锚定到最终站点。
+    if (/首页/.test(label)) {
+      const requestedOrigin = urlOrigin_(url);
+      const finalOrigin = urlOrigin_(finalUrl);
+      if (requestedOrigin && finalOrigin &&
+        requestedOrigin.toLowerCase() !== finalOrigin.toLowerCase() &&
+        isSafeAiImportUrl(finalUrl)) {
+        this.applySiteOriginMigration_(requestedOrigin, finalOrigin);
+        this.log_('  WebView 最终地址确认站点迁移：' + finalOrigin);
+      }
     }
     return { url, finalUrl, html: prepareSourceAgentHtml(html), usedWebView, scriptSrcs,
       scriptEndpointHints: extractScriptEndpointHints_(html),
