@@ -12,6 +12,7 @@ import pasteboard from '@ohos.pasteboard';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
+import { BookSource, BookSourceFormat } from '../model/BookSource';
 
 const MAX_IMPORT_BYTES: number = 10 * 1024 * 1024;
 const MAX_IMPORT_DEPTH: number = 3;
@@ -317,6 +318,20 @@ export struct ImportSourceDialog {
   private statusColor(s: string): string { return s==='new'?ThemeColors.success(this.isDark):s==='update'?ThemeColors.warning(this.isDark):ThemeColors.secondaryText(this.isDark); }
   private statusLabel(s: string): string { return s==='new'?'新增':s==='update'?'更新':'已有'; }
 
+  private formatLabel(source: BookSource): string {
+    return source.sourceFormat === BookSourceFormat.QYSG ? '轻悦时光' : 'Legado';
+  }
+
+  private formatColor(source: BookSource): string {
+    return source.sourceFormat === BookSourceFormat.QYSG
+      ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark);
+  }
+
+  private formatTextColor(source: BookSource): string {
+    return source.sourceFormat === BookSourceFormat.QYSG
+      ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark);
+  }
+
   build() {
     Column() {
       // 标题
@@ -346,7 +361,7 @@ export struct ImportSourceDialog {
         }.padding({left:16,right:16,top:4,bottom:4}).width('100%')
 
         // 预览列表
-        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor(ThemeColors.primary(this.isDark)).margin({right:8}).onChange((v:boolean)=>{item.checked=v;this.items=[...this.items]});Text(item.name).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.statusLabel(item.status)).fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:ThemeColors.outlineVariant(this.isDark)})})}.layoutWeight(1).width('100%')
+        List(){ForEach(this.items,(item:PreviewItem,idx:number)=>{ListItem(){Row(){Checkbox({name:'imp_'+idx,group:'imprt'}).select(item.checked).selectedColor(ThemeColors.primary(this.isDark)).margin({right:8}).onChange((v:boolean)=>{item.checked=v;this.items=[...this.items]});Text(item.name).fontSize(13).fontColor(ThemeColors.onBackground(this.isDark)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1);Text(this.formatLabel(item.source)).fontSize(10).fontColor(this.formatTextColor(item.source)).backgroundColor(this.formatColor(item.source)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1}).margin({right:6});Text(this.statusLabel(item.status)).fontSize(10).fontColor(ThemeColors.onPrimary(this.isDark)).backgroundColor(this.statusColor(item.status)).borderRadius(8).padding({left:6,right:6,top:1,bottom:1})}.padding({left:16,right:16,top:8,bottom:8}).width('100%')}.border({width:{bottom:0.5},color:ThemeColors.outlineVariant(this.isDark)})})}.layoutWeight(1).width('100%')
 
         // 选项
         Column() {
