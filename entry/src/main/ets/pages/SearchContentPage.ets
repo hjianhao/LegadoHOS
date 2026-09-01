@@ -10,6 +10,8 @@ import { ReplaceRuleTable } from '../data/database/ReplaceRuleTable';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ContentReplaceEngine } from '../engine/book/ContentReplace';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { BookChapter } from '../model/BookChapter';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ChapterCache } from '../util/ChapterCache';
@@ -251,7 +253,7 @@ struct SearchContentPage {
   private async fetchAndCacheChapter(ch: BookChapter): Promise<string> {
     if (!this.source_) return '';
     try {
-      const content = await globalSourceExecutor.getContent(this.source_, ch.url || this.bookUrl, this.bookUrl);
+      const content = await globalSourceGateway.getContent(this.source_, ch.url || this.bookUrl, this.bookUrl);
       if (!content || content.length <= 0) return '';
       if (this.bookId >= 0 && ch.id > 0) {
         ch.content = content;
@@ -575,6 +577,7 @@ struct SearchContentPage {
           .margin({ right: 18, bottom: 24 })
           .onClick(() => { this.jumpToCurrentResult(); })
       }
+      QysgRuntimeHostComponent()
     }
     .width('100%')
     .height('100%')

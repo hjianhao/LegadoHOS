@@ -2,7 +2,7 @@
  * 书源表 — 核心表
  */
 import relationalStore from '@ohos.data.relationalStore';
-import { BookSource, bookSourceToJsonObject, parseBookSource, serializeBookSource } from '../../model/BookSource';
+import { BookSource, bookSourceToJsonObject, parseBookSource, serializeBookSource, BookSourceFormat } from '../../model/BookSource';
 import { RdbUtil } from './RdbUtil';
 
 export const BookSourceTableCreate = `
@@ -11,6 +11,7 @@ export const BookSourceTableCreate = `
     source_name TEXT NOT NULL,
     source_url TEXT NOT NULL UNIQUE,
     source_type INTEGER DEFAULT 0,
+    source_format INTEGER DEFAULT 0,
     source_group TEXT DEFAULT '',
     enabled INTEGER DEFAULT 1,
     weight INTEGER DEFAULT 0,
@@ -534,6 +535,7 @@ export class BookSourceTable {
         sourceName: RdbUtil.string(rs, 'source_name') || '',
         sourceUrl: RdbUtil.string(rs, 'source_url') || '',
         sourceType: RdbUtil.long(rs, 'source_type'),
+        sourceFormat: (RdbUtil.long(rs, 'source_format') || 0) as BookSourceFormat,
         group: RdbUtil.string(rs, 'source_group') || '',
         enabled: RdbUtil.long(rs, 'enabled') === 1,
         weight: RdbUtil.long(rs, 'weight'),
@@ -644,6 +646,9 @@ export class BookSourceTable {
         try {
           const parsed = JSON.parse(rawJson);
           const fixed = parseBookSource(parsed);
+          // 兼容迁移前导入的 qysg 源：数据库旧列可能仍为默认 Legado 格式，
+          // 以 raw_json 重新识别一次，保证重启后仍能分派到 ArkWeb。
+          source.sourceFormat = fixed.sourceFormat;
           this.restoreRawOnlyFields(source, fixed);
           // 恢复 jsLib（聚合书源的核心脚本）
           if (fixed.jsLib) source.jsLib = fixed.jsLib;
@@ -777,6 +782,7 @@ export class BookSourceTable {
       'source_name': source.sourceName,
       'source_url': source.sourceUrl,
       'source_type': source.sourceType,
+      'source_format': source.sourceFormat,
       'source_group': source.group,
       'enabled': source.enabled ? 1 : 0,
       'weight': source.weight,

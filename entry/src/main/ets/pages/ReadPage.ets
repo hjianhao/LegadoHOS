@@ -5,6 +5,8 @@ import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ThemeColors } from '../theme/ThemeColors';
 import { MeasureUtils } from '@kit.ArkUI';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ChapterCache } from '../util/ChapterCache';
 import { DirEpubParser } from '../engine/book/DirEpubParser';
@@ -603,17 +605,17 @@ struct ReadPage {
 	              ' expected=' + expectedCount + ' source=' + (this.source_?.sourceName || ''));
 	            const primaryTocUrl = this.tocUrl || this.bookUrl;
 	            try {
-	              let netChapters = await globalSourceExecutor.getToc(this.source_!, primaryTocUrl);
+	              let netChapters = await globalSourceGateway.getToc(this.source_!, primaryTocUrl);
 	              if (netChapters.length === 0 && primaryTocUrl !== this.bookUrl) {
-	                netChapters = await globalSourceExecutor.getToc(this.source_!, this.bookUrl);
+	                netChapters = await globalSourceGateway.getToc(this.source_!, this.bookUrl);
 	              }
 	              // 有些源 tocUrl 为空/错误时，再尝试详情页解析
 	              if (netChapters.length === 0 && this.bookUrl) {
 	                try {
-	                  const info = await globalSourceExecutor.getBookInfo(this.source_!, this.bookUrl);
+	                  const info = await globalSourceGateway.getBookInfo(this.source_!, this.bookUrl);
 	                  const infoToc = (info && info.tocUrl) ? info.tocUrl : '';
 	                  if (infoToc && infoToc !== primaryTocUrl && infoToc !== this.bookUrl) {
-	                    netChapters = await globalSourceExecutor.getToc(this.source_!, infoToc);
+	                    netChapters = await globalSourceGateway.getToc(this.source_!, infoToc);
 	                    if (netChapters.length > 0 && !this.tocUrl) {
 	                      this.tocUrl = infoToc;
 	                      try {
@@ -949,7 +951,7 @@ struct ReadPage {
 	    }
 
     if (this.source_) {
-      content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl);
+      content = await globalSourceGateway.getContent(this.source_, url, this.bookUrl);
       console.info('[ReadPage] getContent returned:', content ? content.length : 0, 'bytes');
     }
     if (!content && url && url.startsWith('http')) {
@@ -2529,15 +2531,15 @@ struct ReadPage {
       // 2. 加载书籍详情获取目录 URL
       let newTocUrl = '';
       try {
-        const info = await globalSourceExecutor.getBookInfo(newSource, newBookUrl);
+        const info = await globalSourceGateway.getBookInfo(newSource, newBookUrl);
         newTocUrl = info.tocUrl || '';
       } catch (_e) { /* 详情失败时用 bookUrl 兜底拉目录 */ }
 
       // 3. 加载新目录并校验（关键：先验证成功，再动数据库）
       const primaryTocUrl = newTocUrl || newBookUrl;
-      let newToc = await globalSourceExecutor.getToc(newSource, primaryTocUrl);
+      let newToc = await globalSourceGateway.getToc(newSource, primaryTocUrl);
       if (newToc.length === 0 && primaryTocUrl !== newBookUrl) {
-        newToc = await globalSourceExecutor.getToc(newSource, newBookUrl);
+        newToc = await globalSourceGateway.getToc(newSource, newBookUrl);
       }
       if (newToc.length === 0) throw new Error('新源目录为空');
 
@@ -2561,7 +2563,7 @@ struct ReadPage {
       let verifiedContent = '';
       if (matchedChapter?.url) {
         try {
-          verifiedContent = await globalSourceExecutor.getContent(newSource, matchedChapter.url, newBookUrl);
+          verifiedContent = await globalSourceGateway.getContent(newSource, matchedChapter.url, newBookUrl);
         } catch (_e) {
           verifiedContent = '';
         }
@@ -2918,13 +2920,13 @@ struct ReadPage {
 
       let tocUrl = '';
       try {
-        const info = await globalSourceExecutor.getBookInfo(newSource, newBookUrl);
+        const info = await globalSourceGateway.getBookInfo(newSource, newBookUrl);
         tocUrl = info.tocUrl || '';
       } catch (_e) { /* 用 bookUrl 兜底 */ }
       const primaryTocUrl = tocUrl || newBookUrl;
-      let toc = await globalSourceExecutor.getToc(newSource, primaryTocUrl);
+      let toc = await globalSourceGateway.getToc(newSource, primaryTocUrl);
       if (toc.length === 0 && primaryTocUrl !== newBookUrl) {
-        toc = await globalSourceExecutor.getToc(newSource, newBookUrl);
+        toc = await globalSourceGateway.getToc(newSource, newBookUrl);
       }
       if (toc.length === 0) throw new Error('该源目录为空');
       this.isLoading = false;
@@ -2963,7 +2965,7 @@ struct ReadPage {
     }
     this.isLoading = true;
     try {
-      let content = await globalSourceExecutor.getContent(source, ch.url, bookUrl);
+      let content = await globalSourceGateway.getContent(source, ch.url, bookUrl);
       if (!content || content.length <= 50) throw new Error('正文为空');
       const target = this.currentIndex;
       // content 为原文；简繁转换 + 用户规则替换在 applyChapterContent_ 内统一处理
@@ -3010,7 +3012,7 @@ struct ReadPage {
             promise = this.readChapterCache_(n);
           } else {
             const src = this.source_;
-            promise = src ? globalSourceExecutor.getContent(src, ch.url || '', this.bookUrl) : Promise.resolve('');
+            promise = src ? globalSourceGateway.getContent(src, ch.url || '', this.bookUrl) : Promise.resolve('');
           }
           this.preloadingChapterPromises_.set(n, promise);
         }
@@ -3486,6 +3488,7 @@ struct ReadPage {
           })
         }.width('100%').height('100%')
       }
+      QysgRuntimeHostComponent()
     }
     .width('100%').height('100%').backgroundColor(this.cfg.bgColor)
     .onAreaChange((_old: Area, n: Area) => {

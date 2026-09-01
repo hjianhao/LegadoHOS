@@ -13,6 +13,7 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookChapter, createDefaultChapter } from '../model/BookChapter';
 import { BookSource, isImageSource } from '../model/BookSource';
 import { MangaImageLoader } from '../util/MangaImageLoader';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import notificationManager from '@ohos.notificationManager';
 import { common } from '@kit.AbilityKit';
@@ -212,7 +213,7 @@ export class BookCacheService {
     let lastErr: Error | null = null;
     for (let attempt = 1; attempt <= this.maxRetry; attempt++) {
       try {
-        const content = await globalSourceExecutor.getContent(req.source, ch.url, req.bookUrl, isImageSource(req.source));
+        const content = await globalSourceGateway.getContent(req.source, ch.url, req.bookUrl, isImageSource(req.source));
         if (content && content.length > 10) return content;
         if (attempt < this.maxRetry) await this.sleep(500 * attempt);
       } catch (err) {

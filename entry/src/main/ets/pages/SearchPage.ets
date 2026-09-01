@@ -10,11 +10,13 @@ import { Book, BookGroup, BookType } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { SearchResult, mergeSearchResults } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { BookCover } from '../components/BookCover';
 import { CaptchaDialog } from '../components/reader/CaptchaDialog';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
 import { WebViewEngine } from '../components/WebViewEngine';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { UiUtil } from '../util/UiUtil';
@@ -716,7 +718,7 @@ export struct SearchPage {
 
   getActiveSources(): BookSource[] {
     return this.sources.filter((source: BookSource): boolean => {
-      if (!source.ruleSearchUrl) return false;
+      if (!globalSourceGateway.canSearch(source)) return false;
       if (this.selectedSourceTypes.length > 0 && !this.selectedSourceTypes.includes(source.sourceType)) return false;
       if (this.scopeBySource && this.selectedSourceUrls.length > 0) {
         return this.selectedSourceUrls.includes(source.sourceUrl);
@@ -730,6 +732,7 @@ export struct SearchPage {
 
   /** 搜索地址实际使用页码变量时，才允许继续请求下一页。 */
   private supportsSearchPagination_(source: BookSource): boolean {
+    if (source.sourceFormat === 1) return true;
     const template = (source.ruleSearchUrl || '').trim();
     if (!template) return false;
     if (/\{\{\s*(?:page|pageNum)(?:\s*[+-]\s*\d+)?\s*\}\}/i.test(template)) return true;
@@ -1006,7 +1009,7 @@ export struct SearchPage {
       + ' typeFilter=' + JSON.stringify(this.selectedSourceTypes)
       + ' scope=' + this.getScopeLabel());
     try {
-      const merged = await globalSourceExecutor.search(q, searchable,
+      const merged = await globalSourceGateway.search(q, searchable,
         (partial: SearchResult[], done: number, total: number) => {
           if (runId !== this.searchRunId || this.manualStop) return;
           this.processedSources = done;
@@ -1058,7 +1061,7 @@ export struct SearchPage {
     this.processedSources = 0;
     this.totalSources = searchable.length;
     try {
-      const pageResults = await globalSourceExecutor.search(this.committedKeyword, searchable,
+      const pageResults = await globalSourceGateway.search(this.committedKeyword, searchable,
         (partial: SearchResult[], done: number, total: number) => {
           if (runId !== this.searchRunId || this.manualStop) return;
           this.processedSources = done;
@@ -1125,7 +1128,7 @@ export struct SearchPage {
     this.expandedSourceLoading = true;
     this.expandedSourceError = '';
     try {
-      const pageResults = await globalSourceExecutor.search(this.committedKeyword, [source], undefined, nextPage);
+      const pageResults = await globalSourceGateway.search(this.committedKeyword, [source], undefined, nextPage);
       if (runId !== this.expandedSourceRunId) return;
       const merged = this.mergeExpandedSourceItems(base, pageResults);
       this.expandedSourceBooks = merged;
@@ -1224,6 +1227,7 @@ export struct SearchPage {
       noteUrl: item.noteUrl, origin: item.origin, originUrl: item.originUrl,
       introduce: item.introduce || '', kind: item.kind || '',
       lastUpdateTime: item.lastUpdateTime || '',
+      contentType: item.contentType,
       sourceCount: item.sourceCount, sourceOrigins: JSON.stringify(item.sourceOrigins || []),
       sourceOriginUrls: JSON.stringify(item.sourceOriginUrls || []),
       sourceNoteUrls: JSON.stringify(item.sourceNoteUrls || []),
@@ -1275,7 +1279,7 @@ export struct SearchPage {
         await bookTable.updateBook(existing);
       } else {
         // 查询书源类型，判断是否为漫画源
-        let isMangaSource = false;
+        let isMangaSource = item.contentType === BookType.MANGA;
         try {
           const srcDao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
           const sources = await srcDao.getAllSources();
@@ -1348,6 +1352,7 @@ export struct SearchPage {
         .layoutWeight(1)
         .width('100%')
         WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
+        QysgRuntimeHostComponent()
       }
       .width('100%')
       .height('100%')

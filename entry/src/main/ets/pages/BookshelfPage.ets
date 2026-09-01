@@ -25,6 +25,8 @@ import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookG
 import { BookSourceChapter } from '../model/BookSource';
 import { createDefaultChapter, BookChapter } from '../model/BookChapter';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { BookDeleter } from '../service/BookDeleter';
@@ -577,7 +579,7 @@ export struct BookshelfPage {
           const source = await BookSourceResolver.resolve(book);
           if (!source) throw new Error('解析规则不可用');
           const aiProfile = await aiProfileDao.getByBookId(book.id);
-          const rawChapters = await globalSourceExecutor.getToc(source, book.tocUrl || book.bookUrl);
+          const rawChapters = await globalSourceGateway.getToc(source, book.tocUrl || book.bookUrl);
           const chapters = aiProfile ? normalizeAiChapters(rawChapters) : rawChapters;
           if (chapters.length === 0) throw new Error('目录为空');
 
@@ -589,7 +591,7 @@ export struct BookshelfPage {
 
           if (aiProfile) {
             try {
-              const info = await globalSourceExecutor.getBookInfo(source, book.bookUrl);
+              const info = await globalSourceGateway.getBookInfo(source, book.bookUrl);
               if (info.name) book.name = info.name;
               if (info.author) book.author = info.author;
               if (info.coverUrl) book.coverUrl = info.coverUrl;
@@ -1097,6 +1099,7 @@ export struct BookshelfPage {
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
     }
+    QysgRuntimeHostComponent()
   }
   .width('100%').height('100%')
   }

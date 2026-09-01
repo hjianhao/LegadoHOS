@@ -7,6 +7,8 @@ import { ArrayDataSource } from '../util/ArrayDataSource';
 import { BookSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { SourceExploreItem } from '../engine/source/SourceAdapter';
 import { BookCover } from '../components/BookCover';
 import { WebViewEngine } from '../components/WebViewEngine';
 import { WebViewFetcher } from '../engine/web/WebViewFetcher';
@@ -17,6 +19,7 @@ import { UiUtil } from '../util/UiUtil';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { image } from '@kit.ImageKit';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 
 @Entry
 @Component
@@ -169,7 +172,18 @@ struct ExploreBookPage {
       // 部分站点（如雨忆文学网）服务端会随机返回空列表页，0 条时重试两次
       let results: SearchResult[] = [];
       for (let attempt = 0; attempt < 3; attempt++) {
-        results = await globalSourceExecutor.search(this.categoryName || '', [exploreSource]);
+        if (source.sourceFormat === 1) {
+          const item: SourceExploreItem = {
+            id: 'qysg-category-' + catUrl,
+            title: this.categoryName || '发现',
+            target: catUrl,
+            kind: 'books',
+            flexBasisPercent: 1 / 3,
+          };
+          results = await globalSourceGateway.explore(source, item, 1);
+        } else {
+          results = await globalSourceExecutor.search(this.categoryName || '', [exploreSource]);
+        }
         if (!this.isActive || runId !== this.requestId) return;
         if (results.length > 0) break;
         console.info('[ExploreBook] 0 books, retry ' + (attempt + 1) + '/2');
@@ -192,7 +206,8 @@ struct ExploreBookPage {
       params: {
         name: book.name, author: book.author, coverUrl: book.coverUrl,
         noteUrl: book.noteUrl, origin: book.origin, originUrl: book.originUrl,
-        introduce: book.introduce, kind: book.kind, wordCount: book.wordCount
+        introduce: book.introduce, kind: book.kind, wordCount: book.wordCount,
+        contentType: book.contentType
       }
     });
   }
@@ -261,6 +276,7 @@ struct ExploreBookPage {
       }
       // 隐藏 WebView，用于 SPA 站点的 JS 渲染兜底
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
+      QysgRuntimeHostComponent()
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

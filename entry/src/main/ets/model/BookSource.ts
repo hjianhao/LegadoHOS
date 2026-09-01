@@ -7,6 +7,14 @@ export enum BookSourceType {
   AUDIO = 1,
   IMAGE = 2,
   FILE = 3,
+  /** qysg 等可以按单本书返回不同内容类型的源。 */
+  MIXED = 4,
+}
+
+/** 书源规则格式。sourceType 仍只表示内容类型，不能复用为协议格式。 */
+export enum BookSourceFormat {
+  LEGADO = 0,
+  QYSG = 1,
 }
 
 /**
@@ -28,6 +36,8 @@ export interface BookSource {
   sourceName: string;
   sourceUrl: string;        // 书源网站 URL
   sourceType: number;       // 书源类型: 0=文本, 1=音频, 2=图片/漫画, 3=文件（兼容 Legado bookSourceType）
+  /** 规则执行格式：Legado 选择器规则或 qysg WebView HTML/JS。 */
+  sourceFormat: BookSourceFormat;
   group: string;            // 分组标签
   enabled: boolean;
   weight: number;           // 优先级权重
@@ -201,6 +211,8 @@ export interface BookSourceBookInfo {
   downloadUrls?: string[];
   relatedBooks?: Object[];
   tocUrl?: string;
+  /** qysg 详情返回的单书内容类型（BookType 值）。 */
+  contentType?: number;
   chapters: BookSourceChapter[];
 }
 
@@ -211,6 +223,7 @@ export interface BookSourceChapter {
   isVolume?: boolean;  // 是否是卷标题
   isVip?: boolean;
   isPay?: boolean;
+  tag?: string;
   updateTime?: string;
 }
 
@@ -296,11 +309,27 @@ export function createEmptyBookSource(): BookSource {
 }
 
 /**
+ * qysg 使用整段 html 作为书源运行时，不能仅凭 html 字段判断（Legado 扩展字段
+ * 也可能携带 html）。同时检查生命周期函数和 flutter bridge 标记，避免把普通源
+ * 错分给 WebView 运行时。
+ */
+export function isQysgSourceObject(json: any): boolean {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return false;
+  if (json.sourceFormat === BookSourceFormat.QYSG || json.bookSourceFormat === 'qysg') return true;
+  const html = typeof json.html === 'string' ? json.html : '';
+  if (!html.trim()) return false;
+  const hasLifecycle = /(?:async\s+)?function\s+(?:search|info|chapter|content|getfinds|find)\s*\(/i.test(html);
+  const hasFlutterBridge = /flutter_inappwebview\.callHandler/i.test(html);
+  return hasLifecycle && hasFlutterBridge;
+}
+
+/**
  * 从 JSON 对象解析为 BookSource
  *
  * 兼容 Legado 书源 JSON 格式的多种字段名
  */
 export function parseBookSource(json: any): BookSource {
+  const qysg = isQysgSourceObject(json);
   // 兼容嵌套格式: ruleSearch.bookList 或 ruleSearchList
   const rs = parseNestedRuleObject(json.ruleSearch);
   const re = parseNestedRuleObject(json.ruleExplore);
@@ -311,8 +340,9 @@ export function parseBookSource(json: any): BookSource {
   return {
     id: json.id || 0,
     sourceName: json.sourceName || json.bookSourceName || '',
-    sourceUrl: json.sourceUrl || json.bookSourceUrl || '',
-    sourceType: json.bookSourceType ?? json.sourceType ?? 0,
+    sourceUrl: String(json.sourceUrl || json.bookSourceUrl || '').trim(),
+    sourceType: json.bookSourceType ?? json.sourceType ?? (qysg ? BookSourceType.MIXED : BookSourceType.TEXT),
+    sourceFormat: qysg ? BookSourceFormat.QYSG : BookSourceFormat.LEGADO,
     group: json.bookSourceGroup || json.group || '',
     enabled: json.enabled !== false,
     weight: json.weight || 0,
@@ -431,6 +461,25 @@ export function parseBookSource(json: any): BookSource {
  * 已导入书源时，不会丢掉尚未拆列、或由新版 Legado 新增的配置。
  */
 export function bookSourceToJsonObject(source: BookSource): Record<string, Object> {
+  // qysg 源的 html 是可执行协议，不应被转换成 ruleSearch/ruleContent 等 Legado
+  // 字段。以原始对象为基底，只覆盖公共可编辑字段，保证导出后可被轻悦时光重新导入。
+  if (source.sourceFormat === BookSourceFormat.QYSG) {
+    let qysgResult: Record<string, Object> = {};
+    if (source.rawJson) {
+      try {
+        const raw = JSON.parse(source.rawJson) as Record<string, Object>;
+        if (raw && !Array.isArray(raw)) qysgResult = raw;
+      } catch (_e) { /* 按公共字段重新生成 */ }
+    }
+    qysgResult['bookSourceName'] = source.sourceName;
+    qysgResult['bookSourceUrl'] = source.sourceUrl;
+    qysgResult['bookSourceGroup'] = source.group;
+    qysgResult['enabled'] = source.enabled;
+    qysgResult['enabledExplore'] = source.enabledExplore;
+    qysgResult['lastUpdateTime'] = source.updateTime;
+    qysgResult['sourceFormat'] = BookSourceFormat.QYSG;
+    return qysgResult;
+  }
   let result: Record<string, Object> = {};
   if (source.rawJson) {
     try {

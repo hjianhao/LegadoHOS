@@ -10,6 +10,8 @@ import { Book, BookType, BookGroup } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceChapter } from '../model/BookSource';
 import { globalSourceExecutor, preferCompleteBookName } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { ChapterCache } from '../util/ChapterCache';
 import { NetUtil } from '../util/NetUtil';
 import { BookCover } from '../components/BookCover';
@@ -74,6 +76,7 @@ export struct BookInfoPage {
   @State lastReadTime: string = '';
   @State bookId: number = 0;
   @State groupId: number = BookGroup.ALL;
+  @State contentType: number = -1;
   @State showExportDialog: boolean = false;
 
   private cachedSearchResults: SearchResult[] = [];
@@ -101,6 +104,9 @@ export struct BookInfoPage {
       this.wordCount = params['wordCount'] || '';
       this.lastUpdateTime = params['lastUpdateTime'] || '';
       this.latestChapter = params['latestChapterTitle'] || '';
+      if (params['contentType'] !== undefined && params['contentType'] !== '') {
+        this.contentType = Number(params['contentType']);
+      }
       try {
         const cachedStr = String(params['cachedSources'] || '');
         if (cachedStr) {
@@ -152,7 +158,8 @@ export struct BookInfoPage {
       this.currentSource_ = matched;  // 缓存书源对象，供路由分流判断
       this.coverDecodeJs = matched?.coverDecodeJs || '';
       // 获取书籍详情（始终请求，确保简介等字段为最新）
-      const info = await globalSourceExecutor.getBookInfo(matched, this.noteUrl);
+      const info = await globalSourceGateway.getBookInfo(matched, this.noteUrl);
+      if (info.contentType !== undefined) this.contentType = info.contentType;
       const isAiSource = matched.isAiGenerated || (matched.sourceName || '').endsWith('(AI)');
       if (info.name && (!this.bookName || info.canReName === true || isAiSource)) {
         if (!this.bookName) {
@@ -175,8 +182,8 @@ export struct BookInfoPage {
         this.sourceTocOriginUrl = matched.sourceUrl || this.originUrl;
       }
       // 获取目录统计（带进度回调）
-      const rawChapters = await globalSourceExecutor.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
-        (loaded: number) => {
+      const rawChapters = await globalSourceGateway.getToc(matched, this.getCurrentTocUrl() || this.noteUrl,
+        undefined, (loaded: number) => {
           if (loaded > this.tocLoadProgress) this.tocLoadProgress = loaded;
         });
       const aiProfileDao = new AiBookProfileTable(AppDatabase.getInstance().rdbStore);
@@ -404,7 +411,8 @@ export struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
-      const isMangaSource: boolean = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+      const isMangaSource: boolean = this.contentType === BookType.MANGA ||
+        (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -510,7 +518,7 @@ export struct BookInfoPage {
    */
   private async ensureMangaFlag_(): Promise<boolean> {
     if (this.currentSource_) {
-      return this.currentSource_.sourceType === 2;
+      return this.contentType === BookType.MANGA || this.currentSource_.sourceType === 2;
     }
     // currentSource_ 为 null，从 DB 查询
     try {
@@ -519,7 +527,7 @@ export struct BookInfoPage {
         this.bookId, this.noteUrl, this.originUrl, this.origin);
       if (matched) {
         this.currentSource_ = matched;
-        return matched.sourceType === 2;
+        return this.contentType === BookType.MANGA || matched.sourceType === 2;
       }
     } catch (_) { /* ignore */ }
     return false;
@@ -553,6 +561,7 @@ export struct BookInfoPage {
         header: this.sourceHeader,
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
+        contentType: this.contentType,
         cachedSources: JSON.stringify(this.cachedSearchResults),
       }
     });
@@ -576,6 +585,7 @@ export struct BookInfoPage {
         originUrl: this.originUrl,
         header: this.sourceHeader,
         durChapterIndex: index,
+        contentType: this.contentType,
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
         cachedSources: JSON.stringify(this.cachedSearchResults),
@@ -606,7 +616,8 @@ export struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
-      const isMangaSource = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+      const isMangaSource = this.contentType === BookType.MANGA ||
+        (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -772,13 +783,13 @@ export struct BookInfoPage {
       // 先验证：加载新源详情 + 目录，目录为空则视为失败
       let newTocUrl = '';
       try {
-        const info = await globalSourceExecutor.getBookInfo(newSource, newNoteUrl);
+        const info = await globalSourceGateway.getBookInfo(newSource, newNoteUrl);
         newTocUrl = info.tocUrl || '';
       } catch (_e) { /* 详情失败时用 bookUrl 兜底拉目录 */ }
       const primaryTocUrl = newTocUrl || newNoteUrl;
-      let newToc = await globalSourceExecutor.getToc(newSource, primaryTocUrl);
+      let newToc = await globalSourceGateway.getToc(newSource, primaryTocUrl);
       if (newToc.length === 0 && primaryTocUrl !== newNoteUrl) {
-        newToc = await globalSourceExecutor.getToc(newSource, newNoteUrl);
+        newToc = await globalSourceGateway.getToc(newSource, newNoteUrl);
       }
       if (newToc.length === 0) throw new Error('新源目录为空');
 
@@ -851,6 +862,7 @@ export struct BookInfoPage {
       this.sourceTocUrl = primaryTocUrl;
       this.sourceTocOriginUrl = newOriginUrl;
       this.currentSource_ = newSource;
+      if (result.contentType !== undefined) this.contentType = result.contentType;
       this.coverDecodeJs = newSource.coverDecodeJs || '';
       if (result.coverUrl && !this.customCoverPath) this.coverUrl = result.coverUrl;
       if (result.kind) this.kind = result.kind;
@@ -924,18 +936,26 @@ export struct BookInfoPage {
       let infoIntroduce = '';
       let infoKind = '';
       let infoWordCount = '';
+      let infoTypeValue = -1;
       try {
-        const info = await globalSourceExecutor.getBookInfo(src, result.noteUrl);
+        const info = await globalSourceGateway.getBookInfo(src, result.noteUrl);
         tocUrl = info.tocUrl || '';
         infoCover = info.coverUrl || '';
         infoIntroduce = info.introduce || '';
         infoKind = info.kind || '';
         infoWordCount = info.wordCount || '';
+        infoTypeValue = info.contentType === undefined ? -1 : info.contentType;
       } catch (_e) { /* 详情失败时用搜索结果自带字段 */ }
-      const toc = await globalSourceExecutor.getToc(src, tocUrl || result.noteUrl);
+      const toc = await globalSourceGateway.getToc(src, tocUrl || result.noteUrl);
       if (toc.length === 0) throw new Error('目录加载失败');
 
-      const isManga = src.sourceType === 2;
+      let detectedType = result.contentType === undefined ? src.sourceType : result.contentType;
+      try {
+        if (infoTypeValue === BookType.MANGA || infoTypeValue === BookType.AUDIO || infoTypeValue === BookType.TEXT) {
+          detectedType = infoTypeValue;
+        }
+      } catch (_e) { /* use search result/source type */ }
+      const isManga = detectedType === BookType.MANGA;
       const now = Date.now();
       const ct = new ChapterTable(db);
       const chapterRows: BookChapter[] = toc.map((ch: BookSourceChapter, idx: number): BookChapter => {
@@ -1143,7 +1163,8 @@ export struct BookInfoPage {
   }
 
   openToc(): void {
-    const isManga = this.currentSource_ ? (this.currentSource_.sourceType === 2) : false;
+    const isManga = this.contentType === BookType.MANGA ||
+      (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
     UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: {
       from: 'BookInfoPage', bookName: this.bookName, bookAuthor: this.bookAuthor,
       bookUrl: this.noteUrl, originUrl: this.originUrl, origin: this.origin,
@@ -1337,8 +1358,7 @@ export struct BookInfoPage {
         .layoutWeight(1)
         .width('100%')
       }
-      .width('100%')
-      .height('100%')
+      QysgRuntimeHostComponent()
 
       // 阅读 FAB：对齐 Android ExtendedFloatingActionButton，固定右下角
       Stack({ alignContent: Alignment.BottomEnd }) {

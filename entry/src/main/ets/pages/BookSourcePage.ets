@@ -1,5 +1,5 @@
 /** 书源管理：对齐 Android Legado 的核心管理能力，并采用 HarmonyOS 标准列表与底部弹层。 */
-import { BookSource, serializeBookSource } from '../model/BookSource';
+import { BookSource, BookSourceFormat, BookSourceType, serializeBookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ImportSourceDialog } from './ImportSourceDialog';
@@ -37,6 +37,8 @@ export struct BookSourcePage {
   @State sortMode: number = 0;
   @State sortAscending: boolean = true;
   @State groupFilter: string = '';
+  @State formatFilter: number = -1;
+  @State contentTypeFilter: number = -1;
   @State failedOnly_: boolean = false;
   @State groupByDomain: boolean = false;
   @State isLoading: boolean = true;
@@ -287,6 +289,12 @@ export struct BookSourcePage {
     else if (this.groupFilter && this.groupFilter !== '全部') {
       list = list.filter((source: BookSource): boolean => this.splitGroups(source.group).includes(this.groupFilter));
     }
+    if (this.formatFilter >= 0) {
+      list = list.filter((source: BookSource): boolean => source.sourceFormat === this.formatFilter);
+    }
+    if (this.contentTypeFilter >= 0) {
+      list = list.filter((source: BookSource): boolean => source.sourceType === this.contentTypeFilter);
+    }
     const direction = this.sortAscending ? 1 : -1;
     list.sort((a: BookSource, b: BookSource): number => {
       let result = 0;
@@ -318,6 +326,34 @@ export struct BookSourcePage {
       const domain = this.getDomain(a.sourceUrl).localeCompare(this.getDomain(b.sourceUrl));
       return domain !== 0 ? domain : a.sourceName.localeCompare(b.sourceName);
     });
+  }
+
+  private formatLabel_(): string {
+    if (this.formatFilter === BookSourceFormat.QYSG) return '格式：qysg';
+    if (this.formatFilter === BookSourceFormat.LEGADO) return '格式：Legado';
+    return '格式：全部';
+  }
+
+  private contentTypeLabel_(): string {
+    if (this.contentTypeFilter === BookSourceType.TEXT) return '内容：小说';
+    if (this.contentTypeFilter === BookSourceType.AUDIO) return '内容：音频';
+    if (this.contentTypeFilter === BookSourceType.IMAGE) return '内容：漫画';
+    if (this.contentTypeFilter === BookSourceType.MIXED) return '内容：混合';
+    return '内容：全部';
+  }
+
+  private toggleFormatFilter_(): void {
+    if (this.formatFilter < 0) this.formatFilter = BookSourceFormat.LEGADO;
+    else if (this.formatFilter === BookSourceFormat.LEGADO) this.formatFilter = BookSourceFormat.QYSG;
+    else this.formatFilter = -1;
+    this.applyFilters();
+  }
+
+  private toggleContentTypeFilter_(): void {
+    const values = [-1, BookSourceType.TEXT, BookSourceType.AUDIO, BookSourceType.IMAGE, BookSourceType.MIXED];
+    const index = values.indexOf(this.contentTypeFilter);
+    this.contentTypeFilter = values[(index + 1) % values.length];
+    this.applyFilters();
   }
 
   private syncSelectedSet_(): void {
@@ -914,6 +950,20 @@ export struct BookSourcePage {
           })
         }.padding({ left: 16, right: 8, top: 10, bottom: 8 })
       }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+
+      Row({ space: 8 }) {
+        Button(this.formatLabel_())
+          .height(36).padding({ left: 12, right: 12 }).borderRadius(18)
+          .fontSize(12).fontColor(this.formatFilter >= 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+          .backgroundColor(this.formatFilter >= 0 ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+          .onClick((): void => { this.toggleFormatFilter_(); })
+        Button(this.contentTypeLabel_())
+          .height(36).padding({ left: 12, right: 12 }).borderRadius(18)
+          .fontSize(12).fontColor(this.contentTypeFilter >= 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+          .backgroundColor(this.contentTypeFilter >= 0 ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
+          .onClick((): void => { this.toggleContentTypeFilter_(); })
+        Blank()
+      }.width('100%').padding({ left: 16, right: 16, bottom: 4 })
 
       Row() {
         Toggle({ type: ToggleType.Switch, isOn: this.groupByDomain }).onChange((value: boolean) => {

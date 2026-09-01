@@ -7,7 +7,7 @@
  * - 加载/保存到数据库
  * - 新建或编辑已有书源
  */
-import { BookSource, parseBookSource } from '../model/BookSource';
+import { BookSource, BookSourceFormat, parseBookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
@@ -199,6 +199,7 @@ export struct BookSourceEditPage {
       sourceName: '',
       sourceUrl: '',
       sourceType: 0,
+      sourceFormat: BookSourceFormat.LEGADO,
       group: '',
       enabled: true,
       weight: 0,

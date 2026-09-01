@@ -18,6 +18,8 @@ import { BookmarkTable } from '../data/database/BookmarkTable';
 import { Bookmark } from '../model/Bookmark';
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { ChapterCache } from '../util/ChapterCache';
 import router from '@ohos.router';
@@ -173,9 +175,9 @@ export struct ChapterListPage {
         if (matched && this.bookUrl) {
           try {
             const primary = this.tocUrl || this.bookUrl;
-            let tocChapters = await globalSourceExecutor.getToc(matched, primary);
+            let tocChapters = await globalSourceGateway.getToc(matched, primary);
             if (tocChapters.length === 0 && primary !== this.bookUrl) {
-              tocChapters = await globalSourceExecutor.getToc(matched, this.bookUrl);
+              tocChapters = await globalSourceGateway.getToc(matched, this.bookUrl);
             }
             if (tocChapters.length > 0) {
               this.chapters_ = tocChapters;
@@ -840,6 +842,7 @@ export struct ChapterListPage {
       } else {
         this.buildBookmarkPane_()
       }
+      QysgRuntimeHostComponent()
     }
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.background(this.isDark))

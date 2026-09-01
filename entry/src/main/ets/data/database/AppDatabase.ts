@@ -153,6 +153,7 @@ export class AppDatabase {
     // 数据库迁移：为已有表添加新列
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN header TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN raw_json TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
+    try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN source_format INTEGER DEFAULT 0"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_url TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_list TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
     try { await RdbUtil.executeSql(this.rdbStore_, "ALTER TABLE book_sources ADD COLUMN rule_search_name TEXT DEFAULT ''"); } catch (_e) { /* 列已存在 */ }
@@ -299,6 +300,10 @@ export class AppDatabase {
         const pick = (col: string, fresh: string): string => fresh || curMap[col] || '';
         const row: relationalStore.ValuesBucket = {
           'id': id,
+          // 旧版本没有 source_format 列。仅按 qysg 的生命周期函数和 bridge
+          // 标记迁移，避免把普通 Legado 的 html 扩展误交给 ArkWeb。
+          'source_format': /(?:async\s+)?function\s+(?:search|info|chapter|content|getfinds|find)\s*\(/i.test(rawJson) &&
+            /flutter_inappwebview\.callHandler/i.test(rawJson) ? 1 : 0,
           'rule_search_url': pick('rule_search_url', (() => {
             let searchUrl = toStr(obj['ruleSearchUrl'] || rs2['searchUrl'] || obj['searchUrl'] || '');
             // 悠久小说网：AI 生成时误标 webView，站点实际支持直接 HTTP POST 搜索，

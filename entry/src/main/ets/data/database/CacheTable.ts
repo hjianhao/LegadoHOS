@@ -61,6 +61,12 @@ export class CacheTable {
     }
   }
 
+  async remove(key: string): Promise<void> {
+    const predicates = new relationalStore.RdbPredicates(CacheTable.TABLE_NAME);
+    predicates.equalTo('cache_key', key);
+    await RdbUtil.delete(this.rdbStore, predicates);
+  }
+
   async clearExpired(): Promise<void> {
     const p = new relationalStore.RdbPredicates(CacheTable.TABLE_NAME);
     p.lessThan('deadline', Date.now());

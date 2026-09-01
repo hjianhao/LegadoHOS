@@ -1,0 +1,76 @@
+import {
+  BookSource,
+  BookSourceBookInfo,
+  BookSourceChapter,
+  BookSourceFormat,
+} from '../../model/BookSource';
+import { SearchResult } from '../../model/SearchResult';
+import { SourceAdapter, SourceContentResult, SourceExploreItem } from '../source/SourceAdapter';
+import { decodeQysgArray } from './QysgSourceCodec';
+import { mapQysgBooks, mapQysgChapters, mapQysgContent, mapQysgInfo } from './QysgResultMapper';
+import { QysgRuntimeManager } from './QysgRuntimeManager';
+
+function mapExploreItem(raw: Object, index: number): SourceExploreItem {
+  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, Object>;
+  const title = String(value['title'] || value['name'] || ('分类' + (index + 1)));
+  const url = String(value['url'] || '');
+  const js = String(value['js'] || '');
+  const type = Number(value['type'] || 0);
+  const width = Number(value['width'] || 0);
+  let flexBasisPercent = 1 / 3;
+  if (width === 1) flexBasisPercent = 1 / 2;
+  else if (width === 3) flexBasisPercent = 1;
+  return {
+    id: 'qysg-' + index + '-' + title,
+    title: title,
+    target: url,
+    actionJs: js || undefined,
+    kind: !url && !js ? 'heading' : (type === 1 ? 'webview' : 'books'),
+    flexBasisPercent: flexBasisPercent,
+    adapterPayload: JSON.stringify(value),
+  };
+}
+
+export class QysgSourceAdapter implements SourceAdapter {
+  canSearch(source: BookSource): boolean {
+    return source.sourceFormat === BookSourceFormat.QYSG && source.enabled;
+  }
+
+  canExplore(source: BookSource): boolean {
+    return this.canSearch(source) && source.enabledExplore;
+  }
+
+  async search(source: BookSource, keyword: string, page: number): Promise<SearchResult[]> {
+    const raw = await QysgRuntimeManager.invoke(source, 'search', [keyword, page, 'searchone']);
+    return mapQysgBooks(raw, source);
+  }
+
+  async getExploreItems(source: BookSource): Promise<SourceExploreItem[]> {
+    const raw = await QysgRuntimeManager.invoke(source, 'getfinds', []);
+    return decodeQysgArray(raw).map((item: Object, index: number): SourceExploreItem => mapExploreItem(item, index));
+  }
+
+  async explore(source: BookSource, item: SourceExploreItem, page: number): Promise<SearchResult[]> {
+    if (item.kind === 'heading') return [];
+    if (item.kind === 'webview') throw new Error('该发现项需要前台 WebView');
+    const raw = await QysgRuntimeManager.invoke(source, 'find', [item.target, page]);
+    return mapQysgBooks(raw, source);
+  }
+
+  async getBookInfo(source: BookSource, noteUrl: string): Promise<BookSourceBookInfo> {
+    const raw = await QysgRuntimeManager.invoke(source, 'info', [noteUrl]);
+    return mapQysgInfo(raw, source, noteUrl);
+  }
+
+  async getToc(source: BookSource, tocUrl: string, bookUrl: string = ''): Promise<BookSourceChapter[]> {
+    const raw = await QysgRuntimeManager.invoke(source, 'chapter', [tocUrl, bookUrl]);
+    return mapQysgChapters(raw, source);
+  }
+
+  async getContent(source: BookSource, contentUrl: string, bookUrl: string = ''): Promise<SourceContentResult> {
+    const raw = await QysgRuntimeManager.invoke(source, 'content', [contentUrl, bookUrl]);
+    return mapQysgContent(raw, source, contentUrl);
+  }
+}
+
+export const globalQysgSourceAdapter = new QysgSourceAdapter();

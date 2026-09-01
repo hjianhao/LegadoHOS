@@ -12,6 +12,8 @@
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { ThemeColors } from '../theme/ThemeColors';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { ChapterCache } from '../util/ChapterCache';
 import { WindowLayout } from '../util/WindowLayout';
 import { NetUtil } from '../util/NetUtil';
@@ -254,9 +256,9 @@ struct ComicReadPage {
         }
         if (chapters.length === 0 && this.source_) {
           const primaryTocUrl = this.tocUrl || this.bookUrl;
-          chapters = await globalSourceExecutor.getToc(this.source_, primaryTocUrl);
+          chapters = await globalSourceGateway.getToc(this.source_, primaryTocUrl);
           if (chapters.length === 0 && primaryTocUrl !== this.bookUrl) {
-            const fallback = await globalSourceExecutor.getToc(this.source_, this.bookUrl);
+            const fallback = await globalSourceGateway.getToc(this.source_, this.bookUrl);
             if (fallback.length > 0) chapters = fallback;
           }
           if (chapters.length > 0 && this.bookId_ > 0) {
@@ -456,7 +458,7 @@ struct ComicReadPage {
     const url = ch.url || this.bookUrl;
     let content: string = '';
     if (this.source_) {
-      content = await globalSourceExecutor.getContent(this.source_, url, this.bookUrl, true);
+      content = await globalSourceGateway.getContent(this.source_, url, this.bookUrl, true);
     }
     if (!content && url && url.startsWith('http')) {
       const r = await NetUtil.httpGet(url);
@@ -1071,6 +1073,7 @@ struct ComicReadPage {
       if (this.showZoneConfig) {
         this.buildZoneConfigPanel()
       }
+      QysgRuntimeHostComponent()
     }
     .width('100%').height('100%')
     .backgroundColor(ThemeColors.comicCanvas(this.isDark))

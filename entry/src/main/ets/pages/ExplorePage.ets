@@ -16,6 +16,8 @@ import { util } from '@kit.ArkTS';
 import { UiUtil } from '../util/UiUtil';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
 import { SettingsStore } from '../data/preferences/SettingsStore';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 
 interface ExploreCategory {
   name: string;
@@ -184,6 +186,7 @@ export struct ExplorePage {
         // enabled 是搜索开关，与发现开关相互独立。
         if (!s.enabledExplore) return false;
         if (s.exploreUrl && s.exploreUrl.trim().length > 0) return true;
+        if (s.sourceFormat === 1) return true;
         // 兼容：检查 ruleExplores 是否为 :: 格式（如 "玄幻::/xuanhuan/"）
         if (s.ruleExplores && s.ruleExplores.trim().length > 0 && s.ruleExplores.includes('::')) return true;
         return false;
@@ -221,6 +224,39 @@ export struct ExplorePage {
     const cacheKey = source.sourceUrl;
     if (!forceReload && this.categoryCache[cacheKey]) {
       return this.categoryCache[cacheKey];
+    }
+
+    if (source.sourceFormat === 1) {
+      try {
+        const items = await globalSourceGateway.getExploreItems(source);
+        const categories: ExploreCategory[] = items.map((item): ExploreCategory => ({
+          name: item.title,
+          url: item.target,
+          keyword: '',
+          style: '',
+          bookUrl: '',
+          ruleExploreList: '',
+          ruleExploreName: '',
+          ruleExploreAuthor: '',
+          ruleExploreCover: '',
+          ruleExploreNoteUrl: '',
+          ruleExploreKind: '',
+          ruleExploreWordCount: '',
+          ruleExploreLastUpdateTime: '',
+          ruleExploreLastChapter: '',
+          ruleExploreIntroduce: '',
+          parent: '',
+          isSubNav: item.kind === 'heading',
+          flexBasisPercent: item.flexBasisPercent,
+          flexGrow: 0,
+          wrapBefore: item.flexBasisPercent >= 1,
+        }));
+        this.cacheCategories(cacheKey, categories);
+        return categories;
+      } catch (error) {
+        this.lastCategoryError = String(error);
+        throw error instanceof Error ? error : new Error(String(error));
+      }
     }
 
     await this.ensureSourceVariable(source);
@@ -1026,6 +1062,7 @@ export struct ExplorePage {
           })
         }.width('100%').layoutWeight(1)
       }
+      QysgRuntimeHostComponent()
     }
     .width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }

@@ -42,6 +42,8 @@ export interface SearchResult {
   sourceNoteUrls?: string[];
   /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
   coverDecodeJs?: string;
+  /** qysg 可按单本书返回内容类型；Legado 源缺省时沿用书源类型。 */
+  contentType?: number;
 }
 
 /**
@@ -131,6 +133,9 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
       if (r.latestChapterTitle && !existing.latestChapterTitle) {
         existing.latestChapterTitle = r.latestChapterTitle;
       }
+      if (existing.contentType === undefined && r.contentType !== undefined) {
+        existing.contentType = r.contentType;
+      }
     } else {
       map.set(mergeKey, {
         key: r.key, name: r.name, author: r.author,
@@ -144,7 +149,8 @@ export function mergeSearchResults(results: SearchResult[]): SearchResult[] {
         sourceOriginUrls: r.originUrl ? [r.originUrl] : [],
         sourceNoteUrls: r.noteUrl ? [r.noteUrl] : [],
         latestChapterTitle: r.latestChapterTitle || '',
-        coverDecodeJs: r.coverDecodeJs || ''
+        coverDecodeJs: r.coverDecodeJs || '',
+        contentType: r.contentType
       });
     }
   }
