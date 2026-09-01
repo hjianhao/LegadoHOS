@@ -1129,6 +1129,17 @@ export struct ExplorePage {
             .borderRadius(8)
             .textAlign(TextAlign.Center)
             .accessibilityText('分类分组：' + parent.name)
+        } else if (!parent.isSubNav) {
+          // qysg 的 getfinds 会把静态分组标题和可直接查询书籍的分类放在同一数组中。
+          // 普通分类不是动态一级导航，必须直接进入书籍列表页；否则会被误绑定为
+          // toggleDynamicSubNav，点击后既不会请求 find，也不会发生页面跳转。
+          Button(parent.name)
+            .width('100%').height(46).fontSize(15)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .borderRadius(8)
+            .accessibilityText('打开分类：' + parent.name)
+            .onClick((): void => { this.openCategory(source, parent); })
         } else {
           Button((this.isDynamicExpanded_(parent.url) ? '▾ ' : '▸ ') + parent.name)
             .width('100%').height(46).fontSize(15)
