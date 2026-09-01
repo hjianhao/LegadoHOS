@@ -7,7 +7,13 @@ import {
   BookSourceType,
 } from '../../model/BookSource';
 import { SearchResult } from '../../model/SearchResult';
-import { qysgAbsoluteUrl, qysgContentType, decodeQysgArray, decodeQysgObject } from './QysgSourceCodec';
+import {
+  qysgAbsoluteUrl,
+  qysgContentType,
+  decodeQysgArray,
+  decodeQysgObject,
+  decodeQysgValue,
+} from './QysgSourceCodec';
 
 function value(object: Record<string, Object>, ...keys: string[]): string {
   for (const key of keys) {
@@ -108,12 +114,22 @@ export function mapQysgContent(raw: string, source: BookSource, requestedUrl: st
   raw: string;
   baseUrl: string;
 } {
-  const value = raw || '';
-  const type = value.trim().startsWith('{') ? decodeQysgObject(value)['type'] : undefined;
-  const content = value.trim().startsWith('{') ? valueOfChapter(decodeQysgObject(value), 'content', 'data', 'url') : value;
+  const decoded = decodeQysgValue(raw || '');
+  let type: unknown = undefined;
+  let content = '';
+  if (typeof decoded === 'string') {
+    content = decoded;
+  } else if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+    const object = decoded as Record<string, Object>;
+    type = object['type'];
+    const value = object['content'] ?? object['data'] ?? object['text'] ?? object['url'];
+    content = value === undefined || value === null ? '' : String(value);
+  } else if (decoded !== undefined && decoded !== null) {
+    content = String(decoded);
+  }
   return {
     type: qysgContentType(type, source.sourceType) as BookType,
-    raw: content || value,
+    raw: content,
     baseUrl: requestedUrl || source.sourceUrl,
   };
 }

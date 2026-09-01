@@ -18,6 +18,7 @@ import { BookCover } from '../components/BookCover';
 import { BookDeleter } from '../service/BookDeleter';
 import { MangaImageLoader } from '../util/MangaImageLoader';
 import { BookCoverUtil } from '../util/BookCoverUtil';
+import { extractCoverUrl } from '../util/CoverUrlUtil';
 import { SearchResult } from '../model/SearchResult';
 import { BookChapter, createDefaultChapter } from '../model/BookChapter';
 import {
@@ -335,15 +336,9 @@ export struct BookInfoPage {
         'Referer': this.originUrl || this.noteUrl,
       });
       if (!html) return;
-      // 尝试常见封面位置：<img> 标签（优先大图）
-      const imgRegex = /<img[^>]*src=["']([^"']+(?:jpe?g|png|webp|gif|bmp)[^"']*)["'][^>]*>/i;
-      const m = html.match(imgRegex);
-      if (m) {
-        let url = m[1];
-        if (url && !url.startsWith('http')) {
-          const baseUrl = this.noteUrl.replace(/\/[^/]*$/, '');
-          url = (baseUrl || '') + (url.startsWith('/') ? url : '/' + url);
-        }
+      const url = extractCoverUrl(html, this.noteUrl);
+      // 详情请求与 qysg info 并发，不能用站点 logo 覆盖后到达的真实封面。
+      if (url && !this.coverUrl) {
         this.coverUrl = url;
         console.info('[BookInfo] Cover extracted from detail page:', url.substring(0, 60));
       }
@@ -1264,6 +1259,7 @@ export struct BookInfoPage {
                 BookCover({
                   name: this.bookName,
                   coverUrl: this.getDisplayCover(),
+                  fallbackUrl: this.noteUrl,
                   coverWidth: 112,
                   coverHeight: 157,
                   coverDecodeJs: this.coverDecodeJs

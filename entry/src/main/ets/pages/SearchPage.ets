@@ -1713,7 +1713,7 @@ export struct SearchPage {
           ForEach(this.bookshelfHints, (book: Book) => {
             ListItem() {
               Row() {
-                BookCover({ name: book.name, coverUrl: book.coverUrl || book.customCoverPath, coverWidth: 42, coverHeight: 58, coverDecodeJs: book.coverDecodeJs || '' })
+                BookCover({ name: book.name, coverUrl: book.coverUrl || book.customCoverPath, fallbackUrl: book.bookUrl, coverWidth: 42, coverHeight: 58, coverDecodeJs: book.coverDecodeJs || '' })
                   .margin({ right: 12 })
                 Column() {
                   Text(book.name)
@@ -2071,7 +2071,7 @@ export struct SearchPage {
   @Builder buildBookListItem(item: SearchResult) {
     Row() {
       Stack() {
-        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 72, coverHeight: 101, coverDecodeJs: item.coverDecodeJs || '' })
+        BookCover({ name: item.name, coverUrl: item.coverUrl, fallbackUrl: item.noteUrl, coverWidth: 72, coverHeight: 101, coverDecodeJs: item.coverDecodeJs || '' })
         if (this.getShelfState(item) > 0) {
           Text(this.getShelfState(item) === 1 ? '✓' : '↔')
             .fontSize(11)
@@ -2190,7 +2190,7 @@ export struct SearchPage {
   @Builder buildGridItem(item: SearchResult) {
     Column() {
       Stack() {
-        BookCover({ name: item.name, coverUrl: item.coverUrl, coverWidth: 96, coverHeight: 134, coverDecodeJs: item.coverDecodeJs || '' })
+        BookCover({ name: item.name, coverUrl: item.coverUrl, fallbackUrl: item.noteUrl, coverWidth: 96, coverHeight: 134, coverDecodeJs: item.coverDecodeJs || '' })
         if (this.getShelfState(item) > 0) {
           Text(this.getShelfState(item) === 1 ? '✓' : '↔')
             .fontSize(10)
@@ -2796,6 +2796,7 @@ export struct SearchPage {
           BookCover({
             name: this.previewItem.name,
             coverUrl: this.previewItem.coverUrl,
+            fallbackUrl: this.previewItem.noteUrl,
             coverWidth: 96,
             coverHeight: 134,
             coverDecodeJs: this.previewItem.coverDecodeJs || ''

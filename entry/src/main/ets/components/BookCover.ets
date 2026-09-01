@@ -5,6 +5,7 @@
 import { NetUtil } from '../util/NetUtil';
 import { CoverDecoder } from '../util/CoverDecoder';
 import { ThemeColors } from '../theme/ThemeColors';
+import { extractCoverUrl } from '../util/CoverUrlUtil';
 
 /**
  * 防盗链封面通常需要先下载再转成 data URL。页面切换或列表重建时复用结果，
@@ -45,6 +46,8 @@ export struct BookCover {
   @StorageLink('isDark') isDark: boolean = false;
   @Prop name: string = '';
   @Prop @Watch('onCoverUrlChange') coverUrl: string = '';
+  /** 搜索结果未提供封面时，用详情页地址延迟提取。 */
+  @Prop fallbackUrl: string = '';
   @Prop coverWidth: number = 52;
   @Prop coverHeight: number = 70;
   /** 封面解密 JS 代码（标准 Legado coverDecodeJs 格式） */
@@ -56,12 +59,15 @@ export struct BookCover {
   @State networkDataUrl: string = '';
   @State isDecoding: boolean = false;
   @State isLoadingFallback: boolean = false;
+  private pageCoverTried_: boolean = false;
 
   aboutToAppear(): void {
     this.applyCoverUrl();
     this.restoreCachedNetworkCover_();
     console.info('[BookCover] init name=' + (this.name || '').substring(0, 10) + ' url=' +
       (this.coverUrl || '').substring(0, 50) + ' decode=' + (this.coverDecodeJs ? 'yes' : 'no'));
+
+    if (!this.coverUrl && this.fallbackUrl) void this.loadPageCover_();
 
     // 有解密配置时，先下载解密再显示
     if (this.useNetwork && this.coverUrl && this.coverDecodeJs) {
@@ -91,6 +97,23 @@ export struct BookCover {
     this.restoreCachedNetworkCover_();
     if (this.useNetwork && this.coverUrl && this.coverDecodeJs && !this.decryptedDataUrl && !this.isDecoding) {
       this.loadAndDecryptCover();
+    }
+    if (!this.coverUrl && this.fallbackUrl) void this.loadPageCover_();
+  }
+
+  private async loadPageCover_(): Promise<void> {
+    if (this.pageCoverTried_ || !/^https?:\/\//i.test(this.fallbackUrl) || this.coverUrl) return;
+    this.pageCoverTried_ = true;
+    try {
+      const html = await NetUtil.httpGet(this.fallbackUrl, this.coverRequestHeaders_(this.fallbackUrl));
+      const url = extractCoverUrl(html, this.fallbackUrl);
+      if (url && !this.coverUrl) {
+        this.coverUrl = url;
+        console.info('[BookCover] page cover extracted url=' + url.substring(0, 80));
+      }
+    } catch (e) {
+      console.warn('[BookCover] page cover fallback failed url=' +
+        this.fallbackUrl.substring(0, 80) + ' err=' + (e as Error).message);
     }
   }
 
