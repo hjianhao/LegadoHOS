@@ -145,6 +145,7 @@ export struct ChapterListPage {
 
   async loadChapters(forceNetwork: boolean = false): Promise<void> {
     this.isLoading = true;
+    let loadedFromNetwork = false;
     try {
       await AppDatabase.getInstance().waitForInit();
       const db = AppDatabase.getInstance().rdbStore;
@@ -182,6 +183,7 @@ export struct ChapterListPage {
               tocChapters = await globalSourceGateway.getToc(matched, this.bookUrl);
             }
             if (tocChapters.length > 0) {
+              loadedFromNetwork = true;
               this.chapters_ = tocChapters;
               ChapterCache.chapters = tocChapters;
               ChapterCache.bookUrl = this.bookUrl;
@@ -220,7 +222,7 @@ export struct ChapterListPage {
         console.info('[ChapterList] first:', this.chapters_[0].title.substring(0, 30));
         console.info('[ChapterList] last:', this.chapters_[this.chapters_.length - 1].title.substring(0, 30));
       }
-      await this.normalizeCachedQysgChapters_();
+      await this.normalizeCachedQysgChapters_(!loadedFromNetwork);
       this.ensureAscendingOrder();
       // ensureAscendingOrder 可能修正分页合并造成的局部乱序；同步内存缓存，
       // 这样从目录进入阅读页时“上一章/下一章”也使用同一份已排序目录。
@@ -238,14 +240,26 @@ export struct ChapterListPage {
    * 兼容升级前已经缓存的 qysg 重复目录。网络刷新经过 mapper 后本身已去重，
    * 这里只处理内存/数据库旧数据，避免用户必须先手动刷新才能看到正确目录。
    */
-  private async normalizeCachedQysgChapters_(): Promise<void> {
+  private async normalizeCachedQysgChapters_(fromCache: boolean): Promise<void> {
     if (this.chapters_.length === 0 || (!this.originUrl && !this.origin)) return;
     try {
       const source = await BookSourceResolver.resolveByIdentity(
         this.bookId_, this.bookUrl, this.originUrl, this.origin);
       if (!source || source.sourceFormat !== BookSourceFormat.QYSG) return;
       this.isQysgSource_ = true;
-      const normalized = normalizeQysgChapters(this.chapters_);
+      // 数据库只保存 isVolume=false；若是旧内存缓存，之前的标题启发式可能
+      // 已经把真实章节改成 true，这里按 qysg 原始结果重新清除该推断状态。
+      const input = fromCache ? this.chapters_.map((chapter: BookSourceChapter): BookSourceChapter => ({
+        title: chapter.title,
+        url: chapter.url,
+        index: chapter.index,
+        isVolume: false,
+        isVip: chapter.isVip,
+        isPay: chapter.isPay,
+        updateTime: chapter.updateTime,
+        tag: chapter.tag,
+      })) : this.chapters_;
+      const normalized = normalizeQysgChapters(input);
       if (normalized.length === this.chapters_.length) return;
       this.chapters_ = normalized;
       ChapterCache.chapters = normalized;
