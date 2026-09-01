@@ -5,7 +5,6 @@
  * 支持: 在线/本地音频播放、进度追踪、变速、音量控制
  */
 import media from '@ohos.multimedia.media';
-import { fileIo } from '@ohos.file.fs';
 
 export enum PlayState {
   IDLE = 'idle',
@@ -23,6 +22,37 @@ export interface AudioTrack {
   url: string;          // 支持 http/https 和 file://
   duration: number;     // 秒（从元数据获取后更新）
   coverUrl: string;
+}
+
+interface ParsedAudioUrl {
+  url: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Legado 音频书源允许把请求头附在 URL 后：
+ *   https://cdn.example/a.mp3,{"headers":{"Referer":"..."}}
+ * AVPlayer 不能把这个扩展串当作 URL，播放前必须拆开并交给 MediaSource。
+ */
+function parseAudioUrl(value: string): ParsedAudioUrl {
+  const raw = (value || '').trim();
+  const comma = raw.lastIndexOf(',');
+  if (comma <= 0) return { url: raw, headers: {} };
+  const suffix = raw.substring(comma + 1).trim();
+  if (!suffix.startsWith('{')) return { url: raw, headers: {} };
+  try {
+    const parsed: Object = JSON.parse(suffix);
+    const candidate = (parsed as Record<string, Object>)['headers'];
+    if (!candidate || typeof candidate !== 'object') return { url: raw, headers: {} };
+    const headers: Record<string, string> = {};
+    Object.keys(candidate as Record<string, Object>).forEach((key: string): void => {
+      const item = (candidate as Record<string, Object>)[key];
+      if (item !== undefined && item !== null) headers[key] = String(item);
+    });
+    return { url: raw.substring(0, comma).trim(), headers: headers };
+  } catch (_e) {
+    return { url: raw, headers: {} };
+  }
 }
 
 export class AudioPlayer {
@@ -51,6 +81,23 @@ export class AudioPlayer {
   set onProgress(cb: (current: number, total: number) => void) { this.onProgress_ = cb; }
   set onCompletion(cb: () => void) { this.onCompletion_ = cb; }
   set onError(cb: (err: string) => void) { this.onError_ = cb; }
+
+  private applySpeed_(): void {
+    if (!this.avPlayer_) return;
+    // AVPlayer API 12 使用 PlaybackSpeed 枚举（不是任意 number）。
+    const modes: Record<string, media.PlaybackSpeed> = {
+      '0.5': media.PlaybackSpeed.SPEED_FORWARD_0_50_X,
+      '0.75': media.PlaybackSpeed.SPEED_FORWARD_0_75_X,
+      '1': media.PlaybackSpeed.SPEED_FORWARD_1_00_X,
+      '1.25': media.PlaybackSpeed.SPEED_FORWARD_1_25_X,
+      '1.5': media.PlaybackSpeed.SPEED_FORWARD_1_50_X,
+      '1.75': media.PlaybackSpeed.SPEED_FORWARD_1_75_X,
+      '2': media.PlaybackSpeed.SPEED_FORWARD_2_00_X,
+      '3': media.PlaybackSpeed.SPEED_FORWARD_3_00_X,
+    };
+    const key = Object.keys(modes).find((item: string): boolean => Math.abs(Number(item) - this.speed_) < 0.01);
+    this.avPlayer_.setSpeed(key ? modes[key] : media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
+  }
 
   /**
    * 初始化 AVPlayer
@@ -82,7 +129,8 @@ export class AudioPlayer {
           break;
         case 'prepared':
           this.state_ = PlayState.PREPARED;
-          this.duration_ = this.avPlayer_!.duration;
+          // AVPlayer.duration 的单位是毫秒，AudioPlayer 对外统一使用秒。
+          this.duration_ = Math.floor(this.avPlayer_!.duration / 1000);
           this.avPlayer_!.play();
           break;
         case 'playing':
@@ -128,15 +176,34 @@ export class AudioPlayer {
     this.currentTrack_ = track;
 
     try {
-      // 设置播放源（支持 http/https/file）
-      this.avPlayer_.url = track.url;
+      // 切换章节时必须先回到 idle，否则 AVPlayer 会拒绝重新设置源。
+      if (this.state_ !== PlayState.IDLE && this.state_ !== PlayState.INITIALIZED) {
+        try { await this.avPlayer_.stop(); } catch (_e) { /* already stopped */ }
+        try { await this.avPlayer_.reset(); } catch (_e) { /* some devices reset implicitly */ }
+      }
+
+      const parsed = parseAudioUrl(track.url);
+      // MediaSource 支持将 Referer/User-Agent 等请求头传给网络音频；没有头时
+      // 仍走同一 API，避免把 Legado 的扩展串误传给底层播放器。
+      if (/^file:\/\//i.test(parsed.url)) {
+        this.avPlayer_.url = parsed.url;
+      } else {
+        const mediaSource = media.createMediaSourceWithUrl(parsed.url, parsed.headers);
+        try {
+          await this.avPlayer_.setMediaSource(mediaSource);
+        } catch (sourceError) {
+          // 少数旧系统只支持 url 属性；没有请求头时可以安全降级。
+          if (Object.keys(parsed.headers).length > 0) throw sourceError;
+          this.avPlayer_.url = parsed.url;
+        }
+      }
 
       // 准备（触发 stateChange → prepared）
       await this.avPlayer_.prepare();
 
       // 应用已设置的音量、速度
-      this.avPlayer_.volume = this.volume_;
-      this.avPlayer_.speed = this.speed_;
+      this.avPlayer_.setVolume(this.volume_);
+      this.applySpeed_();
 
       console.info(`[AudioPlayer] Playing: ${track.title} (${track.url})`);
     } catch (err) {
@@ -180,9 +247,7 @@ export class AudioPlayer {
    */
   async seek(timeMs: number): Promise<void> {
     if (this.avPlayer_ && this.state_ !== PlayState.IDLE) {
-      this.avPlayer_.seek(timeMs, (err) => {
-        if (err) console.error('[AudioPlayer] Seek failed:', err);
-      });
+      this.avPlayer_.seek(timeMs);
     }
   }
 
@@ -192,7 +257,7 @@ export class AudioPlayer {
   setSpeed(speed: number): void {
     this.speed_ = Math.max(0.5, Math.min(3.0, speed));
     if (this.avPlayer_) {
-      this.avPlayer_.speed = this.speed_;
+      this.applySpeed_();
     }
   }
 
@@ -202,7 +267,7 @@ export class AudioPlayer {
   setVolume(vol: number): void {
     this.volume_ = Math.max(0, Math.min(1, vol));
     if (this.avPlayer_) {
-      this.avPlayer_.volume = this.volume_;
+      this.avPlayer_.setVolume(this.volume_);
     }
   }
 
@@ -227,3 +292,13 @@ export class AudioPlayer {
     console.info('[AudioPlayer] Destroyed');
   }
 }
+
+/**
+ * 应用级播放器实例。
+ *
+ * Android Legado 由 AudioPlayService 持有播放器，因此离开阅读页后播放不会
+ * 被新页面创建的第二个播放器打断。HOS 当前没有单独的 ServiceExtensionAbility，
+ * 先用进程级单例保持同样的切页行为；MainAbility 的 audioPlayback 后台模式负责
+ * 允许音频在页面离开后继续播放。
+ */
+export const globalAudioPlayer: AudioPlayer = new AudioPlayer();

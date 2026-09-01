@@ -8,6 +8,7 @@
     "pages/SearchPage",
     "pages/SearchContentPage",
     "pages/ReadPage",
+    "pages/AudioReadPage",
     "pages/BookInfoPage",
     "pages/BookSourcePage",
     "pages/BookSourceEditPage",

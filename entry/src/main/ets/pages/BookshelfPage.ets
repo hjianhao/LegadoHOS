@@ -10,7 +10,7 @@
  * - 每个条目：封面、书名、作者、当前章节、最新章节、更新数徽章、进度条
  * - 点击阅读 / 长按菜单(详情/清缓存/删除)
  */
-import { Book } from '../model/Book';
+import { Book, BookType } from '../model/Book';
 import { ThemeColors } from '../theme/ThemeColors';
 import { WindowLayout } from '../util/WindowLayout';
 import { AppDatabase } from '../data/database/AppDatabase';
@@ -729,10 +729,22 @@ export struct BookshelfPage {
       } catch (_e) { /* 默认小说引擎 */ }
     }
     // 小说阅读引擎（默认）
-    const targetPage = book.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
+    const targetPage = (book.isAudio || book.type === BookType.AUDIO) ? 'pages/AudioReadPage' :
+      (book.isManga || book.type === BookType.MANGA ? 'pages/ComicReadPage' : 'pages/ReadPage');
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
-      params: { bookUrl: book.bookUrl }
+      params: {
+        bookUrl: book.bookUrl,
+        bookName: book.name,
+        bookAuthor: book.author,
+        origin: book.origin,
+        originUrl: book.originUrl,
+        tocUrl: book.tocUrl,
+        bookId: book.id,
+        durChapterIndex: book.durChapterIndex,
+        durChapterPos: book.durChapterPos,
+        isAudio: (book.isAudio || book.type === BookType.AUDIO) ? '1' : '0'
+      }
     });
   }
 

@@ -722,7 +722,10 @@ export struct SearchPage {
   getActiveSources(): BookSource[] {
     return this.sources.filter((source: BookSource): boolean => {
       if (!globalSourceGateway.canSearch(source)) return false;
-      if (this.selectedSourceTypes.length > 0 && !this.selectedSourceTypes.includes(source.sourceType)) return false;
+      // qysg 混合源（sourceType=4）可以按单本返回小说/音频/漫画，选择具体
+      // 内容类型时不能把这类源整体过滤掉。
+      if (this.selectedSourceTypes.length > 0 &&
+        !this.selectedSourceTypes.includes(source.sourceType) && source.sourceType !== 4) return false;
       if (this.scopeBySource && this.selectedSourceUrls.length > 0) {
         return this.selectedSourceUrls.includes(source.sourceUrl);
       }
@@ -1278,16 +1281,27 @@ export struct SearchPage {
         existing.origin = existing.origin || item.origin;
         existing.originUrl = existing.originUrl || item.originUrl;
         existing.latestChapterTitle = existing.latestChapterTitle || item.latestChapterTitle;
+        if (item.contentType === BookType.AUDIO || item.contentType === BookType.MANGA ||
+          item.contentType === BookType.TEXT) {
+          existing.type = item.contentType as BookType;
+          existing.isAudio = existing.type === BookType.AUDIO;
+          existing.isManga = existing.type === BookType.MANGA;
+        }
         existing.updateTime = now;
         await bookTable.updateBook(existing);
       } else {
-        // 查询书源类型，判断是否为漫画源
-        let isMangaSource = item.contentType === BookType.MANGA;
+        // qysg 可以按单本返回类型；普通 Legado 源沿用书源类型。
+        let detectedType: BookType = (item.contentType === BookType.AUDIO ||
+          item.contentType === BookType.MANGA || item.contentType === BookType.TEXT)
+          ? item.contentType as BookType : BookType.TEXT;
         try {
           const srcDao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
           const sources = await srcDao.getAllSources();
           const matchedSource = sources.find(s => s.sourceUrl === item.originUrl || s.sourceName === item.origin);
-          if (matchedSource && matchedSource.sourceType === 2) isMangaSource = true;
+          if (matchedSource && (matchedSource.sourceType === 1 || matchedSource.sourceType === 2) &&
+            item.contentType === undefined) {
+            detectedType = matchedSource.sourceType as BookType;
+          }
         } catch (_) { /* ignore */ }
 
         const book: Book = {
@@ -1299,7 +1313,7 @@ export struct SearchPage {
           bookUrl: item.noteUrl,
           origin: item.origin,
           originUrl: item.originUrl,
-          type: isMangaSource ? BookType.MANGA : BookType.TEXT,
+          type: detectedType,
           groupId: BookGroup.ALL,
           tocUrl: '',
           chapterCount: 0,
@@ -1310,8 +1324,8 @@ export struct SearchPage {
           durChapterPos: 0,
           durChapterProgress: 0,
           isRead: false,
-          isAudio: false,
-          isManga: isMangaSource,
+          isAudio: detectedType === BookType.AUDIO,
+          isManga: detectedType === BookType.MANGA,
           isShelf: true,
           order: 0,
           canUpdate: true,

@@ -7,7 +7,7 @@
  *
  * 分组与书籍关系：一个书只能属于一个分组（groupId 外键）
  */
-import { Book } from './Book';
+import { Book, BookType } from './Book';
 
 /** 内置分组枚举 */
 export enum BookGroup {
@@ -80,9 +80,9 @@ export function bookMatchesSystemGroup(book: Book, groupId: number): boolean {
     case BookGroup.LOCAL:
       return book.origin === '本地';
     case BookGroup.AUDIO_BOOK:
-      return book.isAudio;
+      return book.isAudio || book.type === BookType.AUDIO;
     case BookGroup.MANGA:
-      return book.isManga;
+      return book.isManga || book.type === BookType.MANGA;
     default:
       return false;
   }
@@ -90,8 +90,8 @@ export function bookMatchesSystemGroup(book: Book, groupId: number): boolean {
 
 /** 新书自动分配到哪个系统分组 */
 export function getDefaultGroupForBook(book: Book): number {
-  if (book.isAudio) return BookGroup.AUDIO_BOOK;
-  if (book.isManga) return BookGroup.MANGA;
+  if (book.isAudio || book.type === BookType.AUDIO) return BookGroup.AUDIO_BOOK;
+  if (book.isManga || book.type === BookType.MANGA) return BookGroup.MANGA;
   return BookGroup.ALL;
 }
 

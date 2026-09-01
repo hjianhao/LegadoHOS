@@ -9,7 +9,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookmarkTable } from '../data/database/BookmarkTable';
 import { BookTable } from '../data/database/BookTable';
 import { Bookmark } from '../model/Bookmark';
-import { Book } from '../model/Book';
+import { Book, BookType } from '../model/Book';
 import { BookmarkEditDialog } from '../components/reader/BookmarkEditDialog';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -88,8 +88,10 @@ export struct BookmarkPage {
         UiUtil.showToast(this.getUIContext(), { message: '书籍已删除，无法跳转', duration: 1500 });
         return;
       }
+      const targetPage = (book.isAudio || book.type === BookType.AUDIO) ? 'pages/AudioReadPage' :
+        (book.isManga || book.type === BookType.MANGA ? 'pages/ComicReadPage' : 'pages/ReadPage');
       UiUtil.pushUrl(this.getUIContext(), {
-        url: 'pages/ReadPage',
+        url: targetPage,
         params: {
           bookName: book.name,
           bookAuthor: book.author,
@@ -99,6 +101,8 @@ export struct BookmarkPage {
           originUrl: book.originUrl,
           durChapterIndex: b.chapterIndex,
           durCharPos: b.chapterPos,
+          bookId: book.id,
+          isAudio: (book.isAudio || book.type === BookType.AUDIO) ? '1' : '0',
         }
       });
     } catch (e) {

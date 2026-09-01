@@ -101,6 +101,7 @@ export struct ChapterListPage {
   @State durChapterIndex: number = 0;     // 当前阅读进度
   @State bookDetailUrl: string = '';       // 原始书籍详情页 URL（用于正文加载兜底）
   @State isManga: boolean = false;         // 是否为漫画书源
+  @State isAudio: boolean = false;         // 是否为有声书源
 
   // 章节数据 — 使用 LazyForEach IDataSource 以支持 2000+ 章节流畅滚动
   private dataSource_: ChapterDataSource = new ChapterDataSource();
@@ -139,6 +140,7 @@ export struct ChapterListPage {
       this.tocUrl = params['tocUrl'] || '';
       this.durChapterIndex = parseInt(params['durChapterIndex'] || '0');
       this.isManga = params['isManga'] === '1';
+      this.isAudio = params['isAudio'] === '1';
     }
     this.loadChapters();
   }
@@ -416,14 +418,16 @@ export struct ChapterListPage {
     ChapterCache.chapters = this.chapters_;
     ChapterCache.bookUrl = this.bookUrl;
     ChapterCache.targetIndex = b.chapterIndex;
-    const targetPage = this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
-    if (this.from === 'ReadPage' || this.from === 'ComicReadPage') {
+    const targetPage = this.isAudio ? 'pages/AudioReadPage' :
+      (this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage');
+    if (this.from === 'ReadPage' || this.from === 'ComicReadPage' || this.from === 'AudioReadPage') {
       UiUtil.back(this.getUIContext(), {
         url: targetPage,
         params: {
           durChapterIndex: b.chapterIndex,
           durCharPos: b.chapterPos,
           durChapterTitle: b.chapterName,
+          isAudio: this.isAudio ? '1' : '0',
         }
       });
     } else {
@@ -440,6 +444,7 @@ export struct ChapterListPage {
           durChapterIndex: b.chapterIndex,
           durCharPos: b.chapterPos,
           durChapterTitle: b.chapterName,
+          isAudio: this.isAudio ? '1' : '0',
         }
       });
     }
@@ -652,14 +657,16 @@ export struct ChapterListPage {
     ChapterCache.chapters = this.chapters_;
     ChapterCache.bookUrl = this.bookUrl;
     ChapterCache.targetIndex = ch.index;
-    const targetPage = this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
-    if (this.from === 'ReadPage' || this.from === 'ComicReadPage') {
+    const targetPage = this.isAudio ? 'pages/AudioReadPage' :
+      (this.isManga ? 'pages/ComicReadPage' : 'pages/ReadPage');
+    if (this.from === 'ReadPage' || this.from === 'ComicReadPage' || this.from === 'AudioReadPage') {
       // 从阅读页进来的 → router.back 回到阅读页并传参
       UiUtil.back(this.getUIContext(), {
         url: targetPage,
         params: {
           durChapterIndex: ch.index,
           durChapterTitle: ch.title,
+          isAudio: this.isAudio ? '1' : '0',
         }
       });
     } else {
@@ -675,6 +682,7 @@ export struct ChapterListPage {
           header: this.header,
           durChapterIndex: ch.index,
           durChapterTitle: ch.title,
+          isAudio: this.isAudio ? '1' : '0',
         }
       });
     }

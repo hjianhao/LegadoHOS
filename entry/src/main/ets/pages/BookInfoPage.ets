@@ -248,6 +248,10 @@ export struct BookInfoPage {
           if (matched.totalChapterNum > 0) this.chapterCount = matched.totalChapterNum;
           this.durChapterTitle = matched.durChapterTitle || '';
           this.durChapterIndex = matched.durChapterIndex || 0;
+          if (this.contentType < 0 && (matched.type === BookType.AUDIO ||
+            matched.type === BookType.MANGA || matched.type === BookType.TEXT)) {
+            this.contentType = matched.type;
+          }
           if (matched.lastOpenTime > 0) {
             const d = new Date(matched.lastOpenTime);
             this.lastReadTime = d.getMonth()+1 + '-' + d.getDate() + ' ' +
@@ -389,6 +393,10 @@ export struct BookInfoPage {
           if (this.origin && !existing.origin) existing.origin = this.origin;
           if (this.originUrl && !existing.originUrl) existing.originUrl = this.originUrl;
           if (this.getCurrentTocUrl()) existing.tocUrl = this.getCurrentTocUrl();
+          const existingType = this.getContentBookType_();
+          existing.type = existingType;
+          existing.isAudio = existingType === BookType.AUDIO;
+          existing.isManga = existingType === BookType.MANGA;
           existing.updateTime = nowTs;
           await bookTable.updateBook(existing);
           this.isInShelf = true;
@@ -406,8 +414,7 @@ export struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
-      const isMangaSource: boolean = this.contentType === BookType.MANGA ||
-        (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
+      const bookType: BookType = this.getContentBookType_();
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -418,7 +425,7 @@ export struct BookInfoPage {
         tocUrl: this.getCurrentTocUrl(),
         origin: this.origin,
         originUrl: this.originUrl,
-        type: isMangaSource ? BookType.MANGA : BookType.TEXT,
+        type: bookType,
         groupId: BookGroup.ALL,
         chapterCount: this.chapterCount,
         totalChapterNum: this.chapterCount,
@@ -428,8 +435,8 @@ export struct BookInfoPage {
         durChapterPos: 0,
         durChapterProgress: 0,
         isRead: false,
-        isAudio: false,
-        isManga: isMangaSource,
+        isAudio: bookType === BookType.AUDIO,
+        isManga: bookType === BookType.MANGA,
         isShelf: true,
         order: 0,
         canUpdate: true,
@@ -507,13 +514,10 @@ export struct BookInfoPage {
    * 1. 不在书架 → 隐式保存（标记 notShelf），加入数据库后再打开阅读器
    * 2. 已在书架 → 更新 lastOpenTime 后打开
    */
-  /**
-   * 确保已加载书源对象（用于 startRead/startReadAt 时 currentSource_ 可能为 null 的情况）
-   * 返回是否为漫画源
-   */
-  private async ensureMangaFlag_(): Promise<boolean> {
+  /** 确保已加载书源对象，并返回当前书籍的内容类型。 */
+  private async ensureBookType_(): Promise<BookType> {
     if (this.currentSource_) {
-      return this.contentType === BookType.MANGA || this.currentSource_.sourceType === 2;
+      return this.getContentBookType_();
     }
     // currentSource_ 为 null，从 DB 查询
     try {
@@ -522,10 +526,20 @@ export struct BookInfoPage {
         this.bookId, this.noteUrl, this.originUrl, this.origin);
       if (matched) {
         this.currentSource_ = matched;
-        return this.contentType === BookType.MANGA || matched.sourceType === 2;
+        return this.getContentBookType_();
       }
     } catch (_) { /* ignore */ }
-    return false;
+    return this.getContentBookType_();
+  }
+
+  private getContentBookType_(): BookType {
+    if (this.contentType === BookType.AUDIO || this.contentType === BookType.MANGA ||
+      this.contentType === BookType.TEXT) {
+      return this.contentType as BookType;
+    }
+    if (this.currentSource_?.sourceType === 1) return BookType.AUDIO;
+    if (this.currentSource_?.sourceType === 2) return BookType.MANGA;
+    return BookType.TEXT;
   }
 
   async startRead(): Promise<void> {
@@ -542,8 +556,9 @@ export struct BookInfoPage {
     } else if (this.bookId > 0) {
       await this.updateLastOpenTime();
     }
-    const isManga: boolean = await this.ensureMangaFlag_();
-    const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
+    const bookType: BookType = await this.ensureBookType_();
+    const targetPage = bookType === BookType.AUDIO ? 'pages/AudioReadPage' :
+      (bookType === BookType.MANGA ? 'pages/ComicReadPage' : 'pages/ReadPage');
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
       params: {
@@ -557,6 +572,7 @@ export struct BookInfoPage {
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
         contentType: this.contentType,
+        isAudio: bookType === BookType.AUDIO ? '1' : '0',
         cachedSources: JSON.stringify(this.cachedSearchResults),
       }
     });
@@ -567,8 +583,9 @@ export struct BookInfoPage {
       UiUtil.showToast(this.getUIContext(), { message: '目录加载中，请稍候', duration: 1500 });
       return;
     }
-    const isManga: boolean = await this.ensureMangaFlag_();
-    const targetPage = isManga ? 'pages/ComicReadPage' : 'pages/ReadPage';
+    const bookType: BookType = await this.ensureBookType_();
+    const targetPage = bookType === BookType.AUDIO ? 'pages/AudioReadPage' :
+      (bookType === BookType.MANGA ? 'pages/ComicReadPage' : 'pages/ReadPage');
     UiUtil.pushUrl(this.getUIContext(), {
       url: targetPage,
       params: {
@@ -581,6 +598,7 @@ export struct BookInfoPage {
         header: this.sourceHeader,
         durChapterIndex: index,
         contentType: this.contentType,
+        isAudio: bookType === BookType.AUDIO ? '1' : '0',
         bookId: this.bookId,
         inBookshelf: this.isInShelf,
         cachedSources: JSON.stringify(this.cachedSearchResults),
@@ -611,8 +629,7 @@ export struct BookInfoPage {
 
       const effectiveCover = this.getEffectiveCoverUrl();
       const insertTime = Date.now();
-      const isMangaSource = this.contentType === BookType.MANGA ||
-        (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
+      const bookType: BookType = this.getContentBookType_();
       const book: Book = {
         id: 0,
         name: this.bookName,
@@ -622,7 +639,7 @@ export struct BookInfoPage {
         bookUrl: this.noteUrl,
         origin: this.origin,
         originUrl: this.originUrl,
-        type: isMangaSource ? BookType.MANGA : BookType.TEXT,
+        type: bookType,
         groupId: BookGroup.ALL,
         tocUrl: this.getCurrentTocUrl(),
         chapterCount: this.chapterCount,
@@ -633,8 +650,8 @@ export struct BookInfoPage {
         durChapterPos: 0,
         durChapterProgress: 0,
         isRead: false,
-        isAudio: false,
-        isManga: isMangaSource,
+        isAudio: bookType === BookType.AUDIO,
+        isManga: bookType === BookType.MANGA,
         isShelf: false,  // 关键：不在书架（对齐 Android BookType.notShelf）
         order: 0,
         canUpdate: true,
@@ -950,7 +967,7 @@ export struct BookInfoPage {
           detectedType = infoTypeValue;
         }
       } catch (_e) { /* use search result/source type */ }
-      const isManga = detectedType === BookType.MANGA;
+      const bookType = detectedType as BookType;
       const now = Date.now();
       const ct = new ChapterTable(db);
       const chapterRows: BookChapter[] = toc.map((ch: BookSourceChapter, idx: number): BookChapter => {
@@ -986,6 +1003,9 @@ export struct BookInfoPage {
           existing.totalChapterNum = toc.length;
           existing.latestChapterTitle = toc[toc.length - 1]?.title || '';
           existing.updateTime = now;
+          existing.type = bookType;
+          existing.isAudio = bookType === BookType.AUDIO;
+          existing.isManga = bookType === BookType.MANGA;
           await bookTable.updateBook(existing);
           newId = existing.id;
           await ct.deleteChaptersByBookId(newId);
@@ -1000,7 +1020,7 @@ export struct BookInfoPage {
             tocUrl: tocUrl || result.noteUrl,
             origin: result.origin || '',
             originUrl: result.originUrl,
-            type: isManga ? BookType.MANGA : BookType.TEXT,
+            type: bookType,
             groupId: BookGroup.ALL,
             chapterCount: toc.length,
             totalChapterNum: toc.length,
@@ -1010,8 +1030,8 @@ export struct BookInfoPage {
             durChapterPos: 0,
             durChapterProgress: 0,
             isRead: false,
-            isAudio: false,
-            isManga: isManga,
+            isAudio: bookType === BookType.AUDIO,
+            isManga: bookType === BookType.MANGA,
             isShelf: true,
             order: 0,
             canUpdate: true,
@@ -1158,14 +1178,14 @@ export struct BookInfoPage {
   }
 
   openToc(): void {
-    const isManga = this.contentType === BookType.MANGA ||
-      (this.currentSource_ ? this.currentSource_.sourceType === 2 : false);
+    const bookType = this.getContentBookType_();
     UiUtil.pushUrl(this.getUIContext(), { url: 'pages/ChapterListPage', params: {
       from: 'BookInfoPage', bookName: this.bookName, bookAuthor: this.bookAuthor,
       bookUrl: this.noteUrl, originUrl: this.originUrl, origin: this.origin,
       tocUrl: this.getCurrentTocUrl(),
       header: this.sourceHeader,
-      isManga: isManga ? '1' : '0',
+      isManga: bookType === BookType.MANGA ? '1' : '0',
+      isAudio: bookType === BookType.AUDIO ? '1' : '0',
     }});
   }
 
