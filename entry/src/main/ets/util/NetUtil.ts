@@ -27,7 +27,8 @@ function normalizedOrigin_(rawOrigin: string): string {
 export function registerSourceOriginAlias(legacyOrigin: string, canonicalOrigin: string): void {
   const legacy = normalizedOrigin_(legacyOrigin);
   const canonical = normalizedOrigin_(canonicalOrigin);
-  if (!legacy || !canonical || legacy.toLowerCase() === canonical.toLowerCase()) return;
+  if (!legacy || !canonical || legacy.includes('@') || canonical.includes('@') ||
+    legacy.toLowerCase() === canonical.toLowerCase()) return;
   sourceOriginAliases.set(legacy.toLowerCase(), canonical);
   // HTTP/HTTPS 可能在书源不同字段中混用；同一主机的另一 scheme 也复用
   // 已验证目标，避免旧书籍链接因只保存了 http 版本而漏迁移。
@@ -36,6 +37,12 @@ export function registerSourceOriginAlias(legacyOrigin: string, canonicalOrigin:
     const alternate = (parts[1].toLowerCase() === 'https' ? 'http' : 'https') +
       '://' + parts[2];
     sourceOriginAliases.set(alternate.toLowerCase(), canonical);
+    if (/^www\./i.test(parts[2])) {
+      const bareHost = parts[2].replace(/^www\./i, '');
+      sourceOriginAliases.set((parts[1] + '://' + bareHost).toLowerCase(), canonical);
+      sourceOriginAliases.set(((parts[1].toLowerCase() === 'https' ? 'http' : 'https') +
+        '://' + bareHost).toLowerCase(), canonical);
+    }
   }
 }
 
