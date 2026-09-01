@@ -117,6 +117,8 @@ export struct ChapterListPage {
   @State bookBookmarks: Bookmark[] = [];    // 当前书的书签
   @State bookmarksLoading: boolean = false;
   @State isRefreshingToc: boolean = false;  // 目录刷新中
+  /** qysg 章节的卷标由源返回的 isVolume 决定，不用标题启发式覆盖。 */
+  private isQysgSource_: boolean = false;
   private listScroller_: Scroller = new Scroller();
   private bookId_: number = 0;
   /** LazyForEach 首屏布局完成前 scrollToIndex 可能被忽略，延迟重试定位当前章节。 */
@@ -242,6 +244,7 @@ export struct ChapterListPage {
       const source = await BookSourceResolver.resolveByIdentity(
         this.bookId_, this.bookUrl, this.originUrl, this.origin);
       if (!source || source.sourceFormat !== BookSourceFormat.QYSG) return;
+      this.isQysgSource_ = true;
       const normalized = normalizeQysgChapters(this.chapters_);
       if (normalized.length === this.chapters_.length) return;
       this.chapters_ = normalized;
@@ -443,6 +446,15 @@ export struct ChapterListPage {
 
   /** 检测卷标题：仅包含明确卷关键词的视为卷标题（不再基于长度/数字推断） */
   private detectVolumes(): void {
+    if (this.isQysgSource_) {
+      let explicitVolumeCount = 0;
+      for (const ch of this.chapters_) {
+        if (ch.isVolume) explicitVolumeCount++;
+      }
+      this.showVolumes = explicitVolumeCount > 0;
+      console.info('[ChapterList] qysg explicit volumes=', explicitVolumeCount);
+      return;
+    }
     let volumeCount = 0;
     for (const ch of this.chapters_) {
       const t = ch.title.trim();

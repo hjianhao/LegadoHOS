@@ -111,7 +111,7 @@ export function mapQysgChapters(raw: string, source: BookSource): BookSourceChap
  */
 export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSourceChapter[] {
   const seenUrls = new Set<string>();
-  const result: BookSourceChapter[] = [];
+  const unique: BookSourceChapter[] = [];
   chapters.forEach((chapter: BookSourceChapter): void => {
     const title = (chapter.title || '').replace(/\s+/g, ' ').trim();
     // 这些是详情页快捷入口，不属于目录项；如果源确实将其作为章节返回，
@@ -120,10 +120,10 @@ export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSource
     const url = (chapter.url || '').trim();
     if (url && seenUrls.has(url)) return;
     if (url) seenUrls.add(url);
-    result.push({
-      title: title || chapter.title || ('第' + (result.length + 1) + '章'),
+    unique.push({
+      title: title || chapter.title || ('第' + (unique.length + 1) + '章'),
       url: chapter.url,
-      index: result.length,
+      index: unique.length,
       isVolume: chapter.isVolume,
       isVip: chapter.isVip,
       isPay: chapter.isPay,
@@ -131,10 +131,45 @@ export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSource
       tag: chapter.tag,
     });
   });
+
+  // 页面还可能把“完全版/完整版”作为第二套单行本目录插入同一 DOM。若其
+  // 卷名均能在基础目录中找到对应的“第 N 卷”，则它是同一本漫画的替代版本，
+  // 不应和主目录混在一起；只有存在基础目录时才折叠，避免误删仅有完全版的源。
+  const baseKeys = new Set<string>();
+  unique.forEach((chapter: BookSourceChapter): void => {
+    if (!/^(?:完全版|完整版|精装版|珍藏版)\s*/.test(chapter.title)) {
+      baseKeys.add(normalizeEditionTitle_(chapter.title));
+    }
+  });
+  const alternate = unique.filter((chapter: BookSourceChapter): boolean => {
+    return /^(?:完全版|完整版|精装版|珍藏版)\s*/.test(chapter.title) &&
+      baseKeys.has(normalizeEditionTitle_(chapter.title));
+  });
+  let result = unique;
+  if (alternate.length >= 3 && alternate.length <= unique.length / 2) {
+    const alternateUrls = new Set<string>(alternate.map((chapter: BookSourceChapter): string => chapter.url));
+    result = unique.filter((chapter: BookSourceChapter): boolean => !alternateUrls.has(chapter.url));
+    console.info('[QysgMapper] removed alternate edition chapters=' + alternate.length);
+  }
+  result = result.map((chapter: BookSourceChapter, index: number): BookSourceChapter => ({
+    title: chapter.title,
+    url: chapter.url,
+    index: index,
+    isVolume: chapter.isVolume,
+    isVip: chapter.isVip,
+    isPay: chapter.isPay,
+    updateTime: chapter.updateTime,
+    tag: chapter.tag,
+  }));
   if (result.length !== chapters.length) {
     console.info('[QysgMapper] normalized chapters ' + chapters.length + ' -> ' + result.length);
   }
   return result;
+}
+
+function normalizeEditionTitle_(title: string): string {
+  return (title || '').replace(/^(?:完全版|完整版|精装版|珍藏版)\s*/, '')
+    .replace(/第0*(\d+)(卷|册|集|话|話)/, '第$1$2');
 }
 
 function valueOfChapter(object: Record<string, Object>, ...keys: string[]): string {
