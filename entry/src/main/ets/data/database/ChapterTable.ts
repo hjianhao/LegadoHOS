@@ -129,10 +129,18 @@ export class ChapterTable {
       const key = (chapter.url || '').replace(/#.*$/, '');
       if (key) oldUniqueUrls.add(key);
     });
+    const editionPattern = /^(?:完全版|完整版|精装版|珍藏版)\s*/;
+    const oldAlternateEditionCount = oldChapters.filter((chapter: BookChapter): boolean =>
+      editionPattern.test((chapter.title || '').trim())).length;
+    const newAlternateEditionCount = chapters.filter((chapter: BookSourceChapter): boolean =>
+      editionPattern.test((chapter.title || '').trim())).length;
+    const alternateEditionCollapse = oldAlternateEditionCount >= 3 &&
+      oldAlternateEditionCount * 4 >= oldChapters.length && newAlternateEditionCount === 0;
     const duplicateCollapse = oldUniqueUrls.size >= 10 && chapters.length >= 10 &&
       oldUniqueUrls.size * 4 <= oldChapters.length * 3 &&
       chapters.length >= Math.floor(oldUniqueUrls.size * 0.9);
-    if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length && !duplicateCollapse) {
+    if (oldChapters.length >= 10 && chapters.length * 2 < oldChapters.length &&
+      !duplicateCollapse && !alternateEditionCollapse) {
       console.warn('[ChapterTable] toc shrink rejected: bookId=' + bookId
         + ' old=' + oldChapters.length + ' new=' + chapters.length);
       return false;
