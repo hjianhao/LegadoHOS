@@ -494,6 +494,9 @@ export struct ChapterListPage {
 
   /** 确保目录排序正确：识别分页插入的倒序块，并对章节号做最终兜底整理 */
   ensureAscendingOrder(): void {
+    // qysg mapper 已按网页“全部”目录整理为正卷在前、番外在后；
+    // 这里不能再用通用数字规则把“番外1”当作“第1卷”重新排序。
+    if (this.isQysgSource_) return;
     if (this.chapters_.length < 3) return;
     // 本地书按 spine 顺序排列，无需自动反转
     if (this.origin === '本地') return;

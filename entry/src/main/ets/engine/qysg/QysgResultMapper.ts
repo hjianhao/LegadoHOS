@@ -151,6 +151,18 @@ export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSource
     result = unique.filter((chapter: BookSourceChapter): boolean => !alternateUrls.has(chapter.url));
     console.info('[QysgMapper] removed alternate edition chapters=' + alternate.length);
   }
+  // “番外”不是正卷编号的一部分。部分站点把它插入第 1/2 卷附近，
+  // 统一目录时放到正卷之后，避免通用数字排序再次把番外夹回中间。
+  const extraCount = result.filter((chapter: BookSourceChapter): boolean => isQysgExtraTitle_(chapter.title)).length;
+  if (extraCount > 0 && extraCount < result.length) {
+    result = result.slice().sort((left: BookSourceChapter, right: BookSourceChapter): number => {
+      const leftExtra = isQysgExtraTitle_(left.title);
+      const rightExtra = isQysgExtraTitle_(right.title);
+      if (leftExtra === rightExtra) return left.index - right.index;
+      return leftExtra ? 1 : -1;
+    });
+    console.info('[QysgMapper] moved extra chapters after regular chapters=' + extraCount);
+  }
   result = result.map((chapter: BookSourceChapter, index: number): BookSourceChapter => ({
     title: chapter.title,
     url: chapter.url,
@@ -170,6 +182,10 @@ export function normalizeQysgChapters(chapters: BookSourceChapter[]): BookSource
 function normalizeEditionTitle_(title: string): string {
   return (title || '').replace(/^(?:完全版|完整版|精装版|珍藏版)\s*/, '')
     .replace(/第0*(\d+)(卷|册|集|话|話)/, '第$1$2');
+}
+
+function isQysgExtraTitle_(title: string): boolean {
+  return /^(?:番外(?:篇)?|外传|外傳|特别篇|特別篇)\s*[0-9一二三四五六七八九十百千万]*/i.test((title || '').trim());
 }
 
 function valueOfChapter(object: Record<string, Object>, ...keys: string[]): string {
