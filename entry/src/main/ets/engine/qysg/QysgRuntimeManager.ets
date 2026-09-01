@@ -412,6 +412,20 @@ export struct QysgRuntimeHostComponent {
       'window.__qysgBridgeComplete=function(id,raw){var p=bridgePending[id];if(!p)return;' +
       'delete bridgePending[id];try{var e=JSON.parse(raw||"{}");if(!e.ok)throw new Error(e.error||"bridge error");' +
       'p.resolve(e.value);}catch(err){p.reject(err);}};' +
+      // 部分 qysg 源引用的 jQuery 地址已失效，但仍使用了少量常用 jQuery API。
+      // 先提供最小回退，外部 jQuery 成功加载时会覆盖 window.$，不影响完整 jQuery 源。
+      'if(!window.$){(function(){function wrap(nodes){var a=[];for(var i=0;i<(nodes||[]).length;i++)' +
+      'if(nodes[i])a.push(nodes[i]);var w={length:a.length};for(var j=0;j<a.length;j++)w[j]=a[j];' +
+      'w.find=function(s){var out=[];for(var i=0;i<a.length;i++){var ns=a[i].querySelectorAll(s);for(var j=0;j<ns.length;j++)out.push(ns[j]);}' +
+      'return wrap(out);};w.each=function(fn){for(var i=0;i<a.length;i++)fn.call(a[i],i,a[i]);return w;};' +
+      'w.attr=function(n){return a.length?a[0].getAttribute(n):undefined;};' +
+      'w.text=function(){var s="";for(var i=0;i<a.length;i++)s+=a[i].textContent||"";return s;};' +
+      'w.eq=function(i){var n=i<0?a.length+i:i;return wrap(n>=0&&n<a.length?[a[n]]:[]);};' +
+      'w.clone=function(){var out=[];for(var i=0;i<a.length;i++)out.push(a[i].cloneNode(true));return wrap(out);};' +
+      'w.html=function(v){if(v===undefined)return a.length?a[0].innerHTML:"";for(var i=0;i<a.length;i++)a[i].innerHTML=v;return w;};' +
+      'w.remove=function(){for(var i=0;i<a.length;i++)if(a[i].parentNode)a[i].parentNode.removeChild(a[i]);return w;};return w;}' +
+      'function $(v){if(typeof v==="string"){if(v.charAt(0)==="<"){var d=document.createElement("div");d.innerHTML=v;return wrap(d.firstElementChild?[d.firstElementChild]:[]);}' +
+      'try{return wrap(document.querySelectorAll(v));}catch(e){return wrap([]);}}if(v&&v.nodeType)return wrap([v]);return wrap([]);}window.$=$;})();}' +
       'window.flutter_inappwebview={callHandler:function(name){' +
       'var args=Array.prototype.slice.call(arguments,1),id="bridge-"+(++bridgeSeq);' +
       'return new Promise(function(resolve,reject){bridgePending[id]={resolve:resolve,reject:reject};' +
