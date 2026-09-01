@@ -1118,40 +1118,53 @@ export struct ExplorePage {
   buildDynamicSubNav(source: BookSource) {
     Column({ space: 6 }) {
       ForEach(this.resolvedCategories, (parent: ExploreCategory) => {
-        Button((this.isDynamicExpanded_(parent.url) ? '▾ ' : '▸ ') + parent.name)
-          .width('100%').height(46).fontSize(15)
-          .fontColor(ThemeColors.onSurface(this.isDark))
-          .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
-          .borderRadius(8)
-          .accessibilityText('展开分类：' + parent.name)
-          .onClick((): void => { void this.toggleDynamicSubNav(source, parent); })
-        if (this.isDynamicExpanded_(parent.url)) {
-          if (this.subLoadingUrl === parent.url) {
-            Row({ space: 8 }) {
-              LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
-              Text('加载分类中…').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
-            }.width('100%').padding({ left: 16, top: 6, bottom: 6 })
-          } else {
-            if (this.filteredSubNavChildren_(parent.url).length > 0) {
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(this.filteredSubNavChildren_(parent.url), (child: ExploreCategory) => {
-                  Button(child.name)
-                    .fontSize(14)
-                    .fontColor(ThemeColors.onBackground(this.isDark))
-                    .height(44)
-                    .padding({ left: 6, right: 6 })
-                    .width('31%')
-                    .margin({ left: '1%', right: '1%', bottom: 8 })
-                    .backgroundColor(ThemeColors.surface(this.isDark))
-                    .borderRadius(8)
-                    .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
-                    .accessibilityText('打开分类：' + child.name)
-                    .onClick((): void => { this.openCategory(source, child); })
-                }, (child: ExploreCategory): string => child.url || child.name)
-              }.width('100%').padding({ left: 14, right: 14, top: 4 })
+        // qysg 用 type=1、空 url 表示静态分组标题（如“玄幻魔法”），
+        // 不是需要再次请求子分类的动态导航。空 url 不能参与展开状态判断，
+        // 否则 dynamicExpandedUrl/subLoadingUrl 的初始空值会让标题永久显示加载中。
+        if (parent.isSubNav && !parent.url.trim()) {
+          Text('▾ ' + parent.name)
+            .width('100%').height(46).fontSize(15)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .borderRadius(8)
+            .textAlign(TextAlign.Center)
+            .accessibilityText('分类分组：' + parent.name)
+        } else {
+          Button((this.isDynamicExpanded_(parent.url) ? '▾ ' : '▸ ') + parent.name)
+            .width('100%').height(46).fontSize(15)
+            .fontColor(ThemeColors.onSurface(this.isDark))
+            .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+            .borderRadius(8)
+            .accessibilityText('展开分类：' + parent.name)
+            .onClick((): void => { void this.toggleDynamicSubNav(source, parent); })
+          if (parent.url.trim() && this.isDynamicExpanded_(parent.url)) {
+            if (this.subLoadingUrl === parent.url) {
+              Row({ space: 8 }) {
+                LoadingProgress().width(18).height(18).color(ThemeColors.primary(this.isDark))
+                Text('加载分类中…').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark))
+              }.width('100%').padding({ left: 16, top: 6, bottom: 6 })
             } else {
-              Text('该分类下暂无子分类').fontSize(13)
-                .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4, bottom: 4 })
+              if (this.filteredSubNavChildren_(parent.url).length > 0) {
+                Flex({ wrap: FlexWrap.Wrap }) {
+                  ForEach(this.filteredSubNavChildren_(parent.url), (child: ExploreCategory) => {
+                    Button(child.name)
+                      .fontSize(14)
+                      .fontColor(ThemeColors.onBackground(this.isDark))
+                      .height(44)
+                      .padding({ left: 6, right: 6 })
+                      .width('31%')
+                      .margin({ left: '1%', right: '1%', bottom: 8 })
+                      .backgroundColor(ThemeColors.surface(this.isDark))
+                      .borderRadius(8)
+                      .border({ width: 1, color: ThemeColors.outlineVariant(this.isDark) })
+                      .accessibilityText('打开分类：' + child.name)
+                      .onClick((): void => { this.openCategory(source, child); })
+                  }, (child: ExploreCategory): string => child.url || child.name)
+                }.width('100%').padding({ left: 14, right: 14, top: 4 })
+              } else {
+                Text('该分类下暂无子分类').fontSize(13)
+                  .fontColor(ThemeColors.secondaryText(this.isDark)).padding({ left: 16, top: 4, bottom: 4 })
+              }
             }
           }
         }
