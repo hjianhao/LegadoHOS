@@ -15,7 +15,7 @@
 | 9 | 猫眼看书 | 🎉 精选 | http://api.jmlldsc.com##@曦灵 | ✅ |  |
 | 10 | 爱笔楼·苍茫 | 笔趣阁 | http://m.biqutu.info | ✅ |  |
 | 11 | 🎨禁漫天堂 | 漫画 | https://comic18j-babu.club | ✅ |  |
-| 12 | 漫蛙 |  | https://www.manware.cc/ | ✅ |  |
+| 12 | 漫蛙 |  | https://manwari.cc/ | ✅ |  |
 
 ---
 *生成时间: 2026-07-13*

@@ -41,7 +41,7 @@ import {
 } from '../main/ets/service/OnlineSearchEngineService';
 import {
   isRedirectLoopError, normalizeVisitedUrl_, resolveRelativeUrl_, shouldKeepPostBodyOnRedirect_,
-  NetUtil
+  migrateLegacySourceUrl, NetUtil
 } from '../main/ets/util/NetUtil';
 
 export default function bookSourceManagementTest() {
@@ -53,6 +53,15 @@ export default function bookSourceManagementTest() {
       expect(source.concurrentRate).assertEqual('2/1000');
       expect(source.enabledCookieJar).assertTrue();
       expect(createEmptyBookSource().respondTime).assertEqual(180000);
+    });
+
+    it('migratesLegacyManwaHostBeforeNetworkRequests', 0, () => {
+      expect(migrateLegacySourceUrl('https://www.manware.cc/api/search?keyword=%E6%A3%8B%E9%AD%82'))
+        .assertEqual('https://manwari.cc/api/search?keyword=%E6%A3%8B%E9%AD%82');
+      expect(migrateLegacySourceUrl('https://manware.cc/comic/97606'))
+        .assertEqual('https://manwari.cc/comic/97606');
+      expect(migrateLegacySourceUrl('https://example.com/comic/97606'))
+        .assertEqual('https://example.com/comic/97606');
     });
 
     it('sharesOnlineSearchEngineSemantics', 0, () => {

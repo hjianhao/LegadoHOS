@@ -9,6 +9,19 @@ import zlib from '@ohos.zlib';
 import { CookieStore } from './CookieStore';
 import { DISABLE_COOKIE_HEADER, REQUEST_GROUP_HEADER } from '../engine/source/SourceNetworkPolicy';
 
+/**
+ * 漫蛙旧域名已停止提供服务，DNS 可能解析到拒绝连接的地址。
+ * 书源数据库里可能还保留旧地址，因此在真正发起请求前统一切换到当前域名。
+ * 只匹配完整主机名，避免误改查询参数或其他站点地址。
+ */
+export function migrateLegacySourceUrl(rawUrl: string): string {
+  if (!rawUrl) return rawUrl;
+  return rawUrl.replace(
+    /^(https?):\/\/(?:www\.)?manware\.cc(?=[:/?#]|$)/i,
+    '$1://manwari.cc'
+  );
+}
+
 /** RCP 有些版本把 Set-Cookie 放在 response.cookies，而不是 headers。 */
 function responseSetCookies(response: rcp.Response): string | string[] | undefined {
   const headers = (response.headers || {}) as Record<string, string | string[] | undefined>;
@@ -605,7 +618,7 @@ export class NetUtil {
    */
   private static normalizeUrl(rawUrl: string): string {
     try {
-      return rawUrl
+      return migrateLegacySourceUrl(rawUrl)
         .replace(/[^\x00-\x7F]+/g, (part: string): string => encodeURIComponent(part))
         .replace(/ /g, '%20');
     } catch (_e) {
