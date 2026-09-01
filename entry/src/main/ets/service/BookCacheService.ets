@@ -29,6 +29,8 @@ export interface CacheChapterItem {
 export interface CacheBookRequest {
   bookId: number;
   bookName: string;
+  /** 书籍实际内容类型；用于 qysg MIXED 书源识别漫画。 */
+  isManga?: boolean;
   /** 书籍详情页 URL，作为 getContent 的 bookUrl 参数 */
   bookUrl: string;
   source: BookSource;
@@ -155,14 +157,20 @@ export class BookCacheService {
         try {
           // 已缓存的跳过；漫画源额外校验：旧版缓存不含图片（下载时未保留 <img>），视为未缓存重新下载
           const existing = await chapterTable.getChapterByIndex(req.bookId, idx);
-          const isImage = isImageSource(req.source);
+          const isImage = req.isManga === true || isImageSource(req.source);
           if (existing && (existing.isCached || existing.isDownloaded) && existing.content.length > 10) {
             const badComicCache = isImage &&
               globalSourceExecutor.extractImageUrls(existing.content, ch.url || req.bookUrl).length === 0;
             if (!badComicCache) {
               // 内容已缓存；漫画源仍需补齐本章图片（离线可看的必要条件）
               if (isImage) {
-                await this.cacheChapterImages_(req, ch, existing.content, task);
+                const imagesCached = await this.cacheChapterImages_(req, ch, existing.content, task);
+                if (!imagesCached) {
+                  result.failed++;
+                  done++;
+                  updateProgress(ch.title || '');
+                  continue;
+                }
               }
               result.skipped++;
               done++;
@@ -176,10 +184,12 @@ export class BookCacheService {
 
           if (content && content.length > 10) {
             await this.saveContent(chapterTable, req.bookId, idx, ch, content, existing);
+            let imagesCached = true;
             if (isImage) {
-              await this.cacheChapterImages_(req, ch, content, task);
+              imagesCached = await this.cacheChapterImages_(req, ch, content, task);
             }
-            result.success++;
+            if (imagesCached) result.success++;
+            else result.failed++;
           } else {
             result.failed++;
             console.warn('[BookCache] empty content, chapter ' + (idx + 1) + ': ' + ch.title);
@@ -213,7 +223,8 @@ export class BookCacheService {
     let lastErr: Error | null = null;
     for (let attempt = 1; attempt <= this.maxRetry; attempt++) {
       try {
-        const content = await globalSourceGateway.getContent(req.source, ch.url, req.bookUrl, isImageSource(req.source));
+        const content = await globalSourceGateway.getContent(req.source, ch.url, req.bookUrl,
+          req.isManga === true || isImageSource(req.source));
         if (content && content.length > 10) return content;
         if (attempt < this.maxRetry) await this.sleep(500 * attempt);
       } catch (err) {
@@ -252,11 +263,13 @@ export class BookCacheService {
   }
 
   /** 漫画章节：下载本章全部图片到本地图片缓存（load 自带已缓存跳过/在途去重/队列） */
-  private async cacheChapterImages_(req: CacheBookRequest, ch: CacheChapterItem, content: string, task: ActiveTask): Promise<void> {
+  private async cacheChapterImages_(req: CacheBookRequest, ch: CacheChapterItem, content: string, task: ActiveTask): Promise<boolean> {
     const urls: string[] = globalSourceExecutor.extractImageUrls(content, ch.url || req.bookUrl);
     const total: number = urls.length;
+    if (total === 0) return false;
+    let allCached = true;
     for (let i = 0; i < total; i++) {
-      if (task.cancelled) return;
+      if (task.cancelled) return false;
       const u: string = urls[i];
       console.info('[BookCache] img ' + (i + 1) + '/' + total + ' ' + ch.title + ' ' + u.substring(0, 60));
       try {
@@ -265,16 +278,19 @@ export class BookCacheService {
         let saved: string = await MangaImageLoader.load(u, req.source, undefined, false, req.bookId);
         if (saved === u) {
           await this.sleep(2000);
-          if (task.cancelled) return;
+          if (task.cancelled) return false;
           saved = await MangaImageLoader.load(u, req.source, undefined, false, req.bookId);
         }
         if (saved === u) {
           console.warn('[BookCache] image failed: ' + u);
+          allCached = false;
         }
       } catch (err) {
         console.warn('[BookCache] image failed: ' + (err as Error).message);
+        allCached = false;
       }
     }
+    return allCached;
   }
 
   private reportProgress(req: CacheBookRequest, done: number, total: number, title: string, notifId: number): void {

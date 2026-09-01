@@ -5,6 +5,7 @@
 import { AppDatabase } from '../../data/database/AppDatabase';
 import { CacheTable } from '../../data/database/CacheTable';
 import { ChapterTable } from '../../data/database/ChapterTable';
+import { MangaImageCache } from '../../util/MangaImageCache';
 
 /** 单本书的章节缓存统计 */
 export interface BookCacheStat {
@@ -13,7 +14,7 @@ export interface BookCacheStat {
   author: string;
   /** 已缓存章节数 */
   chapters: number;
-  /** 正文占用字节数（字符数估算） */
+  /** 正文与漫画图片占用字节数（正文为字符数估算） */
   size: number;
 }
 
@@ -59,6 +60,9 @@ export class CacheManager {
         total += rs2.getLong(0) || 0;
       }
       rs2.close();
+
+      // 漫画图片不在 RDB content 字段中，单独统计本地图片缓存。
+      total += await MangaImageCache.getCacheSize();
     } catch (err) {
       console.error('[CacheManager] Get size failed:', err);
     }
@@ -89,6 +93,7 @@ export class CacheManager {
       await rdb.executeSql('UPDATE chapters SET content = \'\', content_length = 0, is_cached = 0, is_downloaded = 0');
       // 清空缓存表
       await rdb.executeSql('DELETE FROM caches');
+      await MangaImageCache.clearAllCache();
       console.info('[CacheManager] All cache cleared');
     } catch (err) {
       console.error('[CacheManager] Clear all failed:', err);
@@ -105,6 +110,7 @@ export class CacheManager {
         'UPDATE chapters SET content = \'\', content_length = 0, is_cached = 0, is_downloaded = 0 WHERE book_id = ?',
         [bookId]
       );
+      MangaImageCache.clearCacheForBook(bookId);
     } catch (err) {
       console.error('[CacheManager] Clear book cache failed:', err);
     }
@@ -121,9 +127,10 @@ export class CacheManager {
         'SELECT c.book_id, b.name, b.author, COUNT(*) AS cnt, SUM(LENGTH(c.content)) AS total '
         + 'FROM chapters c JOIN books b ON b.id = c.book_id WHERE c.is_cached = 1 '
         + 'GROUP BY c.book_id ORDER BY total DESC', []);
+      const rows: Array<{ bookId: number; name: string; author: string; chapters: number; size: number }> = [];
       let has = rs.goToFirstRow();
       while (has) {
-        stats.push({
+        rows.push({
           bookId: rs.getLong(0),
           name: rs.getString(1) || '',
           author: rs.getString(2) || '',
@@ -133,6 +140,10 @@ export class CacheManager {
         has = rs.goToNextRow();
       }
       rs.close();
+      for (const row of rows) {
+        row.size += await MangaImageCache.getCacheSizeForBook(row.bookId);
+        stats.push(row);
+      }
     } catch (err) {
       console.error('[CacheManager] Get book stats failed:', err);
     }

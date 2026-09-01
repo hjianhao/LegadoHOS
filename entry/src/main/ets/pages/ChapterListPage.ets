@@ -693,6 +693,7 @@ export struct ChapterListPage {
       BookCacheService.getInstance().cacheBook({
         bookId: bookId,
         bookName: this.bookName,
+        isManga: this.isManga,
         bookUrl: this.bookUrl,
         source: source,
         chapters: items,

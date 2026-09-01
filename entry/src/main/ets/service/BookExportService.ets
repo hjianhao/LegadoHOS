@@ -1,23 +1,27 @@
 /**
- * 书籍导出服务（TXT / EPUB）
+ * 书籍导出服务（TXT / EPUB / 漫画图片 ZIP）
  *
  * 对齐安卓 Legado ExportBookService 的产品逻辑：
  * - 只导出 chapters 表中已缓存的章节内容
  * - 可选先调用 BookCacheService 下载缺失章节
  * - 可选应用用户替换净化规则
  * - TXT：文件头（书名/作者/简介）+ 逐章 标题+正文，流式写入
- * - EPUB：EPUB 2.0 + NCX，结构见 EpubBuilder
+ * - EPUB：EPUB 2.0 + NCX，漫画图片内嵌到 EPUB，结构见 EpubBuilder
+ * - 漫画 ZIP：图片按章节/页序组织，并写入 manifest.json
  */
 import { AppDatabase } from '../data/database/AppDatabase';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ReplaceRuleTable } from '../data/database/ReplaceRuleTable';
 import { BookChapter } from '../model/BookChapter';
-import { BookSource } from '../model/BookSource';
+import { BookSource, isImageSource } from '../model/BookSource';
 import { ContentReplaceEngine } from '../engine/book/ContentReplace';
-import { EpubBuilder, EpubChapter, EpubData } from '../engine/book/EpubBuilder';
+import { EpubBuilder, EpubChapter, EpubData, EpubImage } from '../engine/book/EpubBuilder';
 import { BookCacheService, CacheChapterItem } from './BookCacheService';
 import { HtmlUtil } from '../util/HtmlUtil';
+import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { MangaImageLoader } from '../util/MangaImageLoader';
+import { ZipWriter } from '../util/ZipWriter';
 import fileIo from '@ohos.file.fs';
 import notificationManager from '@ohos.notificationManager';
 import { common } from '@kit.AbilityKit';
@@ -32,6 +36,8 @@ export interface ExportBookInfo {
   bookUrl: string;
   origin: string;
   originUrl: string;
+  /** 书籍是否为漫画；未传入时导出服务会根据书源自动判断。 */
+  isManga?: boolean;
 }
 
 export interface ExportOptions {
@@ -52,6 +58,8 @@ export interface ExportResult {
   exported: number;
   /** 未缓存被跳过的章节数 */
   skipped: number;
+  /** 漫画导出的图片数（TXT 导出为 0）。 */
+  exportedImages?: number;
   error: string;
 }
 
@@ -59,6 +67,30 @@ export interface ExportResult {
 export interface CacheStats {
   total: number;
   cached: number;
+}
+
+interface PreparedComicPage {
+  title: string;
+  path: string;
+  bytes: Uint8Array;
+  mediaType: string;
+}
+
+interface PreparedComicChapter {
+  index: number;
+  title: string;
+  pages: PreparedComicPage[];
+}
+
+interface PreparedComicResult {
+  chapters: PreparedComicChapter[];
+  skipped: number;
+}
+
+interface ComicManifestChapter {
+  index: number;
+  title: string;
+  pages: string[];
 }
 
 export class BookExportService {
@@ -147,6 +179,9 @@ export class BookExportService {
    */
   static async exportBookEpub(book: ExportBookInfo, targetUri: string,
     options: ExportOptions): Promise<ExportResult> {
+    if (await BookExportService.isComicBook(book)) {
+      return BookExportService.exportComicEpub(book, targetUri, options);
+    }
     const result = BookExportService.newResult(BookExportService.suggestFileName(book, '.epub'));
     if (book.id <= 0) {
       result.error = '书籍未入库';
@@ -206,12 +241,223 @@ export class BookExportService {
     return result;
   }
 
+  /**
+   * 导出漫画为内嵌图片的 EPUB。
+   * 每章对应一个 XHTML，图片从 manga_cache_v3/{bookId} 读取，生成后无需网络即可阅读。
+   */
+  static async exportComicEpub(book: ExportBookInfo, targetUri: string,
+    options: ExportOptions): Promise<ExportResult> {
+    const result = BookExportService.newResult(BookExportService.suggestFileName(book, '.epub'));
+    if (book.id <= 0) {
+      result.error = '书籍未入库';
+      return result;
+    }
+    const notifId = 3000 + (book.id % 10000);
+    BookExportService.publishNotif(notifId, '导出漫画', '正在生成《' + book.name + '》(EPUB)...');
+    try {
+      const prepared = await BookExportService.prepareComicChapters(book, options);
+      if (!prepared || prepared.chapters.length === 0) {
+        result.skipped = prepared ? prepared.skipped : 0;
+        result.error = prepared && prepared.skipped > 0
+          ? '没有完整缓存的漫画章节可导出' : '目录为空，请先加载目录';
+        BookExportService.finishNotify(notifId, book.name, result);
+        return result;
+      }
+      const epubChapters: EpubChapter[] = [];
+      const images: EpubImage[] = [];
+      for (const chapter of prepared.chapters) {
+        const contentLines: string[] = [];
+        for (const page of chapter.pages) {
+          contentLines.push('<img src="../Images/' + page.path + '" alt="' +
+            BookExportService.escapeHtmlAttribute(page.title) + '" />');
+          images.push({ path: page.path, bytes: page.bytes, mediaType: page.mediaType });
+        }
+        epubChapters.push({ title: chapter.title, content: contentLines.join('\n') });
+      }
+      const data: EpubData = {
+        name: book.name,
+        author: book.author || '',
+        introduce: HtmlUtil.stripHtml(book.introduce || ''),
+        coverUrl: book.coverUrl || '',
+        chapters: epubChapters,
+        images: images,
+      };
+      await EpubBuilder.build(data, targetUri, options.context,
+        options.onProgress
+          ? (done: number, total: number): void => {
+            const title = done > 0 && done <= prepared.chapters.length
+              ? prepared.chapters[done - 1].title : '';
+            options.onProgress!('write', done, total, title);
+          }
+          : undefined);
+      result.exported = prepared.chapters.length;
+      result.exportedImages = images.length;
+      result.skipped = prepared.skipped;
+      result.success = true;
+    } catch (e) {
+      result.error = (e as Error).message || '生成漫画 EPUB 失败';
+      console.error('[BookExport] write comic epub fail:', result.error);
+    }
+    BookExportService.finishNotify(notifId, book.name, result);
+    return result;
+  }
+
+  /** 导出漫画为图片 ZIP，并附带 manifest.json 记录章节与图片顺序。 */
+  static async exportComicZip(book: ExportBookInfo, targetUri: string,
+    options: ExportOptions): Promise<ExportResult> {
+    const result = BookExportService.newResult(BookExportService.suggestFileName(book, '.zip'));
+    if (book.id <= 0) {
+      result.error = '书籍未入库';
+      return result;
+    }
+    const notifId = 3000 + (book.id % 10000);
+    BookExportService.publishNotif(notifId, '导出漫画', '正在生成《' + book.name + '》(图片 ZIP)...');
+    try {
+      const prepared = await BookExportService.prepareComicChapters(book, options);
+      if (!prepared || prepared.chapters.length === 0) {
+        result.skipped = prepared ? prepared.skipped : 0;
+        result.error = prepared && prepared.skipped > 0
+          ? '没有完整缓存的漫画章节可导出' : '目录为空，请先加载目录';
+        BookExportService.finishNotify(notifId, book.name, result);
+        return result;
+      }
+      const manifestChapters: ComicManifestChapter[] = [];
+      let totalImages = 0;
+      for (const chapter of prepared.chapters) {
+        manifestChapters.push({
+          index: chapter.index,
+          title: chapter.title,
+          pages: chapter.pages.map((page: PreparedComicPage): string => page.path),
+        });
+        totalImages += chapter.pages.length;
+      }
+      const zip = ZipWriter.open(targetUri);
+      try {
+        const manifest = JSON.stringify({
+          format: 'legado-comic-v1',
+          name: book.name,
+          author: book.author || '',
+          chapters: manifestChapters,
+        });
+        await zip.addText('manifest.json', manifest);
+        let done = 0;
+        for (const chapter of prepared.chapters) {
+          for (const page of chapter.pages) {
+            await zip.addStored(page.path, page.bytes);
+            done++;
+            if (options.onProgress) {
+              options.onProgress('write', done, totalImages, chapter.title);
+            }
+          }
+        }
+        await zip.finish();
+      } catch (e) {
+        zip.abort();
+        throw e as Error;
+      }
+      result.exported = prepared.chapters.length;
+      result.exportedImages = totalImages;
+      result.skipped = prepared.skipped;
+      result.success = true;
+    } catch (e) {
+      result.error = (e as Error).message || '生成漫画 ZIP 失败';
+      console.error('[BookExport] write comic zip fail:', result.error);
+    }
+    BookExportService.finishNotify(notifId, book.name, result);
+    return result;
+  }
+
   // ============================================================
   // 共享逻辑
   // ============================================================
 
   private static newResult(fileName: string): ExportResult {
-    return { success: false, fileName: fileName, exported: 0, skipped: 0, error: '' };
+    return { success: false, fileName: fileName, exported: 0, skipped: 0, exportedImages: 0, error: '' };
+  }
+
+  private static async isComicBook(book: ExportBookInfo): Promise<boolean> {
+    if (book.isManga === true) return true;
+    try {
+      const source = await BookExportService.resolveSource(book);
+      return source !== null && isImageSource(source);
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private static async prepareComicChapters(book: ExportBookInfo, options: ExportOptions):
+    Promise<PreparedComicResult | null> {
+    const chapters = await BookExportService.prepareChapters(book, options);
+    if (!chapters) return null;
+    const source = await BookExportService.resolveSource(book);
+    const prepared: PreparedComicChapter[] = [];
+    let skipped = 0;
+    for (const chapter of chapters) {
+      if (!BookExportService.isChapterCached(chapter)) {
+        skipped++;
+        continue;
+      }
+      const baseUrl = chapter.url || book.bookUrl;
+      const urls = globalSourceExecutor.extractImageUrls(chapter.content, baseUrl);
+      if (urls.length === 0) {
+        skipped++;
+        continue;
+      }
+      const pages: PreparedComicPage[] = [];
+      let complete = true;
+      for (let pageIndex = 0; pageIndex < urls.length; pageIndex++) {
+        const url = urls[pageIndex];
+        let bytes = await MangaImageLoader.readCachedImage(url, book.id);
+        if (!bytes && options.downloadMissing && source) {
+          const loaded = await MangaImageLoader.load(url, source, undefined, false, book.id);
+          if (loaded !== url) {
+            bytes = await MangaImageLoader.readCachedImage(url, book.id);
+          }
+        }
+        if (!bytes || bytes.length === 0) {
+          complete = false;
+          break;
+        }
+        // 以文件魔数为准，避免源 URL 后缀与实际响应格式不一致导致 EPUB 解码失败。
+        const ext = BookExportService.imageExtension(bytes);
+        pages.push({
+          title: '第 ' + (pageIndex + 1) + ' 页',
+          path: 'chapters/' + String(chapter.index + 1).padStart(4, '0') + '/page_'
+            + String(pageIndex + 1).padStart(4, '0') + '.' + ext,
+          bytes: bytes,
+          mediaType: BookExportService.imageMediaType(bytes, ext),
+        });
+      }
+      if (!complete || pages.length === 0) {
+        skipped++;
+        continue;
+      }
+      prepared.push({ index: chapter.index, title: chapter.title || ('第 ' + (chapter.index + 1) + ' 章'), pages: pages });
+    }
+    return { chapters: prepared, skipped: skipped };
+  }
+
+  private static imageExtension(bytes: Uint8Array): string {
+    if (bytes.length >= 12 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'png';
+    if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'jpg';
+    if (bytes.length >= 3 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
+    if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'webp';
+    return 'jpg';
+  }
+
+  private static imageMediaType(bytes: Uint8Array, ext: string): string {
+    const detected = BookExportService.imageExtension(bytes);
+    if (detected === 'png') return 'image/png';
+    if (detected === 'gif') return 'image/gif';
+    if (detected === 'webp') return 'image/webp';
+    if (ext === 'svg') return 'image/svg+xml';
+    return 'image/jpeg';
+  }
+
+  private static escapeHtmlAttribute(text: string): string {
+    return (text || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   /** 加载章节；可选先下载缺失章节后重新加载。目录为空返回 null */
@@ -235,6 +481,7 @@ export class BookExportService {
           await BookCacheService.getInstance().cacheBook({
             bookId: book.id,
             bookName: book.name,
+            isManga: book.isManga,
             bookUrl: book.bookUrl,
             source: source,
             chapters: items,

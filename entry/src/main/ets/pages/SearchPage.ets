@@ -405,6 +405,7 @@ export struct SearchPage {
       BookCacheService.getInstance().cacheBook({
         bookId: book.id,
         bookName: book.name,
+        isManga: book.isManga || book.type === BookType.MANGA,
         bookUrl: book.bookUrl,
         source: source,
         chapters: items,

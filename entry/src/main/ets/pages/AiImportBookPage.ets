@@ -14,6 +14,7 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookChapter } from '../model/BookChapter';
+import { BookType } from '../model/Book';
 
 @Entry
 @Component
@@ -249,6 +250,7 @@ export struct AiImportBookPage {
       const task = BookCacheService.getInstance().cacheBook({
         bookId: book.id,
         bookName: book.name,
+        isManga: book.isManga || book.type === BookType.MANGA,
         bookUrl: book.bookUrl,
         source: source,
         chapters: items,

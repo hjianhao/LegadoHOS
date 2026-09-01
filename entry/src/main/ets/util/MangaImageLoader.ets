@@ -131,6 +131,30 @@ export class MangaImageLoader {
   }
 
   /**
+   * 读取已缓存的图片字节。
+   * 导出功能只应读取本地缓存，不会因为调用该方法而隐式发起网络请求。
+   */
+  static async readCachedImage(url: string, bookId: number): Promise<Uint8Array | null> {
+    const localPath: string = MangaImageLoader.getLocalPath(url, bookId);
+    let file: fileFs.File | null = null;
+    try {
+      const stat: fileFs.Stat = await fileFs.stat(localPath);
+      if (stat.size <= 0) return null;
+      file = await fileFs.open(localPath, fileFs.OpenMode.READ_ONLY);
+      const buffer: ArrayBuffer = new ArrayBuffer(stat.size);
+      const readLength: number = await fileFs.read(file.fd, buffer, { offset: 0, length: stat.size });
+      if (readLength <= 0) return null;
+      return new Uint8Array(buffer, 0, readLength).slice();
+    } catch (_) {
+      return null;
+    } finally {
+      if (file) {
+        try { await fileFs.close(file); } catch (_) { /* ignore */ }
+      }
+    }
+  }
+
+  /**
    * 获取图片的本地路径，如果未缓存则下载。
    * 返回本地文件路径（成功）或空字符串（失败）或原始 URL（回退）。
    *
@@ -728,6 +752,12 @@ export class MangaImageLoader {
    */
   static async getCacheSize(): Promise<number> {
     return MangaImageLoader.getDirSize_(MangaImageLoader.cacheDir);
+  }
+
+  /** 获取指定书籍的漫画图片缓存大小（字节）。 */
+  static async getCacheSizeForBook(bookId: number): Promise<number> {
+    if (bookId <= 0) return 0;
+    return MangaImageLoader.getDirSize_(MangaImageLoader.cacheDir + bookId + '/');
   }
 
   /** 递归计算目录大小 */

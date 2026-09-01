@@ -622,7 +622,7 @@ export struct BookshelfPage {
             const startIdx = Math.max(0, Math.min(book.durChapterIndex, items.length - 1));
             const endIdx = Math.min(startIdx + autoCacheNum, items.length - 1);
             BookCacheService.getInstance().cacheBook({
-              bookId: book.id, bookName: book.name, bookUrl: book.bookUrl, source: source,
+              bookId: book.id, bookName: book.name, isManga: book.isManga, bookUrl: book.bookUrl, source: source,
               chapters: items, startIndex: startIdx, endIndex: endIdx,
               context: UiUtil.getHostContext(this.getUIContext()),
             }).catch((e: Error) => {

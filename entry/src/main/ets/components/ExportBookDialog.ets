@@ -1,5 +1,5 @@
 /**
- * 导出书籍对话框（TXT）
+ * 导出书籍/漫画对话框
  * - 显示目录/已缓存统计
  * - 缺失章节可选「下载后导出」或「仅导出已缓存」
  * - 可选包含章节标题、替换净化
@@ -23,13 +23,15 @@ export struct ExportBookDialog {
   bookUrl: string = '';
   origin: string = '';
   originUrl: string = '';
+  /** 漫画使用内嵌图片 EPUB 或图片 ZIP 导出。 */
+  isManga: boolean = false;
 
   onDismiss?: () => void;
 
   @State statsLoading: boolean = true;
   @State totalChapters: number = 0;
   @State cachedChapters: number = 0;
-  /** 导出格式：txt / epub */
+  /** 导出格式：txt / epub / comicZip */
   @State exportFormat: string = 'txt';
   /** 缺失章节策略：download = 下载后导出，cachedOnly = 仅导出已缓存 */
   @State missingMode: string = 'download';
@@ -42,6 +44,7 @@ export struct ExportBookDialog {
   @State showResult: boolean = false;
 
   aboutToAppear(): void {
+    if (this.isManga) this.exportFormat = 'epub';
     this.loadStats();
   }
 
@@ -95,19 +98,30 @@ export struct ExportBookDialog {
 
       // 导出格式
       Row() {
-        Text($r('app.string.ui_9d2601c843')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(80)
-        Radio({ value: 'txt', group: 'exportFormat' })
-          .checked(this.exportFormat === 'txt')
-          .onChange((checked: boolean) => { if (checked) this.exportFormat = 'txt'; })
-        Text($r('app.string.ui_7475c2bd12')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
-          .margin({ left: 6, right: 24 })
-          .onClick(() => { this.exportFormat = 'txt'; })
+        Text('格式').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).width(56)
+        if (!this.isManga) {
+          Radio({ value: 'txt', group: 'exportFormat' })
+            .checked(this.exportFormat === 'txt')
+            .onChange((checked: boolean) => { if (checked) this.exportFormat = 'txt'; })
+          Text($r('app.string.ui_7475c2bd12')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+            .margin({ left: 6, right: 24 })
+            .onClick(() => { this.exportFormat = 'txt'; })
+        }
         Radio({ value: 'epub', group: 'exportFormat' })
           .checked(this.exportFormat === 'epub')
           .onChange((checked: boolean) => { if (checked) this.exportFormat = 'epub'; })
-        Text($r('app.string.ui_7f464ff72d')).fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
-          .margin({ left: 6 })
+        Text(this.isManga ? '漫画 EPUB' : $r('app.string.ui_7f464ff72d'))
+          .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+          .margin({ left: 6, right: this.isManga ? 24 : 0 })
           .onClick(() => { this.exportFormat = 'epub'; })
+        if (this.isManga) {
+          Radio({ value: 'comicZip', group: 'exportFormat' })
+            .checked(this.exportFormat === 'comicZip')
+            .onChange((checked: boolean) => { if (checked) this.exportFormat = 'comicZip'; })
+          Text('图片 ZIP').fontSize(14).fontColor(ThemeColors.onSurface(this.isDark))
+            .margin({ left: 6 })
+            .onClick(() => { this.exportFormat = 'comicZip'; })
+        }
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 6, bottom: 6 })
@@ -223,9 +237,12 @@ export struct ExportBookDialog {
       bookUrl: this.bookUrl,
       origin: this.origin,
       originUrl: this.originUrl,
+      isManga: this.isManga,
     };
+    const isZip = this.exportFormat === 'comicZip';
     const isEpub = this.exportFormat === 'epub';
-    const fileName = BookExportService.suggestFileName(book, isEpub ? '.epub' : '.txt');
+    const extension = isZip ? '.zip' : (isEpub ? '.epub' : '.txt');
+    const fileName = BookExportService.suggestFileName(book, extension);
 
     let uri = '';
     try {
@@ -252,14 +269,17 @@ export struct ExportBookDialog {
         this.progressText = (phase === 'download' ? '下载章节 ' : '写入 ') + done + '/' + total + ': ' + message;
       },
     };
-    const result = isEpub
-      ? await BookExportService.exportBookEpub(book, uri, options)
-      : await BookExportService.exportBookTxt(book, uri, options);
+    const result = isZip
+      ? await BookExportService.exportComicZip(book, uri, options)
+      : (isEpub
+        ? await BookExportService.exportBookEpub(book, uri, options)
+        : await BookExportService.exportBookTxt(book, uri, options));
 
     this.exporting = false;
     this.showResult = true;
     if (result.success) {
       this.resultMsg = '已导出 ' + result.exported + ' 章到「' + result.fileName + '」'
+        + (result.exportedImages && result.exportedImages > 0 ? '（' + result.exportedImages + ' 张图片）' : '')
         + (result.skipped > 0 ? '\n跳过未缓存章节 ' + result.skipped + ' 章' : '');
     } else {
       this.resultMsg = '导出失败：' + (result.error || '未知错误');

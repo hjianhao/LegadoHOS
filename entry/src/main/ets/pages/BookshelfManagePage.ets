@@ -5,7 +5,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookGroupTable } from '../data/database/BookGroupTable';
 import { ChapterTable } from '../data/database/ChapterTable';
-import { Book } from '../model/Book';
+import { Book, BookType } from '../model/Book';
 import { BookGroup, BookGroupItem, bookMatchesSystemGroup } from '../model/BookGroup';
 import { BookCover } from '../components/BookCover';
 import { BookshelfTransferService } from '../service/BookshelfTransferService';
@@ -187,6 +187,7 @@ export struct BookshelfManagePage {
         cacheService.cacheBook({
           bookId: book.id,
           bookName: book.name,
+          isManga: book.isManga || book.type === BookType.MANGA,
           bookUrl: book.bookUrl,
           source: source,
           chapters: chapters.map((ch: BookChapter): CacheChapterItem => {
@@ -231,21 +232,34 @@ export struct BookshelfManagePage {
     }
   }
 
-  /** 批量导出：先选格式（TXT / EPUB），再选目录，每本书导出一个文件 */
+  /** 批量导出：先选格式，再选目录，每本书导出一个文件。 */
   chooseExportFormat(): void {
     if (!this.requireSelection()) return;
-    UiUtil.showAlertDialog(this.getUIContext(), {
+    UiUtil.showDialog(this.getUIContext(), {
       title: '批量导出',
       message: '选择导出格式（每本书导出一个文件，自动下载缺失章节）',
-      primaryButton: { value: 'TXT', action: (): void => { this.exportSelectedBooks('txt'); } },
-      secondaryButton: { value: 'EPUB', action: (): void => { this.exportSelectedBooks('epub'); } },
+      buttons: [
+        { text: 'TXT', color: ThemeColors.primary(this.isDark) },
+        { text: 'EPUB', color: ThemeColors.primary(this.isDark) },
+        { text: '漫画图片 ZIP', color: ThemeColors.primary(this.isDark) },
+      ]
+    }).then((result): void => {
+      if (result.index === 0) this.exportSelectedBooks('txt');
+      else if (result.index === 1) this.exportSelectedBooks('epub');
+      else if (result.index === 2) this.exportSelectedBooks('comicZip');
     });
   }
 
   /** 批量导出到用户选择的目录 */
   async exportSelectedBooks(format: string): Promise<void> {
-    const books = this.selectedBooks();
-    const ext = format === 'epub' ? '.epub' : '.txt';
+    const books = format === 'comicZip'
+      ? this.selectedBooks().filter((book: Book): boolean => book.isManga || book.type === BookType.MANGA)
+      : this.selectedBooks();
+    if (books.length === 0) {
+      UiUtil.showToast(this.getUIContext(), { message: '未选择漫画书籍', duration: 1500 });
+      return;
+    }
+    const ext = format === 'comicZip' ? '.zip' : (format === 'epub' ? '.epub' : '.txt');
     let dirUri = '';
     try {
       const uris = await new picker.DocumentViewPicker().select({
@@ -271,6 +285,7 @@ export struct BookshelfManagePage {
           bookUrl: book.bookUrl,
           origin: book.origin,
           originUrl: book.originUrl,
+          isManga: book.isManga || book.type === BookType.MANGA,
         };
         const fileName = BookExportService.suggestFileName(info, ext);
         const options: ExportOptions = {
@@ -279,9 +294,11 @@ export struct BookshelfManagePage {
           downloadMissing: true,
           context: UiUtil.getHostContext(this.getUIContext()),
         };
-        const result = format === 'epub'
-          ? await BookExportService.exportBookEpub(info, dirUri + '/' + fileName, options)
-          : await BookExportService.exportBookTxt(info, dirUri + '/' + fileName, options);
+        const result = format === 'comicZip'
+          ? await BookExportService.exportComicZip(info, dirUri + '/' + fileName, options)
+          : (format === 'epub'
+            ? await BookExportService.exportBookEpub(info, dirUri + '/' + fileName, options)
+            : await BookExportService.exportBookTxt(info, dirUri + '/' + fileName, options));
         if (result.success) {
           success++;
         } else {

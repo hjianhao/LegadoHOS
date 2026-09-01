@@ -1,5 +1,5 @@
 /**
- * 缓存管理页 — 查看与清理书籍章节内容缓存
+ * 缓存管理页 — 查看与清理书籍章节内容及漫画图片缓存
  * - 顶部：总占用大小 + 清理全部
  * - 列表：每本书的已缓存章节数与占用大小，可单书清理
  */
@@ -37,7 +37,7 @@ export struct CacheManagePage {
   private clearBook(stat: BookCacheStat): void {
     UiUtil.showAlertDialog(this.getUIContext(), {
       title: '清理缓存',
-      message: '删除《' + stat.name + '》的全部章节缓存？（保留目录和阅读进度）',
+      message: '删除《' + stat.name + '》的章节内容和漫画图片缓存？（保留目录和阅读进度）',
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
         value: '删除', fontColor: ThemeColors.error(this.isDark),
@@ -51,10 +51,10 @@ export struct CacheManagePage {
   }
 
   private clearAll(): void {
-    if (this.stats.length === 0) return;
+    if (this.totalSize <= 0) return;
     UiUtil.showAlertDialog(this.getUIContext(), {
       title: '清理全部缓存',
-      message: '将删除所有书籍的章节内容缓存（保留目录和阅读进度），确定继续？',
+      message: '将删除所有书籍的章节内容和漫画图片缓存（保留目录和阅读进度），确定继续？',
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: {
         value: '全部删除', fontColor: ThemeColors.error(this.isDark),
@@ -81,9 +81,9 @@ export struct CacheManagePage {
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
 
           Button($r('app.string.ui_literal_0d5894b920')).fontSize(13).fontColor(ThemeColors.onError(this.isDark))
-            .backgroundColor(this.stats.length > 0
+            .backgroundColor(this.totalSize > 0
               ? ThemeColors.error(this.isDark) : ThemeColors.outlineVariant(this.isDark))
-            .enabled(this.stats.length > 0)
+            .enabled(this.totalSize > 0)
             .height(48).borderRadius(24).padding({ left: 16, right: 16 })
             .onClick(() => { this.clearAll(); })
         }
@@ -106,7 +106,7 @@ export struct CacheManagePage {
                   Text(stat.name).fontSize(14).fontWeight(FontWeight.Medium)
                     .fontColor(ThemeColors.onBackground(this.isDark))
                     .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-                  Text('已缓存 ' + stat.chapters + ' 章 · ' + CacheManager.formatSize(stat.size))
+                  Text('已缓存 ' + stat.chapters + ' 章 · 占用 ' + CacheManager.formatSize(stat.size))
                     .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
                     .margin({ top: 4 })
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start)

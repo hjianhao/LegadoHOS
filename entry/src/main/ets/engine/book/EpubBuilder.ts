@@ -9,7 +9,7 @@
  *   OEBPS/Images/cover.jpg
  *
  * 模板在 resources/rawfile/epub_export/ 下，读取失败时用内置兜底模板。
- * 正文的 <img> 标签保留原始网络地址，不内嵌图片（一期范围）。
+ * 普通书籍正文保留原始 <img> 地址；漫画导出可通过 EpubData.images 内嵌本地图片。
  */
 import { ZipWriter } from '../../util/ZipWriter';
 import http from '@ohos.net.http';
@@ -22,6 +22,13 @@ export interface EpubChapter {
   content: string;
 }
 
+/** EPUB 内嵌图片。path 为 OEBPS/Images 下的相对路径。 */
+export interface EpubImage {
+  path: string;
+  bytes: Uint8Array;
+  mediaType: string;
+}
+
 export interface EpubData {
   name: string;
   author: string;
@@ -29,6 +36,8 @@ export interface EpubData {
   introduce: string;
   coverUrl: string;
   chapters: EpubChapter[];
+  /** 可选的正文图片（漫画导出时使用）。 */
+  images?: EpubImage[];
 }
 
 interface CoverImage {
@@ -124,8 +133,17 @@ export class EpubBuilder {
         await zip.addStored('OEBPS/Images/cover.' + cover!.ext, cover!.bytes);
         const coverHtml = templates.cover
           .split('{name}').join(EpubBuilder.escapeXml(data.name))
-          .split('{author}').join(EpubBuilder.escapeXml(data.author));
+          .split('{author}').join(EpubBuilder.escapeXml(data.author))
+          .split('../Images/cover.jpg').join('../Images/cover.' + cover!.ext);
         await zip.addText('OEBPS/Text/cover.xhtml', coverHtml);
+      }
+
+      // 漫画图片使用本地缓存字节写入 EPUB，正文中的 <img> 已由调用方改写为对应路径。
+      const images: EpubImage[] = data.images || [];
+      for (const image of images) {
+        const path = EpubBuilder.safeImagePath(image.path);
+        if (!path || image.bytes.length === 0) continue;
+        await zip.addStored('OEBPS/Images/' + path, image.bytes);
       }
 
       const intro = (data.introduce || '').trim();
@@ -257,6 +275,14 @@ export class EpubBuilder {
       manifest += '    <item id="intro" href="Text/intro.xhtml" media-type="application/xhtml+xml"/>\n';
       spine += '    <itemref idref="intro"/>\n';
     }
+    const images: EpubImage[] = data.images || [];
+    for (let i = 0; i < images.length; i++) {
+      const image = images[i];
+      const path = EpubBuilder.safeImagePath(image.path);
+      if (!path || image.bytes.length === 0) continue;
+      manifest += '    <item id="image_' + (i + 1) + '" href="Images/'
+        + EpubBuilder.escapeXml(path) + '" media-type="' + EpubBuilder.escapeXml(image.mediaType || 'image/jpeg') + '"/>\n';
+    }
     for (let i = 0; i < data.chapters.length; i++) {
       manifest += '    <item id="chapter_' + (i + 1) + '" href="Text/chapter_' + (i + 1)
         + '.xhtml" media-type="application/xhtml+xml"/>\n';
@@ -358,6 +384,16 @@ export class EpubBuilder {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  /** 防止图片路径越出 EPUB Images 目录或产生重复分隔符。 */
+  private static safeImagePath(path: string): string {
+    return (path || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter((part: string): boolean => !!part && part !== '.' && part !== '..')
+      .map((part: string): string => part.replace(/[^a-zA-Z0-9._-]/g, '_'))
+      .join('/');
   }
 
   private static randomUuid(): string {

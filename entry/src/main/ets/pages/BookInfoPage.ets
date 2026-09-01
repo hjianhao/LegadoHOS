@@ -1393,6 +1393,8 @@ export struct BookInfoPage {
             bookUrl: this.noteUrl,
             origin: this.origin,
             originUrl: this.originUrl,
+            isManga: this.contentType === BookType.MANGA ||
+              (this.currentSource_ ? this.currentSource_.sourceType === 2 : false),
             onDismiss: () => { this.showExportDialog = false; },
           })
         }.width('100%').height('100%')

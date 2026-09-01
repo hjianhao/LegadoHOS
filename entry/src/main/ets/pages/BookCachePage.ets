@@ -1,6 +1,6 @@
 /**
  * 离线缓存页 — 对齐安卓书架「缓存/导出」入口的离线缓存列表
- * - 只显示书源小说（本地导入书籍不显示）
+ * - 只显示书源书籍（本地导入书籍不显示），漫画同样支持整本缓存
  * - 每项：书名、已缓存/总章节，右侧「缓存」「导出」按钮
  * - 缓存进度在列表中实时刷新（轮询 BookCacheService）
  */
@@ -8,7 +8,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
-import { Book } from '../model/Book';
+import { Book, BookType } from '../model/Book';
 import { BookChapter } from '../model/BookChapter';
 import { BookSource } from '../model/BookSource';
 import { BookCover } from '../components/BookCover';
@@ -181,6 +181,7 @@ struct BookCachePage {
       const started = BookCacheService.getInstance().cacheBook({
         bookId: book.id,
         bookName: book.name,
+        isManga: book.isManga || book.type === BookType.MANGA,
         bookUrl: book.bookUrl,
         source: source,
         chapters: chapters.map((ch: BookChapter): CacheChapterItem => {
@@ -284,6 +285,7 @@ struct BookCachePage {
             bookUrl: this.exportBook_!.bookUrl,
             origin: this.exportBook_!.origin,
             originUrl: this.exportBook_!.originUrl,
+            isManga: this.exportBook_!.isManga || this.exportBook_!.type === BookType.MANGA,
             onDismiss: () => {
               this.showExportDialog = false;
               this.needRefresh_ = true;
