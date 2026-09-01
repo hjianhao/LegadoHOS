@@ -5,9 +5,8 @@
  * 支持手动选择最优源或自动切换。
  */
 import { BookSource } from '../../model/BookSource';
-import { globalSourceExecutor } from './SourceExecutor';
+import { globalSourceGateway } from './SourceGateway';
 import { BookSourceRepository } from '../../data/repository/BookSourceRepository';
-import { HtmlUtil } from '../../util/HtmlUtil';
 
 export interface SourceCompareResult {
   source: BookSource;
@@ -43,10 +42,7 @@ export class SourceSwitcher {
     const promises = sources.map(async (source) => {
       try {
         // 用书源搜索这本书
-        const searchResults = await globalSourceExecutor.search(
-          `${bookName} ${author}`,
-          [source]
-        );
+        const searchResults = await globalSourceGateway.search(`${bookName} ${author}`, [source]);
 
         // 找到最匹配的结果
         const match = searchResults.find(
@@ -64,8 +60,8 @@ export class SourceSwitcher {
 
         // 获取详细信息和目录
         try {
-          const info = await globalSourceExecutor.getBookInfo(source, match.noteUrl);
-          const chapters = await globalSourceExecutor.getToc(source, info?.tocUrl || match.noteUrl);
+          const info = await globalSourceGateway.getBookInfo(source, match.noteUrl);
+          const chapters = await globalSourceGateway.getToc(source, info?.tocUrl || match.noteUrl);
 
           results.push({
             source,

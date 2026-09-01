@@ -22,10 +22,24 @@ interface PendingOperation {
   reject: (error: Error) => void;
 }
 
+/** qysg webview() 的一次受控请求。每个运行槽位只允许一个请求进入 ArkWeb，
+ * 这样不会让不同书源的页面导航、脚本结果和 Cookie 状态相互覆盖。 */
+interface QysgWebviewTask {
+  url: string;
+  js: string;
+  html: string;
+  body: string;
+  headers: Record<string, string>;
+  overrideUrlRegex: string;
+  sourceUrlRegex: string;
+  resolve: (value: string) => void;
+  reject: (error: Error) => void;
+}
+
 interface QysgHttpResponse {
   method: string;
   body: string;
-  headers: Record<string, string>;
+  headers: Record<string, string[]>;
   statusCode: number;
   statusMessage: string;
   data: string;
@@ -39,6 +53,25 @@ function encodeBase64(value: string): string {
   try {
     const bytes = new util.TextEncoder().encodeInto(value || '');
     return new util.Base64Helper().encodeToStringSync(bytes);
+  } catch (_e) {
+    return '';
+  }
+}
+
+function encodeBytes(value: ArrayBuffer): string {
+  try {
+    return new util.Base64Helper().encodeToStringSync(new Uint8Array(value));
+  } catch (_e) {
+    return '';
+  }
+}
+
+function decodeBase64(value: string): string {
+  try {
+    let normalized = (value || '').replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
+    while (normalized.length % 4 !== 0) normalized += '=';
+    const bytes = new util.Base64Helper().decodeSync(normalized);
+    return new util.TextDecoder('utf-8', { fatal: false }).decodeToString(bytes);
   } catch (_e) {
     return '';
   }
@@ -62,22 +95,45 @@ function parseHeaders(value: Object): Record<string, string> {
   }
 }
 
+/** qysg 的 htmlToText 兼容实现：保持换行，去除脚本/样式和其余标签。 */
+function qysgHtmlToText(value: string): string {
+  return (value || '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+
 /** 原生侧 qysg bridge。方法签名保留足够参数，适配 callHandler 的多参数调用。 */
 export class QysgNativeBridge {
   private sourceUrl_: string = '';
   private context_: Context | null;
   private pending_: Map<string, PendingOperation>;
   private emitResult_: (requestId: string, payload: string) => void;
+  private webviewHandler_: ((args: Object[]) => Promise<string>) | null;
+  private cookieEnabled_: boolean = true;
 
   constructor(context: Context | null, pending: Map<string, PendingOperation>,
-    emitResult: (requestId: string, payload: string) => void) {
+    emitResult: (requestId: string, payload: string) => void,
+    webviewHandler?: (args: Object[]) => Promise<string>) {
     this.context_ = context;
     this.pending_ = pending;
     this.emitResult_ = emitResult;
+    this.webviewHandler_ = webviewHandler || null;
   }
 
   setSourceUrl(sourceUrl: string): void {
     this.sourceUrl_ = sourceUrl;
+  }
+
+  resetForSource(): void {
+    this.cookieEnabled_ = true;
   }
 
   /** qysg JS → ArkTS：完成一个异步生命周期调用。 */
@@ -115,7 +171,8 @@ export class QysgNativeBridge {
   private async handle_(handler: string, args: Object[]): Promise<Object | string | number | boolean | null> {
     switch (handler) {
       case 'CookieJar':
-        if (this.context_) await CookieStore.getInstance().init(this.context_);
+        this.cookieEnabled_ = args.length === 0 || String(args[0]).toLowerCase() !== 'false';
+        if (this.context_ && this.cookieEnabled_) await CookieStore.getInstance().init(this.context_);
         return true;
       case 'getsourceurl':
         return this.sourceUrl_;
@@ -142,12 +199,73 @@ export class QysgNativeBridge {
       case 'showLongToast':
         console.info('[Qysg][toast] ' + String(args[0] || ''));
         return true;
+      case 'htmlToText':
+        return qysgHtmlToText(String(args[0] || ''));
+      case 'getLoginUser':
+        return '';
+      case 'getdurChapterIndex':
+        return 0;
+      case 'getReadBook':
+        return null;
+      case 'refreshContent':
+      case 'refreshExplore':
+      case 'setHtml':
+      case 'showvideoplay':
+      case 'startBrowserDpwithHtml':
+      case 'voice':
+      case 'showsvg':
+        // 这些调用需要前台页面/媒体控制器。明确返回 false，避免源脚本把
+        // “尚未实现”当成刷新、播放或 SVG 写入成功。
+        console.warn('[QysgBridge] unsupported foreground handler=' + handler);
+        return false;
+      case 'getsvg':
+      case 'addsvg':
+        return [];
       case 'base64encode':
         return encodeBase64(String(args[0] || ''));
       case 'base64decode':
-        return String(args[0] || '');
+        return decodeBase64(String(args[0] || ''));
       case 'utf8ToGbkUrlEncoded':
         return encodeURIComponent(String(args[0] || ''));
+      case 'toSimplified':
+      case 'toTraditional':
+        // qysg 将这两个能力作为可选文本服务。HOS 尚未内置繁简转换库时，
+        // 返回原文比返回空字符串更符合书源的降级预期。
+        console.info('[QysgBridge] ' + handler + ' fallback: identity');
+        return String(args[0] || '');
+      case 'getWidth':
+      case 'getHeight':
+        return 0;
+      case 'id':
+        return '';
+      case 'openurl':
+      case 'startBrowser':
+      case 'startBrowserWithShouldOverrideUrlLoading':
+      case 'startBrowserDp':
+      case 'back':
+      case 'getVerificationCode':
+      case 'addbook':
+      case 'searchbook':
+        // 这些动作需要前台 UI 或业务写操作。先明确返回“不支持”，避免
+        // 书源误以为操作成功而继续提交付费/登录状态。
+        console.warn('[QysgBridge] unsupported foreground handler=' + handler);
+        return handler === 'back' ? false : '';
+      case 'webview':
+        if (!this.webviewHandler_) {
+          throw new Error('qysg webview bridge unavailable');
+        }
+        return await this.webviewHandler_(args);
+      case 'webviewajax':
+        if (!this.webviewHandler_) {
+          throw new Error('qysg webview bridge unavailable');
+        }
+        // webViewGetAjax(url, html, body, header, ajaxRegex) 与普通 webview
+        // 的参数顺序不同，统一转换为 webview 队列的七参数形式；没有可用的
+        // ArkWeb 请求拦截回调时，队列会至少返回加载后的 DOM，并按正则提取。
+        return await this.webviewHandler_([
+          args.length > 0 ? args[0] : '', '',
+          args.length > 1 ? args[1] : '', args.length > 2 ? args[2] : '',
+          args.length > 3 ? args[3] : '', args.length > 4 ? args[4] : '', '']);
       case 'cache.get':
         return await this.cacheGet_(String(args[0] || ''), false);
       case 'cache.set':
@@ -227,18 +345,24 @@ export class QysgNativeBridge {
     const url = String(args[1] || '');
     const body = String(args[2] || '');
     const headers = parseHeaders(args[3]);
-    let data = '';
-    console.info('[QysgBridge] http ' + method + ' ' + url);
-    if (method === 'POST') data = await NetUtil.httpPost(url, body, headers);
-    else data = await NetUtil.httpGet(url, headers);
-    console.info('[QysgBridge] http done status=200 bytes=' + data.length.toString());
+    const contentType = String(args[5] || '');
+    const followRedirects = args.length < 5 || String(args[4]).toLowerCase() !== 'false';
+    if (contentType && !headers['Content-Type'] && !headers['content-type']) {
+      headers['Content-Type'] = contentType;
+    }
+    if (!this.cookieEnabled_) headers['X-Legado-Disable-Cookie'] = '1';
+    console.info('[QysgBridge] http ' + method + ' ' + url + ' follow=' + followRedirects);
+    const response = await NetUtil.httpDetailed(method, url, body, headers,
+      NetUtil.getDefaultTimeout(), followRedirects);
+    console.info('[QysgBridge] http done status=' + response.statusCode +
+      ' bytes=' + response.data.length.toString());
     return {
       method: method.toLowerCase(),
-      body: encodeBase64(data),
-      headers: {},
-      statusCode: 200,
-      statusMessage: 'OK',
-      data: data,
+      body: encodeBytes(response.body),
+      headers: response.headers,
+      statusCode: response.statusCode,
+      statusMessage: response.statusMessage,
+      data: response.data,
     };
   }
 }
@@ -288,7 +412,10 @@ export class QysgRuntimeManager {
 @Component
 export struct QysgRuntimeHostComponent {
   private controller_: web_webview.WebviewController = new web_webview.WebviewController();
+  /** qysg webview() 使用独立控制器，不能导航主运行页，否则会销毁源脚本。 */
+  private webviewController_: web_webview.WebviewController = new web_webview.WebviewController();
   private controllerAttached_: boolean = false;
+  private webviewControllerAttached_: boolean = false;
   private activeSourceKey_: string = '';
   private activeSourceUrl_: string = '';
   private readyPromise_: Promise<void> | null = null;
@@ -299,12 +426,28 @@ export struct QysgRuntimeHostComponent {
   private pending_: Map<string, PendingOperation> = new Map();
   private bridge_: QysgNativeBridge | null = null;
   private hostRegistered_: boolean = false;
+  private webviewQueue_: QysgWebviewTask[] = [];
+  private activeWebviewTask_: QysgWebviewTask | null = null;
+  private webviewEvaluateTimer_: number = -1;
+  private webviewTimeoutTimer_: number = -1;
+  private webviewStartedAt_: number = 0;
+  private webviewPageEndAt_: number = 0;
+  private webviewEvaluateAttempts_: number = 0;
+  private webviewLastValue_: string = '';
+  private webviewStableCount_: number = 0;
+
+  private static readonly QYSG_WEBVIEW_TIMEOUT_MS: number = 30000;
+  private static readonly QYSG_WEBVIEW_STABLE_WAIT_MS: number = 1200;
+  private static readonly QYSG_WEBVIEW_MIN_STABLE_MS: number = 2400;
+  private static readonly QYSG_WEBVIEW_RETRY_MS: number = 400;
+  private static readonly QYSG_WEBVIEW_SCRIPT_WAIT_MS: number = 9000;
 
   aboutToDisappear(): void {
     if (this.hostRegistered_) QysgRuntimeManager.unregisterHost(this);
     this.hostRegistered_ = false;
     this.pending_.forEach((pending: PendingOperation): void => pending.reject(new Error('qysg runtime closed')));
     this.pending_.clear();
+    this.rejectAllWebviewTasks_(new Error('qysg webview runtime closed'));
   }
 
   build() {
@@ -318,7 +461,8 @@ export struct QysgRuntimeHostComponent {
           this.controllerAttached_ = true;
           console.info('[QysgRuntime] WebView controller attached');
           this.bridge_ = new QysgNativeBridge(this.getUIContext().getHostContext() || null, this.pending_,
-            (requestId: string, payload: string): void => this.completeBridgeCall_(requestId, payload));
+            (requestId: string, payload: string): void => this.completeBridgeCall_(requestId, payload),
+            (args: Object[]): Promise<string> => this.enqueueWebview_(args));
           try {
             // callHandler 必须注册为同步方法：qysg 的桥接 shim 需要拿到它返回的
             // Promise 并继续 .then()。ArkWeb 的 asyncMethodList 明确不返回值，若
@@ -352,6 +496,24 @@ export struct QysgRuntimeHostComponent {
             reject(new Error('qysg WebView 加载失败'));
           }
         });
+      // qysg 的 webview()/webViewGetSource() 需要在不破坏主运行脚本的前提下
+      // 访问另一个页面并执行 DOM JavaScript，因此使用第二个隐藏 WebView。
+      Web({ src: '', controller: this.webviewController_ })
+        .width('100%').height('100%')
+        .javaScriptAccess(true)
+        .domStorageAccess(true)
+        .mixedMode(MixedMode.All)
+        .onControllerAttached((): void => {
+          this.webviewControllerAttached_ = true;
+          console.info('[QysgRuntime] webview controller attached');
+          this.processNextWebviewTask_();
+        })
+        .onPageEnd((): void => {
+          this.onWebviewPageEnd_();
+        })
+        .onErrorReceive((): void => {
+          this.finishWebviewTask_(null, new Error('qysg webview 页面加载失败'));
+        });
     }
     .width(1).height(1)
     .constraintSize({ minWidth: 1, minHeight: 1 })
@@ -367,6 +529,206 @@ export struct QysgRuntimeHostComponent {
     this.controller_.runJavaScript(script).catch((error: Error): void => {
       console.error('[QysgBridge] complete callback failed: ' + String(error));
     });
+  }
+
+  /** 将 qysg webview(url, js, html, body, header, ...) 排队到独立 WebView。 */
+  private enqueueWebview_(args: Object[]): Promise<string> {
+    return new Promise<string>((resolve: (value: string) => void,
+      reject: (error: Error) => void): void => {
+      const task: QysgWebviewTask = {
+        url: String(args[0] || ''),
+        js: String(args[1] || '').trim(),
+        html: String(args[2] || ''),
+        body: String(args[3] || ''),
+        headers: parseHeaders(args.length > 4 ? args[4] : ''),
+        overrideUrlRegex: String(args[5] || ''),
+        sourceUrlRegex: String(args[6] || ''),
+        resolve: resolve,
+        reject: reject,
+      };
+      if (!task.url && !task.html) {
+        reject(new Error('qysg webview 缺少 URL 和 HTML'));
+        return;
+      }
+      this.webviewQueue_.push(task);
+      console.info('[QysgRuntime] webview queued url=' + task.url.substring(0, 120) +
+        ' js=' + (task.js ? 'yes' : 'no'));
+      this.processNextWebviewTask_();
+    });
+  }
+
+  private async processNextWebviewTask_(): Promise<void> {
+    if (this.activeWebviewTask_ || this.webviewQueue_.length === 0) return;
+    const task = this.webviewQueue_.shift();
+    if (!task) return;
+    this.activeWebviewTask_ = task;
+    this.webviewStartedAt_ = Date.now();
+    this.webviewPageEndAt_ = 0;
+    this.webviewEvaluateAttempts_ = 0;
+    this.webviewLastValue_ = '';
+    this.webviewStableCount_ = 0;
+    try {
+      for (let attempt = 0; !this.webviewControllerAttached_ && attempt < 100; attempt++) {
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!this.webviewControllerAttached_) {
+        throw new Error('qysg webview 控制器尚未绑定');
+      }
+      this.webviewTimeoutTimer_ = setTimeout((): void => {
+        this.finishWebviewTask_(null, new Error('qysg webview 超时'));
+      }, QysgRuntimeHostComponent.QYSG_WEBVIEW_TIMEOUT_MS);
+
+      const webHeaders: Array<web_webview.WebHeader> = [];
+      let userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+      Object.keys(task.headers).forEach((key: string): void => {
+        if (key.toLowerCase() === 'user-agent') {
+          if (task.headers[key]) userAgent = task.headers[key];
+        } else {
+          const webHeader: web_webview.WebHeader = {
+            headerKey: key,
+            headerValue: task.headers[key],
+          };
+          webHeaders.push(webHeader);
+        }
+      });
+      this.webviewController_.setCustomUserAgent(userAgent);
+
+      if (task.html) {
+        this.webviewController_.loadData(task.html, 'text/html', 'UTF-8', task.url || 'about:blank');
+      } else if (task.body) {
+        // ArkWeb Controller 没有统一的带 body loadUrl API。先用同一网络策略
+        // 获取 POST 响应，再以原 URL 作为 baseUrl 装载，仍保留页面脚本和 DOM。
+        const pageHtml = await NetUtil.httpPost(task.url, task.body, task.headers);
+        this.webviewController_.loadData(pageHtml, 'text/html', 'UTF-8', task.url);
+      } else {
+        this.webviewController_.loadUrl(task.url, webHeaders);
+      }
+      console.info('[QysgRuntime] webview loading url=' + task.url.substring(0, 120));
+    } catch (error) {
+      this.finishWebviewTask_(null, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private onWebviewPageEnd_(): void {
+    if (!this.activeWebviewTask_) return;
+    this.webviewPageEndAt_ = Date.now();
+    if (this.webviewEvaluateTimer_ >= 0) clearTimeout(this.webviewEvaluateTimer_);
+    this.webviewEvaluateTimer_ = setTimeout((): void => {
+      this.evaluateWebviewTask_();
+    }, QysgRuntimeHostComponent.QYSG_WEBVIEW_STABLE_WAIT_MS);
+  }
+
+  private async evaluateWebviewTask_(): Promise<void> {
+    const task = this.activeWebviewTask_;
+    if (!task) return;
+    this.webviewEvaluateTimer_ = -1;
+    this.webviewEvaluateAttempts_++;
+    const script = task.js || 'document.documentElement ? document.documentElement.outerHTML : ""';
+    try {
+      const raw = await this.webviewController_.runJavaScript(script);
+      let value = this.decodeWebviewValue_(raw);
+      if (value === this.webviewLastValue_) {
+        this.webviewStableCount_++;
+      } else {
+        this.webviewLastValue_ = value;
+        this.webviewStableCount_ = 1;
+      }
+      if (task.js && !value.trim() &&
+        Date.now() - this.webviewStartedAt_ < QysgRuntimeHostComponent.QYSG_WEBVIEW_SCRIPT_WAIT_MS) {
+        this.webviewEvaluateTimer_ = setTimeout((): void => {
+          this.evaluateWebviewTask_();
+        }, QysgRuntimeHostComponent.QYSG_WEBVIEW_RETRY_MS);
+        return;
+      }
+      // qysg 源经常在 onPageEnd 后通过 XMLHttpRequest/定时器补齐目录。不能
+      // 看到静态 HTML 中的首个章节就立即完成，否则动态目录会被截成 1~2 章。
+      // 至少等待一个稳定窗口，并要求连续两次结果一致；结果发生变化时重新
+      // 计数，最长仍受脚本等待上限约束。
+      if (task.js && Date.now() - this.webviewStartedAt_ <
+        QysgRuntimeHostComponent.QYSG_WEBVIEW_MIN_STABLE_MS &&
+        Date.now() - this.webviewStartedAt_ < QysgRuntimeHostComponent.QYSG_WEBVIEW_SCRIPT_WAIT_MS) {
+        this.webviewEvaluateTimer_ = setTimeout((): void => {
+          this.evaluateWebviewTask_();
+        }, QysgRuntimeHostComponent.QYSG_WEBVIEW_RETRY_MS);
+        return;
+      }
+      if (task.js && this.webviewStableCount_ < 2 &&
+        Date.now() - this.webviewStartedAt_ < QysgRuntimeHostComponent.QYSG_WEBVIEW_SCRIPT_WAIT_MS) {
+        this.webviewEvaluateTimer_ = setTimeout((): void => {
+          this.evaluateWebviewTask_();
+        }, QysgRuntimeHostComponent.QYSG_WEBVIEW_RETRY_MS);
+        return;
+      }
+      value = this.applyWebviewRegex_(value, task.overrideUrlRegex || task.sourceUrlRegex);
+      console.info('[QysgRuntime] webview completed bytes=' + value.length +
+        ' attempts=' + this.webviewEvaluateAttempts_);
+      this.finishWebviewTask_(value, null);
+    } catch (error) {
+      if (Date.now() - this.webviewStartedAt_ < QysgRuntimeHostComponent.QYSG_WEBVIEW_SCRIPT_WAIT_MS) {
+        this.webviewEvaluateTimer_ = setTimeout((): void => {
+          this.evaluateWebviewTask_();
+        }, QysgRuntimeHostComponent.QYSG_WEBVIEW_RETRY_MS);
+        return;
+      }
+      this.finishWebviewTask_(null, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private decodeWebviewValue_(raw: Object): string {
+    if (raw === undefined || raw === null) return '';
+    const text = String(raw);
+    try {
+      const decoded: string = JSON.parse(text) as string;
+      if (typeof decoded === 'string') return decoded;
+      return text;
+    } catch (_e) {
+      return text;
+    }
+  }
+
+  private applyWebviewRegex_(value: string, regex: string): string {
+    if (!regex || !value) return value;
+    try {
+      const match = value.match(new RegExp(regex));
+      if (!match) return value;
+      return String(match[1] || match[0] || value);
+    } catch (error) {
+      console.warn('[QysgRuntime] invalid webview regex:', String(error));
+      return value;
+    }
+  }
+
+  private finishWebviewTask_(value: string | null, error: Error | null): void {
+    const task = this.activeWebviewTask_;
+    if (!task) return;
+    if (this.webviewTimeoutTimer_ >= 0) clearTimeout(this.webviewTimeoutTimer_);
+    if (this.webviewEvaluateTimer_ >= 0) clearTimeout(this.webviewEvaluateTimer_);
+    this.webviewTimeoutTimer_ = -1;
+    this.webviewEvaluateTimer_ = -1;
+    this.activeWebviewTask_ = null;
+    if (error) {
+      console.error('[QysgRuntime] webview failed:', error.message);
+      task.reject(error);
+    } else {
+      task.resolve(value || '');
+    }
+    setTimeout((): void => {
+      this.processNextWebviewTask_();
+    }, 0);
+  }
+
+  private rejectAllWebviewTasks_(error: Error): void {
+    if (this.webviewTimeoutTimer_ >= 0) clearTimeout(this.webviewTimeoutTimer_);
+    if (this.webviewEvaluateTimer_ >= 0) clearTimeout(this.webviewEvaluateTimer_);
+    this.webviewTimeoutTimer_ = -1;
+    this.webviewEvaluateTimer_ = -1;
+    const active = this.activeWebviewTask_;
+    this.activeWebviewTask_ = null;
+    if (active) active.reject(error);
+    this.webviewQueue_.forEach((task: QysgWebviewTask): void => task.reject(error));
+    this.webviewQueue_ = [];
   }
 
   invoke(source: QysgSourceDefinition, method: string, args: Object[]): Promise<string> {
@@ -404,6 +766,7 @@ export struct QysgRuntimeHostComponent {
     if (key === this.activeSourceKey_ && this.readyPromise_) return await this.readyPromise_;
     this.activeSourceKey_ = key;
     this.activeSourceUrl_ = source.sourceUrl;
+    this.bridge_?.resetForSource();
     this.bridge_?.setSourceUrl(source.sourceUrl);
     this.readyPromise_ = new Promise<void>((resolve, reject) => {
       this.readyResolve_ = resolve;

@@ -10,16 +10,16 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { Book, BookType } from '../model/Book';
 import { BookChapter } from '../model/BookChapter';
-import { BookSource } from '../model/BookSource';
+import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { BookCover } from '../components/BookCover';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { LocalBookEngine } from '../engine/book/LocalBookEngine';
 import { ExportBookDialog } from '../components/ExportBookDialog';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { ArrayDataSource } from '../util/ArrayDataSource';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 
 interface CacheRow {
   book: Book;
@@ -165,7 +165,7 @@ struct BookCachePage {
       console.info('[BookCachePage] chapters in db=' + chapters.length + ' bookId=' + book.id);
       // 缓存前先刷新目录：DB 目录可能不完整（如漫画只读过几章），否则进度和缓存范围都不对
       try {
-        const toc = await globalSourceExecutor.getToc(source, book.bookUrl);
+        const toc: BookSourceChapter[] = await globalSourceGateway.getToc(source, book.tocUrl || book.bookUrl);
         if (toc.length > 0) {
           await chapterTable.replaceTocPreserveContent(book.id, toc);
           chapters = await chapterTable.getChaptersByBookId(book.id);

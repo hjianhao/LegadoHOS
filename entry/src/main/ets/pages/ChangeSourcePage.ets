@@ -18,7 +18,7 @@ import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSourcesCacheTable, SourceCacheEntry } from '../data/database/BookSourcesCacheTable';
 import { BookSource } from '../model/BookSource';
 import { SearchResult, createSearchResult } from '../model/SearchResult';
-import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { SourceSwitchStore } from '../util/SourceSwitchStore';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
@@ -173,7 +173,7 @@ export struct ChangeSourcePage {
       const sources = await dao.getEnabledSources();
       const enabled: BookSource[] = [];
       for (const s of sources) {
-        if (s.enabled && s.ruleSearchUrl) {
+        if (globalSourceGateway.canSearch(s)) {
           enabled.push(s);
         }
       }
@@ -183,7 +183,7 @@ export struct ChangeSourcePage {
         return;
       }
 
-      const rawResults = await globalSourceExecutor.search(
+      const rawResults = await globalSourceGateway.search(
         this.bookName.trim(), enabled,
         (merged: SearchResult[], processed: number, total: number) => {
           if (!this.searching) return;

@@ -59,6 +59,15 @@ interface RequestGroupState {
   systemRequests: Set<http.HttpRequest>;
 }
 
+/** qysg HTTP bridge 需要的原始响应元数据。 */
+export interface NetUtilHttpResponse {
+  body: ArrayBuffer;
+  data: string;
+  headers: Record<string, string[]>;
+  statusCode: number;
+  statusMessage: string;
+}
+
 export class NetUtil {
   private static requestGroups_: Map<string, RequestGroupState> = new Map();
   private static gbkEncodeMap_: Map<string, number[]> | null = null;
@@ -233,6 +242,63 @@ export class NetUtil {
       h['Content-Type'] = 'application/x-www-form-urlencoded';
     }
     return NetUtil.httpRequest('POST', url, body, h, timeout || NetUtil.getDefaultTimeout());
+  }
+
+  /**
+   * 返回完整 HTTP 响应，供 qysg Http.Get/Post/Head 使用。
+   * 与普通 httpGet 保持相同的默认头、CookieStore、DNS/代理和响应解码策略，
+   * 但保留状态码、响应头及原始字节，避免书源只能看到固定的 200 状态。
+   */
+  static async httpDetailed(method: string, url: string, body: string = '',
+    headers?: Record<string, string>, timeout?: number, followRedirects: boolean = true): Promise<NetUtilHttpResponse> {
+    const requestUrl = NetUtil.normalizeUrl(url);
+    const requestHeaders = NetUtil.buildHeaders(headers);
+    const cookieEnabled = NetUtil.prepareCookiePolicy_(requestHeaders);
+    if (cookieEnabled) NetUtil.injectCookie_(requestUrl, requestHeaders);
+    const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod,
+      requestHeaders as rcp.RequestHeaders, body || '');
+    const session = NetUtil.createSession_(timeout || NetUtil.getDefaultTimeout(), followRedirects);
+    try {
+      const response = await session.fetch(request);
+      if (cookieEnabled) {
+        await CookieStore.getInstance().setCookiesFromResponse(requestUrl, responseSetCookies(response));
+      }
+      const bytes = response.body === undefined || response.body === null ?
+        new Uint8Array(0) : new Uint8Array(response.body);
+      const copy = new Uint8Array(bytes.length);
+      copy.set(bytes);
+      const rawHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+      const responseHeaders: Record<string, string[]> = {};
+      Object.keys(rawHeaders).forEach((key: string): void => {
+        const value = rawHeaders[key];
+        if (Array.isArray(value)) responseHeaders[key] = value.map((item: string): string => String(item));
+        else if (value !== undefined && value !== null) responseHeaders[key] = [String(value)];
+      });
+      const responseObject = response as Object as Record<string, Object>;
+      const statusMessage = responseObject['statusMessage'] ? String(responseObject['statusMessage']) :
+        NetUtil.httpStatusMessage_(response.statusCode);
+      const data = await NetUtil.decodeBody(copy, requestUrl);
+      return {
+        body: copy.buffer,
+        data: data,
+        headers: responseHeaders,
+        statusCode: response.statusCode,
+        statusMessage: statusMessage,
+      };
+    } finally {
+      try { session.close(); } catch (_error) { /* ignore */ }
+    }
+  }
+
+  private static httpStatusMessage_(statusCode: number): string {
+    const messages: Record<string, string> = {
+      '200': 'OK', '201': 'Created', '204': 'No Content', '301': 'Moved Permanently',
+      '302': 'Found', '303': 'See Other', '307': 'Temporary Redirect', '308': 'Permanent Redirect',
+      '400': 'Bad Request', '401': 'Unauthorized', '403': 'Forbidden', '404': 'Not Found',
+      '429': 'Too Many Requests', '500': 'Internal Server Error', '502': 'Bad Gateway',
+      '503': 'Service Unavailable',
+    };
+    return messages[String(statusCode)] || '';
   }
 
   /**

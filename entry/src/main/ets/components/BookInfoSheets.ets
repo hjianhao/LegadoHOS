@@ -15,6 +15,7 @@
 import { BookSource, BookSourceChapter } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
+import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { Book, BookType, BookGroup } from '../model/Book';
@@ -65,12 +66,12 @@ export struct ChangeCoverSheet {
       const sources = await dao.getEnabledSources();
       const enabled: BookSource[] = [];
       for (const s of sources) {
-        if (s.enabled && s.ruleSearchUrl) {
+        if (globalSourceGateway.canSearch(s)) {
           enabled.push(s);
         }
       }
       const keyword = this.bookName + ' ' + this.bookAuthor;
-      const results = await globalSourceExecutor.search(keyword, enabled.slice(0, 8));
+      const results = await globalSourceGateway.search(keyword, enabled.slice(0, 8));
       this.coverResults = results.filter(r => r.coverUrl);
     } catch (_e) {
       /* ignore */
@@ -289,7 +290,7 @@ export struct ChangeSourceSheet {
       const sources = await dao.getEnabledSources();
       const enabled: BookSource[] = [];
       for (const s of sources) {
-        if (s.enabled && s.ruleSearchUrl) {
+        if (globalSourceGateway.canSearch(s)) {
           enabled.push(s);
         }
       }
@@ -302,7 +303,7 @@ export struct ChangeSourceSheet {
 	      // 对齐 Legado ChangeSourceSearchUseCase: flatMapMerge(concurrency)
 	      // ArkTS 没有 Flow，但我们用全局单例 SourceExecutor 自带的并发池
 	      // 进度回调对齐 Legado ChangeSourceSearchEvent.Progress
-	      const rawResults = await globalSourceExecutor.search(
+	      const rawResults = await globalSourceGateway.search(
 	        this.keyword.trim(), enabled,
 	        (merged: SearchResult[], processed: number, total: number) => {
 	          // 检查是否已取消

@@ -43,6 +43,8 @@ interface ExploreCategory {
   flexBasisPercent: number;
   flexGrow: number;
   wrapBefore: boolean;
+  /** qysg type=1：该项目应在前台浏览器打开，而不是调用 find()。 */
+  kind?: 'books' | 'webview' | 'heading';
 }
 
 interface SourceLoginAction {
@@ -247,6 +249,7 @@ export struct ExplorePage {
           ruleExploreIntroduce: '',
           parent: '',
           isSubNav: item.kind === 'heading',
+          kind: item.kind,
           flexBasisPercent: item.flexBasisPercent,
           flexGrow: 0,
           wrapBefore: item.flexBasisPercent >= 1,
@@ -807,6 +810,13 @@ export struct ExplorePage {
     // 无 URL 的分类不跳转
     if (!category.url || category.url.trim() === '') {
       console.warn('[Explore] Category ' + category.name + ' has no URL, skip');
+      return;
+    }
+    if (category.kind === 'webview') {
+      UiUtil.pushUrl(this.getUIContext(), {
+        url: 'pages/WebFetchPage',
+        params: { url: category.url, interactive: 'true' },
+      });
       return;
     }
     UiUtil.pushUrl(this.getUIContext(), {

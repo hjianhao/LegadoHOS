@@ -14,7 +14,7 @@
 import socket from '@ohos.net.socket';
 import { BookRepository } from '../../data/repository/BookRepository';
 import { BookSourceRepository } from '../../data/repository/BookSourceRepository';
-import { globalSourceExecutor } from '../source/SourceExecutor';
+import { globalSourceGateway } from '../source/SourceGateway';
 
 export class WebServer {
   private server: socket.TcpServer | null = null;
@@ -110,7 +110,7 @@ export class WebServer {
         const keyword = params.get('keyword') || '';
         if (keyword) {
           const sources = await this.sourceRepo.getEnabledSources();
-          const results = await globalSourceExecutor.search(keyword, sources);
+          const results = await globalSourceGateway.search(keyword, sources);
           return this.json(200, { keyword, total: results.length, results });
         }
         return this.json(400, { error: 'keyword required' });
