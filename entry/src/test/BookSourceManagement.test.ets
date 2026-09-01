@@ -28,7 +28,8 @@ import {
   inferMobileCanonicalOrigin_, isSearchKeywordTooShortAlert_, extractSearchAlertInfo_,
   isLikelyAiEmptySearchResultPage_, nextAiFallbackSearchKeyword_,
   plainRateLimitWaitMs_, patchSearchRuleCharset_, inferAiSearchNameCleanupRule_,
-  buildAiVisibleNameRuleCandidates_, extractSearchFormFromJsSource_, resolveSourceRedirectUrl_
+  buildAiVisibleNameRuleCandidates_, extractSearchFormFromJsSource_,
+  inferSearchApiRequestFromJsSource_, resolveSourceRedirectUrl_
 } from '../main/ets/engine/ai/AiSourceAgent';
 import { supportedAiRuleContract } from '../main/ets/engine/ai/AiPromptKnowledge';
 import { changedSourceFields } from '../main/ets/service/SourceRevisionService';
@@ -70,6 +71,19 @@ export default function bookSourceManagementTest() {
       expect(resolveSourceRedirectUrl_('https://new.example/', 'https://legacy.example/'))
         .assertEqual('https://new.example/');
       expect(resolveSourceRedirectUrl_('', 'https://legacy.example/')).assertEqual('');
+    });
+
+    it('infersSearchApiFromExternalJs', 0, () => {
+      const js = \"const state = { currentPage: 1, pageSize: 20, searchField: 'keyword', currentType: 'mh' };\\n\" +
+        \"const searchData = { type: state.currentType, page: page, pageSize: state.pageSize };\\n\" +
+        \"searchData[state.searchField] = state.searchValue;\\n\" +
+        \"$.ajax({ url: '/api/search', data: searchData, type: 'GET' });\";
+      const inferred = inferSearchApiRequestFromJsSource_(js, 'https://manwari.cc/search/', '棋魂');
+      expect(inferred !== null).assertTrue();
+      expect(inferred!.ruleSearchUrl)
+        .assertEqual('https://manwari.cc/api/search?type=mh&page={{page}}&pageSize=20&keyword={{key}}');
+      expect(inferred!.probeUrl)
+        .assertEqual('https://manwari.cc/api/search?type=mh&page=1&pageSize=20&keyword=%E6%A3%8B%E9%AD%82');
     });
 
     it('appliesVerifiedRuntimeSourceOriginAlias', 0, () => {

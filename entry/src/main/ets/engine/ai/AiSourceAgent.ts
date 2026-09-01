@@ -726,6 +726,127 @@ export function extractSearchFormFromJsSource_(jsText: string, pageUrl: string,
 }
 
 /**
+ * 从外部脚本里的 AJAX 搜索调用推导 Legado 搜索 URL。
+ *
+ * 新版漫画站常把搜索框完全交给 JS：页面只有输入框，search.js 再通过
+ * `$.ajax({url:'/api/search', data: searchData})` 请求 JSON。此类站点没有
+ * HTML form，单靠 inferSearchRequest 会继续沿用已经失效的旧代理接口。
+ * 这里只接受明确的 `/api/search` 请求，并要求数据对象中能找到关键词字段；
+ * URL 仍需由调用方执行真实搜索验证后才会写入书源。
+ */
+export function inferSearchApiRequestFromJsSource_(jsText: string, pageUrl: string,
+  keyword: string): InferredSearchRequest | null {
+  const value = jsText || '';
+  if (!value || !pageUrl) return null;
+
+  const stateBlockMatch = value.match(/\bstate\s*=\s*\{([\s\S]{0,4000}?)\}/i);
+  const stateBlock = stateBlockMatch && stateBlockMatch.length > 1 ? stateBlockMatch[1] : '';
+  const stateValue = (name: string): string => {
+    if (!stateBlock || !name) return '';
+    const quoted = stateBlock.match(new RegExp('\\b' + name + '\\s*:\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
+    if (quoted && quoted.length > 2) return quoted[2].trim();
+    const bare = stateBlock.match(new RegExp('\\b' + name + '\\s*:\\s*([^,}\\n]+)', 'i'));
+    return bare && bare.length > 1 ? bare[1].trim() : '';
+  };
+  const searchField = stateValue('searchField') || 'keyword';
+  const decodeToken = (raw: string): string => {
+    const token = (raw || '').trim().replace(/[;}]$/, '').trim();
+    const quoted = token.match(/^["'`]([\s\S]*?)["'`]$/);
+    if (quoted && quoted.length > 1) return quoted[1];
+    const stateRef = token.match(/^state\.([A-Za-z_$][\w$]*)$/);
+    if (stateRef) return stateValue(stateRef[1]);
+    return token;
+  };
+  const variableObject = (name: string): string => {
+    if (!name) return '';
+    const escaped = name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const match = value.match(new RegExp('(?:const|let|var)\\s+' + escaped +
+      '\\s*=\\s*\\{([\\s\\S]{0,1800}?)\\}', 'i'));
+    return match && match.length > 1 ? match[1] : '';
+  };
+  const urlPattern = /\burl\s*:\s*(["'`])([^"'`]{1,240})\1/gi;
+  let urlMatch: RegExpExecArray | null;
+  while ((urlMatch = urlPattern.exec(value)) !== null) {
+    const rawUrl = (urlMatch[2] || '').trim();
+    const pathOnly = rawUrl.split(/[?#]/)[0];
+    if (!/(?:^|\/)api\/search(?:\/|$)/i.test(pathOnly) ||
+      /(?:^|\/)api\/search\/(?:hot|history|user)(?:\/|$)/i.test(pathOnly)) continue;
+    const action = absoluteUrl_(rawUrl, pageUrl);
+    if (!/^https?:\/\//i.test(action)) continue;
+
+    // 在同一 AJAX 调用中查找 data: {...} 或 data: searchData；后者再解析其
+    // 前面的局部对象赋值。限制窗口长度，避免串到下一个函数的 data 字段。
+    const tail = value.substring(urlMatch.index, Math.min(value.length, urlMatch.index + 3200));
+    const dataMatch = tail.match(/\bdata\s*:\s*(\{[\s\S]{0,1800}?\}|[A-Za-z_$][\w$]*)/i);
+    if (!dataMatch || dataMatch.length < 2) continue;
+    let dataBlock = dataMatch[1].trim();
+    if (dataBlock.startsWith('{')) dataBlock = dataBlock.substring(1, dataBlock.lastIndexOf('}'));
+    else dataBlock = variableObject(dataBlock);
+
+    const params: string[] = [];
+    let keywordFound = false;
+    const addParam = (name: string, rendered: string): void => {
+      if (!name || !rendered || params.some((item: string): boolean =>
+        item.toLowerCase().startsWith(encodeURIComponent(name).toLowerCase() + '='))) return;
+      params.push(encodeURIComponent(name) + '=' + rendered);
+    };
+    const pairPattern = /(?:^|,)\s*([A-Za-z_$][\w$]*)\s*:\s*([^,}\n]+)/g;
+    let pair: RegExpExecArray | null;
+    while ((pair = pairPattern.exec(dataBlock || '')) !== null) {
+      const name = (pair[1] || '').trim();
+      const token = (pair[2] || '').trim();
+      let rendered = '';
+      if (/^(?:page|pageNum|currentPage)$/i.test(name) ||
+        /(?:^|\.)page(?:Num)?$/i.test(token)) {
+        rendered = '{{page}}';
+      } else if (/^(?:key|keyword|query|q|wd|searchValue|searchKeyword|title|name)$/i.test(name) ||
+        /(?:searchValue|searchKeyword)$/i.test(token)) {
+        rendered = '{{key}}';
+        keywordFound = true;
+      } else {
+        const decoded = decodeToken(token);
+        if (decoded && decoded.length <= 120 && !/[{}]/.test(decoded)) {
+          rendered = encodeURIComponent(decoded);
+        }
+      }
+      if (rendered) addParam(name, rendered);
+    }
+    // 常见写法：先构造 type/page/pageSize，再用 data[state.searchField] 动态加入关键词。
+    const dataName = dataMatch[1].startsWith('{') ? '' : dataMatch[1];
+    const dynamicField = dataName ? value.match(new RegExp('\\b' +
+      dataName.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') +
+      '\\s*\\[\\s*state\\.searchField\\s*\\]\\s*=\\s*state\\.searchValue', 'i')) : null;
+    if (dynamicField && searchField) {
+      addParam(searchField, '{{key}}');
+      keywordFound = true;
+    }
+    if (!keywordFound) continue;
+
+    const methodMatch = tail.match(/\b(?:type|method)\s*:\s*["'](GET|POST)["']/i);
+    const method = methodMatch && methodMatch.length > 1 ? methodMatch[1].toUpperCase() : 'GET';
+    const ruleBody = params.join('&');
+    const probeBody = ruleBody.replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
+      .replace(/\{\{page\}\}/g, '1');
+    if (!ruleBody) continue;
+    if (method === 'POST') {
+      return {
+        ruleSearchUrl: action + ',' + JSON.stringify({ method: 'POST', body: ruleBody }),
+        probeUrl: action,
+        method: method,
+        keywordField: searchField,
+      };
+    }
+    return {
+      ruleSearchUrl: appendQuery_(action, [ruleBody]),
+      probeUrl: appendQuery_(action, [probeBody]),
+      method: method,
+      keywordField: searchField,
+    };
+  }
+  return null;
+}
+
+/**
  * 从页面 HTML 检测 charset，并补全到搜索规则中。
  * 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点的搜索关键词
  * 必须按 GBK 编码提交（否则站点按 GBK 解码 UTF-8 字节得到乱码，返回空结果，
@@ -2121,7 +2242,7 @@ export class AiSourceAgent {
     // URL 可求值时保留现状，不重复抓取外部脚本。
     const existingSearchUrl = this.draft_?.ruleSearchUrl || '';
     if (!inferred?.ruleSearchUrl && (!existingSearchUrl ||
-      isUnevaluableSearchTemplate_(existingSearchUrl))) {
+      isUnevaluableSearchTemplate_(existingSearchUrl) || this.siteOriginChanged_)) {
       inferred = await this.inferSearchFromExternalScripts_(
         evidence.scriptSrcs || [], evidence.finalUrl || evidence.url, keyword);
       // 外部 JS 中提取的表单不包含页面 charset 声明，但 GBK 站点（如
@@ -5509,12 +5630,15 @@ ${optimizeTextRule ? '当前是文本小说书源。优先生成段落级纯文�
         // 老式站点（如 picdg/wxc8 的 header.js）的搜索表单由多条
         // document.writeln 分片拼接渲染，单条片段不含完整 <form>；
         // 先按 JS 源码提取（拼接 + 反转义），失败再回退常规 HTML 推断。
-        let inferred = extractSearchFormFromJsSource_(jsText, pageUrl, keyword, '');
+        let inferred = inferSearchApiRequestFromJsSource_(jsText, pageUrl, keyword);
+        if (!inferred?.ruleSearchUrl) {
+          inferred = extractSearchFormFromJsSource_(jsText, pageUrl, keyword, '');
+        }
         if (!inferred?.ruleSearchUrl) {
           inferred = inferSearchRequest(jsText, pageUrl, keyword);
         }
         if (inferred?.ruleSearchUrl) {
-          this.log_('  已从外部脚本提取搜索表单：' + resolved.substring(0, 80));
+          this.log_('  已从外部脚本提取搜索请求：' + resolved.substring(0, 80));
           return inferred;
         }
       } catch (_e) {
