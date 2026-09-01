@@ -41,8 +41,11 @@ export class QysgSourceAdapter implements SourceAdapter {
   }
 
   async search(source: BookSource, keyword: string, page: number): Promise<SearchResult[]> {
+    console.info('[QysgAdapter] search source=' + source.sourceName + ' keyword=' + keyword + ' page=' + page);
     const raw = await QysgRuntimeManager.invoke(source, 'search', [keyword, page, 'searchone']);
-    return mapQysgBooks(raw, source);
+    const results = mapQysgBooks(raw, source);
+    console.info('[QysgAdapter] search mapped=' + results.length + ' rawBytes=' + raw.length);
+    return results;
   }
 
   async getExploreItems(source: BookSource): Promise<SourceExploreItem[]> {

@@ -44,7 +44,7 @@ export class SourceGateway {
         else items = await globalSourceExecutor.search(keyword, [source], undefined, page, isAborted);
         if (!(isAborted && isAborted())) collected.push(...items);
       } catch (error) {
-        console.warn('[SourceGateway] search failed for ' + source.sourceName + ': ' + String(error));
+        console.error('[SourceGateway] search failed for ' + source.sourceName + ': ' + String(error));
       } finally {
         processed++;
         if (onProgress && !(isAborted && isAborted())) {

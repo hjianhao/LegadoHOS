@@ -234,11 +234,15 @@ export class QysgRuntimeManager {
   private static hosts_: QysgRuntimeHost[] = [];
 
   static registerHost(host: QysgRuntimeHost): void {
-    if (QysgRuntimeManager.hosts_.indexOf(host) < 0) QysgRuntimeManager.hosts_.push(host);
+    if (QysgRuntimeManager.hosts_.indexOf(host) < 0) {
+      QysgRuntimeManager.hosts_.push(host);
+      console.info('[QysgRuntime] host registered, count=' + QysgRuntimeManager.hosts_.length);
+    }
   }
 
   static unregisterHost(host: QysgRuntimeHost): void {
     QysgRuntimeManager.hosts_ = QysgRuntimeManager.hosts_.filter((item: QysgRuntimeHost): boolean => item !== host);
+    console.info('[QysgRuntime] host unregistered, count=' + QysgRuntimeManager.hosts_.length);
   }
 
   static hasHost(): boolean {
@@ -246,6 +250,7 @@ export class QysgRuntimeManager {
   }
 
   static async invoke(source: BookSource, method: string, args: Object[]): Promise<string> {
+    console.info('[QysgRuntime] invoke requested source=' + source.sourceName + ' method=' + method);
     if (!source.enabled) throw new Error('书源未启用');
     const definition = decodeQysgSource(source);
     let host = QysgRuntimeManager.hosts_[0];
@@ -257,7 +262,11 @@ export class QysgRuntimeManager {
       });
       host = QysgRuntimeManager.hosts_[0];
     }
-    if (!host) throw new Error('qysg WebView 运行时未就绪，请返回应用主页后重试');
+    if (!host) {
+      console.error('[QysgRuntime] no host after waiting');
+      throw new Error('qysg WebView 运行时未就绪，请返回应用主页后重试');
+    }
+    console.info('[QysgRuntime] dispatching to host method=' + method);
     return await host.invoke(definition, method, args);
   }
 }
@@ -294,6 +303,7 @@ export struct QysgRuntimeHostComponent {
         .mixedMode(MixedMode.All)
         .onControllerAttached((): void => {
           this.controllerAttached_ = true;
+          console.info('[QysgRuntime] WebView controller attached');
           this.bridge_ = new QysgNativeBridge(this.getUIContext().getHostContext() || null, this.pending_);
           try {
             // callHandler 必须注册为同步方法：qysg 的桥接 shim 需要拿到它返回的
@@ -311,6 +321,7 @@ export struct QysgRuntimeHostComponent {
           }
         })
         .onPageEnd((): void => {
+          console.info('[QysgRuntime] qysg page ready source=' + this.activeSourceUrl_);
           if (this.readyResolve_) {
             const resolve = this.readyResolve_;
             this.readyResolve_ = null;
@@ -319,6 +330,7 @@ export struct QysgRuntimeHostComponent {
           }
         })
         .onErrorReceive((): void => {
+          console.error('[QysgRuntime] qysg page load error');
           if (this.readyReject_) {
             const reject = this.readyReject_;
             this.readyResolve_ = null;
@@ -329,11 +341,15 @@ export struct QysgRuntimeHostComponent {
     }
     .width(1).height(1)
     .constraintSize({ minWidth: 1, minHeight: 1 })
-    .visibility(Visibility.None);
+    // Visibility.None 会将 Web 组件从渲染树中移除，在部分系统版本上不会触发
+    // onControllerAttached/onPageEnd，导致运行时注册成功但搜索请求立即返回空结果。
+    // Hidden 保留组件生命周期，同时不在界面上显示。
+    .visibility(Visibility.Hidden);
   }
 
   invoke(source: QysgSourceDefinition, method: string, args: Object[]): Promise<string> {
     const run = async (): Promise<string> => {
+      console.info('[QysgRuntime] host invoke method=' + method + ' url=' + source.sourceUrl);
       await this.ensureSource_(source);
       const operationId = 'qysg-' + (++this.operationId_).toString();
       const result = new Promise<string>((resolve, reject) => {
@@ -345,9 +361,12 @@ export struct QysgRuntimeHostComponent {
         await this.controller_.runJavaScript(invokeScript);
       } catch (error) {
         this.pending_.delete(operationId);
+        console.error('[QysgRuntime] runJavaScript failed: ' + String(error));
         throw error instanceof Error ? error : new Error(String(error));
       }
-      return await this.withTimeout_(result, 45000, 'qysg ' + method + ' 超时');
+      const payload = await this.withTimeout_(result, 45000, 'qysg ' + method + ' 超时');
+      console.info('[QysgRuntime] host invoke completed method=' + method + ' bytes=' + payload.length);
+      return payload;
     };
     const result = this.queue_.then(run, run);
     this.queue_ = result.then(() => undefined, () => undefined);
@@ -355,7 +374,10 @@ export struct QysgRuntimeHostComponent {
   }
 
   private async ensureSource_(source: QysgSourceDefinition): Promise<void> {
-    if (!this.controllerAttached_) throw new Error('qysg WebView 控制器尚未绑定');
+    if (!this.controllerAttached_) {
+      console.error('[QysgRuntime] ensureSource before controller attached');
+      throw new Error('qysg WebView 控制器尚未绑定');
+    }
     const key = source.sourceUrl + '\n' + source.html.length + '\n' + source.html.substring(0, 32);
     if (key === this.activeSourceKey_ && this.readyPromise_) return await this.readyPromise_;
     this.activeSourceKey_ = key;
@@ -382,6 +404,7 @@ export struct QysgRuntimeHostComponent {
     // 否则 qysg 中相对路径和外部 jQuery 无法解析。
     const html = bootstrap + source.html;
     try {
+      console.info('[QysgRuntime] loading source html url=' + source.sourceUrl + ' bytes=' + html.length);
       this.controller_.loadData(html, 'text/html', 'UTF-8', source.sourceUrl);
     } catch (error) {
       this.readyReject_?.(error as Error);
