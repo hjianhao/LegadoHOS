@@ -120,8 +120,10 @@ export class QysgNativeBridge {
       case 'getsourceurl':
         return this.sourceUrl_;
       case 'getsearch':
-        // 与 qysg 约定兼容：0 表示普通搜索，-1 表示不限制。
-        return 0;
+        // qysg 约定：-1 表示不限制搜索内容类型，0/1/2 分别表示小说、
+        // 音频、漫画。App 已在搜索页按书源类型筛选，桥接层不能固定返回 0，
+        // 否则漫画源会被书源自身的 getsearch 类型判断直接返回空数组。
+        return -1;
       case 'getWebViewUA':
         return 'Mozilla/5.0 (Linux; Android 12; HarmonyOS) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36';
       case 'device':
