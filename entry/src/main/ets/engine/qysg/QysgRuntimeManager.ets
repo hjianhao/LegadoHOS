@@ -423,6 +423,8 @@ export struct QysgRuntimeHostComponent {
       'w.attr=function(n){return a.length?a[0].getAttribute(n):undefined;};' +
       'w.text=function(){var s="";for(var i=0;i<a.length;i++)s+=a[i].textContent||"";return s;};' +
       'w.eq=function(i){var n=i<0?a.length+i:i;return wrap(n>=0&&n<a.length?[a[n]]:[]);};' +
+      'w.first=function(){return wrap(a.length?[a[0]]:[]);};' +
+      'w.last=function(){return wrap(a.length?[a[a.length-1]]:[]);};' +
       'w.clone=function(){var out=[];for(var i=0;i<a.length;i++)out.push(a[i].cloneNode(true));return wrap(out);};' +
       'w.html=function(v){if(v===undefined)return a.length?a[0].innerHTML:"";for(var i=0;i<a.length;i++)a[i].innerHTML=v;return w;};' +
       'w.remove=function(){for(var i=0;i<a.length;i++)if(a[i].parentNode)a[i].parentNode.removeChild(a[i]);return w;};return w;}' +

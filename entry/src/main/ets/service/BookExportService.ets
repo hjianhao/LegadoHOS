@@ -481,7 +481,7 @@ export class BookExportService {
           await BookCacheService.getInstance().cacheBook({
             bookId: book.id,
             bookName: book.name,
-            isManga: book.isManga,
+            isManga: book.isManga || source.sourceType === 2,
             bookUrl: book.bookUrl,
             source: source,
             chapters: items,
