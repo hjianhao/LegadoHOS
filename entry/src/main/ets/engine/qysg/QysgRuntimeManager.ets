@@ -67,10 +67,13 @@ export class QysgNativeBridge {
   private sourceUrl_: string = '';
   private context_: Context | null;
   private pending_: Map<string, PendingOperation>;
+  private emitResult_: (requestId: string, payload: string) => void;
 
-  constructor(context: Context | null, pending: Map<string, PendingOperation>) {
+  constructor(context: Context | null, pending: Map<string, PendingOperation>,
+    emitResult: (requestId: string, payload: string) => void) {
     this.context_ = context;
     this.pending_ = pending;
+    this.emitResult_ = emitResult;
   }
 
   setSourceUrl(sourceUrl: string): void {
@@ -87,20 +90,26 @@ export class QysgNativeBridge {
     return '';
   }
 
-  /** qysg JS → ArkTS：实现 flutter_inappwebview.callHandler(name, ...args)。 */
-  async callHandler(handler: string, a?: Object, b?: Object, c?: Object, d?: Object,
-    e?: Object, f?: Object, g?: Object): Promise<string> {
+  /** qysg JS → ArkTS：发起 flutter_inappwebview.callHandler(name, ...args)。
+   *
+   * ArkWeb 的同步 JavaScript Proxy 不能等待异步 ArkTS 返回值，异步 Proxy 又
+   * 不会把返回值交给网页。因此这里同步启动任务，再由 emitResult_ 主动调用
+   * 网页侧的 Promise 完成函数，保持 qysg 期望的 Future/Promise 语义。
+  */
+  callHandler(requestId: string, handler: string, a?: Object, b?: Object, c?: Object, d?: Object,
+    e?: Object, f?: Object, g?: Object): void {
     const args: Object[] = [];
     [a, b, c, d, e, f, g].forEach((value: Object | undefined): void => {
       if (value !== undefined) args.push(value);
     });
-    try {
-      const value = await this.handle_(handler, args);
-      return jsonEnvelope(true, value as Object | string | number | boolean | null);
-    } catch (error) {
+    const id = String(requestId || '');
+    console.info('[QysgBridge] call handler=' + handler + ' request=' + id);
+    this.handle_(handler, args).then((value: Object | string | number | boolean | null): void => {
+      this.emitResult_(id, jsonEnvelope(true, value));
+    }, (error: Error): void => {
       const message = error instanceof Error ? error.message : String(error);
-      return jsonEnvelope(false, null, message);
-    }
+      this.emitResult_(id, jsonEnvelope(false, null, message));
+    });
   }
 
   private async handle_(handler: string, args: Object[]): Promise<Object | string | number | boolean | null> {
@@ -217,8 +226,10 @@ export class QysgNativeBridge {
     const body = String(args[2] || '');
     const headers = parseHeaders(args[3]);
     let data = '';
+    console.info('[QysgBridge] http ' + method + ' ' + url);
     if (method === 'POST') data = await NetUtil.httpPost(url, body, headers);
     else data = await NetUtil.httpGet(url, headers);
+    console.info('[QysgBridge] http done status=200 bytes=' + data.length.toString());
     return {
       method: method.toLowerCase(),
       body: encodeBase64(data),
@@ -304,7 +315,8 @@ export struct QysgRuntimeHostComponent {
         .onControllerAttached((): void => {
           this.controllerAttached_ = true;
           console.info('[QysgRuntime] WebView controller attached');
-          this.bridge_ = new QysgNativeBridge(this.getUIContext().getHostContext() || null, this.pending_);
+          this.bridge_ = new QysgNativeBridge(this.getUIContext().getHostContext() || null, this.pending_,
+            (requestId: string, payload: string): void => this.completeBridgeCall_(requestId, payload));
           try {
             // callHandler 必须注册为同步方法：qysg 的桥接 shim 需要拿到它返回的
             // Promise 并继续 .then()。ArkWeb 的 asyncMethodList 明确不返回值，若
@@ -345,6 +357,14 @@ export struct QysgRuntimeHostComponent {
     // onControllerAttached/onPageEnd，导致运行时注册成功但搜索请求立即返回空结果。
     // Hidden 保留组件生命周期，同时不在界面上显示。
     .visibility(Visibility.Hidden);
+  }
+
+  private completeBridgeCall_(requestId: string, payload: string): void {
+    const script = 'window.__qysgBridgeComplete&&window.__qysgBridgeComplete(' +
+      JSON.stringify(requestId) + ',' + JSON.stringify(payload) + ');';
+    this.controller_.runJavaScript(script).catch((error: Error): void => {
+      console.error('[QysgBridge] complete callback failed: ' + String(error));
+    });
   }
 
   invoke(source: QysgSourceDefinition, method: string, args: Object[]): Promise<string> {
@@ -388,11 +408,15 @@ export struct QysgRuntimeHostComponent {
       this.readyReject_ = reject;
     });
     const bootstrap = '<script>(function(){' +
+      'var bridgePending={},bridgeSeq=0;' +
+      'window.__qysgBridgeComplete=function(id,raw){var p=bridgePending[id];if(!p)return;' +
+      'delete bridgePending[id];try{var e=JSON.parse(raw||"{}");if(!e.ok)throw new Error(e.error||"bridge error");' +
+      'p.resolve(e.value);}catch(err){p.reject(err);}};' +
       'window.flutter_inappwebview={callHandler:function(name){' +
-      'var args=Array.prototype.slice.call(arguments,1);' +
-      'return window.qysgNative.callHandler.apply(window.qysgNative,[name].concat(args)).then(function(raw){' +
-      'try{var e=JSON.parse(raw);if(!e.ok)throw new Error(e.error||"bridge error");return e.value;}' +
-      'catch(err){throw err;}});}};' +
+      'var args=Array.prototype.slice.call(arguments,1),id="bridge-"+(++bridgeSeq);' +
+      'return new Promise(function(resolve,reject){bridgePending[id]={resolve:resolve,reject:reject};' +
+      'try{window.qysgNative.callHandler.apply(window.qysgNative,[id,name].concat(args));}' +
+      'catch(err){delete bridgePending[id];reject(err);}});}};' +
       'window.__qysgHost={invoke:async function(id,name,argsJson){try{' +
       'var args=JSON.parse(argsJson),fn=window[name];' +
       'if(typeof fn!=="function")throw new Error("unsupported qysg method: "+name);' +
