@@ -31,9 +31,24 @@ function boolValue(object: Record<string, Object>, ...keys: string[]): boolean {
   return false;
 }
 
+/**
+ * qysg 的 bookUrl/tocUrl/chapterId 是源脚本之间传递的身份值，不一定是 URL。
+ * 例如部分听书源会把作品 ID 编码为 Base64，再在 info/chapter 中自行解码。
+ * 只有看起来确实是 URL 的值才做相对地址补全，避免把不透明 ID 改写成
+ * `https://host/<id>` 后导致源脚本无法还原原始身份。
+ */
+function qysgIdentityValue(base: string, value: string): string {
+  const raw = (value || '').trim();
+  if (!raw) return '';
+  if (/^(?:https?:\/\/|data:|\/\/|\/|\.\.?\/)/i.test(raw)) {
+    return qysgAbsoluteUrl(base, raw);
+  }
+  return raw;
+}
+
 export function mapQysgBook(raw: Object, source: BookSource): SearchResult {
   const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, Object>;
-  const bookUrl = qysgAbsoluteUrl(source.sourceUrl, value(item, 'bookUrl', 'url', 'bookurl'));
+  const bookUrl = qysgIdentityValue(source.sourceUrl, value(item, 'bookUrl', 'url', 'bookurl'));
   const contentType = qysgContentType(item['type'], source.sourceType);
   return {
     key: source.sourceUrl + '\n' + bookUrl,
@@ -67,7 +82,7 @@ export function mapQysgBooks(raw: string, source: BookSource): SearchResult[] {
 
 export function mapQysgInfo(raw: string, source: BookSource, requestedUrl: string): BookSourceBookInfo {
   const item = decodeQysgObject(raw);
-  const tocUrl = qysgAbsoluteUrl(source.sourceUrl, value(item, 'tocUrl', 'tocURL', 'chapterUrl')) || requestedUrl;
+  const tocUrl = qysgIdentityValue(source.sourceUrl, value(item, 'tocUrl', 'tocURL', 'chapterUrl')) || requestedUrl;
   const type = qysgContentType(item['type'], source.sourceType);
   const info: BookSourceBookInfo = {
     name: value(item, 'name', 'bookName', 'title'),
@@ -91,7 +106,7 @@ export function mapQysgChapters(raw: string, source: BookSource): BookSourceChap
     const itemIndex = Number(item['index']);
     return {
       title: valueOfChapter(item, 'name', 'title', 'chapterName') || ('第' + (index + 1) + '章'),
-      url: qysgAbsoluteUrl(source.sourceUrl, valueOfChapter(item, 'chapterId', 'url', 'chapterUrl')),
+      url: qysgIdentityValue(source.sourceUrl, valueOfChapter(item, 'chapterId', 'url', 'chapterUrl')),
       index: Number.isFinite(itemIndex) ? itemIndex : index,
       isVolume: boolValue(item, 'isVolume', 'volume'),
       isVip: boolValue(item, 'isVip', 'vip'),
