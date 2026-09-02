@@ -618,6 +618,8 @@ export class SourceChecker {
     const copy = JSON.parse(JSON.stringify(source)) as BookSource;
     copy.enabled = true;
     copy.isExploreRequest = true;
+    // 发现校验同样会覆盖搜索地址，保留原始模板以支持动态线路失效重试。
+    copy.exploreOriginalSearchUrl = source.ruleSearchUrl;
     copy.ruleSearchUrl = exploreUrl;
     // 与发现列表页保持一致：书源未提供独立的 ruleExplore* 时，
     // 分类接口通常复用搜索结果结构，应回退到对应的 ruleSearch*。

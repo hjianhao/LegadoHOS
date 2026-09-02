@@ -1279,7 +1279,10 @@ export class SourceExecutor {
     if (!source || !source.loginUrl || !/function\s+url\s*\(/.test(source.loginUrl)) {
       return false;
     }
-    const searchRule = source.ruleSearchUrl || '';
+    // 发现分类请求会把 ruleSearchUrl 替换为已展开的绝对分类地址；
+    // 用保存的原始搜索规则判断它是否依赖动态 url 变量，否则 404 时
+    // 无法触发书源自带的 url() 换线逻辑（禁漫天堂等源会因此空结果）。
+    const searchRule = source.exploreOriginalSearchUrl || source.ruleSearchUrl || '';
     return /\b(?:get|getVariable)\s*\(\s*['"]url['"]\s*\)/i.test(searchRule);
   }
 

@@ -80,6 +80,8 @@ export interface BookSource {
   // --- 发现规则 ---
   ruleExplores: string;            // 发现页规则 JSON
   isExploreRequest?: boolean;      // 发现分类合成请求标记（不持久化）
+  /** 发现分类请求覆盖 ruleSearchUrl 后保留的原始搜索规则（不持久化）。 */
+  exploreOriginalSearchUrl?: string;
   checkRequestGroup?: string;      // 校验专用网络取消组（不持久化）
 
   // --- 评论规则 ---

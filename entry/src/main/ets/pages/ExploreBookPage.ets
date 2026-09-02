@@ -95,6 +95,9 @@ struct ExploreBookPage {
     const exploreSource: BookSource = JSON.parse(JSON.stringify(source)) as BookSource;
     exploreSource.enabled = true;
     exploreSource.isExploreRequest = true;
+    // 分类页会把 ruleSearchUrl 覆盖为具体分类地址；保留原始模板，
+    // 让动态线路失效（404/410）时仍能识别并执行书源的 url() 换线动作。
+    exploreSource.exploreOriginalSearchUrl = source.ruleSearchUrl;
     exploreSource.ruleSearchUrl = catUrl;
     const categoryRules: Record<string, string> = this.parseCategoryRules_();
     exploreSource.ruleSearchList = categoryRules['ruleExploreList'] || source.ruleExploreList || source.ruleSearchList;
