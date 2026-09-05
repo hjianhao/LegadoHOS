@@ -1,3 +1,4 @@
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 /** 书源管理：对齐 Android Legado 的核心管理能力，并采用 HarmonyOS 标准列表与底部弹层。 */
 import { BookSource, BookSourceFormat, BookSourceType, serializeBookSource } from '../model/BookSource';
 import { AppDatabase } from '../data/database/AppDatabase';
@@ -1052,6 +1053,7 @@ export struct BookSourcePage {
         }.height(52).padding({ left: 16, right: 12 }).width('100%').backgroundColor(ThemeColors.surface(this.isDark))
       }
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
+      QysgRuntimeHostComponent()
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
       .onClick(() => { this.showSortMenu = false; })
   }

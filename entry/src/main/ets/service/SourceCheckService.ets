@@ -1,3 +1,4 @@
+import { globalQysgSourceAdapter } from '../engine/qysg/QysgSourceAdapter';
 import notificationManager from '@ohos.notificationManager';
 import wantAgent from '@ohos.app.ability.wantAgent';
 import { common } from '@kit.AbilityKit';
@@ -105,7 +106,7 @@ export class SourceCheckService {
         if (source) sources.push(source);
       }
       this.snapshot_.total = sources.length;
-      this.checker_ = new SourceChecker(config);
+      this.checker_ = new SourceChecker(config, globalQysgSourceAdapter);
       await this.checker_.checkSources(sources,
         (completed: number, total: number, result: CheckResult): void => {
           this.snapshot_.completed = completed;

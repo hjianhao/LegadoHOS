@@ -1,3 +1,5 @@
+import { globalQysgSourceAdapter } from '../engine/qysg/QysgSourceAdapter';
+import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
 import { AppDatabase } from '../data/database/AppDatabase';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { BookSource } from '../model/BookSource';
@@ -117,7 +119,7 @@ export struct BookSourceDebugPage {
       keyword: this.keyword.trim(), timeout: 30000,
       checkSearch: true, checkDiscovery: false, checkInfo: true,
       checkCategory: true, checkContent: true, concurrency: 1
-    });
+    }, globalQysgSourceAdapter);
     try {
       const result: CheckResult = await this.checker.checkSource(this.source);
       this.details = result.details.slice();
@@ -265,6 +267,7 @@ export struct BookSourceDebugPage {
         }.layoutWeight(1).padding({ left: 16, right: 16, bottom: 16 })
       }
       WebViewEngine().width(1).height(1).visibility(Visibility.Hidden)
+      QysgRuntimeHostComponent()
     }.width('100%').height('100%').backgroundColor(ThemeColors.background(this.isDark))
   }
 }

@@ -1,8 +1,9 @@
 /** Android Legado compatible book-source validity checker. */
-import { BookSource, BookSourceBookInfo, BookSourceChapter, BookSourceType, isImageSource } from '../model/BookSource';
+import { BookSource, BookSourceBookInfo, BookSourceChapter, BookSourceFormat, BookSourceType, isImageSource } from '../model/BookSource';
 import { SearchResult } from '../model/SearchResult';
 import { globalSourceExecutor, isExplicitlyDisabledSearchTemplate } from '../engine/source/SourceExecutor';
 import { JsEvalContext, JsExpressionEvaluator } from '../engine/source/JsExpressionEvaluator';
+import { SourceAdapter } from '../engine/source/SourceAdapter';
 import { NetUtil } from '../util/NetUtil';
 
 export interface CheckConfig {
@@ -177,7 +178,7 @@ export class SourceChecker {
   private results_: Map<string, CheckResult> = new Map();
   private onStage_?: (progress: CheckStageProgress) => void;
 
-  constructor(config?: Partial<CheckConfig>) {
+  constructor(config?: Partial<CheckConfig>, private qysgAdapter?: SourceAdapter) {
     this.config = normalizeCheckConfig({
       keyword: config?.keyword ?? '我的',
       timeout: config?.timeout ?? 180000,
@@ -325,7 +326,8 @@ export class SourceChecker {
 
     await runChannel('搜索', async (): Promise<void> => {
       if (this.config.checkSearch) {
-        if (!source.ruleSearchUrl.trim() || isSearchCheckDisabled(source)) {
+        if (source.sourceFormat !== BookSourceFormat.QYSG &&
+          (!source.ruleSearchUrl.trim() || isSearchCheckDisabled(source))) {
           const reason = source.ruleSearchUrl.trim() ? '书源已明确关闭搜索' : '搜索链接规则为空';
           this.addDetail_(source, details, { name: '搜索', passed: true, skipped: true,
             message: '跳过：' + reason, duration: 0 });
@@ -348,6 +350,10 @@ export class SourceChecker {
 
     await runChannel('发现', async (): Promise<void> => {
       if (this.config.checkDiscovery) {
+        if (source.sourceFormat === BookSourceFormat.QYSG) {
+          await this.checkQysgDiscovery_(source, deadline, details, invalidGroups, errors);
+          return;
+        }
         const exploreUrl = await this.runBeforeDeadline_(this.getFirstExploreUrl_(source), deadline,
           source.checkRequestGroup || '');
         if (!exploreUrl) {
@@ -381,6 +387,11 @@ export class SourceChecker {
 
     this.downgradeEmptySearch_(source, details, invalidGroups);
 
+    if (!details.some((item: CheckDetail): boolean => !item.skipped)) {
+      this.addDetail_(source, details, { name: '校验', passed: false,
+        message: '未执行任何校验，请检查书源能力和校验选项', duration: 0 });
+      invalidGroups.push('无可执行校验');
+    }
     const uniqueInvalid = Array.from(new Set(invalidGroups));
     const failed = details.filter((item: CheckDetail): boolean => !item.passed).length;
     const totalChecks = details.filter((item: CheckDetail): boolean => !item.skipped).length;
@@ -399,11 +410,63 @@ export class SourceChecker {
     return result;
   }
 
+  private getQysgAdapter_(): SourceAdapter {
+    if (!this.qysgAdapter) throw new Error('轻悦时光校验运行时未配置');
+    return this.qysgAdapter;
+  }
+
+  private async checkQysgDiscovery_(source: BookSource, deadline: number, details: CheckDetail[],
+    invalidGroups: string[], errors: string[]): Promise<void> {
+    const start = Date.now();
+    const items = await this.runBeforeDeadline_(this.getQysgAdapter_().getExploreItems(source), deadline,
+      source.checkRequestGroup || '');
+    const item = items.find((entry): boolean => entry.kind === 'books');
+    if (!item) {
+      this.addDetail_(source, details, { name: '发现', passed: true, skipped: true,
+        message: items.some((entry): boolean => entry.kind === 'webview')
+          ? '跳过：发现需要手动打开网页验证' : '跳过：未提供可校验的发现分类', duration: Date.now() - start });
+      return;
+    }
+    const results = await this.runBeforeDeadline_(this.getQysgAdapter_().explore(source, item, 1), deadline,
+      source.checkRequestGroup || '');
+    const result = selectCheckResult(source, results);
+    this.addDetail_(source, details, { name: '发现', passed: !!result,
+      message: result ? '成功返回 ' + results.length + ' 条结果' : '发现无有效书籍', duration: Date.now() - start });
+    if (!result) {
+      invalidGroups.push('发现失效');
+      return;
+    }
+    await this.checkBookPath_(source, result, '发现', deadline, details, invalidGroups, errors, results);
+  }
+
+  private async getCheckBookInfo_(source: BookSource, bookUrl: string): Promise<BookSourceBookInfo> {
+    return source.sourceFormat === BookSourceFormat.QYSG
+      ? await this.getQysgAdapter_().getBookInfo(source, bookUrl)
+      : await globalSourceExecutor.getBookInfo(source, bookUrl);
+  }
+
+  private async getCheckToc_(source: BookSource, tocUrl: string, bookUrl: string): Promise<BookSourceChapter[]> {
+    return source.sourceFormat === BookSourceFormat.QYSG
+      ? await this.getQysgAdapter_().getToc(source, tocUrl, bookUrl)
+      : await globalSourceExecutor.getToc(source, tocUrl, undefined, 3);
+  }
+
+  private async getCheckContent_(source: BookSource, chapterUrl: string, bookUrl: string,
+    nextChapterUrl?: string): Promise<string> {
+    if (source.sourceFormat === BookSourceFormat.QYSG) {
+      const content = await this.getQysgAdapter_().getContent(source, chapterUrl, bookUrl);
+      return content.raw;
+    }
+    return await globalSourceExecutor.getContent(source, chapterUrl, bookUrl, isImageSource(source), nextChapterUrl);
+  }
+
   private async checkList_(source: BookSource, name: string, keyword: string, deadline: number,
     details: CheckDetail[], errors: string[]): Promise<SearchResult[]> {
     const start = Date.now();
     try {
-      const results = await this.runBeforeDeadline_(globalSourceExecutor.searchForCheck(keyword, source), deadline,
+      const results = await this.runBeforeDeadline_(source.sourceFormat === BookSourceFormat.QYSG
+        ? this.getQysgAdapter_().search(source, keyword, 1, () => this.cancelled_ || Date.now() >= deadline)
+        : globalSourceExecutor.searchForCheck(keyword, source), deadline,
         source.checkRequestGroup || '');
       const passed = results.length > 0;
       this.addDetail_(source, details, { name: name, passed: passed,
@@ -426,13 +489,16 @@ export class SourceChecker {
     const detailName = channel + '详情';
     const infoStart = Date.now();
     try {
-      state.info = await this.runBeforeDeadline_(globalSourceExecutor.getBookInfo(source, result.noteUrl), deadline,
+      state.info = await this.runBeforeDeadline_(this.getCheckBookInfo_(source, result.noteUrl), deadline,
         source.checkRequestGroup || '');
       const info = state.info;
-      const parsed = !!(info.name || info.author || info.tocUrl || info.introduce);
+      const parsed = source.sourceFormat === BookSourceFormat.QYSG
+        ? !!(info.name || info.author || info.introduce)
+        : !!(info.name || info.author || info.tocUrl || info.introduce);
       // Android can continue directly from a search/explore Book object when the source has no
       // detail rules (or only @get cached fields). Directory/content are the decisive checks.
-      const passed = parsed || !!(result.name || result.author || result.introduce);
+      const passed = parsed || (source.sourceFormat !== BookSourceFormat.QYSG &&
+        !!(result.name || result.author || result.introduce));
       const parsedSummary = [info.name, info.author, info.wordCount]
         .filter((v: string | undefined): boolean => !!v && !/^(?:字|章|页|万字)$/.test(v.trim())).join(' · ');
       const listSummary = [result.name, result.author, result.wordCount]
@@ -466,15 +532,15 @@ export class SourceChecker {
       // 校验只需要确认目录规则和正文入口可用，不应因某本书有几十个分页而
       // 把整源校验耗尽。正常阅读仍由 getToc 默认抓取全部分页。
       const checkTocPageLimit = 3;
-      const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(
-        source, tocUrl, undefined, checkTocPageLimit), deadline,
+      const toc = await this.runBeforeDeadline_(this.getCheckToc_(source, tocUrl, result.noteUrl), deadline,
         source.checkRequestGroup || '');
       // 保留少量候选章节：站点正文页可能只对最新章节注入广告/验证页，
       // 校验不应因单个章节瞬态为空而判定整条发现链路失效。
       state.chapters = selectReadableChapters(toc, 3);
       const passed = state.chapters.length > 0;
       this.addDetail_(source, details, { name: tocName, passed: passed,
-        message: passed ? '读取前 ' + checkTocPageLimit + ' 页，共解析 ' + toc.length + ' 章' : '目录为空',
+        message: passed ? (source.sourceFormat === BookSourceFormat.QYSG ? '解析 ' + toc.length + ' 章' :
+          '读取前 ' + checkTocPageLimit + ' 页，共解析 ' + toc.length + ' 章') : '目录为空',
         duration: Date.now() - tocStart });
       if (!passed) invalidGroups.push(channel + '目录失效');
     } catch (error) {
@@ -497,8 +563,7 @@ export class SourceChecker {
         // 随后再换下一章，避免把校验时间耗在单个坏链接上。
         const attempts = index === 0 ? 2 : 1;
         for (let attempt = 0; attempt < attempts && !content.trim(); attempt++) {
-          content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
-            source, chapter.url, result.noteUrl, isImageSource(source), nextChapterUrl), deadline,
+          content = await this.runBeforeDeadline_(this.getCheckContent_(source, chapter.url, result.noteUrl, nextChapterUrl), deadline,
             source.checkRequestGroup || '');
         }
       }
@@ -536,17 +601,15 @@ export class SourceChecker {
       const candidate = alternatives[index];
       if (isUnresolvedResult(candidate) || candidate.noteUrl.trim() === original.noteUrl.trim()) continue;
       try {
-        const info = await this.runBeforeDeadline_(globalSourceExecutor.getBookInfo(source, candidate.noteUrl), deadline,
+        const info = await this.runBeforeDeadline_(this.getCheckBookInfo_(source, candidate.noteUrl), deadline,
           source.checkRequestGroup || '');
         const tocUrl = info.tocUrl || candidate.noteUrl;
-        const toc = await this.runBeforeDeadline_(globalSourceExecutor.getToc(
-          source, tocUrl, undefined, 3), deadline, source.checkRequestGroup || '');
+        const toc = await this.runBeforeDeadline_(this.getCheckToc_(source, tocUrl, candidate.noteUrl), deadline, source.checkRequestGroup || '');
         const chapters = selectReadableChapters(toc, 3);
         for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex++) {
           const chapter = chapters[chapterIndex];
           const nextChapterUrl = chapters[chapterIndex + 1]?.url;
-          const content = await this.runBeforeDeadline_(globalSourceExecutor.getContent(
-            source, chapter.url, candidate.noteUrl, isImageSource(source), nextChapterUrl), deadline,
+          const content = await this.runBeforeDeadline_(this.getCheckContent_(source, chapter.url, candidate.noteUrl, nextChapterUrl), deadline,
             source.checkRequestGroup || '');
           if (content.trim()) return { content: content, result: candidate };
         }
