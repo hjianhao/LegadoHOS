@@ -132,7 +132,7 @@ cd <repo-root>
 
 ### 文档说明
 'doc/source.md' : 书源规则
-'doc/verified_source.json' : 用于测试过的书源配置
+'doc/legado_source.json' : 用于测试过的 Legado 书源配置
 'doc/ref' : 参考文档
 'doc/modules' : 具体功能的设计
 
