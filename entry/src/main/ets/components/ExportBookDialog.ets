@@ -9,6 +9,7 @@ import { BookCacheService } from '../service/BookCacheService';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import picker from '@ohos.file.picker';
+import fileIo from '@ohos.file.fs';
 
 @Component
 export struct ExportBookDialog {
@@ -35,6 +36,10 @@ export struct ExportBookDialog {
   @State exportFormat: string = 'txt';
   /** 缺失章节策略：download = 下载后导出，cachedOnly = 仅导出已缓存 */
   @State missingMode: string = 'download';
+  /** 是否将漫画 EPUB 分卷导出；默认开启，关闭后整本输出一个文件。 */
+  @State splitEpub: boolean = true;
+  /** 漫画 EPUB 拆分大小：每个文件包含的章节数，默认每 1 章一个文件。 */
+  @State epubChapterSizeText: string = '1';
   @State includeTitle: boolean = true;
   @State useReplace: boolean = true;
   @State exporting: boolean = false;
@@ -129,6 +134,31 @@ export struct ExportBookDialog {
       if (!this.statsLoading && this.totalChapters > 0 && this.cachedChapters < this.totalChapters) {
         this.buildModeOption('download', '下载缺失章节后导出')
         this.buildModeOption('cachedOnly', '仅导出已缓存章节（跳过 ' + (this.totalChapters - this.cachedChapters) + ' 章）')
+      }
+
+      if (this.isManga && this.exportFormat === 'epub') {
+        this.buildSwitchRow('分卷导出', this.splitEpub, (v: boolean): void => { this.splitEpub = v; })
+        if (this.splitEpub) {
+          Row() {
+            Text('每 N 章（卷）导出一个 EPUB')
+              .fontSize(14).fontColor(ThemeColors.onSurface(this.isDark)).layoutWeight(1)
+            TextInput({ text: this.epubChapterSizeText, placeholder: '1' })
+              .width(72).height(40).fontSize(14)
+              .type(InputType.Number)
+              .backgroundColor(ThemeColors.surfaceVariant(this.isDark))
+              .fontColor(ThemeColors.onSurface(this.isDark))
+              .placeholderColor(ThemeColors.secondaryText(this.isDark))
+              .onChange((value: string): void => { this.epubChapterSizeText = value; })
+          }
+          .width('100%').padding({ left: 16, right: 16, top: 2, bottom: 2 })
+          Text('默认每 1 章一个文件；拆分为多个文件时请选择保存位置，文件名会自动添加序号。')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+            .padding({ left: 16, right: 16, bottom: 6 }).alignSelf(ItemAlign.Start)
+        } else {
+          Text('关闭后整本漫画导出为一个 EPUB 文件。')
+            .fontSize(12).fontColor(ThemeColors.secondaryText(this.isDark))
+            .padding({ left: 16, right: 16, bottom: 6 }).alignSelf(ItemAlign.Start)
+        }
       }
 
       if (this.exportFormat === 'txt') {
@@ -243,15 +273,72 @@ export struct ExportBookDialog {
     const isEpub = this.exportFormat === 'epub';
     const extension = isZip ? '.zip' : (isEpub ? '.epub' : '.txt');
     const fileName = BookExportService.suggestFileName(book, extension);
+    const epubChapterSize = this.isManga && isEpub && this.splitEpub ? this.parseEpubChapterSize_() : 0;
+    const shouldSplitEpub = this.isManga && isEpub && this.splitEpub &&
+      epubChapterSize < Math.max(1, this.totalChapters);
 
     let uri = '';
+    let overwriteExisting = false;
+    let epubOutputUris: string[] | undefined;
     try {
       const context = this.getUIContext().getHostContext()!;
-      const uris = await new picker.DocumentViewPicker(context).save({ newFileNames: [fileName] });
-      if (!uris || uris.length === 0) return;
-      uri = uris[0];
+      if (shouldSplitEpub) {
+        // 让 Picker 直接为每个分卷返回文件 URI。不要先保存临时文件再推导
+        // 父目录：Picker 授权的是文件 URI，父目录和同级文件未必可由 fs.mkdir
+        // 访问，尤其是 datashare/cloud 等文件提供方。
+        const partCount = Math.ceil(Math.max(1, this.totalChapters) / epubChapterSize);
+        const partNames: string[] = [];
+        for (let i = 1; i <= partCount; i++) {
+          partNames.push(BookExportService.suggestSplitFileName(book, extension, i));
+        }
+        const splitSaveOptions = new picker.DocumentSaveOptions();
+        splitSaveOptions.newFileNames = partNames;
+        // false 不预创建空文件，但返回的 URI 具备临时创建/删除权限，导出服务
+        // 可以直接以 CREATE|WRITE_ONLY|TRUNC 打开，避免留下占位文件。
+        splitSaveOptions.autoCreateEmptyFile = false;
+        const uris = await new picker.DocumentViewPicker(context).save(splitSaveOptions);
+        if (!uris || uris.length === 0) return;
+        if (uris.length < partNames.length) {
+          throw new Error('当前设备的文件选择器未返回完整的分卷文件位置，请关闭分卷导出后重试');
+        }
+        epubOutputUris = uris.slice(0, partNames.length);
+        uri = epubOutputUris[0];
+        const existingPartNames = partNames.filter((name: string, index: number): boolean =>
+          this.fileExists_(epubOutputUris![index]));
+        if (existingPartNames.length > 0) {
+          const overwriteTarget = existingPartNames.length === 1
+            ? existingPartNames[0] : '已有 ' + existingPartNames.length + ' 个分卷文件';
+          const resultIndex = await this.confirmOverwrite_(overwriteTarget);
+          if (resultIndex !== 1) return;
+          overwriteExisting = true;
+        }
+      } else {
+        const saveOptions = new picker.DocumentSaveOptions();
+        saveOptions.newFileNames = [fileName];
+        // 不让 Picker 先创建空文件，否则后续以 CREATE|TRUNC 打开时会被部分
+        // 文件提供方误判为“重名文件”。文件由导出服务在确认后创建/截断。
+        saveOptions.autoCreateEmptyFile = false;
+        try {
+          const uris = await new picker.DocumentViewPicker(context).save(saveOptions);
+          if (!uris || uris.length === 0) return;
+          uri = uris[0];
+        } catch (e) {
+          if (!this.isDuplicateFileError_(e)) throw e as Error;
+          uri = await this.chooseOverwriteFile_(fileName);
+          if (!uri) return;
+          overwriteExisting = true;
+        }
+
+        // autoCreateEmptyFile=false 返回的 URI 既可能指向新文件，也可能指向
+        // 已存在的文件；后者必须先取得用户明确的覆盖确认。
+        if (!overwriteExisting && this.fileExists_(uri)) {
+          const resultIndex = await this.confirmOverwrite_(fileName);
+          if (resultIndex !== 1) return;
+          overwriteExisting = true;
+        }
+      }
     } catch (e) {
-      UiUtil.showToast(this.getUIContext(), { message: '选择保存位置失败', duration: 1500 });
+      UiUtil.showToast(this.getUIContext(), { message: '选择保存位置失败：' + String(e), duration: 1800 });
       return;
     }
 
@@ -263,6 +350,10 @@ export struct ExportBookDialog {
       includeTitle: this.includeTitle,
       useReplace: this.useReplace,
       downloadMissing: this.missingMode === 'download',
+      overwriteExisting: overwriteExisting,
+      epubChapterSize: shouldSplitEpub ? epubChapterSize : undefined,
+      epubSplitOutput: shouldSplitEpub,
+      epubOutputUris: shouldSplitEpub ? epubOutputUris : undefined,
       context: UiUtil.getHostContext(this.getUIContext()),
       onProgress: (phase: 'download' | 'write', done: number, total: number, message: string): void => {
         this.progressPercent = Math.round((done / Math.max(1, total)) * 100);
@@ -278,11 +369,100 @@ export struct ExportBookDialog {
     this.exporting = false;
     this.showResult = true;
     if (result.success) {
-      this.resultMsg = '已导出 ' + result.exported + ' 章到「' + result.fileName + '」'
+      const fileCount = result.fileNames && result.fileNames.length > 1 ? result.fileNames.length : 1;
+      const targetText = fileCount > 1
+        ? '已导出 ' + result.exported + ' 章到 ' + fileCount + ' 个 EPUB 文件'
+        : '已导出 ' + result.exported + ' 章到「' + result.fileName + '」';
+      this.resultMsg = targetText
         + (result.exportedImages && result.exportedImages > 0 ? '（' + result.exportedImages + ' 张图片）' : '')
         + (result.skipped > 0 ? '\n跳过未缓存章节 ' + result.skipped + ' 章' : '');
     } else {
       this.resultMsg = '导出失败：' + (result.error || '未知错误');
     }
   }
+
+  private parseEpubChapterSize_(): number {
+    const value = parseInt(this.epubChapterSizeText.trim());
+    if (!Number.isFinite(value) || value < 1) return 1;
+    return Math.min(value, 99999);
+  }
+
+  /** 判断文件 URI 或路径是否已经对应一个文件。 */
+  private fileExists_(uri: string): boolean {
+    let file: fileIo.File | null = null;
+    try {
+      file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+      return true;
+    } catch (_e) {
+      return false;
+    } finally {
+      if (file) {
+        try { fileIo.closeSync(file); } catch (_e) { /* ignore */ }
+      }
+    }
+  }
+
+  /** 对已存在的目标文件进行覆盖确认。 */
+  private async confirmOverwrite_(fileName: string): Promise<number> {
+    const result = await UiUtil.showDialog(this.getUIContext(), {
+      title: '文件已存在',
+      message: fileName + ' 已存在，是否覆盖原文件？',
+      buttons: [
+        { text: '取消', color: ThemeColors.secondaryText(this.isDark) },
+        { text: '覆盖', color: ThemeColors.error(this.isDark) },
+      ],
+    });
+    return result.index;
+  }
+
+  /** 文件选择器 save() 可能直接以“重名”失败，此时让用户选中要覆盖的原文件。 */
+  private async chooseOverwriteFile_(fileName: string): Promise<string> {
+    const resultIndex = await this.confirmOverwrite_(fileName);
+    if (resultIndex !== 1) return '';
+    try {
+      const options = new picker.DocumentSelectOptions();
+      const extension = fileName.substring(fileName.lastIndexOf('.'));
+      if (extension && extension.length <= 12) options.fileSuffixFilters = [extension];
+      options.maxSelectNumber = 1;
+      const context = this.getUIContext().getHostContext()!;
+      const uris = await new picker.DocumentViewPicker(context).select(options);
+      if (!uris || uris.length === 0) return '';
+      const selectedName = this.fileNameFromUri_(uris[0]);
+      // datashare URI 在部分设备上不携带真实文件名，因此仅在能可靠解析时校验。
+      if (selectedName && /\.[a-z0-9]{1,8}$/i.test(selectedName) && selectedName !== fileName) {
+        UiUtil.showToast(this.getUIContext(), {
+          message: '请选择同名文件：' + fileName, duration: 2200,
+        });
+        return '';
+      }
+      return uris[0];
+    } catch (e) {
+      UiUtil.showToast(this.getUIContext(), { message: '选择覆盖文件失败：' + String(e), duration: 2200 });
+      return '';
+    }
+  }
+
+  /** 兼容不同设备对“文件已存在”错误的 code/message 表达。 */
+  private isDuplicateFileError_(error: Error): boolean {
+    const raw = error as Object as Record<string, Object>;
+    const code = String(raw['code'] || raw['errorCode'] || '');
+    const message = [
+      error.message || '', String(raw['message'] || ''), String(raw['name'] || ''),
+      String(raw['details'] || ''), String(error)
+    ].join(' ');
+    return code === '13900015' || /\b13900015\b/.test(message) ||
+      /(already\s+exists|file\s+exists|same\s+name|duplicate|conflict|重名|同名|已存在)/i.test(message);
+  }
+
+  private fileNameFromUri_(uri: string): string {
+    const withoutQuery = (uri || '').split(/[?#]/)[0];
+    const rawName = withoutQuery.substring(withoutQuery.lastIndexOf('/') + 1);
+    try {
+      const decoded = decodeURIComponent(rawName);
+      return decoded.substring(decoded.lastIndexOf('/') + 1);
+    } catch (_e) {
+      return rawName;
+    }
+  }
+
 }

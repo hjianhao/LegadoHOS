@@ -13,6 +13,7 @@ import {
   decodeQysgArray,
   decodeQysgObject,
   decodeQysgValue,
+  normalizeQysgTomatoTocUrl,
 } from './QysgSourceCodec';
 
 function value(object: Record<string, Object>, ...keys: string[]): string {
@@ -82,7 +83,9 @@ export function mapQysgBooks(raw: string, source: BookSource): SearchResult[] {
 
 export function mapQysgInfo(raw: string, source: BookSource, requestedUrl: string): BookSourceBookInfo {
   const item = decodeQysgObject(raw);
-  const tocUrl = qysgIdentityValue(source.sourceUrl, value(item, 'tocUrl', 'tocURL', 'chapterUrl')) || requestedUrl;
+  const tocUrl = normalizeQysgTomatoTocUrl(
+    qysgIdentityValue(source.sourceUrl, value(item, 'tocUrl', 'tocURL', 'chapterUrl')) || requestedUrl
+  );
   const type = qysgContentType(item['type'], source.sourceType);
   const info: BookSourceBookInfo = {
     name: value(item, 'name', 'bookName', 'title'),

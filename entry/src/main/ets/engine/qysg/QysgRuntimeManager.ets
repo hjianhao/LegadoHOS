@@ -10,11 +10,12 @@ import { AppDatabase } from '../../data/database/AppDatabase';
 import { CacheTable } from '../../data/database/CacheTable';
 import { BookSource } from '../../model/BookSource';
 import { CookieStore } from '../../util/CookieStore';
-import { NetUtil } from '../../util/NetUtil';
-import { decodeQysgSource, QysgSourceDefinition } from './QysgSourceCodec';
+import { NetUtil, NetUtilHttpResponse } from '../../util/NetUtil';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../web/WebViewFetcher';
+import { resolveQysgSource, QysgSourceDefinition } from './QysgSourceCodec';
 
 export interface QysgRuntimeHost {
-  invoke(source: QysgSourceDefinition, method: string, args: Object[]): Promise<string>;
+  invoke(source: QysgSourceDefinition, method: string, args: Object[], isAborted?: () => boolean): Promise<string>;
 }
 
 interface PendingOperation {
@@ -66,6 +67,65 @@ function encodeBytes(value: ArrayBuffer): string {
   }
 }
 
+function encodeTextBytes(value: string): ArrayBuffer {
+  try {
+    const encoded = new util.TextEncoder().encodeInto(value || '');
+    const copy = new Uint8Array(encoded.length);
+    copy.set(encoded);
+    return copy.buffer;
+  } catch (_e) {
+    return new ArrayBuffer(0);
+  }
+}
+
+function isCloudflareChallengeResponse(response: NetUtilHttpResponse): boolean {
+  const data = response.data || '';
+  const headers = response.headers || {};
+  const headerNames = Object.keys(headers).map((key: string): string => key.toLowerCase());
+  const hasCloudflareHeader = headerNames.includes('cf-mitigated') || headerNames.includes('cf-ray');
+  const hasExplicitChallengeHeader = Object.keys(headers).some((key: string): boolean => {
+    if (key.toLowerCase() !== 'cf-mitigated') return false;
+    return (headers[key] || []).some((value: string): boolean =>
+      String(value || '').trim().toLowerCase() === 'challenge');
+  });
+  if (hasExplicitChallengeHeader ||
+    ((response.statusCode === 403 || response.statusCode === 503) && hasCloudflareHeader)) {
+    return true;
+  }
+
+  // 411 是服务端要求 Content-Length 的协议错误，不是 Cloudflare 挑战。
+  // 旧版的通用 HTML 启发式会把其中的 WAF/JSD 脚本误认成挑战，从而在
+  // 每次搜索（以及离开搜索页后的分页请求）打开验证 WebView。
+  if (response.statusCode === 411) return false;
+
+  // JSD 是 Cloudflare 注入正常 HTML 的不可见检测脚本；爱看小说的搜索/正文
+  // 响应是 200，但 HTML 尾部同样带有 JSD 标记。只有显式挑战头、独立挑战
+  // 标记或错误状态下才把它作为 Cloudflare 挑战，避免每次搜索都弹交互 WebView。
+  const hasJsdMarker = /__CF\$cv\$params|cdn-cgi\/challenge-platform\/scripts\/jsd\/main\.js/i
+    .test(data);
+  const hasIndependentChallengeMarker = /_cf_chl_opt|cf-turnstile|cf-chl-widget|challenge-form|checking your browser|just a moment|cloudflare ray id|访问验证/i
+    .test(data);
+  const isSuccessfulHtmlResponse = response.statusCode >= 200 && response.statusCode < 400;
+  if (hasJsdMarker && isSuccessfulHtmlResponse && !hasIndependentChallengeMarker) return false;
+  if (!data.trim() || !WebViewFetcher.isInteractiveChallengeHtml(data)) return false;
+  // 没有 Cloudflare 响应头时，仅接受正文中明确的挑战文案/控件；JSD
+  // 静默脚本或普通错误页不能单独触发前台交互窗口。
+  return hasCloudflareHeader || hasIndependentChallengeMarker;
+}
+
+function toQysgHttpResponse(response: NetUtilHttpResponse, method: string, data: string = response.data,
+  statusCode: number = response.statusCode, statusMessage: string = response.statusMessage): QysgHttpResponse {
+  const responseBody = data === response.data ? response.body : encodeTextBytes(data);
+  return {
+    method: method.toLowerCase(),
+    body: encodeBytes(responseBody),
+    headers: response.headers,
+    statusCode: statusCode,
+    statusMessage: statusMessage,
+    data: data,
+  };
+}
+
 function decodeBase64(value: string): string {
   try {
     let normalized = (value || '').replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
@@ -80,8 +140,13 @@ function decodeBase64(value: string): string {
 function parseHeaders(value: Object): Record<string, string> {
   if (!value) return {};
   try {
-    const parsed: Object | string = typeof value === 'string' ? JSON.parse(value as string) : value;
-    if (!parsed || typeof parsed !== 'object') return {};
+    // 轻悦时光 Http.Get/Head/Post 会再次 stringify 已经是 JSON 字符串的
+    // headers（企鹅阅读详情即如此），需要解开两层才能保留 Referer 等头。
+    let parsed: Object | string = value;
+    for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth++) {
+      parsed = JSON.parse(parsed as string) as Object | string;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const out: Record<string, string> = {};
     Object.keys(parsed as Record<string, Object>).forEach((key: string): void => {
       const item = (parsed as Record<string, Object>)[key];
@@ -110,14 +175,42 @@ function qysgHtmlToText(value: string): string {
     .replace(/&gt;/gi, '>');
 }
 
+/** 从应用 rawfile 读取内置 jQuery；读取失败时仍由最小兼容层兜底。 */
+function loadBundledQysgJquery(context: Context | null): string {
+  if (!context) return '';
+  try {
+    const bytes = context.resourceManager.getRawFileContentSync('qysg/jquery-3.7.1.min.js');
+    const script = new util.TextDecoder('utf-8', { fatal: false }).decodeToString(bytes);
+    if (!script || script.indexOf('jQuery v3.7.1') < 0) {
+      console.warn('[QysgRuntime] bundled jQuery resource is empty or unexpected');
+      return '';
+    }
+    return script;
+  } catch (error) {
+    console.warn('[QysgRuntime] bundled jQuery load failed:', (error as Error).message);
+    return '';
+  }
+}
+
 /** 原生侧 qysg bridge。方法签名保留足够参数，适配 callHandler 的多参数调用。 */
 export class QysgNativeBridge {
   private sourceUrl_: string = '';
+  private sourceName_: string = '';
   private context_: Context | null;
   private pending_: Map<string, PendingOperation>;
   private emitResult_: (requestId: string, payload: string) => void;
   private webviewHandler_: ((args: Object[]) => Promise<string>) | null;
   private cookieEnabled_: boolean = true;
+  /** 当前 qysg 生命周期调用名，用于区分搜索 POST 与正文/目录请求。 */
+  private operation_: string = '';
+  /** 同一生命周期内的目录分页可能并发撞上同一个 WAF；只允许一个验证窗口。 */
+  private interactiveChallengePromise_: Promise<string> | null = null;
+  /** 当前验证窗口对应的原始 URL；共享窗口后各请求仍需重放自己的 URL。 */
+  private interactiveChallengeUrl_: string = '';
+  /** 验证页已返回正常 HTML 后的短暂冷却，避免短结果列表触发第二次挑战。 */
+  private interactiveVerificationAt_: number = 0;
+  /** 页面离开后仍可能完成的旧搜索请求；此检查器禁止它再打开交互验证窗口。 */
+  private isAborted_: (() => boolean) | null = null;
 
   constructor(context: Context | null, pending: Map<string, PendingOperation>,
     emitResult: (requestId: string, payload: string) => void,
@@ -132,8 +225,26 @@ export class QysgNativeBridge {
     this.sourceUrl_ = sourceUrl;
   }
 
+  setSourceName(sourceName: string): void {
+    this.sourceName_ = sourceName || '';
+  }
+
   resetForSource(): void {
+    this.sourceName_ = '';
     this.cookieEnabled_ = true;
+    this.operation_ = '';
+    this.interactiveChallengePromise_ = null;
+    this.interactiveChallengeUrl_ = '';
+    this.interactiveVerificationAt_ = 0;
+    this.isAborted_ = null;
+  }
+
+  setOperation(operation: string): void {
+    this.operation_ = (operation || '').toLowerCase();
+  }
+
+  setAbortChecker(isAborted?: () => boolean): void {
+    this.isAborted_ = isAborted || null;
   }
 
   /** qysg JS → ArkTS：完成一个异步生命周期调用。 */
@@ -226,7 +337,9 @@ export class QysgNativeBridge {
       case 'base64decode':
         return decodeBase64(String(args[0] || ''));
       case 'utf8ToGbkUrlEncoded':
-        return encodeURIComponent(String(args[0] || ''));
+        // qysg 书源会把该结果直接放入 GBK 表单的百分号编码中；不能用
+        // encodeURIComponent（UTF-8），否则旧站会把关键词解码成乱码并返回空页。
+        return NetUtil.encodeUrlComponent(String(args[0] || ''), 'gbk');
       case 'toSimplified':
       case 'toTraditional':
         // qysg 将这两个能力作为可选文本服务。HOS 尚未内置繁简转换库时，
@@ -351,19 +464,138 @@ export class QysgNativeBridge {
       headers['Content-Type'] = contentType;
     }
     if (!this.cookieEnabled_) headers['X-Legado-Disable-Cookie'] = '1';
+    if (this.isAborted_ && this.isAborted_()) {
+      console.info('[QysgBridge] skip aborted ' + method + ' ' + url);
+      return {
+        method: method.toLowerCase(), body: '', headers: {}, statusCode: 499,
+        statusMessage: 'Canceled', data: ''
+      };
+    }
     console.info('[QysgBridge] http ' + method + ' ' + url + ' follow=' + followRedirects);
     const response = await NetUtil.httpDetailed(method, url, body, headers,
       NetUtil.getDefaultTimeout(), followRedirects);
     console.info('[QysgBridge] http done status=' + response.statusCode +
       ' bytes=' + response.data.length.toString());
-    return {
-      method: method.toLowerCase(),
-      body: encodeBytes(response.body),
-      headers: response.headers,
-      statusCode: response.statusCode,
-      statusMessage: response.statusMessage,
-      data: response.data,
-    };
+    if (response.statusCode === 411) {
+      console.warn('[QysgBridge] HTTP 411 is not a Cloudflare challenge; skip interactive WebView');
+    }
+    return await this.resolveInteractiveChallenge_(response, method, url, body, headers, followRedirects);
+  }
+
+  /**
+   * qysg 的 Http.Get/Post 不经过 SourceExecutor，原先会把 Cloudflare 403
+   * 原样交给书源脚本；大多数 qysg 脚本随后 catch 并返回空数组，界面看起来
+   * 就像“搜索没有结果”。复用全局交互 WebView 完成挑战，并把用户验证后
+   * 的页面作为本次 HTTP 响应交回 qysg 解析器。
+   */
+  private async resolveInteractiveChallenge_(response: NetUtilHttpResponse, method: string,
+    url: string, body: string, headers: Record<string, string>, followRedirects: boolean): Promise<QysgHttpResponse> {
+    if (this.isAborted_ && this.isAborted_()) {
+      console.info('[QysgBridge] skip interactive challenge for aborted ' + method + ' ' + url);
+      return toQysgHttpResponse(response, method);
+    }
+    if (!isCloudflareChallengeResponse(response) || !WebViewFetcher.interactiveFetcher) {
+      return toQysgHttpResponse(response, method);
+    }
+
+    // 搜索结果较少时 ArkUI 的 onReachEnd 可能在第一页完成后立即请求下一页。
+    // 第一版主的验证 cookie 在 ArkWeb/原生请求之间并不总能即时同步；如果刚
+    // 完成过一次验证就再次遇到挑战，不应立刻再弹一个完全相同的窗口。先给
+    // 原生请求一次机会，仍是挑战时返回当前响应，让分页自然结束。
+    const verificationCooldownMs = 30 * 1000;
+    const recentlyVerified = this.operation_ === 'search' &&
+      this.interactiveVerificationAt_ > 0 &&
+      Date.now() - this.interactiveVerificationAt_ < verificationCooldownMs;
+    if (recentlyVerified && !this.interactiveChallengePromise_) {
+      console.info('[QysgBridge] Reusing recent search verification; skip duplicate WebView');
+      try {
+        const retried = await NetUtil.httpDetailed(method, url, body, headers,
+          NetUtil.getDefaultTimeout(), followRedirects);
+        if (!isCloudflareChallengeResponse(retried)) {
+          console.info('[QysgBridge] Cloudflare cleared on retry after recent verification; bytes=' +
+            retried.data.length.toString());
+          return toQysgHttpResponse(retried, method);
+        }
+      } catch (retryError) {
+        console.warn('[QysgBridge] retry after recent verification failed: ' +
+          ((retryError as Error).message || String(retryError)));
+      }
+      return toQysgHttpResponse(response, method);
+    }
+
+    // qysg HTTP 请求会在验证后由此处重放；使用 challenge 模式只回填表单，
+    // 避免交互窗口先自动提交一次、随后原生重放再次触发站点限频。
+    const purpose = 'challenge';
+    const request: WebViewInteractiveRequest | undefined = method === 'POST' ?
+      { method: 'POST', body: body } : undefined;
+    console.warn('[QysgBridge] Interactive WebView request source=' + this.sourceName_ +
+      ' stage=' + (this.operation_ || 'unknown') +
+      ' reason=cloudflare-challenge purpose=' + purpose + ' url=' + url);
+    try {
+      let interactiveHtml: string = '';
+      let verificationUrl = url;
+      if (this.interactiveChallengePromise_) {
+        verificationUrl = this.interactiveChallengeUrl_ || url;
+        console.info('[QysgBridge] Reusing active Cloudflare verification window for ' + url);
+        interactiveHtml = await this.interactiveChallengePromise_;
+      } else {
+        this.interactiveChallengeUrl_ = url;
+        const pending = WebViewFetcher.fetchInteractive(url, purpose,
+          this.operation_ === 'search' ? '搜索需要完成 Cloudflare 验证' : '页面需要完成 Cloudflare 验证', request);
+        this.interactiveChallengePromise_ = pending;
+        pending.then((): void => {
+          if (this.interactiveChallengePromise_ === pending) {
+            this.interactiveChallengePromise_ = null;
+            this.interactiveChallengeUrl_ = '';
+          }
+        }, (): void => {
+          if (this.interactiveChallengePromise_ === pending) {
+            this.interactiveChallengePromise_ = null;
+            this.interactiveChallengeUrl_ = '';
+          }
+        });
+        interactiveHtml = await pending;
+      }
+      if (this.isAborted_ && this.isAborted_()) {
+        console.info('[QysgBridge] verification finished for an aborted ' + method + '; skip replay');
+        return toQysgHttpResponse(response, method);
+      }
+      if (interactiveHtml && !WebViewFetcher.isInteractiveChallengeHtml(interactiveHtml)) {
+        this.interactiveVerificationAt_ = Date.now();
+        console.info('[QysgBridge] Cloudflare verification completed; duplicate-window cooldown started');
+      }
+      // 验证窗口可能由目录第一页打开，但其余分页也会同时收到 403。验证结束
+      // 后每个请求都重放自己的原始 URL/POST body，不能直接把第一页的 HTML
+      // 当作其它分页的响应，否则目录会被截断或章节链接串页。
+      try {
+        const retried = await NetUtil.httpDetailed(method, url, body, headers,
+          NetUtil.getDefaultTimeout(), followRedirects);
+        if (!isCloudflareChallengeResponse(retried)) {
+          console.info('[QysgBridge] Cloudflare cleared; replayed qysg ' + method.toUpperCase() +
+            ' bytes=' + retried.data.length.toString());
+          return toQysgHttpResponse(retried, method);
+        }
+        console.warn('[QysgBridge] qysg ' + method.toUpperCase() + ' replay still returned a Cloudflare challenge');
+      } catch (retryError) {
+        console.warn('[QysgBridge] qysg ' + method.toUpperCase() + ' replay failed: ' +
+          ((retryError as Error).message || String(retryError)));
+      }
+      // 只有真正发起验证的请求才可使用验证窗口提取到的 HTML；共享窗口的其它
+      // 请求若重放仍失败，应保留各自的挑战响应，不能错误复用别页正文。
+      if (url === verificationUrl && interactiveHtml && !WebViewFetcher.isInteractiveChallengeHtml(interactiveHtml)) {
+        console.info('[QysgBridge] interactive WebView returned bytes=' + interactiveHtml.length.toString());
+        return toQysgHttpResponse(response, method, interactiveHtml, 200, 'OK');
+      }
+      console.warn('[QysgBridge] interactive WebView closed before challenge completed');
+    } catch (error) {
+      console.warn('[QysgBridge] interactive Cloudflare verification failed: ' +
+        ((error as Error).message || String(error)));
+    }
+    // 验证未完成（用户关闭窗口/排队超时/批量校验无人验证）时，不再把挑战页
+    // HTML 原样交给书源脚本：脚本多半会解析出 null 并抛出含义不明的
+    // TypeError（如 null['更多设置']）。抛出明确错误让校验/阅读界面能直接
+    // 报告“需要 Cloudflare 验证”，而不是一串源页面内部的崩溃栈。
+    throw new Error('Cloudflare 验证未完成，请求被拦截：' + url);
   }
 }
 
@@ -386,25 +618,37 @@ export class QysgRuntimeManager {
     return QysgRuntimeManager.hosts_.length > 0;
   }
 
-  static async invoke(source: BookSource, method: string, args: Object[]): Promise<string> {
+  static async invoke(source: BookSource, method: string, args: Object[],
+    isAborted?: () => boolean): Promise<string> {
     console.info('[QysgRuntime] invoke requested source=' + source.sourceName + ' method=' + method);
-    if (!source.enabled) throw new Error('书源未启用');
-    const definition = decodeQysgSource(source);
-    let host = QysgRuntimeManager.hosts_[0];
+    // enabled 只控制搜索/发现等主动找书操作。书架中的已有书籍仍需
+    // 使用其保存的书源读取详情、目录和正文，即使用户后来停用了该书源。
+    // 搜索入口会通过 QysgSourceAdapter.canSearch/canExplore 过滤停用源；
+    // 这里也保留运行时兜底，但不能把 info/chapter/content 一概拦截。
+    const isReadOperation = method === 'info' || method === 'chapter' || method === 'content';
+    if (!source.enabled && !isReadOperation) throw new Error('书源未启用');
+    if (isAborted && isAborted()) throw new Error('qysg operation cancelled');
+    // qysg 书源的 html 可能是一个或多个远程镜像地址。先解析成真正的脚本，
+    // 再交给隐藏 WebView；否则 loadData 会把 URL 文本当成 HTML，所有生命周期
+    // 函数都会缺失。
+    const definition = await resolveQysgSource(source);
+    // 页面切换期间旧页面的隐藏 WebView 可能尚未完成 aboutToDisappear；
+    // 优先使用最近注册的运行槽位，避免正文请求误复用搜索页的控制器。
+    let host = QysgRuntimeManager.hosts_[QysgRuntimeManager.hosts_.length - 1];
     // 页面生命周期中 aboutToAppear 可能早于 WebView.onControllerAttached，给隐藏
     // WebView 一个短暂的注册窗口，避免首次搜索/发现请求无谓失败。
     for (let attempt = 0; !host && attempt < 100; attempt++) {
       await new Promise<void>((resolve: () => void): void => {
         setTimeout(resolve, 100);
       });
-      host = QysgRuntimeManager.hosts_[0];
+      host = QysgRuntimeManager.hosts_[QysgRuntimeManager.hosts_.length - 1];
     }
     if (!host) {
       console.error('[QysgRuntime] no host after waiting');
       throw new Error('qysg WebView 运行时未就绪，请返回应用主页后重试');
     }
     console.info('[QysgRuntime] dispatching to host method=' + method);
-    return await host.invoke(definition, method, args);
+    return await host.invoke(definition, method, args, isAborted);
   }
 }
 
@@ -731,10 +975,16 @@ export struct QysgRuntimeHostComponent {
     this.webviewQueue_ = [];
   }
 
-  invoke(source: QysgSourceDefinition, method: string, args: Object[]): Promise<string> {
+  invoke(source: QysgSourceDefinition, method: string, args: Object[],
+    isAborted?: () => boolean): Promise<string> {
     const run = async (): Promise<string> => {
       console.info('[QysgRuntime] host invoke method=' + method + ' url=' + source.sourceUrl);
+      if (isAborted && isAborted()) throw new Error('qysg operation cancelled');
       await this.ensureSource_(source);
+      this.bridge_?.setSourceName(source.sourceName);
+      this.bridge_?.setOperation(method);
+      this.bridge_?.setAbortChecker(isAborted);
+      if (isAborted && isAborted()) throw new Error('qysg operation cancelled');
       const operationId = 'qysg-' + (++this.operationId_).toString();
       const result = new Promise<string>((resolve, reject) => {
         this.pending_.set(operationId, { resolve, reject });
@@ -762,7 +1012,8 @@ export struct QysgRuntimeHostComponent {
       console.error('[QysgRuntime] ensureSource before controller attached');
       throw new Error('qysg WebView 控制器尚未绑定');
     }
-    const key = source.sourceUrl + '\n' + source.html.length + '\n' + source.html.substring(0, 32);
+    const baseUrl = source.htmlBaseUrl || source.sourceUrl;
+    const key = baseUrl + '\n' + source.html.length + '\n' + source.html.substring(0, 32);
     if (key === this.activeSourceKey_ && this.readyPromise_) return await this.readyPromise_;
     this.activeSourceKey_ = key;
     this.activeSourceUrl_ = source.sourceUrl;
@@ -772,7 +1023,15 @@ export struct QysgRuntimeHostComponent {
       this.readyResolve_ = resolve;
       this.readyReject_ = reject;
     });
-    const bootstrap = '<script>(function(){' +
+    // qysg 源依赖的 CDN jQuery 可能因失效、网络策略或 Cloudflare 无法加载。
+    // 先注入应用内的固定版本，再保留下方最小兼容层；源 HTML 自带的 jQuery
+    // 若能成功加载仍可覆盖它，不能加载时则使用本地版本保证常用 API 可用。
+    const bundledJquery = loadBundledQysgJquery(this.getUIContext().getHostContext() || null);
+    const bundledJqueryScript = bundledJquery ? '<script>' + bundledJquery + '</script>' : '';
+    if (bundledJquery) {
+      console.info('[QysgRuntime] bundled jQuery injected bytes=' + bundledJquery.length.toString());
+    }
+    const bootstrap = bundledJqueryScript + '<script>(function(){' +
       'var bridgePending={},bridgeSeq=0;' +
       'window.__qysgBridgeComplete=function(id,raw){var p=bridgePending[id];if(!p)return;' +
       'delete bridgePending[id];try{var e=JSON.parse(raw||"{}");if(!e.ok)throw new Error(e.error||"bridge error");' +
@@ -785,6 +1044,10 @@ export struct QysgRuntimeHostComponent {
       'return wrap(out);};w.each=function(fn){for(var i=0;i<a.length;i++)fn.call(a[i],i,a[i]);return w;};' +
       'w.attr=function(n){return a.length?a[0].getAttribute(n):undefined;};' +
       'w.text=function(){var s="";for(var i=0;i<a.length;i++)s+=a[i].textContent||"";return s;};' +
+      // 兼容 qysg 正文分页常用的 $(node).hasClass("curr") 判断。
+      // jQuery 失效时使用的最小包装器也必须保持“任一匹配元素包含该类名”语义。
+      'w.hasClass=function(c){if(!c)return false;for(var i=0;i<a.length;i++)' +
+      'if(a[i].classList&&a[i].classList.contains(c))return true;return false;};' +
       'w.eq=function(i){var n=i<0?a.length+i:i;return wrap(n>=0&&n<a.length?[a[n]]:[]);};' +
       'w.first=function(){return wrap(a.length?[a[0]]:[]);};' +
       'w.last=function(){return wrap(a.length?[a[a.length-1]]:[]);};' +
@@ -798,10 +1061,26 @@ export struct QysgRuntimeHostComponent {
       'return new Promise(function(resolve,reject){bridgePending[id]={resolve:resolve,reject:reject};' +
       'try{window.qysgNative.callHandler.apply(window.qysgNative,[id,name].concat(args));}' +
       'catch(err){delete bridgePending[id];reject(err);}});}};' +
+      // qysg 音频源通常在 HTML 中声明全局 header。网页 <audio> 会自动带上
+      // Referer/User-Agent，但原生 AVPlayer 不会；把安全的媒体请求头附在
+      // content 返回的 URL 后，由 AudioPlayer 转成 MediaSource 请求头。
+      'function qysgAttachMediaHeaders(name,value){' +
+      'if(name!=="content"||typeof value!=="string"||' +
+      '(value.indexOf("http://")!==0&&value.indexOf("https://")!==0)||' +
+      '(value.indexOf(",{")>=0&&value.indexOf("headers")>=0))return value;' +
+      'var sourceHeader=window.header;' +
+      'if(!sourceHeader||typeof sourceHeader!=="object"||Array.isArray(sourceHeader))return value;' +
+      'var mediaHeaders={};' +
+      'for(var h in sourceHeader){' +
+      'if(Object.prototype.hasOwnProperty.call(sourceHeader,h)&&' +
+      '/^(referer|user-agent|cookie|authorization|origin)$/i.test(h))' +
+      'mediaHeaders[h]=String(sourceHeader[h]);}' +
+      'if(Object.keys(mediaHeaders).length===0)return value;' +
+      'try{return value+","+JSON.stringify({headers:mediaHeaders});}catch(e){return value;}};' +
       'window.__qysgHost={invoke:async function(id,name,argsJson){try{' +
       'var args=JSON.parse(argsJson),fn=window[name];' +
       'if(typeof fn!=="function")throw new Error("unsupported qysg method: "+name);' +
-      'var value=await Promise.resolve(fn.apply(window,args));' +
+      'var value=qysgAttachMediaHeaders(name,await Promise.resolve(fn.apply(window,args)));' +
       'await window.qysgNative.complete(String(id),true,JSON.stringify(value===undefined?null:value));' +
       '}catch(err){await window.qysgNative.complete(String(id),false,String(err&&err.stack||err));}}};' +
       '})();</script>';
@@ -810,7 +1089,7 @@ export struct QysgRuntimeHostComponent {
     const html = bootstrap + source.html;
     try {
       console.info('[QysgRuntime] loading source html url=' + source.sourceUrl + ' bytes=' + html.length);
-      this.controller_.loadData(html, 'text/html', 'UTF-8', source.sourceUrl);
+      this.controller_.loadData(html, 'text/html', 'UTF-8', baseUrl);
     } catch (error) {
       this.readyReject_?.(error as Error);
       throw error instanceof Error ? error : new Error(String(error));

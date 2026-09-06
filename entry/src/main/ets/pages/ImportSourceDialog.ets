@@ -12,7 +12,7 @@ import pasteboard from '@ohos.pasteboard';
 import { UiUtil } from '../util/UiUtil';
 import { ThemeColors } from '../theme/ThemeColors';
 import { BookSourceChangeNotifier } from '../service/BookSourceChangeNotifier';
-import { BookSource, BookSourceFormat } from '../model/BookSource';
+import { BookSource, BookSourceFormat, isQysgSourceObject } from '../model/BookSource';
 
 const MAX_IMPORT_BYTES: number = 10 * 1024 * 1024;
 const MAX_IMPORT_DEPTH: number = 3;
@@ -62,6 +62,11 @@ export struct ImportSourceDialog {
       this.ensurePayloadSize_(normalizedJson);
       const normalizedSources = await this.resolvePayload_(normalizedJson, 0);
       if (normalizedSources.length === 0) throw new Error('没有找到可导入的书源');
+      // 轻悦时光合集既有内嵌 HTML，也有指向镜像 HTML 的外链。把识别结果写回
+      // 原始对象，预览和数据库都会保留明确的格式标识，后续不再依赖启发式推断。
+      normalizedSources.forEach((source: Record<string, Object>): void => {
+        if (isQysgSourceObject(source)) source['sourceFormat'] = BookSourceFormat.QYSG;
+      });
       await AppDatabase.getInstance().waitForInit();
       const dao = new BookSourceTable(AppDatabase.getInstance().rdbStore);
       this.items = await dao.importSourcesPreview(JSON.stringify(normalizedSources));

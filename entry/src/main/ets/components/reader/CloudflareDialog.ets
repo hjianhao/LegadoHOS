@@ -270,8 +270,45 @@ export struct CloudflareDialog {
           var submitField = null;
           var explicitSearchField = false;
           var decode = function(value) {
-            try { return decodeURIComponent(String(value || '').split('+').join(' ')); }
-            catch (e) { return String(value || ''); }
+            var text = String(value || '').split('+').join(' ');
+            // qysg 的第一版主搜索接口要求 GBK/GB18030 表单编码。
+            // decodeURIComponent 只能处理 UTF-8，遇到 %B1%B1... 这类字节
+            // 会抛异常，导致验证页把转义码原样显示在搜索框里。先保留
+            // UTF-8 快路径，再按连续的百分号字节片段用 GB18030 解码，
+            // 未编码的 ASCII 片段则原样保留。
+            try { return decodeURIComponent(text); } catch (e) {}
+            try {
+              var decodedText = '';
+              var bytes = [];
+              var flushBytes = function() {
+                if (bytes.length === 0) return;
+                try {
+                  var decoder = null;
+                  try { decoder = new TextDecoder('gb18030'); }
+                  catch (e1) { decoder = new TextDecoder('gbk'); }
+                  decodedText += decoder.decode(new Uint8Array(bytes));
+                } catch (e2) {
+                  // 无 GBK 解码器时保留原始文本，至少不要清空用户输入。
+                  decodedText += bytes.map(function(item) {
+                    var hex = item.toString(16).toUpperCase();
+                    return '%' + (hex.length < 2 ? '0' + hex : hex);
+                  }).join('');
+                }
+                bytes = [];
+              };
+              for (var index = 0; index < text.length;) {
+                if (text.charAt(index) === '%' && /^[0-9a-fA-F]{2}$/.test(text.substring(index + 1, index + 3))) {
+                  bytes.push(parseInt(text.substring(index + 1, index + 3), 16));
+                  index += 3;
+                } else {
+                  flushBytes();
+                  decodedText += text.charAt(index);
+                  index++;
+                }
+              }
+              flushBytes();
+              return decodedText || text;
+            } catch (e3) { return text; }
           };
           // 不能只给 element.value 赋值：Vue/React 及不少老站点的搜索脚本
           // 会维护自己的状态，使用原生 setter + input/change 事件同步状态。

@@ -3,13 +3,18 @@ import {
   BookSource,
   BookSourceFormat,
   BookSourceType,
+  isQysgInlineHtml,
+  qysgHtmlUrlCandidates,
   isQysgSourceObject,
 } from '../../model/BookSource';
+import { NetUtil } from '../../util/NetUtil';
 
 export interface QysgSourceDefinition {
   sourceUrl: string;
   sourceName: string;
   html: string;
+  /** 外链 html 实际地址，用作 loadData 的 baseUrl；内嵌 html 时为空。 */
+  htmlBaseUrl?: string;
   enabled: boolean;
   enabledExplore: boolean;
   group: string;
@@ -41,6 +46,15 @@ function parseObject(raw: string): Record<string, Object> {
   return {};
 }
 
+interface QysgRemoteHtmlCacheEntry {
+  html: string;
+  baseUrl: string;
+  expiresAt: number;
+}
+
+const QYSG_REMOTE_HTML_CACHE_TTL_MS = 10 * 60 * 1000;
+const qysgRemoteHtmlCache: Map<string, QysgRemoteHtmlCacheEntry> = new Map();
+
 /** 从已持久化的 BookSource 中读取 qysg HTML。 */
 export function decodeQysgSource(source: BookSource): QysgSourceDefinition {
   if (source.sourceFormat !== BookSourceFormat.QYSG) {
@@ -53,6 +67,7 @@ export function decodeQysgSource(source: BookSource): QysgSourceDefinition {
     sourceUrl: source.sourceUrl.replace(/##.*$/, '').trim().replace(/\/+$/, ''),
     sourceName: source.sourceName,
     html: html,
+    htmlBaseUrl: '',
     enabled: source.enabled,
     enabledExplore: source.enabledExplore,
     group: source.group,
@@ -60,6 +75,57 @@ export function decodeQysgSource(source: BookSource): QysgSourceDefinition {
     help: asString(raw['help']),
     login: raw['login'] || {},
   };
+}
+
+/**
+ * 解析轻悦时光书源中的外链 HTML。书源站为节省合集体积，会把完整脚本放在
+ * html 字段列出的一个或多个镜像地址中；运行时必须先下载脚本，再交给 ArkWeb
+ * 加载，否则 WebView 只会把“http://...”这段文本当成页面内容。
+ */
+export async function resolveQysgSource(source: BookSource): Promise<QysgSourceDefinition> {
+  const definition = decodeQysgSource(source);
+  const candidates = qysgHtmlUrlCandidates(definition.html);
+  if (candidates.length === 0) return definition;
+
+  const cacheKey = definition.sourceUrl + '\n' + candidates.join('\n');
+  const cached = qysgRemoteHtmlCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      ...definition,
+      html: cached.html,
+      htmlBaseUrl: cached.baseUrl,
+    };
+  }
+
+  const requestHeaders: Record<string, string> = {
+    'Accept': 'text/html,application/xhtml+xml,*/*',
+    'Referer': definition.sourceUrl,
+  };
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const html = await NetUtil.httpGet(candidate, requestHeaders, 20000);
+      if (!isQysgInlineHtml(html)) {
+        errors.push(candidate + ': 返回内容不是可执行 qysg HTML');
+        continue;
+      }
+      qysgRemoteHtmlCache.set(cacheKey, {
+        html: html,
+        baseUrl: candidate,
+        expiresAt: Date.now() + QYSG_REMOTE_HTML_CACHE_TTL_MS,
+      });
+      console.info('[QysgSourceCodec] resolved external html source=' + source.sourceName +
+        ' url=' + candidate + ' bytes=' + html.length.toString());
+      return {
+        ...definition,
+        html: html,
+        htmlBaseUrl: candidate,
+      };
+    } catch (error) {
+      errors.push(candidate + ': ' + ((error as Error).message || String(error)));
+    }
+  }
+  throw new Error('qysg 外链 HTML 下载失败（' + errors.join('; ').substring(0, 300) + '）');
 }
 
 /** qysg 函数返回值可能是 JSON 字符串，也可能是已经序列化的数组。 */
@@ -133,4 +199,23 @@ export function qysgAbsoluteUrl(base: string, value: string): string {
   }
   const slash = cleanBase.lastIndexOf('/');
   return (slash >= 0 ? cleanBase.substring(0, slash + 1) : cleanBase + '/') + url;
+}
+
+/**
+ * 番茄 qysg 源的搜索结果把书籍身份写成 multi-detail API 地址。
+ *
+ * 该地址只适合查询详情，在详情代理不可用时会返回 HTTP 200 的空响应；
+ * 番茄官网的目录接口则仍可直接按 bookId 返回完整目录。详情函数失败时
+ * mapQysgInfo 会把请求地址原样作为 tocUrl，因此在进入 chapter 前统一把
+ * 这个身份地址恢复为官方目录地址。仅处理 fqnovel 的 multi-detail URL，
+ * 其它 qysg 源和普通书籍 URL 保持不变。
+ */
+export function normalizeQysgTomatoTocUrl(value: string): string {
+  const raw = (value || '').trim();
+  const hostMatch = raw.match(/^https?:\/\/([^/?#]+)/i);
+  if (!raw || !hostMatch || !/(?:^|\.)fqnovel\.com(?::\d+)?$/i.test(hostMatch[1]) ||
+    !/\/reading\/bookapi\/multi-detail\//i.test(raw)) return raw;
+  const match = raw.match(/[?&]book_id=(\d{10,})/i);
+  if (!match) return raw;
+  return 'https://fanqienovel.com/api/reader/directory/detail?bookId=' + match[1];
 }

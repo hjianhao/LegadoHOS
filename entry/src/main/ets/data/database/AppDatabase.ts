@@ -34,6 +34,7 @@ import {
   CloudBookBindingIndexSourceId,
 } from './CloudBookBindingTable';
 import { RdbUtil } from './RdbUtil';
+import { BookSourceFormat, isQysgSourceObject } from '../../model/BookSource';
 
 const DATABASE_NAME = 'legado_hos.db';
 const DATABASE_VERSION = 1;
@@ -300,10 +301,9 @@ export class AppDatabase {
         const pick = (col: string, fresh: string): string => fresh || curMap[col] || '';
         const row: relationalStore.ValuesBucket = {
           'id': id,
-          // 旧版本没有 source_format 列。仅按 qysg 的生命周期函数和 bridge
-          // 标记迁移，避免把普通 Legado 的 html 扩展误交给 ArkWeb。
-          'source_format': /(?:async\s+)?function\s+(?:search|info|chapter|content|getfinds|find)\s*\(/i.test(rawJson) &&
-            /flutter_inappwebview\.callHandler/i.test(rawJson) ? 1 : 0,
+          // 旧版本没有 source_format 列。复用统一识别逻辑，外链型 qysg 也要
+          // 迁移为轻悦时光格式，避免升级后又显示为 Legado。
+          'source_format': isQysgSourceObject(obj) ? BookSourceFormat.QYSG : BookSourceFormat.LEGADO,
           'rule_search_url': pick('rule_search_url', (() => {
             let searchUrl = toStr(obj['ruleSearchUrl'] || rs2['searchUrl'] || obj['searchUrl'] || '');
             // 悠久小说网：AI 生成时误标 webView，站点实际支持直接 HTTP POST 搜索，

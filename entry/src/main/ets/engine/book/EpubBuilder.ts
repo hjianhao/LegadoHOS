@@ -112,16 +112,17 @@ body.cover { text-align: center; }
 
 export class EpubBuilder {
   /**
-   * 生成 EPUB 写入 targetPath（picker 返回的 uri 或目录拼接路径）。
+   * 生成 EPUB 写入 targetPath（Picker 返回的文件 URI 或应用沙箱路径）。
    * 异常会向上抛出（文件不可写、模板渲染失败等）。
    */
   static async build(data: EpubData, targetPath: string, context: common.Context | undefined,
-    onProgress?: (done: number, total: number) => void): Promise<void> {
+    onProgress?: (done: number, total: number) => void,
+    overwriteExisting: boolean = false): Promise<void> {
     const templates = EpubBuilder.loadTemplates(context);
     const cover = await EpubBuilder.fetchCover(data.coverUrl);
     const uuid = EpubBuilder.randomUuid();
 
-    const zip = ZipWriter.open(targetPath);
+    const zip = ZipWriter.open(targetPath, overwriteExisting);
     try {
       // 规范：mimetype 必须是第一个条目且不压缩
       await zip.addText('mimetype', 'application/epub+zip');

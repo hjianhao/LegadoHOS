@@ -72,7 +72,7 @@ export struct SourceCheckConfigDialog {
           TextInput({ text: this.keyword, placeholder: $r('app.string.ui_afa3ab04fa') }).height(48).width('100%').borderRadius(12)
             .backgroundColor(ThemeColors.surfaceVariant(this.isDark)).fontColor(ThemeColors.onSurface(this.isDark))
             .onChange((value: string) => { this.keyword = value; }).margin({ top: 4, bottom: 12 })
-          Text('单个书源总超时（秒）').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
+          Text('单个阶段超时（秒）').fontSize(13).fontColor(ThemeColors.secondaryText(this.isDark)).width('100%')
           TextInput({ text: this.timeoutText, placeholder: $r('app.string.ui_a5f4fde1e3') }).height(48).width('100%').borderRadius(12)
             .type(InputType.Number).backgroundColor(ThemeColors.surfaceVariant(this.isDark))
             .fontColor(ThemeColors.onSurface(this.isDark)).onChange((value: string) => { this.timeoutText = value; })

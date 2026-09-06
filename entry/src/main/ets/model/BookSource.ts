@@ -311,18 +311,54 @@ export function createEmptyBookSource(): BookSource {
 }
 
 /**
- * qysg 使用整段 html 作为书源运行时，不能仅凭 html 字段判断（Legado 扩展字段
- * 也可能携带 html）。同时检查生命周期函数和 flutter bridge 标记，避免把普通源
- * 错分给 WebView 运行时。
+ * qysg 书源的 html 既可以直接内嵌脚本，也可以是一个或多个远程 HTML 地址。
+ * 后者是轻悦时光书源站实际使用的格式，例如：
+ *   "http://mirror.example/source.html\nhttps://backup.example/source.html"
+ * 导入时不能把这种 URL 文本误认为 Legado 的 html 扩展字段。
+ */
+export function qysgHtmlUrlCandidates(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const candidates = value.split(/\r?\n/)
+    .map((item: string): string => item.trim())
+    .filter((item: string): boolean => !!item);
+  if (candidates.length === 0 || candidates.some((item: string): boolean =>
+    !/^https?:\/\/\S+$/i.test(item))) return [];
+  return candidates;
+}
+
+function hasQysgEnvelope(json: any): boolean {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return false;
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(json, key);
+  // 这些字段是轻悦时光导出的外层结构；标准 Legado 书源通常不会同时携带
+  // login 布尔值、enabledExplore 和 lastUpdateTime 这组字段。
+  return (has('bookSourceName') || has('sourceName')) &&
+    (has('bookSourceUrl') || has('sourceUrl')) &&
+    has('enabledExplore') && has('login') && has('lastUpdateTime');
+}
+
+/** qysg 内嵌/下载后的 HTML 至少应包含生命周期函数和原生桥调用。 */
+export function isQysgInlineHtml(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  const hasLifecycle = /(?:async\s+)?function\s+(?:search|info|chapter|content|getfinds|find)\s*\(/i.test(value);
+  const hasFlutterBridge = /flutter_inappwebview\.callHandler/i.test(value);
+  return hasLifecycle && hasFlutterBridge;
+}
+
+/**
+ * 判断 qysg 书源。显式格式标识优先；没有标识时识别内嵌脚本和轻悦时光的
+ * 外链 HTML 结构，同时检查生命周期函数和 flutter bridge，避免把普通源的
+ * html 扩展字段错分给 WebView 运行时。
  */
 export function isQysgSourceObject(json: any): boolean {
   if (!json || typeof json !== 'object' || Array.isArray(json)) return false;
-  if (json.sourceFormat === BookSourceFormat.QYSG || json.bookSourceFormat === 'qysg') return true;
+  const format = json.sourceFormat ?? json.bookSourceFormat;
+  if (format === BookSourceFormat.QYSG ||
+    (typeof format === 'string' && /^(?:qysg|1)$/i.test(format))) return true;
   const html = typeof json.html === 'string' ? json.html : '';
   if (!html.trim()) return false;
-  const hasLifecycle = /(?:async\s+)?function\s+(?:search|info|chapter|content|getfinds|find)\s*\(/i.test(html);
-  const hasFlutterBridge = /flutter_inappwebview\.callHandler/i.test(html);
-  return hasLifecycle && hasFlutterBridge;
+  if (isQysgInlineHtml(html)) return true;
+  // 轻悦时光允许 html 指向远程脚本，导出的外层字段可作为可靠格式标识。
+  return qysgHtmlUrlCandidates(html).length > 0 && hasQysgEnvelope(json);
 }
 
 /**

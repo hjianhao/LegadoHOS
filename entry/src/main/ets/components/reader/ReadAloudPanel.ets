@@ -87,7 +87,10 @@ export struct ReadAloudPanel {
         this.isPlaying = s === AloudState.PLAYING;
         this.isPaused = s === AloudState.PAUSED;
         if (s === AloudState.PLAYING) this.errorText = '';
-        if (s === AloudState.PAUSED) this.stopBgTask_();
+        // 系统音频焦点临时中断时会先进入 PAUSED，焦点恢复后引擎自动回到
+        // PLAYING；后台任务也要随状态恢复，否则熄屏后进程可能被回收。
+        if (s === AloudState.PLAYING) this.startBgTask_().catch(() => {});
+        else if (s === AloudState.PAUSED || s === AloudState.STOPPED) this.stopBgTask_();
         this.updateAvPlaybackState_(s, this.curCharIdx_, this.mediaTotalChars_);
       },
       onProgress: (ci: number, t: number) => {

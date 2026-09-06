@@ -25,6 +25,13 @@ import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { image } from '@kit.ImageKit';
 
+/** 书源格式筛选项：-1 表示全部，其余值对应 BookSourceFormat。 */
+const BOOK_SOURCE_FORMAT_OPTIONS: SelectOption[] = [
+  { value: '全部书源' },
+  { value: 'Legado书源' },
+  { value: '轻悦时光书源' },
+];
+
 @Entry
 @Component
 export struct BookSourcePage {
@@ -330,9 +337,9 @@ export struct BookSourcePage {
   }
 
   private formatLabel_(): string {
-    if (this.formatFilter === BookSourceFormat.QYSG) return '格式：qysg';
-    if (this.formatFilter === BookSourceFormat.LEGADO) return '格式：Legado';
-    return '格式：全部';
+    if (this.formatFilter === BookSourceFormat.QYSG) return '轻悦时光书源';
+    if (this.formatFilter === BookSourceFormat.LEGADO) return 'Legado书源';
+    return '全部书源';
   }
 
   private contentTypeLabel_(): string {
@@ -343,10 +350,16 @@ export struct BookSourcePage {
     return '内容：全部';
   }
 
-  private toggleFormatFilter_(): void {
-    if (this.formatFilter < 0) this.formatFilter = BookSourceFormat.LEGADO;
-    else if (this.formatFilter === BookSourceFormat.LEGADO) this.formatFilter = BookSourceFormat.QYSG;
-    else this.formatFilter = -1;
+  private formatFilterIndex_(): number {
+    if (this.formatFilter === BookSourceFormat.LEGADO) return 1;
+    if (this.formatFilter === BookSourceFormat.QYSG) return 2;
+    return 0;
+  }
+
+  private selectFormatFilter_(index: number): void {
+    if (index <= 0) this.formatFilter = -1;
+    else if (index === 1) this.formatFilter = BookSourceFormat.LEGADO;
+    else if (index === 2) this.formatFilter = BookSourceFormat.QYSG;
     this.applyFilters();
   }
 
@@ -953,11 +966,13 @@ export struct BookSourcePage {
       }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
 
       Row({ space: 8 }) {
-        Button(this.formatLabel_())
+        Select(BOOK_SOURCE_FORMAT_OPTIONS)
+          .selected(this.formatFilterIndex_()).value(this.formatLabel_())
           .height(36).padding({ left: 12, right: 12 }).borderRadius(18)
-          .fontSize(12).fontColor(this.formatFilter >= 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
+          .fontColor(this.formatFilter >= 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))
           .backgroundColor(this.formatFilter >= 0 ? ThemeColors.primary(this.isDark) : ThemeColors.surfaceVariant(this.isDark))
-          .onClick((): void => { this.toggleFormatFilter_(); })
+          .accessibilityText('书源格式筛选')
+          .onSelect((index: number): void => { this.selectFormatFilter_(index); })
         Button(this.contentTypeLabel_())
           .height(36).padding({ left: 12, right: 12 }).borderRadius(18)
           .fontSize(12).fontColor(this.contentTypeFilter >= 0 ? ThemeColors.onPrimary(this.isDark) : ThemeColors.onSurface(this.isDark))

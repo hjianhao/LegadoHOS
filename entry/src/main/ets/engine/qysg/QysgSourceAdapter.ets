@@ -6,7 +6,7 @@ import {
 } from '../../model/BookSource';
 import { SearchResult } from '../../model/SearchResult';
 import { SourceAdapter, SourceContentResult, SourceExploreItem } from '../source/SourceAdapter';
-import { decodeQysgArray } from './QysgSourceCodec';
+import { decodeQysgArray, normalizeQysgTomatoTocUrl } from './QysgSourceCodec';
 import { mapQysgBooks, mapQysgChapters, mapQysgContent, mapQysgInfo } from './QysgResultMapper';
 import { QysgRuntimeManager } from './QysgRuntimeManager';
 
@@ -40,9 +40,10 @@ export class QysgSourceAdapter implements SourceAdapter {
     return this.canSearch(source) && source.enabledExplore;
   }
 
-  async search(source: BookSource, keyword: string, page: number): Promise<SearchResult[]> {
+  async search(source: BookSource, keyword: string, page: number,
+    isAborted?: () => boolean): Promise<SearchResult[]> {
     console.info('[QysgAdapter] search source=' + source.sourceName + ' keyword=' + keyword + ' page=' + page);
-    const raw = await QysgRuntimeManager.invoke(source, 'search', [keyword, page, 'searchone']);
+    const raw = await QysgRuntimeManager.invoke(source, 'search', [keyword, page, 'searchone'], isAborted);
     const results = mapQysgBooks(raw, source);
     console.info('[QysgAdapter] search mapped=' + results.length + ' rawBytes=' + raw.length);
     return results;
@@ -66,7 +67,12 @@ export class QysgSourceAdapter implements SourceAdapter {
   }
 
   async getToc(source: BookSource, tocUrl: string, bookUrl: string = ''): Promise<BookSourceChapter[]> {
-    const raw = await QysgRuntimeManager.invoke(source, 'chapter', [tocUrl, bookUrl]);
+    const normalizedTocUrl = normalizeQysgTomatoTocUrl(tocUrl);
+    if (normalizedTocUrl !== tocUrl) {
+      console.warn('[QysgAdapter] normalized Tomato multi-detail URL to official directory:',
+        normalizedTocUrl);
+    }
+    const raw = await QysgRuntimeManager.invoke(source, 'chapter', [normalizedTocUrl, bookUrl]);
     return mapQysgChapters(raw, source);
   }
 

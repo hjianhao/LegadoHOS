@@ -108,6 +108,13 @@ export class MangaImageLoader {
       if (!await fileFs.access(MangaImageLoader.cacheDir)) {
         await fileFs.mkdir(MangaImageLoader.cacheDir, true);
       }
+      // 下载采用“临时文件写完后 rename”的原子提交方式。正常失败路径会删除
+      // .tmp；如果应用在写入期间被系统杀死，启动时清理遗留临时文件，避免它们
+      // 永久占用与漫画图片同等大小的磁盘空间。
+      const staleTempBytes = await MangaImageLoader.cleanupTempFiles_(MangaImageLoader.cacheDir);
+      if (staleTempBytes > 0) {
+        console.info('[MangaImg] Removed stale temp files:', staleTempBytes, 'bytes');
+      }
       // 清理旧版扁平缓存目录（v2，无 bookId 信息，无法迁移到子目录结构，直接删除释放空间）
       FileUtil.removeDirRecursive(LEGACY_CACHE_DIR);
       MangaImageLoader.initialized = true;
@@ -144,7 +151,10 @@ export class MangaImageLoader {
       const buffer: ArrayBuffer = new ArrayBuffer(stat.size);
       const readLength: number = await fileFs.read(file.fd, buffer, { offset: 0, length: stat.size });
       if (readLength <= 0) return null;
-      return new Uint8Array(buffer, 0, readLength).slice();
+      // buffer 按文件大小一次性分配，返回同一块内存的视图即可。
+      // 这里再调用 slice() 会把整张图片复制一遍；导出漫画时每张图都会
+      // 经过一次该路径，累计会造成明显的内存带宽浪费和峰值内存上涨。
+      return new Uint8Array(buffer, 0, readLength);
     } catch (_) {
       return null;
     } finally {
@@ -758,6 +768,28 @@ export class MangaImageLoader {
   static async getCacheSizeForBook(bookId: number): Promise<number> {
     if (bookId <= 0) return 0;
     return MangaImageLoader.getDirSize_(MangaImageLoader.cacheDir + bookId + '/');
+  }
+
+  /** 清理上次异常退出遗留的下载临时文件，返回释放的字节数。 */
+  private static async cleanupTempFiles_(dirPath: string): Promise<number> {
+    let removedBytes: number = 0;
+    try {
+      if (!await fileFs.access(dirPath)) return 0;
+      const names: string[] = await fileFs.listFile(dirPath);
+      for (const name of names) {
+        const child: string = `${dirPath}${dirPath.endsWith('/') ? '' : '/'}${name}`;
+        try {
+          const stat: fileFs.Stat = await fileFs.stat(child);
+          if (stat.isDirectory()) {
+            removedBytes += await MangaImageLoader.cleanupTempFiles_(child);
+          } else if (name.endsWith('.tmp')) {
+            removedBytes += stat.size;
+            await fileFs.unlink(child);
+          }
+        } catch (_) { /* 单个文件清理失败不影响其它缓存 */ }
+      }
+    } catch (_) { /* 缓存目录不可读时由后续下载逻辑处理 */ }
+    return removedBytes;
   }
 
   /** 递归计算目录大小 */

@@ -232,7 +232,7 @@ export struct BookshelfManagePage {
     }
   }
 
-  /** 批量导出：先选格式，再选目录，每本书导出一个文件。 */
+  /** 批量导出：先选格式，再选择每本书对应的保存文件。 */
   chooseExportFormat(): void {
     if (!this.requireSelection()) return;
     UiUtil.showDialog(this.getUIContext(), {
@@ -250,7 +250,7 @@ export struct BookshelfManagePage {
     });
   }
 
-  /** 批量导出到用户选择的目录 */
+  /** 批量导出到用户选择的位置 */
   async exportSelectedBooks(format: string): Promise<void> {
     const books = format === 'comicZip'
       ? this.selectedBooks().filter((book: Book): boolean => book.isManga || book.type === BookType.MANGA)
@@ -260,23 +260,12 @@ export struct BookshelfManagePage {
       return;
     }
     const ext = format === 'comicZip' ? '.zip' : (format === 'epub' ? '.epub' : '.txt');
-    let dirUri = '';
+    const infos: ExportBookInfo[] = [];
+    const fileNames: string[] = [];
+    let targetUris: string[] = [];
     try {
-      const uris = await new picker.DocumentViewPicker().select({
-        selectMode: picker.DocumentSelectMode.FOLDER,
-      });
-      if (!uris || uris.length === 0) return;
-      dirUri = uris[0];
-    } catch (_e) {
-      UiUtil.showToast(this.getUIContext(), { message: '选择导出目录失败', duration: 1500 });
-      return;
-    }
-    UiUtil.showToast(this.getUIContext(), { message: '开始导出 ' + books.length + ' 本书...', duration: 1500 });
-    let success = 0;
-    let failed = 0;
-    for (const book of books) {
-      try {
-        const info: ExportBookInfo = {
+      for (const book of books) {
+        infos.push({
           id: book.id,
           name: book.name,
           author: book.author,
@@ -286,8 +275,28 @@ export struct BookshelfManagePage {
           origin: book.origin,
           originUrl: book.originUrl,
           isManga: book.isManga || book.type === BookType.MANGA,
-        };
-        const fileName = BookExportService.suggestFileName(info, ext);
+        });
+        fileNames.push(BookExportService.suggestFileName(infos[infos.length - 1], ext));
+      }
+      const saveOptions = new picker.DocumentSaveOptions();
+      saveOptions.newFileNames = fileNames;
+      saveOptions.autoCreateEmptyFile = false;
+      const context = this.getUIContext().getHostContext()!;
+      targetUris = await new picker.DocumentViewPicker(context).save(saveOptions);
+      if (!targetUris || targetUris.length === 0) return;
+      if (targetUris.length < infos.length) {
+        throw new Error('当前设备的文件选择器未返回完整的批量导出文件位置');
+      }
+    } catch (_e) {
+      UiUtil.showToast(this.getUIContext(), { message: '选择导出位置失败', duration: 1500 });
+      return;
+    }
+    UiUtil.showToast(this.getUIContext(), { message: '开始导出 ' + books.length + ' 本书...', duration: 1500 });
+    let success = 0;
+    let failed = 0;
+    for (let i = 0; i < infos.length; i++) {
+      try {
+        const info = infos[i];
         const options: ExportOptions = {
           includeTitle: true,
           useReplace: true,
@@ -295,19 +304,19 @@ export struct BookshelfManagePage {
           context: UiUtil.getHostContext(this.getUIContext()),
         };
         const result = format === 'comicZip'
-          ? await BookExportService.exportComicZip(info, dirUri + '/' + fileName, options)
+          ? await BookExportService.exportComicZip(info, targetUris[i], options)
           : (format === 'epub'
-            ? await BookExportService.exportBookEpub(info, dirUri + '/' + fileName, options)
-            : await BookExportService.exportBookTxt(info, dirUri + '/' + fileName, options));
+            ? await BookExportService.exportBookEpub(info, targetUris[i], options)
+            : await BookExportService.exportBookTxt(info, targetUris[i], options));
         if (result.success) {
           success++;
         } else {
           failed++;
-          console.warn('[BookshelfManage] export fail: ' + book.name + ' - ' + result.error);
+          console.warn('[BookshelfManage] export fail: ' + info.name + ' - ' + result.error);
         }
       } catch (e) {
         failed++;
-        console.warn('[BookshelfManage] export error: ' + book.name + ' - ' + (e as Error).message);
+        console.warn('[BookshelfManage] export error: ' + infos[i].name + ' - ' + (e as Error).message);
       }
     }
     UiUtil.showToast(this.getUIContext(), {

@@ -7,6 +7,7 @@ import { MeasureUtils } from '@kit.ArkUI';
 import { globalSourceExecutor } from '../engine/source/SourceExecutor';
 import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { SettingsStore } from '../data/preferences/SettingsStore';
 import { ChapterCache } from '../util/ChapterCache';
 import { DirEpubParser } from '../engine/book/DirEpubParser';
@@ -49,6 +50,7 @@ import { WebDavService } from '../service/WebDavService';
 import { UiUtil } from '../util/UiUtil';
 import { Want, common } from '@kit.AbilityKit';
 import { LoginDialog } from '../components/reader/LoginDialog';
+import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { FontManager, FontInfo } from '../utils/FontManager';
 import { LOCAL_BOOK_ORIGIN } from '../engine/book/LocalBookEngine';
 import { TxtParser } from '../engine/book/TxtParser';
@@ -208,6 +210,8 @@ struct ReadPage {
   private chapterPickDlg?: CustomDialogController;
   private optionDlg?: CustomDialogController;
   private loginDlg?: CustomDialogController;
+  private challengeDlg?: CustomDialogController;
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
   private pendingStyleSave_: ReadStyleSaveSnapshot | null = null;
   private styleSavePromise_: Promise<void> = Promise.resolve();
   private styleSaveScheduled_: boolean = false;
@@ -236,6 +240,13 @@ struct ReadPage {
 	  }
 
 	  async aboutToAppear(): Promise<void> {
+	    // 阅读页也可能直接请求受 Cloudflare 保护的正文；接管验证回调，
+	    // 确保弹出的 WebView 使用当前章节 URL，而不是离开前的搜索页。
+	    if (!this.interactiveFetcher_) {
+	      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
+	        this.openInteractiveWebView_(url, request?.body || '');
+	    }
+	    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
 	    const p = UiUtil.getParams(this.getUIContext()) as Record<string, Object>;
 	    this.bookName = String(p['bookName'] || p['name'] || '');
 	    this.bookAuthor = String(p['bookAuthor'] || p['author'] || '');
@@ -264,7 +275,7 @@ struct ReadPage {
 	  }
 
   /** 初始化 FontManager 并注册已安装的自定义字体 */
-  private async initFonts(): Promise<void> {
+	  private async initFonts(): Promise<void> {
     try {
       const ctx = UiUtil.getHostContext(this.getUIContext()) as common.Context;
       await FontManager.getInstance().init(ctx);
@@ -398,6 +409,21 @@ struct ReadPage {
 	    }
 	    // loadContent 已在 aboutToAppear 中调用，此处不再重复执行
 	  }
+
+  private openInteractiveWebView_(url: string, requestBody: string = ''): Promise<string> {
+    return new Promise<string>((resolve: (html: string) => void) => {
+      WebViewFetcher.interactiveResolve = resolve;
+      this.challengeDlg = new CustomDialogController({
+        builder: CloudflareDialog({ controller: this.challengeDlg!, url: url,
+          reason: WebViewFetcher.interactiveReason || '正文需要完成 Cloudflare 验证',
+          requestBody: requestBody }),
+        autoCancel: false,
+        customStyle: true,
+        alignment: DialogAlignment.Center,
+      });
+      this.challengeDlg.open();
+    });
+  }
 
 	  private async loadSettings(): Promise<void> {
 	    try {
@@ -1685,6 +1711,13 @@ struct ReadPage {
 
 	  async aboutToDisappear(): Promise<void> {
 	    console.info('[ReadPage] aboutToDisappear, page=' + this.pageIndex + ' chapter=' + this.currentIndex);
+    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+      WebViewFetcher.interactiveFetcher = null;
+      if (WebViewFetcher.interactiveResolve) {
+        WebViewFetcher.interactiveResolve('');
+        WebViewFetcher.interactiveResolve = null;
+      }
+    }
     this.notifySourceEvent_('END_READ', this.allChapters_[this.currentIndex]);
     // 对齐安卓：退出阅读时尝试自动备份（24h 节流）
     BackupService.autoBack().catch((e: Error) => console.warn('[ReadPage] autoBack failed:', e.message));

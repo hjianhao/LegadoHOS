@@ -1,5 +1,8 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { BookSourceChapter, createEmptyBookSource, parseBookSource } from '../main/ets/model/BookSource';
+import {
+  BookSourceChapter, BookSourceFormat, BookSourceType, bookSourceToJsonObject,
+  createEmptyBookSource, isQysgSourceObject, parseBookSource, qysgHtmlUrlCandidates
+} from '../main/ets/model/BookSource';
 import {
   CheckConfig, createSourceForCheck, firstExploreUrlFromText, isSearchCheckDisabled, normalizeCheckConfig,
   selectCheckResult, selectReadableChapters
@@ -18,6 +21,7 @@ import {
 import {
   DISABLE_COOKIE_HEADER, SourceNetworkPolicy
 } from '../main/ets/engine/source/SourceNetworkPolicy';
+import { normalizeQysgTomatoTocUrl } from '../main/ets/engine/qysg/QysgSourceCodec';
 import { applyCheckResultToSource, removeCheckErrorComment } from '../main/ets/service/SourceCheckPersistence';
 import {
   inferSearchRequest, isAiBookNameConsistent, isAiLinkExtractionRule,
@@ -54,6 +58,41 @@ export default function bookSourceManagementTest() {
       expect(source.concurrentRate).assertEqual('2/1000');
       expect(source.enabledCookieJar).assertTrue();
       expect(createEmptyBookSource().respondTime).assertEqual(180000);
+    });
+
+    it('recognizesExternalQysgHtmlAsQysg', 0, () => {
+      const external = JSON.parse('{"bookSourceName":"外链轻悦源",' +
+        '"bookSourceUrl":"https://example.com",' +
+        '"enabledExplore":true,"enabled":true,"bookSourceGroup":"测试",' +
+        '"html":"https://mirror.example/qysg.html\\nhttps://backup.example/qysg.html",' +
+        '"login":false,"lastUpdateTime":"123"}') as Object;
+      expect(qysgHtmlUrlCandidates((external as Record<string, Object>)['html']).length).assertEqual(2);
+      expect(isQysgSourceObject(external)).assertTrue();
+      const source = parseBookSource(external);
+      expect(source.sourceFormat).assertEqual(BookSourceFormat.QYSG);
+      expect(source.sourceType).assertEqual(BookSourceType.MIXED);
+      const exported = bookSourceToJsonObject(source);
+      expect(exported['sourceFormat']).assertEqual(BookSourceFormat.QYSG);
+    });
+
+    it('normalizesTomatoMultiDetailToOfficialDirectory', 0, () => {
+      const stale = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/multi-detail/v/' +
+        '?aid=1967&iid=1&version_code=999&book_id=7269278400190090280';
+      expect(normalizeQysgTomatoTocUrl(stale))
+        .assertEqual('https://fanqienovel.com/api/reader/directory/detail?bookId=7269278400190090280');
+      expect(normalizeQysgTomatoTocUrl('https://fanqienovel.com/api/reader/directory/detail?bookId=1'))
+        .assertEqual('https://fanqienovel.com/api/reader/directory/detail?bookId=1');
+      expect(normalizeQysgTomatoTocUrl('https://example.com/reading/bookapi/multi-detail/v/?book_id=1234567890'))
+        .assertEqual('https://example.com/reading/bookapi/multi-detail/v/?book_id=1234567890');
+    });
+
+    it('doesNotTreatLegadoHtmlExtensionAsQysg', 0, () => {
+      const legado = JSON.parse('{"bookSourceName":"普通源",' +
+        '"bookSourceUrl":"https://example.com",' +
+        '"html":"https://example.com/template.html",' +
+        '"ruleSearch":{"bookList":".book"}}') as Object;
+      expect(isQysgSourceObject(legado)).assertFalse();
+      expect(parseBookSource(legado).sourceFormat).assertEqual(BookSourceFormat.LEGADO);
     });
 
     it('migratesLegacyManwaHostBeforeNetworkRequests', 0, () => {
@@ -438,6 +477,18 @@ export default function bookSourceManagementTest() {
       expect(WebViewFetcher.isInteractiveChallengeHtml(completedSearch)).assertFalse();
       expect(WebViewFetcher.isInteractiveChallengeHtml(
         completedSearch + '<script>var _cf_chl_opt = {};</script>')).assertFalse();
+    });
+
+    it('doesNotTreatAikanJsdSearchOrChapterAsChallenge', 0, () => {
+      const jsd = '<script>window.__CF$cv$params={r:"ray"};</script>' +
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>';
+      const searchPage = '<div class="hot_sale"><a href="/ks123/">' +
+        '<p class="title">四合院之光</p><p class="author">作者：测试</p></a></div>' + jsd;
+      expect(WebViewFetcher.isInteractiveChallengeHtml(searchPage)).assertFalse();
+
+      const chapterPage = '<div id="chaptercontent" class="Readarea ReadAjax_content">' +
+        '<p>正文内容</p></div>' + jsd;
+      expect(WebViewFetcher.isInteractiveChallengeHtml(chapterPage)).assertFalse();
     });
 
     it('doesNotTreatTurnstileEmbeddedBookPageAsChallenge', 0, () => {

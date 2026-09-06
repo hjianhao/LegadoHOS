@@ -5,6 +5,7 @@
  * 支持: 在线/本地音频播放、进度追踪、变速、音量控制
  */
 import media from '@ohos.multimedia.media';
+import audio from '@ohos.multimedia.audio';
 
 export enum PlayState {
   IDLE = 'idle',
@@ -65,12 +66,33 @@ function parseAudioUrl(value: string): ParsedAudioUrl {
 
 export class AudioPlayer {
   private avPlayer_: media.AVPlayer | null = null;
+  // MediaSource 需要由 JS 层保持引用到当前曲目结束；否则后台切换/GC 时
+  // 原生对象可能提前析构，导致网络音频在息屏后停止供数。
+  private mediaSource_: media.MediaSource | null = null;
+  private initPromise_: Promise<void> | null = null;
+  // AVPlayer 的状态回调是异步的，播放/切源操作必须串行执行，否则第二次
+  // prepare 可能在第一次操作仍处于 idle/prepared 切换过程中发起。
+  private playQueue_: Promise<void> = Promise.resolve();
   private state_: PlayState = PlayState.IDLE;
   private currentTrack_: AudioTrack | null = null;
   private position_: number = 0;
   private duration_: number = 0;
   private volume_: number = 1.0;
   private speed_: number = 1.0;
+  // 音频焦点被其他应用临时抢占时，记录原本正在播放的状态；焦点恢复后
+  // 仅在窗口内自动 play，避免把用户手动暂停误恢复。
+  private interruptionActive_: boolean = false;
+  private interruptionStartedAt_: number = 0;
+  private autoResumeEligible_: boolean = false;
+  private autoResumeTimer_: number = -1;
+  private interruptionGeneration_: number = 0;
+  private wasPlayingBeforeInterruption_: boolean = false;
+  private resumeInProgress_: boolean = false;
+  private static readonly AUTO_RESUME_WINDOW_MS = 60 * 1000;
+  // 耳机/外接音频设备断开属于设备路由变化，不应被当作临时焦点中断自动恢复。
+  private routingManager_: audio.AudioRoutingManager | null = null;
+  private deviceChangeCb_: ((action: audio.DeviceChangeAction) => void) | null = null;
+  private outputWasHeadset_: boolean = false;
 
   // 回调
   private onStateChange_: ((state: PlayState) => void) | null = null;
@@ -112,15 +134,65 @@ export class AudioPlayer {
    */
   async init(): Promise<void> {
     if (this.avPlayer_) return;
+    if (this.initPromise_) return await this.initPromise_;
 
-    try {
-      this.avPlayer_ = await media.createAVPlayer();
-      this.setupListeners();
-      console.info('[AudioPlayer] AVPlayer created');
-    } catch (err) {
-      console.error('[AudioPlayer] Init failed:', err);
-      this.state_ = PlayState.ERROR;
+    this.initPromise_ = (async (): Promise<void> => {
+      try {
+        this.avPlayer_ = await media.createAVPlayer();
+        this.setupListeners();
+        this.registerDeviceChangeListener_();
+        console.info('[AudioPlayer] AVPlayer created');
+      } catch (err) {
+        console.error('[AudioPlayer] Init failed:', err);
+        this.state_ = PlayState.ERROR;
+        throw err;
+      } finally {
+        this.initPromise_ = null;
+      }
+    })();
+    return await this.initPromise_;
+  }
+
+  /**
+   * 等待 AVPlayer 的真实状态，而不是依赖可能尚未到达的 stateChange 回调。
+   * 设置 MediaSource 后状态切换是异步的，立即 prepare 会在 idle 状态下被系统拒绝。
+   */
+  private async waitForNativeState_(expected: media.AVPlayerState, timeoutMs: number = 5000): Promise<void> {
+    const player = this.avPlayer_;
+    if (!player) throw new Error('AVPlayer not initialized');
+    const deadline = Date.now() + timeoutMs;
+    while (player.state !== expected) {
+      if (player.state === 'error') throw new Error('AVPlayer entered error state');
+      if (Date.now() >= deadline) {
+        throw new Error('AVPlayer state timeout: expected ' + expected + ', got ' + player.state);
+      }
+      // AVPlayer 的 off('stateChange', listener) 会清除该事件的全部回调，
+      // 包括 setupListeners 注册的长期回调，因此这里用轮询等待而不增删监听器。
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout(resolve, 50);
+      });
     }
+  }
+
+  private async resetForNewTrack_(): Promise<void> {
+    const player = this.avPlayer_;
+    if (!player) return;
+    const nativeState = player.state;
+    if (nativeState === 'released') {
+      this.avPlayer_ = null;
+      await this.init();
+      return;
+    }
+    if (nativeState === 'idle') return;
+
+    // stop 只允许在 prepared/playing/paused/completed 状态调用；initialized、
+    // stopped、error 状态直接 reset 即可。
+    if (nativeState === 'prepared' || nativeState === 'playing' ||
+      nativeState === 'paused' || nativeState === 'completed') {
+      try { await player.stop(); } catch (_e) { /* 状态可能已在回调中变化 */ }
+    }
+    try { await player.reset(); } catch (_e) { /* 某些系统在错误状态会自动复位 */ }
+    await this.waitForNativeState_('idle');
   }
 
   /**
@@ -131,6 +203,7 @@ export class AudioPlayer {
 
     this.avPlayer_.on('stateChange', (state: media.AVPlayerState, reason: media.StateChangeReason) => {
       console.info(`[AudioPlayer] State: ${state}`);
+      const previousState = this.state_;
       switch (state) {
         case 'idle':
           this.state_ = PlayState.IDLE;
@@ -142,19 +215,34 @@ export class AudioPlayer {
           this.state_ = PlayState.PREPARED;
           // AVPlayer.duration 的单位是毫秒，AudioPlayer 对外统一使用秒。
           this.duration_ = Math.floor(this.avPlayer_!.duration / 1000);
-          this.avPlayer_!.play();
           break;
         case 'playing':
           this.state_ = PlayState.PLAYING;
+          this.wasPlayingBeforeInterruption_ = true;
           break;
         case 'paused':
           this.state_ = PlayState.PAUSED;
+          if (!this.interruptionActive_ && previousState !== PlayState.PLAYING) {
+            this.wasPlayingBeforeInterruption_ = false;
+          }
           break;
         case 'stopped':
           this.state_ = PlayState.STOPPED;
+          this.wasPlayingBeforeInterruption_ = false;
+          break;
+        case 'completed':
+          // completed 之后仍需调用 play 才能重播；对外按停止态处理，下一次
+          // 点击播放会重新加载当前章节，避免 UI 继续显示“暂停”。
+          this.state_ = PlayState.STOPPED;
+          this.wasPlayingBeforeInterruption_ = false;
+          break;
+        case 'released':
+          this.state_ = PlayState.IDLE;
+          this.wasPlayingBeforeInterruption_ = false;
           break;
         case 'error':
           this.state_ = PlayState.ERROR;
+          this.wasPlayingBeforeInterruption_ = false;
           break;
       }
       this.onStateChange_?.(this.state_);
@@ -170,55 +258,246 @@ export class AudioPlayer {
       this.onCompletion_?.();
     });
 
+    this.avPlayer_.on('audioInterrupt', (event: audio.InterruptEvent) => {
+      console.info('[AudioPlayer] Audio interrupt: event=' + event.eventType +
+        ', force=' + event.forceType + ', hint=' + event.hintType +
+        ', state=' + this.state_);
+      this.handleAudioInterrupt_(event);
+    });
+
     this.avPlayer_.on('error', (err) => {
       console.error('[AudioPlayer] Error:', err);
       this.state_ = PlayState.ERROR;
+      this.wasPlayingBeforeInterruption_ = false;
       this.onError_?.(String(err));
     });
+  }
+
+  /** 处理 AVPlayer 的音频焦点中断，恢复策略与朗读 AudioRenderer 保持一致。 */
+  private handleAudioInterrupt_(event: audio.InterruptEvent): void {
+    if (event.eventType === audio.InterruptType.INTERRUPT_TYPE_BEGIN) {
+      if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_STOP) {
+        // STOP 代表永久失去焦点，交给用户重新点击播放。
+        this.clearInterruptionState_();
+        if (this.state_ === PlayState.PLAYING || this.state_ === PlayState.PAUSED) {
+          this.state_ = PlayState.STOPPED;
+          this.onStateChange_?.(this.state_);
+        }
+        return;
+      }
+      if (event.hintType !== audio.InterruptHint.INTERRUPT_HINT_PAUSE ||
+        (this.state_ !== PlayState.PLAYING && !this.wasPlayingBeforeInterruption_)) return;
+
+      this.interruptionGeneration_++;
+      this.interruptionActive_ = true;
+      this.interruptionStartedAt_ = Date.now();
+      this.autoResumeEligible_ = true;
+      this.scheduleAutoResumeExpiry_();
+
+      // FORCE/PAUSE 已由系统暂停；SHARE/PAUSE 需要应用自行暂停。
+      this.state_ = PlayState.PAUSED;
+      this.onStateChange_?.(this.state_);
+      if (event.forceType === audio.InterruptForceType.INTERRUPT_SHARE && this.avPlayer_) {
+        this.avPlayer_.pause().catch((e: Error) => {
+          console.warn('[AudioPlayer] pause for shared audio interrupt failed: ' + e.message);
+        });
+      }
+      return;
+    }
+
+    if (event.eventType !== audio.InterruptType.INTERRUPT_TYPE_END ||
+      event.hintType !== audio.InterruptHint.INTERRUPT_HINT_RESUME ||
+      !this.interruptionActive_ || !this.autoResumeEligible_) return;
+
+    const elapsed = Date.now() - this.interruptionStartedAt_;
+    if (elapsed > AudioPlayer.AUTO_RESUME_WINDOW_MS) {
+      console.info('[AudioPlayer] audio focus restored after auto-resume window: ' + elapsed + 'ms');
+      this.clearInterruptionState_();
+      return;
+    }
+
+    this.interruptionActive_ = false;
+    this.autoResumeEligible_ = false;
+    this.wasPlayingBeforeInterruption_ = false;
+    this.cancelAutoResumeTimer_();
+    console.info('[AudioPlayer] audio focus restored, auto resume after ' + elapsed + 'ms');
+    this.resume().catch((e: Error) => {
+      console.warn('[AudioPlayer] auto resume failed: ' + e.message);
+    });
+  }
+
+  private scheduleAutoResumeExpiry_(): void {
+    this.cancelAutoResumeTimer_();
+    const generation = this.interruptionGeneration_;
+    this.autoResumeTimer_ = setTimeout((): void => {
+      this.autoResumeTimer_ = -1;
+      if (generation !== this.interruptionGeneration_ || !this.interruptionActive_) return;
+      this.autoResumeEligible_ = false;
+      console.info('[AudioPlayer] audio interruption exceeded auto-resume window');
+    }, AudioPlayer.AUTO_RESUME_WINDOW_MS);
+  }
+
+  private cancelAutoResumeTimer_(): void {
+    if (this.autoResumeTimer_ >= 0) {
+      clearTimeout(this.autoResumeTimer_);
+      this.autoResumeTimer_ = -1;
+    }
+  }
+
+  private clearInterruptionState_(): void {
+    this.interruptionGeneration_++;
+    this.interruptionActive_ = false;
+    this.interruptionStartedAt_ = 0;
+    this.autoResumeEligible_ = false;
+    this.wasPlayingBeforeInterruption_ = false;
+    this.cancelAutoResumeTimer_();
+  }
+
+  // ---- 输出设备断开自动暂停 ----
+
+  private registerDeviceChangeListener_(): void {
+    if (this.deviceChangeCb_) return;
+    try {
+      const routing = audio.getAudioManager().getRoutingManager();
+      const cb: (action: audio.DeviceChangeAction) => void = (action: audio.DeviceChangeAction) => {
+        this.handleDeviceChange_(action);
+      };
+      routing.on('deviceChange', audio.DeviceFlag.OUTPUT_DEVICES_FLAG, cb);
+      this.routingManager_ = routing;
+      this.deviceChangeCb_ = cb;
+      this.outputWasHeadset_ = this.isCurrentOutputHeadset_();
+      console.info('[AudioPlayer] deviceChange listener registered');
+    } catch (e) {
+      console.warn('[AudioPlayer] register deviceChange listener failed: ' + (e as Error).message);
+      this.routingManager_ = null;
+      this.deviceChangeCb_ = null;
+    }
+  }
+
+  private unregisterDeviceChangeListener_(): void {
+    if (!this.routingManager_ || !this.deviceChangeCb_) return;
+    try {
+      this.routingManager_.off('deviceChange', this.deviceChangeCb_);
+    } catch (e) {
+      console.warn('[AudioPlayer] unregister deviceChange listener failed: ' + (e as Error).message);
+    }
+    this.routingManager_ = null;
+    this.deviceChangeCb_ = null;
+    this.outputWasHeadset_ = false;
+  }
+
+  private handleDeviceChange_(action: audio.DeviceChangeAction): void {
+    const wasHeadset = this.outputWasHeadset_;
+    const nowHeadset = this.isCurrentOutputHeadset_();
+    this.outputWasHeadset_ = nowHeadset;
+    if (action.type !== audio.DeviceChangeType.DISCONNECT || !wasHeadset || nowHeadset) return;
+
+    // 设备断开时不允许后续的 audioInterrupt END/RESUME 把声音恢复到扬声器。
+    const shouldPause = this.state_ === PlayState.PLAYING || this.interruptionActive_;
+    if (!shouldPause) return;
+    console.info('[AudioPlayer] headset output disconnected, auto pause');
+    this.clearInterruptionState_();
+    if (this.state_ === PlayState.PLAYING) {
+      // 先同步切到暂停态，避免异步 pause() 完成前到达的旧 BEGIN/PAUSE
+      // 又把这次设备断开误判为可自动恢复的焦点中断。
+      this.state_ = PlayState.PAUSED;
+      this.onStateChange_?.(this.state_);
+      this.avPlayer_?.pause().catch((e: Error) => {
+        console.warn('[AudioPlayer] pause for device disconnect failed: ' + e.message);
+      });
+    } else {
+      // 系统可能已经先将 AVPlayer 置为 paused；同步通知页面，但保持不可自动恢复。
+      this.onStateChange_?.(PlayState.PAUSED);
+    }
+  }
+
+  private isCurrentOutputHeadset_(): boolean {
+    try {
+      const routing = this.routingManager_ ?? audio.getAudioManager().getRoutingManager();
+      const preferred = routing.getPreferredOutputDeviceForRendererInfoSync({
+        usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+        rendererFlags: 0,
+      });
+      if (preferred.length > 0) return this.containsHeadsetDevice_(preferred);
+      return this.containsHeadsetDevice_(routing.getDevicesSync(audio.DeviceFlag.OUTPUT_DEVICES_FLAG));
+    } catch (e) {
+      console.warn('[AudioPlayer] query output devices failed: ' + (e as Error).message);
+    }
+    return false;
+  }
+
+  private containsHeadsetDevice_(devices: audio.AudioDeviceDescriptors): boolean {
+    for (let i = 0; i < devices.length; i++) {
+      const type = devices[i].deviceType;
+      if (type === audio.DeviceType.BLUETOOTH_SCO || type === audio.DeviceType.BLUETOOTH_A2DP ||
+        type === audio.DeviceType.WIRED_HEADSET || type === audio.DeviceType.WIRED_HEADPHONES ||
+        type === audio.DeviceType.USB_HEADSET) return true;
+    }
+    return false;
   }
 
   /**
    * 播放音频
    */
   async play(track: AudioTrack): Promise<void> {
+    const run = this.playQueue_.then(() => this.playInternal_(track), () => this.playInternal_(track));
+    this.playQueue_ = run.then((): void => {}, (): void => {});
+    return await run;
+  }
+
+  private async playInternal_(track: AudioTrack): Promise<void> {
     if (!this.avPlayer_) await this.init();
     if (!this.avPlayer_) throw new Error('AVPlayer not initialized');
 
+    this.clearInterruptionState_();
     this.currentTrack_ = track;
 
     try {
-      // setMediaSource 只允许在 AVPlayer 的 idle 状态调用。部分系统在刚创建
-      // AVPlayer 后会先报告 initialized，即使还没有设置过资源，因此这里也要
-      // 显式 reset；切换章节则先停止再复位。
-      if (this.state_ !== PlayState.IDLE) {
-        if (this.state_ !== PlayState.INITIALIZED) {
-          try { await this.avPlayer_.stop(); } catch (_e) { /* already stopped */ }
-        }
-        try { await this.avPlayer_.reset(); } catch (_e) { /* some devices reset implicitly */ }
-      }
+      await this.resetForNewTrack_();
+      if (!this.avPlayer_) throw new Error('AVPlayer not initialized');
 
       const parsed = parseAudioUrl(track.url);
-      // MediaSource 支持将 Referer/User-Agent 等请求头传给网络音频；没有头时
-      // 仍走同一 API，避免把 Legado 的扩展串误传给底层播放器。
-      if (/^file:\/\//i.test(parsed.url)) {
+      const hasHeaders = Object.keys(parsed.headers).length > 0;
+      // 普通 URL 直接设置 url，由系统切换到 initialized。只有确实带有
+      // Legado 请求头扩展时才使用 MediaSource；setMediaSource 的状态切换是
+      // 异步的，下面统一等待 initialized 后再 prepare。
+      this.mediaSource_ = null;
+      if (/^file:\/\//i.test(parsed.url) || !hasHeaders) {
         this.avPlayer_.url = parsed.url;
       } else {
-        const mediaSource = media.createMediaSourceWithUrl(parsed.url, parsed.headers);
-        try {
-          await this.avPlayer_.setMediaSource(mediaSource);
-        } catch (sourceError) {
-          // 少数旧系统只支持 url 属性；没有请求头时可以安全降级。
-          if (Object.keys(parsed.headers).length > 0) throw sourceError;
-          this.avPlayer_.url = parsed.url;
-        }
+        this.mediaSource_ = media.createMediaSourceWithUrl(parsed.url, parsed.headers);
+        await this.avPlayer_.setMediaSource(this.mediaSource_);
+      }
+      await this.waitForNativeState_('initialized');
+
+      // 有声书使用 AUDIOBOOK 流类型，系统才能按朗读/听书策略正确分配音频焦点。
+      // 该属性必须在 initialized 状态、prepare 之前设置。
+      try {
+        this.avPlayer_.audioRendererInfo = {
+          usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+          rendererFlags: 0,
+        };
+        // audioRendererInfo 生效后再取一次实际路由，覆盖播放器创建时尚未准备好的情况。
+        this.outputWasHeadset_ = this.isCurrentOutputHeadset_();
+      } catch (e) {
+        console.warn('[AudioPlayer] set audiobook renderer info failed: ' + (e as Error).message);
       }
 
-      // 准备（触发 stateChange → prepared）
       await this.avPlayer_.prepare();
+      await this.waitForNativeState_('prepared');
 
-      // 应用已设置的音量、速度
+      // SHARE_MODE 下焦点恢复会回调 RESUME，由本类主动 play()，实现短时中断自动恢复。
+      try {
+        this.avPlayer_.audioInterruptMode = audio.InterruptMode.SHARE_MODE;
+      } catch (e) {
+        console.warn('[AudioPlayer] set interrupt mode failed: ' + (e as Error).message);
+      }
+
+      // 应用已设置的音量、速度，并显式启动播放。播放不能放在
+      // stateChange 回调中，否则会与 prepare 的 Promise 产生重入竞态。
       this.avPlayer_.setVolume(this.volume_);
       this.applySpeed_();
+      await this.avPlayer_.play();
 
       console.info(`[AudioPlayer] Playing: ${track.title} (${track.url})`);
     } catch (err) {
@@ -233,6 +512,8 @@ export class AudioPlayer {
    * 暂停
    */
   async pause(): Promise<void> {
+    // 用户主动暂停后，忽略稍后到达的旧 RESUME 事件。
+    this.clearInterruptionState_();
     if (this.avPlayer_ && this.state_ === PlayState.PLAYING) {
       await this.avPlayer_.pause();
     }
@@ -243,7 +524,17 @@ export class AudioPlayer {
    */
   async resume(): Promise<void> {
     if (this.avPlayer_ && this.state_ === PlayState.PAUSED) {
-      await this.avPlayer_.play();
+      if (this.interruptionActive_) {
+        console.info('[AudioPlayer] resume deferred while audio focus is interrupted');
+        return;
+      }
+      if (this.resumeInProgress_) return;
+      this.resumeInProgress_ = true;
+      try {
+        await this.avPlayer_.play();
+      } finally {
+        this.resumeInProgress_ = false;
+      }
     }
   }
 
@@ -251,6 +542,7 @@ export class AudioPlayer {
    * 停止
    */
   async stop(): Promise<void> {
+    this.clearInterruptionState_();
     if (this.avPlayer_ && (this.state_ === PlayState.PLAYING || this.state_ === PlayState.PAUSED)) {
       await this.avPlayer_.stop();
       this.position_ = 0;
@@ -290,16 +582,20 @@ export class AudioPlayer {
    * 释放播放器资源
    */
   async destroy(): Promise<void> {
+    this.clearInterruptionState_();
+    this.unregisterDeviceChangeListener_();
     if (this.avPlayer_) {
       // 移除所有监听
       this.avPlayer_.off('stateChange');
       this.avPlayer_.off('timeUpdate');
       this.avPlayer_.off('endOfStream');
+      this.avPlayer_.off('audioInterrupt');
       this.avPlayer_.off('error');
 
       await this.avPlayer_.release();
       this.avPlayer_ = null;
     }
+    this.mediaSource_ = null;
     this.state_ = PlayState.IDLE;
     this.currentTrack_ = null;
     this.position_ = 0;

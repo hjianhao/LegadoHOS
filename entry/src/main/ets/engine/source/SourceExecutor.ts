@@ -99,6 +99,43 @@ export function hasUsableSearchIdentity(name: string, noteUrl: string): boolean 
   return !!(name || '').trim() && !!(noteUrl || '').trim();
 }
 
+/**
+ * 清理书源 URL 后处理产生的重复查询串。
+ *
+ * 一些站点已把 `?shunt=...` 写进章节 href，而旧规则仍会追加
+ * `/?shunt={{Get('shunt')}}`，最终得到 `?shunt=1/?shunt=1`。浏览器
+ * 可能把它当成合法 URL，但站点会返回 403/404；已缓存的旧目录也会持续
+ * 复用这个地址，因此在目录落库前和正文请求前都做一次兼容清理。
+ */
+export function normalizeGeneratedSourceUrl_(value: string): string {
+  const input = (value || '').trim();
+  if (!input) return '';
+  const hashIndex = input.indexOf('#');
+  const fragment = hashIndex >= 0 ? input.substring(hashIndex) : '';
+  const withoutFragment = hashIndex >= 0 ? input.substring(0, hashIndex) : input;
+  const queryIndex = withoutFragment.indexOf('?');
+  if (queryIndex < 0) return input;
+  const rawQuery = withoutFragment.substring(queryIndex + 1);
+  // 没有嵌套查询标记时保留原 URL，避免改变合法的重复参数语义。
+  if (rawQuery.indexOf('/?') < 0 && rawQuery.indexOf('?') < 0) return input;
+
+  const fixedQuery = rawQuery.replace(/\/\?/g, '&').replace(/\?/g, '&');
+  const parts = fixedQuery.split('&');
+  const seenKeys = new Set<string>();
+  const kept: string[] = [];
+  for (const part of parts) {
+    const token = part.trim();
+    if (!token) continue;
+    const equalIndex = token.indexOf('=');
+    const key = (equalIndex >= 0 ? token.substring(0, equalIndex) : token).trim().toLowerCase();
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    kept.push(token);
+  }
+  return withoutFragment.substring(0, queryIndex) +
+    (kept.length > 0 ? '?' + kept.join('&') : '') + fragment;
+}
+
 /** 站点迁移/异常时可能用 200 返回错误 HTML，不能再从页内导航链接伪造搜索结果。 */
 function isServerErrorHtml_(html: string): boolean {
   const value = (html || '').replace(/\s+/g, ' ');
@@ -386,15 +423,42 @@ export function isLikelySameChapterPageUrl(chapterUrl: string, nextUrl: string):
 
   const currentPath = current.replace(/^https?:\/\/[^\/]+/i, '').replace(/[?#].*$/, '');
   const nextPath = next.replace(/^https?:\/\/[^\/]+/i, '').replace(/[?#].*$/, '');
-  if (currentPath === nextPath) return /[?&](page|p|pageIndex|pageNo)=\d+/i.test(next);
+  if (currentPath === nextPath) {
+    return /[?&](page|p|pageIndex|pageNo)=\d+/i.test(current) ||
+      /[?&](page|p|pageIndex|pageNo)=\d+/i.test(next);
+  }
 
-  const pageSuffix = /(?:[_-](?:page)?\d+)(\.[a-z0-9]+)?$/i;
-  const currentStem = currentPath.replace(pageSuffix, '$1');
-  const nextStem = nextPath.replace(pageSuffix, '$1');
-  if (currentStem === nextStem && (pageSuffix.test(currentPath) || pageSuffix.test(nextPath))) return true;
+  /**
+   * 仅把 1~3 位数字视为页码，避免把书站常见的 6~8 位章节 ID
+   * （例如 `123848_46202771.html`）误当成分页后缀。
+   * 返回的 baseWithExtension 保留原扩展名，方便识别
+   * `chapter.html -> chapter_2.html`。
+   */
+  const splitPageSuffix = (path: string): { baseWithExtension: string; page: number | null } => {
+    const match = path.match(/^(.*?)(?:[_-](?:page)?(\d{1,3}))(\.[a-z0-9]+)?$/i);
+    if (!match) return { baseWithExtension: path, page: null };
+    return {
+      baseWithExtension: match[1] + (match[3] || ''),
+      page: parseInt(match[2], 10),
+    };
+  };
 
-  // `.../4.html → .../3.html` 这类裸数字变化通常是相邻章节，不是同章分页。
-  // 真正分页必须有 page 查询参数、_2/-page2 等明确标记，或由页面"下一页"语义嗅探确认。
+  const currentPage = splitPageSuffix(currentPath);
+  const nextPage = splitPageSuffix(nextPath);
+
+  // 香书等移动站点：章节页 `..._章节ID.html` 的下一页为
+  // `..._章节ID_2.html`。只有后一个 URL 明确是当前 URL 加页码时才放行。
+  if (nextPage.page !== null && nextPage.baseWithExtension === currentPath) return true;
+
+  // 已经在分页页时，允许同一章节的 `_2 -> _3` / `-page2 -> -page3`。
+  if (currentPage.page !== null && nextPage.page !== null &&
+    currentPage.baseWithExtension === nextPage.baseWithExtension &&
+    currentPage.page !== nextPage.page) {
+    return true;
+  }
+
+  // `.../4.html -> .../3.html` 这类裸数字变化通常是相邻章节，不是同章分页。
+  // 真正分页必须有 page 查询参数、明确的 `_2/-page2` 后缀，或由页面"下一页"语义确认。
   return false;
 }
 
@@ -1450,36 +1514,15 @@ export class SourceExecutor {
     const requestTimeout = SourceNetworkPolicy.timeout(source);
     await SourceNetworkPolicy.wait(source);
 
-    // 源配置了 webView 且搜索使用 POST 时，不能退回无会话的直连 URL：
-    // 隐藏 WebView 的 loadUrl 只支持 GET，但交互 WebView 可以打开同一入口、
-    // 回填并提交原始表单体。生成的 AI 书源会持久化 webView=true，实际搜索
-    // 也必须走这条路径，否则校验时能搜到、保存后却永远得到空结果/限频页。
+    // `webView:true` 只表示书源允许/需要浏览器环境，并不等于每次搜索都
+    // 必须弹出前台交互窗口。先走带完整 POST body、Cookie 和重定向处理的
+    // 原生 HTTP；只有返回明确的挑战页，或普通请求确实失败时，后面的
+    // challenge 分支才会打开交互 WebView。这样七真等能直接 POST 的书源
+    // 不会每次搜索都弹出搜索页面，同时仍保留真正需要验证时的兜底。
     if (finalWebView && finalMethod === 'POST') {
-      if (WebViewFetcher.interactiveFetcher) {
-        try {
-          console.info('[SrcEx] POST search requires interactive WebView for', source.sourceName);
-          const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'searchSubmit',
-            '搜索需要浏览器提交', { method: 'POST', body: finalBody || '' });
-          if (interactiveHtml && interactiveHtml.length > 200) {
-            const interactiveResults = await this.parseResponse(
-              this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl, 0, finalUrl);
-            console.info('[SrcEx] Interactive POST search got', interactiveResults.length,
-              'results for', source.sourceName);
-            // webView 是书源的明确请求语义。交互页即使解析出 0 条，也不能
-            // 再退回无会话的直连 POST，否则会重复触发限频并掩盖真正问题。
-            return interactiveResults;
-          }
-          console.warn('[SrcEx] Interactive POST search returned no usable HTML for', source.sourceName);
-        } catch (interactiveError) {
-          console.warn('[SrcEx] Interactive POST search failed for', source.sourceName, ':',
-            (interactiveError as Error).message || String(interactiveError));
-        }
-        // 交互处理器存在但用户关闭/页面未取到结果时，保持 webView 语义，
-        // 不调用会失败的搜索 URL；下次搜索可再次打开弹窗。
-        return [];
-      }
-      console.warn('[SrcEx] POST search webView requested but interactive WebView is not registered; using HTTP fallback for',
-        source.sourceName);
+      console.info('[SrcEx] Search WebView policy source=' + source.sourceName +
+        ' stage=search method=POST configured=true action=http-first url=' +
+        finalUrl.substring(0, 160) + ' bodyLen=' + (finalBody || '').length.toString());
     }
 
     // 源配置了 webView 且非 POST → 用隐藏 WebView 加载
@@ -1518,8 +1561,11 @@ export class SourceExecutor {
           let bodyText = wvResult.html;
           if (WebViewFetcher.isInteractiveChallengeHtml(bodyText) &&
             WebViewFetcher.interactiveFetcher) {
-            console.info('[SrcEx] Configured WebView still requires interaction for', source.sourceName);
-            const interactiveHtml = await WebViewFetcher.fetchInteractive(wvResult.finalUrl || finalUrl);
+            console.warn('[SrcEx] Interactive WebView request source=' + source.sourceName +
+              ' stage=search reason=configured-webview-challenge url=' +
+              (wvResult.finalUrl || finalUrl).substring(0, 160));
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(
+              wvResult.finalUrl || finalUrl, 'challenge', 'configured-webview-challenge');
             if (interactiveHtml && interactiveHtml.length > 200) bodyText = interactiveHtml;
           }
           if (bodyText && bodyText.length > 100) {
@@ -1579,10 +1625,16 @@ export class SourceExecutor {
         bodyText = await NetUtil.httpGet(finalUrl, requestHeaders, requestTimeout);
       }
       if (!bodyText) {
-        console.warn('[SrcEx] Empty response from', source.sourceName);
+        console.warn('[SrcEx] Search response source=' + source.sourceName +
+          ' stage=search transport=http method=' + (finalMethod || 'GET') +
+          ' url=' + finalUrl.substring(0, 160) + ' bytes=0 empty=true');
         return [];
       }
-      console.info('[SrcEx] Got', bodyText.length, 'bytes from', source.sourceName);
+      console.info('[SrcEx] Search response source=' + source.sourceName +
+        ' stage=search transport=http method=' + (finalMethod || 'GET') +
+        ' url=' + finalUrl.substring(0, 160) +
+        ' bytes=' + bodyText.length.toString() +
+        ' challenge=' + (WebViewFetcher.isInteractiveChallengeHtml(bodyText) ? 'true' : 'false'));
 
       // 搜索频率限制：部分站点在两次搜索间隔不足时返回 alert("搜索间隔: 30 秒")
       // 脚本页。校验和 Agent 刚执行过搜索时容易触发。检测到后等待指定时间再
@@ -1614,17 +1666,22 @@ export class SourceExecutor {
       parsedBody = await this.applyLoginCheckJs_(parsedBody, source, finalUrl);
 
       const httpResults = await this.parseResponse(parsedBody, source, baseUrl, 0, finalUrl);
+      console.info('[SrcEx] Search parsed source=' + source.sourceName +
+        ' stage=search transport=http results=' + httpResults.length.toString() +
+        ' challenge=' + (WebViewFetcher.isInteractiveChallengeHtml(parsedBody) ? 'true' : 'false'));
 
       if (httpResults.length === 0 && WebViewFetcher.isInteractiveChallengeHtml(parsedBody)) {
         const challengeMessage = '搜索页返回验证码/人工验证页面，未完成验证或书源缺少验证码提交规则';
         console.warn('[SrcEx] ' + challengeMessage + ':', source.sourceName);
+        let challengeClearedByHiddenWebView = false;
         // 图片验证码门禁 → 优先弹验证码输入对话框（CaptchaDialog），与 Android
         // 的验证码对话框体验一致；输入成功后站点会话 Cookie 通常放行，重放
         // 原请求即可拿到真实结果。未输入或重放仍被拦截时降级到完整 WebView。
         if (WebViewFetcher.isLikelyImageCaptchaPage(parsedBody)) {
           const captchaImgUrl = WebViewFetcher.extractCaptchaImageUrl(parsedBody, finalUrl);
           if (captchaImgUrl && JsExpressionEvaluator.captchaHandler) {
-            console.info('[SrcEx] 图片验证码门禁，弹出验证码输入对话框 for', source.sourceName);
+            console.info('[SrcEx] Interactive request source=' + source.sourceName +
+              ' stage=search reason=image-captcha url=' + finalUrl.substring(0, 160));
             const code = await JsExpressionEvaluator.requestCaptchaInput(captchaImgUrl);
             if (code) {
               try {
@@ -1660,10 +1717,41 @@ export class SourceExecutor {
             }
           }
         }
-        if (WebViewFetcher.interactiveFetcher) {
+        // 对明确配置 webView 的 POST 源，先尝试隐藏 WebView 执行站点自己的
+        // JS/Guard 脚本，再重放原始 POST。只有隐藏会话仍停在真实挑战页时
+        // 才需要用户介入；这能消除七真等站点每次搜索都弹窗口的问题。
+        if (finalWebView && finalMethod === 'POST' &&
+          !WebViewFetcher.isLikelyImageCaptchaPage(parsedBody) && WebViewFetcher.isReady()) {
           try {
-            console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
-            const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge', '',
+            console.info('[SrcEx] Hidden WebView challenge probe source=' + source.sourceName +
+              ' stage=search reason=post-webview-js url=' + finalUrl.substring(0, 160));
+            const probe = await WebViewFetcher.fetch(finalUrl, Math.min(requestTimeout, 15000), headers,
+              allowedWebViewRedirectHosts_(finalUrl, source.sourceUrl));
+            const probeHtml = probe.html || '';
+            console.info('[SrcEx] Hidden WebView challenge probe result source=' + source.sourceName +
+              ' bytes=' + probeHtml.length.toString() +
+              ' challenge=' + (WebViewFetcher.isInteractiveChallengeHtml(probeHtml) ? 'true' : 'false'));
+            if (probeHtml && !WebViewFetcher.isInteractiveChallengeHtml(probeHtml)) {
+              const replayedBody = await NetUtil.httpPost(finalUrl, finalBody || '', requestHeaders, requestTimeout);
+              if (replayedBody && !WebViewFetcher.isInteractiveChallengeHtml(replayedBody)) {
+                challengeClearedByHiddenWebView = true;
+                const replayedResults = await this.parseResponse(
+                  this.tryHexDecode_(replayedBody) || replayedBody, source, baseUrl, 0, finalUrl);
+                console.info('[SrcEx] Hidden WebView POST replay source=' + source.sourceName +
+                  ' results=' + replayedResults.length.toString());
+                if (replayedResults.length > 0) return replayedResults;
+              }
+            }
+          } catch (probeError) {
+            console.info('[SrcEx] Hidden WebView challenge probe failed source=' + source.sourceName +
+              ' error=' + ((probeError as Error).message || String(probeError)));
+          }
+        }
+        if (!challengeClearedByHiddenWebView && WebViewFetcher.interactiveFetcher) {
+          try {
+            console.warn('[SrcEx] Interactive WebView request source=' + source.sourceName +
+              ' stage=search reason=challenge-page url=' + finalUrl.substring(0, 160));
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(finalUrl, 'challenge', 'challenge-page',
               finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
             // 交互 WebView 只能先以 GET 打开页面完成 WAF/JS 验证；搜索请求若
             // 原本是 POST，验证完成后必须用同一 body 重放，否则页面会停在
@@ -1772,9 +1860,13 @@ export class SourceExecutor {
             console.info('[SrcEx] WebView parse returned 0 for', wvHtml.length, 'byte page, may be Cloudflare');
           }
           // 静态 WebView 结果为空/太小/0结果 → 尝试交互式 Cloudflare 验证
-          if (WebViewFetcher.needsInteractive(url, msg)) {
-            console.info('[SrcEx] Trying interactive WebView for', source.sourceName);
-            const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
+          const hiddenChallengeDetected = wvHtml.length > 100 &&
+            WebViewFetcher.isInteractiveChallengeHtml(wvHtml);
+          if (hiddenChallengeDetected || WebViewFetcher.needsInteractive(url, msg)) {
+            console.warn('[SrcEx] Interactive WebView request source=' + source.sourceName +
+              ' stage=search reason=' + (hiddenChallengeDetected ? 'hidden-challenge-page' : 'http-error') +
+              ' url=' + url.substring(0, 160));
+            const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', 'http-error',
               finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
             // 外层 catch 代表原始 HTTP 请求直接以 403/5xx 抛错。交互 WebView
             // 完成 Cloudflare 后，不能只解析它打开的 GET 页面；POST 搜索必须
@@ -1815,8 +1907,9 @@ export class SourceExecutor {
           // WebView 纯加载失败 → 尝试交互式 Cloudflare 验证
           if (WebViewFetcher.needsInteractive(url, msg)) {
             try {
-              console.info('[SrcEx] Trying interactive WebView (catch) for', source.sourceName);
-              const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', '',
+              console.warn('[SrcEx] Interactive WebView request source=' + source.sourceName +
+                ' stage=search reason=http-error-webview-failed url=' + url.substring(0, 160));
+              const interactiveHtml = await WebViewFetcher.fetchInteractive(url, 'challenge', 'http-error-webview-failed',
                 finalMethod === 'POST' ? { method: 'POST', body: finalBody || '' } : undefined);
               if (interactiveHtml && interactiveHtml.length > 200) {
                 return await this.parseResponse(this.tryHexDecode_(interactiveHtml) || interactiveHtml, source, baseUrl,
@@ -3129,6 +3222,12 @@ export class SourceExecutor {
         console.info('[SrcEx] getContent resolved relative URL:', contentUrl.substring(0, 80));
       }
     }
+    const normalizedContentUrl = normalizeGeneratedSourceUrl_(contentUrl);
+    if (normalizedContentUrl !== contentUrl) {
+      console.info('[SrcEx] getContent normalized duplicate query URL:',
+        contentUrl.substring(0, 120), '->', normalizedContentUrl.substring(0, 120));
+      contentUrl = normalizedContentUrl;
+    }
     console.info('[SrcEx] getContent final URL:', contentUrl.substring(0, 80));
     try {
       // 提取 URL 末尾 JSON 选项（与 buildUrl 一致）
@@ -3687,6 +3786,12 @@ export class SourceExecutor {
     }
     if (effectiveTocUrlRule) {
       tocUrl = this.resolveUrl(effectiveTocUrlRule, tocUrl);
+    }
+    const normalizedTocUrl = normalizeGeneratedSourceUrl_(tocUrl);
+    if (normalizedTocUrl !== tocUrl) {
+      console.info('[SrcEx] getToc normalized duplicate query URL:',
+        tocUrl.substring(0, 120), '->', normalizedTocUrl.substring(0, 120));
+      tocUrl = normalizedTocUrl;
     }
     const preUpdateJs = (source.ruleTocPreUpdateJs || '').trim();
     if (preUpdateJs) {
@@ -6042,6 +6147,7 @@ export class SourceExecutor {
         !url.startsWith('#')) {
         url = this.resolvePageUrl(url, baseUrl);
       }
+      url = normalizeGeneratedSourceUrl_(url);
 
       const volumeRule = rules['isVolume'] || '';
       const volumeValue = volumeRule ? this.getPath(itemObj as Record<string, unknown>, volumeRule) : undefined;
@@ -6404,11 +6510,12 @@ export class SourceExecutor {
         const isPayValue = await resolveTocField(rules['isPay'] || '');
         const updateTimeValue = await resolveTocField(rules['updateTime'] || '');
         if (!chapterUrl) chapterUrl = isVolume ? (title + index) : tocUrl;
-        if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
         if (chapterUrl && (!isVolume || hasRuleUrl) &&
           !chapterUrl.startsWith('http://') && !chapterUrl.startsWith('https://')) {
           chapterUrl = this.resolvePageUrl(chapterUrl, tocUrl);
         }
+        chapterUrl = normalizeGeneratedSourceUrl_(chapterUrl);
+        if (index === 0) console.info('[SrcEx] Chapter0 url len=' + chapterUrl.length + ':', chapterUrl.substring(0, 300));
         return {
           title: title || `第${index + 1}章`,
           url: chapterUrl,
@@ -6456,6 +6563,7 @@ export class SourceExecutor {
       if (baseTocUrl) {
         url = this.resolveTocUrlTemplate(url, baseTocUrl) || url;
       }
+      url = normalizeGeneratedSourceUrl_(url);
       // 空标题且空链接跳过
       if (!title && !url) continue;
       // 去重：优先 URL；URL 为空时退回 title（卷名/无链接项）
@@ -6514,6 +6622,7 @@ export class SourceExecutor {
       const title = (chapter.title || '').trim();
       let url = (chapter.url || '').trim();
       if (baseTocUrl) url = this.resolveTocUrlTemplate(url, baseTocUrl) || url;
+      url = normalizeGeneratedSourceUrl_(url);
       if (!title && !url) continue;
       const key = url ? ('u:' + this.normalizeTocDedupUrl_(url)) : ('t:' + title);
       const existing = seen.get(key);
@@ -6527,7 +6636,7 @@ export class SourceExecutor {
         }
       }
       seen.set(key, target.length);
-      target.push(chapter);
+      target.push(url === chapter.url ? chapter : { ...chapter, url: url });
     }
   }
 

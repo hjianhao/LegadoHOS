@@ -28,6 +28,7 @@ import { SourceCheckService } from '../service/SourceCheckService';
 import { BookTable } from '../data/database/BookTable';
 import { BookDeleter } from '../service/BookDeleter';
 import { AloudState, getGlobalAloudState } from '../service/ReadAloudEngine';
+import { globalAudioPlaybackSession } from '../service/AudioPlaybackSession';
 
 export default class MainAbility extends UIAbility {
   /** 朗读期间不启动自动备份，避免 ZIP/JSON 构建阻塞 AudioRenderer 实时供数。 */
@@ -35,6 +36,9 @@ export default class MainAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[MainAbility] onCreate');
+    // 页面生命周期的 onPageHide 同时覆盖路由切换和 Ability 进入后台。
+    // 记录 Ability 状态，让需要跨息屏继续执行的页面任务不要被误取消。
+    AppStorage.setOrCreate('appInBackground', false);
     // 通过「打开方式/分享」冷启动：解析文件并广播给页面
     ShareImportService.handleWant(want, this.context);
     this.handleSourceCheckAction_(want);
@@ -315,11 +319,22 @@ export default class MainAbility extends UIAbility {
     console.info('[MainAbility] onWindowStageDestroy');
   }
 
+  onWillForeground(): void {
+    AppStorage.setOrCreate('appInBackground', false);
+  }
+
+  onWillBackground(): void {
+    // onPageHide 可能紧随 onWillBackground 调用，提前写入状态避免把
+    // 息屏误判为路由离开。
+    AppStorage.setOrCreate('appInBackground', true);
+  }
+
   onForeground(): void {
     console.info('[MainAbility] onForeground');
+    AppStorage.setOrCreate('appInBackground', false);
     this.syncProgressFromCloud();
-    // 后台期间若因朗读而延后备份，回前台后在不播放时补做一次。
-    if (this.autoBackupDeferred_ && getGlobalAloudState() !== AloudState.PLAYING) {
+    // 后台期间若因朗读或有声书播放而延后备份，回前台后在不播放时补做一次。
+    if (this.autoBackupDeferred_ && !this.isMediaPlaying_()) {
       this.autoBackupDeferred_ = false;
       this.runAutoBack_();
     }
@@ -327,16 +342,30 @@ export default class MainAbility extends UIAbility {
 
   onBackground(): void {
     console.info('[MainAbility] onBackground');
-    if (getGlobalAloudState() === AloudState.PLAYING) {
+    AppStorage.setOrCreate('appInBackground', true);
+    if (this.isMediaPlaying_()) {
       this.autoBackupDeferred_ = true;
-      console.info('[MainAbility] autoBack deferred while aloud is playing');
+      console.info('[MainAbility] autoBack deferred while media is playing');
       return;
     }
     this.runAutoBack_();
   }
 
+  private isMediaPlaying_(): boolean {
+    // PAUSED 也属于朗读会话：恢复操作可能随时继续，不能在此时启动大体量备份。
+    const aloudState = getGlobalAloudState();
+    return (aloudState === AloudState.PLAYING || aloudState === AloudState.PAUSED) ||
+      globalAudioPlaybackSession.isPlaying();
+  }
+
   private runAutoBack_(): void {
     // 对齐安卓：生命周期机会点触发自动备份（24h 节流）
+    // 生命周期回调与用户恢复朗读可能并发，启动备份前再次检查媒体状态。
+    if (this.isMediaPlaying_()) {
+      this.autoBackupDeferred_ = true;
+      console.info('[MainAbility] autoBack deferred: media became active');
+      return;
+    }
     try {
       BackupService.autoBack()
         .then((did) => {

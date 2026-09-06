@@ -16,7 +16,13 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { globalSourceGateway } from '../engine/source/SourceGateway';
 import { AudioTrack, globalAudioPlayer, PlayState } from '../engine/audio/AudioPlayer';
+import { globalAudioPlaybackSession } from '../service/AudioPlaybackSession';
 import { QysgRuntimeHostComponent } from '../engine/qysg/QysgRuntimeManager';
+
+// 音频地址通常是带时效的 CDN 地址，临时网络抖动时重新执行章节规则
+// 比复用失败的地址更可靠。总共最多尝试 4 次，避免永久失效的书源阻塞播放。
+const AUDIO_RETRY_LIMIT: number = 3;
+const AUDIO_RETRY_DELAYS: number[] = [1000, 2000, 4000];
 
 @Entry
 @Component
@@ -49,9 +55,21 @@ export struct AudioReadPage {
   private targetPosition_: number = 0;
   private lastProgressSave_: number = 0;
   private disposed_: boolean = false;
+  private hostContext_: Context | null = null;
+  // 章节地址获取是异步的；新选择应使之前尚未完成的请求失效，避免旧章节抢先播放。
+  private chapterRequestId_: number = 0;
+  // 同一章节的临时网络/播放器错误最多自动重试 AUDIO_RETRY_LIMIT 次。
+  private audioRetryCount_: number = 0;
 
   aboutToAppear(): void {
     this.disposed_ = false;
+    try {
+      this.hostContext_ = UiUtil.getHostContext(this.getUIContext());
+      globalAudioPlaybackSession.attach(this.hostContext_, this.player_)
+        .catch((error: Error) => console.warn('[AudioReadPage] AVSession unavailable: ' + error.message));
+    } catch (error) {
+      console.warn('[AudioReadPage] AVSession context unavailable: ' + (error as Error).message);
+    }
     // 重新进入页面时先同步跨页面播放器状态，避免正在后台播放时界面仍显示“播放”。
     this.playState = this.player_.state;
     this.playPosition = this.player_.position;
@@ -69,9 +87,11 @@ export struct AudioReadPage {
     if (params['durChapterPos'] !== undefined) this.targetPosition_ = Number(params['durChapterPos']);
     if (params['durCharPos'] !== undefined) this.targetPosition_ = Number(params['durCharPos']);
     this.player_.onStateChange = (state: PlayState): void => {
+      globalAudioPlaybackSession.updatePlayback(state, this.player_.position, this.player_.duration, this.player_.speed);
       if (!this.disposed_) this.playState = state;
     };
     this.player_.onProgress = (current: number, total: number): void => {
+      globalAudioPlaybackSession.updatePlayback(this.player_.state, current, total, this.player_.speed);
       if (this.disposed_) return;
       this.playPosition = current;
       if (total > 0) this.duration = Math.floor(total);
@@ -82,16 +102,29 @@ export struct AudioReadPage {
       if (!this.disposed_) this.playNext_();
     };
     this.player_.onError = (error: string): void => {
-      if (!this.disposed_) {
+      if (this.disposed_) return;
+      // playChapter_ 的首次加载/重试会自行捕获 play() 抛出的错误；此处只
+      // 处理已经播放起来后由 AVPlayer 异步上报的断流错误，避免一次失败重试两遍。
+      if (this.isLoadingAudio) return;
+      if (this.audioRetryCount_ >= AUDIO_RETRY_LIMIT || this.currentIndex < 0 ||
+        this.currentIndex >= this.chapters.length) {
         this.isLoadingAudio = false;
         this.loadError = '音频播放失败：' + error;
+        return;
       }
+      this.isLoadingAudio = true;
+      this.loadError = '音频播放中断，正在重新获取（1/' + AUDIO_RETRY_LIMIT + '）…';
+      this.playChapter_(this.currentIndex, true).catch((retryError: Error): void => {
+        console.warn('[AudioReadPage] Background audio retry failed: ' + retryError.message);
+      });
     };
     this.loadBook_();
   }
 
   async aboutToDisappear(): Promise<void> {
     this.disposed_ = true;
+    this.chapterRequestId_++;
+    this.isLoadingAudio = false;
     this.saveProgress_();
     // 不主动 stop：与 Android AudioPlayService 一致，离开页面后音频仍可继续播放。
     // 下一次进入该书时会复用本页播放器状态或重新创建播放器。
@@ -162,7 +195,8 @@ export struct AudioReadPage {
       this.currentIndex = this.resolveIndex_(this.targetIndex_);
       this.currentTitle = this.chapters[this.currentIndex]?.title || '';
       this.playPosition = Math.max(0, this.targetPosition_);
-      if (this.chapters.length === 0) this.loadError = '未获取到音频目录';
+      if (!this.source_) this.loadError = '书源不存在，无法播放音频';
+      else if (this.chapters.length === 0) this.loadError = '未获取到音频目录';
     } catch (error) {
       this.loadError = '加载音频目录失败：' + String(error);
     } finally {
@@ -182,8 +216,20 @@ export struct AudioReadPage {
     return 0;
   }
 
-  private async playChapter_(index: number): Promise<void> {
-    if (!this.source_ || index < 0 || index >= this.chapters.length) return;
+  private async playChapter_(index: number, autoRetry: boolean = false): Promise<void> {
+    if (index < 0 || index >= this.chapters.length) return;
+    if (!this.source_) {
+      this.isLoadingAudio = false;
+      this.loadError = '书源不存在，无法播放音频';
+      return;
+    }
+    if (!autoRetry) this.audioRetryCount_ = 0;
+    if (autoRetry && this.audioRetryCount_ >= AUDIO_RETRY_LIMIT) {
+      this.isLoadingAudio = false;
+      this.loadError = '音频播放失败，已重试 ' + AUDIO_RETRY_LIMIT + ' 次';
+      return;
+    }
+    const requestId = ++this.chapterRequestId_;
     const chapter = this.chapters[index];
     if (!chapter.url) {
       this.playNextFrom_(index);
@@ -191,28 +237,67 @@ export struct AudioReadPage {
     }
     this.isLoadingAudio = true;
     this.loadError = '';
-    try {
-      const result = await globalSourceGateway.getContentResult(this.source_, chapter.url, this.bookUrl);
-      const audioUrl = (result.raw || '').trim();
-      if (!audioUrl) throw new Error('书源没有返回音频地址');
-      const track: AudioTrack = {
-        title: chapter.title || ('第' + (index + 1) + '章'),
-        artist: this.bookAuthor || this.bookName,
-        url: audioUrl,
-        duration: 0,
-        coverUrl: this.coverUrl,
-      };
-      await this.player_.play(track);
-      this.currentIndex = index;
-      this.currentTitle = track.title;
-      this.playPosition = 0;
-      this.duration = 0;
-      this.isLoadingAudio = false;
-      this.saveProgress_();
-    } catch (error) {
-      this.isLoadingAudio = false;
-      this.loadError = '获取音频失败：' + String(error);
+    let lastError: Error = new Error('未知音频错误');
+    for (let attempt = 0; attempt <= AUDIO_RETRY_LIMIT; attempt++) {
+      if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+      try {
+        const result = await globalSourceGateway.getContentResult(this.source_, chapter.url, this.bookUrl);
+        if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+        const audioUrl = (result.raw || '').trim();
+        if (!audioUrl) throw new Error('书源没有返回音频地址');
+        const track: AudioTrack = {
+          title: chapter.title || ('第' + (index + 1) + '章'),
+          artist: this.bookAuthor || this.bookName,
+          url: audioUrl,
+          duration: 0,
+          coverUrl: this.coverUrl,
+        };
+        globalAudioPlaybackSession.setTrack(track);
+        if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+        // 播放前先申请 UIAbility 级连续任务，避免息屏恰好发生在 prepare/play
+        // 的异步窗口内；任务由全局媒体会话持有，离开阅读页后仍有效。
+        if (this.hostContext_) {
+          await globalAudioPlaybackSession.startBackgroundTask(this.hostContext_);
+        }
+        if (requestId !== this.chapterRequestId_ || this.disposed_) {
+          // 若是离开页面导致请求失效，播放尚未开始，不能留下孤儿连续任务；
+          // 同页切换章节则交给新请求复用任务，避免误停新章节。
+          if (this.disposed_) await globalAudioPlaybackSession.stopBackgroundTask();
+          return;
+        }
+        await this.player_.play(track);
+        if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+        this.currentIndex = index;
+        this.currentTitle = track.title;
+        this.playPosition = 0;
+        this.duration = 0;
+        this.isLoadingAudio = false;
+        this.audioRetryCount_ = 0;
+        // 清除之前重试过程中显示的红色失败提示，避免成功播放后仍残留错误文案。
+        this.loadError = '';
+        this.saveProgress_();
+        return;
+      } catch (error) {
+        lastError = error as Error;
+        if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+        if (attempt >= AUDIO_RETRY_LIMIT) break;
+        this.audioRetryCount_ = Math.min(AUDIO_RETRY_LIMIT, this.audioRetryCount_ + 1);
+        const delayMs = AUDIO_RETRY_DELAYS[Math.min(this.audioRetryCount_ - 1, AUDIO_RETRY_DELAYS.length - 1)];
+        this.loadError = '获取音频失败，' + Math.ceil(delayMs / 1000) + '秒后重试（' +
+          this.audioRetryCount_ + '/' + AUDIO_RETRY_LIMIT + '）…';
+        console.warn('[AudioReadPage] Audio attempt ' + (attempt + 1) + ' failed, retrying: ' +
+          String(error));
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, delayMs); });
+      }
     }
+    if (requestId !== this.chapterRequestId_ || this.disposed_) return;
+    // 获取地址失败时可能仍在播放上一章，不能因为本次请求失败误停旧任务；
+    // 只有播放器已不在播放态时才清理本次可能残留的任务。
+    if (this.player_.state !== PlayState.PLAYING && this.player_.state !== PlayState.PAUSED) {
+      await globalAudioPlaybackSession.stopBackgroundTask();
+    }
+    this.isLoadingAudio = false;
+    this.loadError = '获取音频失败：' + String(lastError);
   }
 
   private playNextFrom_(index: number): void {
@@ -241,7 +326,11 @@ export struct AudioReadPage {
   private async togglePlay_(): Promise<void> {
     if (this.playState === PlayState.PLAYING) {
       await this.player_.pause();
+      await globalAudioPlaybackSession.stopBackgroundTask();
     } else if (this.playState === PlayState.PAUSED) {
+      if (this.hostContext_) {
+        await globalAudioPlaybackSession.startBackgroundTask(this.hostContext_);
+      }
       await this.player_.resume();
     } else {
       await this.playChapter_(this.currentIndex);

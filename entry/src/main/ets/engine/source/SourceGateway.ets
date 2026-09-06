@@ -40,7 +40,7 @@ export class SourceGateway {
       let items: SearchResult[] = [];
       try {
         const adapter = adapterFor(source);
-        if (adapter) items = await adapter.search(source, keyword, page);
+        if (adapter) items = await adapter.search(source, keyword, page, isAborted);
         else items = await globalSourceExecutor.search(keyword, [source], undefined, page, isAborted);
         if (!(isAborted && isAborted())) collected.push(...items);
       } catch (error) {

@@ -3,7 +3,7 @@ import { AppDatabase } from '../data/database/AppDatabase';
 import { BookTable } from '../data/database/BookTable';
 import { BookSourceTable } from '../data/database/BookSourceTable';
 import { ChapterTable } from '../data/database/ChapterTable';
-import { WebViewFetcher } from '../engine/web/WebViewFetcher';
+import { WebViewFetcher, WebViewInteractiveRequest } from '../engine/web/WebViewFetcher';
 import { CloudflareDialog } from '../components/reader/CloudflareDialog';
 import { LoginDialog } from '../components/reader/LoginDialog';
 import { Book, BookType, BookGroup } from '../model/Book';
@@ -90,6 +90,7 @@ export struct BookInfoPage {
   private remarkDlg?: CustomDialogController
   private editInfoDlg?: CustomDialogController
   private loginDlg?: CustomDialogController
+  private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
 
   aboutToAppear(): void {
     const params = UiUtil.getParams(this.getUIContext()) as Record<string, string>;
@@ -117,20 +118,26 @@ export struct BookInfoPage {
     }
     this.loadSourceHeader();
     this.checkShelfStatus();
-    // 注册 Cloudflare 交互验证：当请求被拦截时弹出 WebView 让用户手动验证
-    WebViewFetcher.interactiveFetcher = (url: string): Promise<string> => {
-      return new Promise((resolve) => {
-        WebViewFetcher.interactiveResolve = resolve;
-        let dlg: CustomDialogController | null = null;
-        dlg = new CustomDialogController({
-          builder: CloudflareDialog({ controller: dlg!, url: url }),
-          autoCancel: false,
-          customStyle: true,
-          alignment: DialogAlignment.Center,
+    // 注册 Cloudflare 交互验证：当请求被拦截时弹出 WebView 让用户手动验证。
+    // 保存回调引用，离开详情页后及时注销，避免阅读页复用旧的搜索/详情 URL。
+    if (!this.interactiveFetcher_) {
+      this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> => {
+        return new Promise((resolve) => {
+          WebViewFetcher.interactiveResolve = resolve;
+          let dlg: CustomDialogController | null = null;
+          dlg = new CustomDialogController({
+            builder: CloudflareDialog({ controller: dlg!, url: url,
+              reason: WebViewFetcher.interactiveReason || '页面需要人工验证',
+              requestBody: request?.body || '' }),
+            autoCancel: false,
+            customStyle: true,
+            alignment: DialogAlignment.Center,
+          });
+          dlg.open();
         });
-        dlg.open();
-      });
-    };
+      };
+    }
+    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
     // 登录弹窗
     this.loginDlg = new CustomDialogController({
       builder: LoginDialog({ controller: this.loginDlg! }),
@@ -141,6 +148,17 @@ export struct BookInfoPage {
     this.tryFetchBookInfo();
     this.tryFetchCover();
     this.isLoading = false;
+  }
+
+  aboutToDisappear(): void {
+    // 只清理自己注册的回调；若阅读页已接管全局验证器，不得误清理新页面。
+    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+      WebViewFetcher.interactiveFetcher = null;
+      if (WebViewFetcher.interactiveResolve) {
+        WebViewFetcher.interactiveResolve('');
+        WebViewFetcher.interactiveResolve = null;
+      }
+    }
   }
 
   /** 从源获取书籍详情和目录 */

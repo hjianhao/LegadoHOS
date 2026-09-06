@@ -11,7 +11,7 @@ import { extractAiBookMetadata, isSafeAiImportUrl, parseAiRulesJson,
   inferAiContentRule, isLikelySameAiBookPage,
   isUsableAiExtractedContent } from '../main/ets/engine/ai/AiBookImporter';
 import { isInvalidAiContentResult, isLikelySameChapterPageUrl,
-  sniffNextContentPageUrl } from '../main/ets/engine/source/SourceExecutor';
+  sniffNextContentPageUrl, normalizeGeneratedSourceUrl_ } from '../main/ets/engine/source/SourceExecutor';
 import { OpdsParser } from '../main/ets/service/cloud/OpdsParser';
 import { mapGutenbergFeedToGutendex } from '../main/ets/service/cloud/OpdsCloudProvider';
 import { WebDavHttp } from '../main/ets/service/cloud/WebDavHttp';
@@ -400,6 +400,13 @@ export default function localUnitTest() {
       const chapter = 'https://m.3kxs.net/read/7613/79/4.html';
       expect(isLikelySameChapterPageUrl(chapter, 'https://m.3kxs.net/read/7613/79/3.html')).assertFalse();
       expect(isLikelySameChapterPageUrl(chapter, 'https://m.3kxs.net/read/7613/79/5.html')).assertFalse();
+      // 香书移动页：章节 ID 本身也是下划线数字，正文分页会再追加 `_2`。
+      expect(isLikelySameChapterPageUrl(
+        'https://wap.example.com/wapbook/123848_46202771.html',
+        'https://wap.example.com/wapbook/123848_46202771_2.html')).assertTrue();
+      expect(isLikelySameChapterPageUrl(
+        'https://wap.example.com/wapbook/123848_46202771.html',
+        'https://wap.example.com/wapbook/123848_46202772.html')).assertFalse();
       expect(isInvalidAiContentResult('转码失败！请换以下其他源继续阅读！')).assertTrue();
       expect(isInvalidAiContentResult('这是正常的小说正文内容。')).assertFalse();
       expect(inferAiContentRule('<main><div class="content">真实正文</div></main>')).assertEqual('.content@html');
@@ -412,6 +419,17 @@ export default function localUnitTest() {
         .assertFalse();
       expect(isUsableAiExtractedContent('请换以下其他源继续阅读！' +
         '张二河推开房门走进院子，少女跟在他的身后小声说着话。'.repeat(25))).assertTrue();
+    });
+    it('normalizesDuplicateSourceQueryParameters', 0, () => {
+      expect(normalizeGeneratedSourceUrl_(
+        'https://jmcomic-zzz.one/photo/1114752/?shunt=1/?shunt=1')).assertEqual(
+        'https://jmcomic-zzz.one/photo/1114752/?shunt=1');
+      expect(normalizeGeneratedSourceUrl_(
+        'https://jmcomic-zzz.one/photo/1114752/?shunt=1')).assertEqual(
+        'https://jmcomic-zzz.one/photo/1114752/?shunt=1');
+      expect(normalizeGeneratedSourceUrl_(
+        'https://example.com/read?id=1&tag=a&tag=b')).assertEqual(
+        'https://example.com/read?id=1&tag=a&tag=b');
     });
   });
 }

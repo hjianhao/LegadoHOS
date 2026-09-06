@@ -21,7 +21,7 @@ export interface SourceContentResult {
 export interface SourceAdapter {
   canSearch(source: BookSource): boolean;
   canExplore(source: BookSource): boolean;
-  search(source: BookSource, keyword: string, page: number): Promise<SearchResult[]>;
+  search(source: BookSource, keyword: string, page: number, isAborted?: () => boolean): Promise<SearchResult[]>;
   getExploreItems(source: BookSource): Promise<SourceExploreItem[]>;
   explore(source: BookSource, item: SourceExploreItem, page: number): Promise<SearchResult[]>;
   getBookInfo(source: BookSource, noteUrl: string): Promise<BookSourceBookInfo>;

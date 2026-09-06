@@ -29,6 +29,8 @@ import { ChapterTable } from '../data/database/ChapterTable';
 import { BookSourceResolver } from '../service/BookSourceResolver';
 import { BookCacheService, CacheChapterItem } from '../service/BookCacheService';
 import { BookChapter } from '../model/BookChapter';
+import { BackgroundRunningManager } from '../service/BackgroundRunningManager';
+import { common } from '@kit.AbilityKit';
 import {
   ONLINE_SEARCH_ENGINES, OnlineSearchEngine, buildOnlineSearchUrl,
   getOnlineSearchEngineName, isOnlineSearchResultPage, normalizeOnlineSearchEngine
@@ -129,6 +131,9 @@ export struct SearchPage {
   private resultDataSource_: ArrayDataSource<SearchResult> = new ArrayDataSource<SearchResult>();
   private onlineImporter_: AiBookImporter | null = null;
   private pageActive_: boolean = false;
+  /** 每个搜索运行独立持有后台租约，避免旧搜索结束时释放新搜索的租约。 */
+  private searchBackgroundOwners_: Set<string> = new Set<string>();
+  private searchBackgroundContext_: common.Context | null = null;
   private challengeDlg?: CustomDialogController;
   private interactiveFetcher_: ((url: string, request?: WebViewInteractiveRequest) => Promise<string>) | null = null;
 
@@ -154,8 +159,7 @@ export struct SearchPage {
       this.interactiveFetcher_ = (url: string, request?: WebViewInteractiveRequest): Promise<string> =>
         this.openInteractiveWebView_(url, request?.body || '');
     }
-    WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
-    this.pageActive_ = true;
+    this.activatePage_();
     this.onlineImporter_ = new AiBookImporter((progress: ImportProgress): void => {
       if (!this.pageActive_) return;
       this.onlinePhase = progress.phase;
@@ -174,16 +178,51 @@ export struct SearchPage {
   }
 
   aboutToDisappear(): void {
+    this.deactivatePage_('aboutToDisappear');
+  }
+
+  /** Navigation push 只会隐藏旧页面，未必销毁页面组件；必须在 onPageHide
+   * 使正在加载的下一页搜索失效，否则它完成后会借用阅读页的验证回调。 */
+  onPageHide(): void {
+    this.deactivatePage_('onPageHide');
+  }
+
+  onPageShow(): void {
+    this.activatePage_();
+  }
+
+  private activatePage_(): void {
+    this.pageActive_ = true;
+    if (this.interactiveFetcher_) WebViewFetcher.interactiveFetcher = this.interactiveFetcher_;
+  }
+
+  private deactivatePage_(reason: string): void {
+    // Ability 进入后台（包括息屏）也会触发 onPageHide，但这不代表用户
+    // 离开了搜索页。批量搜索已申请持续数据传输任务，此时保留运行状态；
+    // 真正的路由切换仍走下面的取消逻辑。
+    if (reason === 'onPageHide' && this.isAppInBackground_() &&
+      (this.isSearching || this.isLoadingMore)) {
+      console.info('[SearchPage] keep search alive while app is background, reason=' + reason);
+      return;
+    }
+    const ownsInteractiveFetcher = WebViewFetcher.interactiveFetcher === this.interactiveFetcher_;
     this.pageActive_ = false;
+    this.searchRunId++;
+    this.expandedSourceRunId++;
+    this.isSearching = false;
+    this.isLoadingMore = false;
+    const owners = Array.from(this.searchBackgroundOwners_);
+    owners.forEach((owner: string): void => { void this.releaseSearchBackground_(owner); });
     this.onlineImporter_?.cancel();
-    if (WebViewFetcher.interactiveFetcher === this.interactiveFetcher_) {
+    if (ownsInteractiveFetcher) {
       WebViewFetcher.interactiveFetcher = null;
+      if (WebViewFetcher.interactiveResolve) {
+        WebViewFetcher.interactiveResolve('');
+        WebViewFetcher.interactiveResolve = null;
+      }
+      WebViewFetcher.cancelPending();
     }
-    if (WebViewFetcher.interactiveResolve) {
-      WebViewFetcher.interactiveResolve('');
-      WebViewFetcher.interactiveResolve = null;
-    }
-    WebViewFetcher.cancelPending();
+    console.info('[SearchPage] deactivated reason=' + reason);
     if (this.queryHintTimer >= 0) {
       clearTimeout(this.queryHintTimer);
       this.queryHintTimer = -1;
@@ -191,6 +230,16 @@ export struct SearchPage {
   }
 
   private openInteractiveWebView_(url: string, requestBody: string = ''): Promise<string> {
+    if (!this.pageActive_ || WebViewFetcher.interactiveFetcher !== this.interactiveFetcher_) {
+      console.info('[SearchPage] Skip interactive WebView: page inactive url=' + (url || '').substring(0, 160));
+      return Promise.resolve('');
+    }
+    console.warn('[SearchPage] Open interactive WebView stage=' +
+      WebViewFetcher.interactivePurpose +
+      ' reason=' + (WebViewFetcher.interactiveReason || 'unknown') +
+      ' url=' + (url || '').substring(0, 160) +
+      ' method=' + (requestBody ? 'POST' : 'GET') +
+      ' bodyLen=' + requestBody.length.toString());
     return new Promise<string>((resolve: (html: string) => void) => {
       WebViewFetcher.interactiveResolve = resolve;
       this.challengeDlg = new CustomDialogController({
@@ -960,6 +1009,8 @@ export struct SearchPage {
     this.manualStop = true;
     this.isSearching = false;
     this.isLoadingMore = false;
+    const owners = Array.from(this.searchBackgroundOwners_);
+    owners.forEach((owner: string): void => { void this.releaseSearchBackground_(owner); });
     const pageableSources = this.getPageableSearchSources_(this.getActiveSources());
     this.hasMore = this.hasPageableSearchResult_(this.results, pageableSources);
     UiUtil.showToast(this.getUIContext(), { message: '已停止搜索', duration: 1200 });
@@ -1007,7 +1058,8 @@ export struct SearchPage {
     this.results = [];
     this.processedSources = 0;
     this.totalSources = searchable.length;
-    await this.addToHistory(q);
+    const backgroundOwner = 'search-' + runId.toString();
+    let backgroundAcquired = false;
     console.info('[SearchPage] start q=' + q
       + ' exact=' + (this.matchModeExact ? 'true' : 'false')
       + ' activeSources=' + searchable.length.toString()
@@ -1015,6 +1067,9 @@ export struct SearchPage {
       + ' typeFilter=' + JSON.stringify(this.selectedSourceTypes)
       + ' scope=' + this.getScopeLabel());
     try {
+      backgroundAcquired = await this.acquireSearchBackground_(backgroundOwner, q, searchable.length);
+      if (this.isSearchAborted_(runId)) return;
+      await this.addToHistory(q);
       const merged = await globalSourceGateway.search(q, searchable,
         (partial: SearchResult[], done: number, total: number) => {
           if (runId !== this.searchRunId || this.manualStop) return;
@@ -1022,15 +1077,21 @@ export struct SearchPage {
           this.totalSources = total;
           this.allResults = partial;
           this.results = this.filterResultsByMode(this.allResults, q);
+          if (backgroundAcquired) {
+            BackgroundRunningManager.reportProgress('搜索《' + q + '》', done, total);
+          }
           console.info('[SearchPage] progress q=' + q
             + ' done=' + done.toString() + '/' + total.toString()
             + ' raw=' + this.allResults.length.toString()
             + ' shown=' + this.results.length.toString()
             + ' exact=' + (this.matchModeExact ? 'true' : 'false'));
-        }, 1);
-      if (runId !== this.searchRunId || this.manualStop) return;
+        }, 1, () => this.isSearchAborted_(runId));
+      if (this.isSearchAborted_(runId)) return;
       this.allResults = merged;
       this.results = this.filterResultsByMode(this.allResults, q);
+      if (backgroundAcquired) {
+        BackgroundRunningManager.reportProgress('搜索《' + q + '》', searchable.length, searchable.length);
+      }
       console.info('[SearchPage] finish q=' + q
         + ' raw=' + this.allResults.length.toString()
         + ' shown=' + this.results.length.toString()
@@ -1040,11 +1101,13 @@ export struct SearchPage {
       const pageableSources = this.getPageableSearchSources_(searchable);
       this.hasMore = !exactShouldStop && this.hasPageableSearchResult_(merged, pageableSources);
     } catch (_e) {
-      if (runId === this.searchRunId) {
+      if (runId === this.searchRunId && !this.isPageInactive_()) {
         UiUtil.showToast(this.getUIContext(), { message: '搜索失败', duration: 1500 });
       }
+    } finally {
+      if (backgroundAcquired) await this.releaseSearchBackground_(backgroundOwner);
     }
-    if (runId === this.searchRunId) {
+    if (runId === this.searchRunId && !this.isPageInactive_()) {
       this.isSearching = false;
       this.processedSources = this.totalSources;
       if (this.results.length === 0 && this.hasRelaxableFilters()) {
@@ -1066,16 +1129,24 @@ export struct SearchPage {
     this.manualStop = false;
     this.processedSources = 0;
     this.totalSources = searchable.length;
+    const backgroundOwner = 'search-more-' + runId.toString();
+    let backgroundAcquired = false;
     try {
+      backgroundAcquired = await this.acquireSearchBackground_(backgroundOwner,
+        this.committedKeyword, searchable.length);
+      if (this.isSearchAborted_(runId)) return;
       const pageResults = await globalSourceGateway.search(this.committedKeyword, searchable,
         (partial: SearchResult[], done: number, total: number) => {
-          if (runId !== this.searchRunId || this.manualStop) return;
+          if (this.isSearchAborted_(runId)) return;
           this.processedSources = done;
           this.totalSources = total;
           this.allResults = mergeSearchResults([...baseResults, ...partial]);
           this.results = this.filterResultsByMode(this.allResults, this.committedKeyword);
-        }, nextPage);
-      if (runId !== this.searchRunId || this.manualStop) return;
+          if (backgroundAcquired) {
+            BackgroundRunningManager.reportProgress('搜索《' + this.committedKeyword + '》', done, total);
+          }
+        }, nextPage, () => this.isSearchAborted_(runId));
+      if (this.isSearchAborted_(runId)) return;
       const mergedCount = this.allResults.length;
       if (pageResults.length === 0 || mergedCount <= beforeCount) {
         this.hasMore = false;
@@ -1087,9 +1158,13 @@ export struct SearchPage {
         this.hasMore = this.allResults.length > beforeCount;
       }
     } catch (_e) {
-      if (runId === this.searchRunId) UiUtil.showToast(this.getUIContext(), { message: '加载更多失败', duration: 1500 });
+      if (runId === this.searchRunId && !this.isPageInactive_()) {
+        UiUtil.showToast(this.getUIContext(), { message: '加载更多失败', duration: 1500 });
+      }
+    } finally {
+      if (backgroundAcquired) await this.releaseSearchBackground_(backgroundOwner);
     }
-    if (runId === this.searchRunId) {
+    if (runId === this.searchRunId && !this.isPageInactive_()) {
       this.isLoadingMore = false;
       this.processedSources = this.totalSources;
     }
@@ -1134,8 +1209,9 @@ export struct SearchPage {
     this.expandedSourceLoading = true;
     this.expandedSourceError = '';
     try {
-      const pageResults = await globalSourceGateway.search(this.committedKeyword, [source], undefined, nextPage);
-      if (runId !== this.expandedSourceRunId) return;
+      const pageResults = await globalSourceGateway.search(this.committedKeyword, [source], undefined, nextPage,
+        () => this.isExpandedSearchAborted_(runId));
+      if (this.isExpandedSearchAborted_(runId)) return;
       const merged = this.mergeExpandedSourceItems(base, pageResults);
       this.expandedSourceBooks = merged;
       this.expandedSourcePage = nextPage;
@@ -1144,13 +1220,61 @@ export struct SearchPage {
         this.expandedSourceError = '没有更多结果';
       }
     } catch (_e) {
-      if (runId === this.expandedSourceRunId) {
+      if (runId === this.expandedSourceRunId && !this.isPageInactive_()) {
         this.expandedSourceError = '加载更多失败';
       }
     }
-    if (runId === this.expandedSourceRunId) {
+    if (runId === this.expandedSourceRunId && !this.isPageInactive_()) {
       this.expandedSourceLoading = false;
     }
+  }
+
+  private isSearchAborted_(runId: number): boolean {
+    return runId !== this.searchRunId || this.isPageInactive_();
+  }
+
+  private isExpandedSearchAborted_(runId: number): boolean {
+    return runId !== this.expandedSourceRunId || this.isPageInactive_();
+  }
+
+  private isPageInactive_(): boolean {
+    return this.manualStop || !this.pageActive_ ||
+      (!!this.interactiveFetcher_ && WebViewFetcher.interactiveFetcher !== this.interactiveFetcher_);
+  }
+
+  private isAppInBackground_(): boolean {
+    return AppStorage.get<boolean>('appInBackground') === true;
+  }
+
+  private async acquireSearchBackground_(owner: string, keyword: string, total: number): Promise<boolean> {
+    try {
+      const context = UiUtil.getHostContext(this.getUIContext());
+      await BackgroundRunningManager.acquire(context, owner);
+      this.searchBackgroundContext_ = context;
+      this.searchBackgroundOwners_.add(owner);
+      BackgroundRunningManager.reportProgress('搜索《' + keyword + '》', 0, total);
+      console.info('[SearchPage] background search task acquired owner=' + owner);
+      return true;
+    } catch (error) {
+      // 后台能力不可用时仍允许前台搜索，不能把系统能力差异当成搜索失败。
+      console.warn('[SearchPage] background search task unavailable: ' +
+        ((error as Error).message || String(error)));
+      return false;
+    }
+  }
+
+  private async releaseSearchBackground_(owner: string): Promise<void> {
+    if (!this.searchBackgroundOwners_.delete(owner)) return;
+    const context = this.searchBackgroundContext_;
+    if (!context) return;
+    try {
+      await BackgroundRunningManager.release(context, owner);
+      console.info('[SearchPage] background search task released owner=' + owner);
+    } catch (error) {
+      console.warn('[SearchPage] background search task release failed: ' +
+        ((error as Error).message || String(error)));
+    }
+    if (this.searchBackgroundOwners_.size === 0) this.searchBackgroundContext_ = null;
   }
 
   getShelfState(item: SearchResult): number {
@@ -1488,10 +1612,10 @@ export struct SearchPage {
             this.showSettingsSheet = true;
             this.showScopeSheet = false;
           })
-          this.buildIconAction('=', this.matchModeExact, () => {
+          this.buildIconAction('精确', this.matchModeExact, () => {
             this.setMatchModeExact(!this.matchModeExact);
           })
-          this.buildIconAction('☰', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
+          this.buildIconAction('范围', this.selectedGroups.length > 0 || this.selectedSourceUrls.length > 0, () => {
             this.showScopeSheet = true;
             this.showSettingsSheet = false;
           })

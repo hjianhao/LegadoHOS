@@ -143,7 +143,7 @@ export class BookSourceTable {
     let sources: object[];
     const parsed = JSON.parse(jsonSources);
     if (Array.isArray(parsed)) {
-      sources = parsed;
+      sources = this.deduplicateRawSources_(parsed as object[]);
     } else {
       sources = [parsed];  // 单个对象自动包成数组
     }
@@ -212,10 +212,13 @@ export class BookSourceTable {
     customGroup: string,
     groupMode: number = 0
   ): Promise<number> {
+    // 预览是在数据库写入前生成的，同一合集中的重复 URL 都会被标记为 new。
+    // 先按 URL 合并，避免事务内第二次 INSERT 触发 source_url UNIQUE 约束；
+    // 同 URL 有多条时保留更新时间较新的书源配置。
+    const selectedItems = this.deduplicateImportItems_(items);
     return await RdbUtil.transaction<number>(this.rdbStore, async (): Promise<number> => {
       let count = 0;
-      for (const item of items) {
-        if (!item.checked) continue;
+      for (const item of selectedItems) {
         const src = item.source;
         this.validateIdentity(src);
         const existing = await this.getSourcesByUrl(src.sourceUrl);
@@ -469,6 +472,72 @@ export class BookSourceTable {
     const prefix = index >= 0 ? '第 ' + (index + 1) + ' 个书源' : '书源';
     if (!source.sourceName) throw new Error(prefix + '名称不能为空');
     if (!source.sourceUrl) throw new Error(prefix + ' URL 不能为空');
+  }
+
+  /** 返回用于比较导入版本的时间戳；异常值按最旧配置处理。 */
+  private sourceUpdateTime_(source: BookSource): number {
+    const timestamp = Number(source.updateTime);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  /** 合并直接导入 JSON 中的重复 URL，保留更新时间较新的原始对象。 */
+  private deduplicateRawSources_(sources: object[]): object[] {
+    const latestByUrl: Map<string, object> = new Map<string, object>();
+    const timeByUrl: Map<string, number> = new Map<string, number>();
+    const orderedUrls: string[] = [];
+    for (let i = 0; i < sources.length; i++) {
+      const raw = sources[i];
+      const source = parseBookSource(raw);
+      this.validateIdentity(source, i);
+      const key = source.sourceUrl;
+      const updateTime = this.sourceUpdateTime_(source);
+      const previousTime = timeByUrl.get(key);
+      if (!latestByUrl.has(key)) orderedUrls.push(key);
+      if (previousTime === undefined || updateTime >= previousTime) {
+        latestByUrl.set(key, raw);
+        timeByUrl.set(key, updateTime);
+      }
+    }
+    if (latestByUrl.size < sources.length) {
+      console.info('[BookSourceTable] Deduplicated', sources.length - latestByUrl.size,
+        'duplicate source URLs during direct import');
+    }
+    const result: object[] = [];
+    for (const key of orderedUrls) {
+      const raw = latestByUrl.get(key);
+      if (raw !== undefined) result.push(raw);
+    }
+    return result;
+  }
+
+  /** 合并预览中同 URL 的勾选项，保留更新时间较新的书源。 */
+  private deduplicateImportItems_(items: PreviewItem[]): PreviewItem[] {
+    const latestByUrl: Map<string, PreviewItem> = new Map<string, PreviewItem>();
+    const timeByUrl: Map<string, number> = new Map<string, number>();
+    const orderedUrls: string[] = [];
+    let checkedCount = 0;
+    for (const item of items) {
+      if (!item.checked) continue;
+      checkedCount++;
+      const key = item.source.sourceUrl.trim();
+      const updateTime = this.sourceUpdateTime_(item.source);
+      const previousTime = timeByUrl.get(key);
+      if (!latestByUrl.has(key)) orderedUrls.push(key);
+      if (previousTime === undefined || updateTime >= previousTime) {
+        latestByUrl.set(key, item);
+        timeByUrl.set(key, updateTime);
+      }
+    }
+    if (latestByUrl.size < checkedCount) {
+      console.info('[BookSourceTable] Deduplicated', checkedCount - latestByUrl.size,
+        'duplicate source URLs during preview import');
+    }
+    const result: PreviewItem[] = [];
+    for (const key of orderedUrls) {
+      const item = latestByUrl.get(key);
+      if (item !== undefined) result.push(item);
+    }
+    return result;
   }
 
   async getSourceByUrl(url: string): Promise<BookSource | null> {

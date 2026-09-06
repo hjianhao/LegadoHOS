@@ -139,20 +139,72 @@ export class WebViewFetcher {
   /** 当前交互 WebView 的用户提示，由页面层传入，避免所有弹窗都显示成泛化“验证”。 */
   static interactiveReason: string = '';
   private static interactivePageCache: Map<string, InteractivePageCacheEntry> = new Map();
+  /** 同一 URL/请求体的交互请求共享一个窗口，避免多源并发重复弹窗。 */
+  private static interactiveInFlight: Map<string, Promise<string>> = new Map();
+  /** 不同验证请求也必须串行，前台只有一个 interactiveResolve 回调。 */
+  private static interactiveQueueTail: Promise<void> = Promise.resolve();
   private static readonly INTERACTIVE_CACHE_TTL_MS: number = 5 * 60 * 1000;
   private static readonly INTERACTIVE_CACHE_MAX_ENTRIES: number = 6;
 
   /** 请求是否需要交互式验证 */
   static needsInteractive(url: string, errorMsg: string): boolean {
-    return !!(WebViewFetcher.interactiveFetcher) &&
-      (errorMsg.includes('403') || errorMsg.includes('Cloudflare') || errorMsg.includes('503') || errorMsg.includes('page not found'));
+    const message = (errorMsg || '').toLowerCase();
+    // 状态码本身不能证明是 Cloudflare：普通 403/503/404、站点限频和临时
+    // 故障都可能走到这里。只有错误信息明确包含挑战/WAF 特征时才允许打开
+    // 前台交互窗口，避免把普通搜索失败变成“搜索页面弹窗”。响应正文若已
+    // 被拿到，则由 isInteractiveChallengeHtml() 做更准确的内容判断。
+    const hasChallengeEvidence = /cloudflare|cf-mitigated|cf-ray|turnstile|challenge|checking your browser|just a moment|访问验证|验证码|waf/i
+      .test(message);
+    if (!hasChallengeEvidence) {
+      console.info('[WebViewFetcher] Skip interactive WebView: no challenge evidence, url=' +
+        (url || '').substring(0, 160) + ' error=' + (errorMsg || '').substring(0, 160));
+    }
+    return !!(WebViewFetcher.interactiveFetcher) && hasChallengeEvidence;
   }
 
   /** 弹出交互式 WebView 验证 */
   static async fetchInteractive(url: string, purpose: InteractivePurpose = 'challenge',
     reason: string = '', request?: WebViewInteractiveRequest,
     fetcherOverride?: (url: string, request?: WebViewInteractiveRequest) => Promise<string>): Promise<string> {
+    const requestKey = purpose + '|' + WebViewFetcher.interactiveCacheKey(url, request);
+    const existing = WebViewFetcher.interactiveInFlight.get(requestKey);
+    if (existing) {
+      console.info('[WebViewFetcher] Reusing in-flight interactive request purpose=' + purpose +
+        ' url=' + (url || '').substring(0, 160));
+      return existing;
+    }
+
+    // 在排队时固定调用方。页面切换后全局 interactiveFetcher 可能已经换成
+    // 阅读页；如果等到队列真正执行时再读取全局值，旧搜索请求会把阅读页
+    // 当成回调目标，重新弹出搜索 URL。
+    const requestFetcher = fetcherOverride || WebViewFetcher.interactiveFetcher;
+    if (!requestFetcher) {
+      console.warn('[WebViewFetcher] Skip interactive request: no fetcher registered url=' +
+        (url || '').substring(0, 160));
+      return Promise.reject(new Error('Interactive fetcher not registered'));
+    }
+    const queued = WebViewFetcher.interactiveQueueTail.then((): Promise<string> =>
+      WebViewFetcher.fetchInteractiveOnce_(url, purpose, reason, request, requestFetcher));
+    WebViewFetcher.interactiveQueueTail = queued.then((): void => undefined, (): void => undefined);
+    WebViewFetcher.interactiveInFlight.set(requestKey, queued);
+    try {
+      return await queued;
+    } finally {
+      if (WebViewFetcher.interactiveInFlight.get(requestKey) === queued) {
+        WebViewFetcher.interactiveInFlight.delete(requestKey);
+      }
+    }
+  }
+
+  private static async fetchInteractiveOnce_(url: string, purpose: InteractivePurpose = 'challenge',
+    reason: string = '', request?: WebViewInteractiveRequest,
+    fetcherOverride?: (url: string, request?: WebViewInteractiveRequest) => Promise<string>): Promise<string> {
     WebViewFetcher.interactivePurpose = purpose;
+    console.warn('[WebViewFetcher] Interactive request purpose=' + purpose +
+      ' reason=' + (reason || 'unknown') +
+      ' method=' + (request?.method || 'GET') +
+      ' bodyLen=' + (request?.body || '').length.toString() +
+      ' url=' + (url || '').substring(0, 160));
     const cacheKey = WebViewFetcher.interactiveCacheKey(url, request);
     const cached = WebViewFetcher.interactivePageCache.get(cacheKey);
     // 登录模式必须重新打开页面，不能复用上次验证缓存，否则用户无法进入登录面板。
@@ -651,6 +703,11 @@ export class WebViewFetcher {
     const detailContainer = /<(?:article|main|section|div)\b[^>]*(?:id|class)=["'][^"']*(?:r_cons|r_tools|lastrecord|novel[_-]?list|book(?:info|[_-]?detail|[_-]?content)|chapter[_-]?list|catalog|btn-toolbar|intro-block)[^"']*["']/i;
     if (detailContainer.test(html)) return true;
 
+    // 传统小说站正文常使用 chaptercontent/ReadAjax_content/Readarea，
+    // 这些页面也会被 Cloudflare JSD 追加脚本，不能因为脚本存在就弹验证。
+    const chapterContainer = /<(?:article|main|section|div)\b[^>]*(?:id|class)=["'][^"']*(?:chaptercontent|readajax[_-]?content|readarea|chapter[_-]?body)[^"']*["']/i;
+    if (chapterContainer.test(html)) return true;
+
     // 漫画/视频播放页（如 antbyw 的 plugin.php?a=bofang&kuid=…）：页面主体
     // 是章节/播放器而不是登录表单，即便导航栏预渲染了隐藏登录下拉框也
     // 不能当独立登录页处理。播放器标记与章节导航同时出现才算；漫画站
@@ -678,7 +735,10 @@ export class WebViewFetcher {
     // 图片验证码成功后，页面脚本甚至可能保留 Cloudflare/验证码相关脚本，
     // 但真实搜索结果已经出现；先识别结果，避免被脚本标记误判为未完成验证。
     const hasSearchResultMarkup = /<table\b[^>]*class=["'][^"']*\btable\b[^"']*["'][\s\S]*<tr\b[\s\S]*<td\b[\s\S]*<a\b[^>]*href=/i.test(html) ||
-      /(?:book-coverlist|novel-row(?:-main)?|search[-_ ]?(?:item|result|row))/i.test(html);
+      /(?:book-coverlist|novel-row(?:-main)?|search[-_ ]?(?:item|result|row))/i.test(html) ||
+      // 爱看小说使用 .hot_sale 卡片，搜索结果页没有通用 table/search-result
+      // class，但每个卡片都包含书籍链接，属于正常结果而非挑战壳。
+      /<(?:article|li|tr|div)\b[^>]*class=["'][^"']*\bhot[_-]?sale\b[^"']*["'][^>]*>/i.test(html);
     // 页面主体已是书籍/漫画/章节内容时，直接按内容页处理，绝不再触发交互
     // 验证：禁漫天堂等站点在正常详情页嵌入 Cloudflare Turnstile 脚本，登录
     // 弹窗还带验证码输入框（其 id 与 login_regist 等常见命名不一致时会漏过
@@ -689,11 +749,10 @@ export class WebViewFetcher {
       .test(html);
     if (hasStrongChallengeMarker && !hasSearchResultMarkup) return true;
 
-    // Cloudflare JSD（JavaScript Detections）静默挑战：不显示复选框/文案，
-    // 只在页面注入 __CF$cv$params 并加载 /cdn-cgi/challenge-platform/scripts/jsd/main.js，
-    // 通过 JS 指纹自动完成并发起重载。旧标记（_cf_chl_opt、just a moment 等）
-    // 不覆盖该壳，导致提取到 403 空壳后被当作正常首页。该标记专属于挑战
-    // 脚本，正常页面引用 Cloudflare 统计脚本（如 /cdn-cgi/scripts/...）不会命中。
+    // Cloudflare JSD（JavaScript Detections）会把不可见脚本注入正常 HTML，
+    // 不能仅凭 __CF$cv$params 或 /challenge-platform/.../jsd/main.js 判定挑战。
+    // 对没有任何可识别正文/结果结构的壳仍保留此兜底；HTTP 层应优先依据
+    // cf-mitigated: challenge 响应头判断，避免把正常 200 页面误判为挑战。
     const hasJsdChallengeMarker = /__CF\$cv\$params|cdn-cgi\/challenge-platform\/scripts\/jsd\/main\.js/i
       .test(html);
     if (hasJsdChallengeMarker && !hasSearchResultMarkup) return true;

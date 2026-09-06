@@ -300,7 +300,21 @@ export class NetUtil {
     const requestHeaders = NetUtil.buildHeaders(headers);
     const cookieEnabled = NetUtil.prepareCookiePolicy_(requestHeaders);
     if (cookieEnabled) NetUtil.injectCookie_(requestUrl, requestHeaders);
-    const request = new rcp.Request(requestUrl, method.toUpperCase() as rcp.HttpMethod,
+    const requestMethod = method.toUpperCase();
+    // RCP 在部分 HTTP/2/Cloudflare 节点上不会从字符串 body 自动生成
+    // Content-Length，旧站会直接返回 411 Length Required。QYSG 的搜索体
+    // 是 ASCII 百分号编码，字符数与字节数一致，显式补齐长度即可。
+    if (requestMethod === 'POST' && body && !requestHeaders['Content-Length'] &&
+      !requestHeaders['content-length']) {
+      requestHeaders['Content-Length'] = body.length.toString();
+    }
+    // RCP 自动重定向会把带体 POST 的 301/302 改成 GET，旧搜索接口随后
+    // 收到空体并返回 411。逐跳跟随可保留 301/307/308 的请求体。
+    if (requestMethod === 'POST' && body && followRedirects) {
+      return await NetUtil.manualFollowPostDetailed_(requestMethod, requestUrl, body,
+        requestHeaders, timeout || NetUtil.getDefaultTimeout(), cookieEnabled);
+    }
+    const request = new rcp.Request(requestUrl, requestMethod as rcp.HttpMethod,
       requestHeaders as rcp.RequestHeaders, body || '');
     const session = NetUtil.createSession_(timeout || NetUtil.getDefaultTimeout(), followRedirects);
     try {
@@ -340,6 +354,7 @@ export class NetUtil {
       '200': 'OK', '201': 'Created', '204': 'No Content', '301': 'Moved Permanently',
       '302': 'Found', '303': 'See Other', '307': 'Temporary Redirect', '308': 'Permanent Redirect',
       '400': 'Bad Request', '401': 'Unauthorized', '403': 'Forbidden', '404': 'Not Found',
+      '411': 'Length Required',
       '429': 'Too Many Requests', '500': 'Internal Server Error', '502': 'Bad Gateway',
       '503': 'Service Unavailable',
     };
@@ -594,6 +609,14 @@ export class NetUtil {
         if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
         const h = { ...headers };
         if (cookieEnabled) NetUtil.injectCookie_(curUrl, h);
+        if (curMethod === 'POST' && curBody && !h['Content-Length'] && !h['content-length']) {
+          // RCP 对字符串 body 在部分 HTTP/2 节点不会自动补长度；旧站会以
+          // 411 拒绝请求。按 UTF-8 字节数填写，百分号编码表单仍与字符数一致。
+          h['Content-Length'] = new util.TextEncoder().encodeInto(curBody).length.toString();
+        } else if (curMethod !== 'POST') {
+          delete h['Content-Length'];
+          delete h['content-length'];
+        }
         const request = new rcp.Request(curUrl, curMethod as rcp.HttpMethod, h as rcp.RequestHeaders, curBody || '');
         const response = await session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
@@ -681,6 +704,14 @@ export class NetUtil {
         if (requestGroup && (!group || group.cancelled)) throw new Error('校验已取消');
         const h = { ...headers };
         if (cookieEnabled) NetUtil.injectCookie_(curUrl, h);
+        if (curMethod === 'POST' && curBody && !h['Content-Length'] && !h['content-length']) {
+          // RCP 对字符串 body 在部分 HTTP/2 节点不会自动补长度；旧站会以
+          // 411 拒绝请求。按 UTF-8 字节数填写，百分号编码表单仍与字符数一致。
+          h['Content-Length'] = new util.TextEncoder().encodeInto(curBody).length.toString();
+        } else if (curMethod !== 'POST') {
+          delete h['Content-Length'];
+          delete h['content-length'];
+        }
         const request = new rcp.Request(curUrl, curMethod as rcp.HttpMethod, h as rcp.RequestHeaders, curBody || '');
         const response = await session.fetch(request);
         const respHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
@@ -718,6 +749,75 @@ export class NetUtil {
         throw new Error('手动跟随重定向遇到 HTTP ' + status);
       }
       throw new Error('Number of redirects hit maximum amount (manual POST follow)');
+    } finally {
+      try { session.close(); } catch (_error) { /* ignore */ }
+    }
+  }
+
+  /** QYSG 需要状态码和响应头的 POST 逐跳跟随版本。 */
+  private static async manualFollowPostDetailed_(
+    method: string, url: string, body: string, headers: Record<string, string>,
+    timeout: number, cookieEnabled: boolean
+  ): Promise<NetUtilHttpResponse> {
+    const session = NetUtil.createSession_(timeout, false);
+    let curMethod = method.toUpperCase();
+    let curUrl = url;
+    let curBody = body;
+    const visited: string[] = [normalizeVisitedUrl_(url)];
+    try {
+      for (let hop = 0; hop < 10; hop++) {
+        const requestHeaders = { ...headers };
+        if (cookieEnabled) NetUtil.injectCookie_(curUrl, requestHeaders);
+        if (curMethod === 'POST' && curBody && !requestHeaders['Content-Length'] &&
+          !requestHeaders['content-length']) {
+          requestHeaders['Content-Length'] = curBody.length.toString();
+        } else if (curMethod !== 'POST') {
+          delete requestHeaders['Content-Length'];
+          delete requestHeaders['content-length'];
+        }
+        const response = await session.fetch(new rcp.Request(curUrl, curMethod as rcp.HttpMethod,
+          requestHeaders as rcp.RequestHeaders, curBody || ''));
+        const rawHeaders = (response.headers || {}) as Record<string, string | string[] | undefined>;
+        if (cookieEnabled) {
+          await CookieStore.getInstance().setCookiesFromResponse(curUrl, responseSetCookies(response));
+        }
+        const responseHeaders: Record<string, string[]> = {};
+        Object.keys(rawHeaders).forEach((key: string): void => {
+          const value = rawHeaders[key];
+          if (Array.isArray(value)) responseHeaders[key] = value.map((item: string): string => String(item));
+          else if (value !== undefined && value !== null) responseHeaders[key] = [String(value)];
+        });
+        const responseObject = response as Object as Record<string, Object>;
+        const statusMessage = responseObject['statusMessage'] ? String(responseObject['statusMessage']) :
+          NetUtil.httpStatusMessage_(response.statusCode);
+        const bytes = response.body === undefined || response.body === null ?
+          new Uint8Array(0) : new Uint8Array(response.body);
+        const copy = new Uint8Array(bytes.length);
+        copy.set(bytes);
+        console.info('[NetUtil] detailed-manual-post hop' + hop, curMethod, curUrl, '→', response.statusCode);
+        if (response.statusCode >= 300 && response.statusCode < 400) {
+          const locationRaw = rawHeaders['location'];
+          const location: string = Array.isArray(locationRaw) ? (locationRaw[0] || '') : (locationRaw || '');
+          if (!location) {
+            return { body: copy.buffer, data: await NetUtil.decodeBody(copy, curUrl), headers: responseHeaders,
+              statusCode: response.statusCode, statusMessage: statusMessage };
+          }
+          const next = resolveRelativeUrl_(curUrl, location);
+          if (visited.indexOf(normalizeVisitedUrl_(next)) >= 0) {
+            throw new Error('Number of redirects hit maximum amount (manual detailed POST follow)');
+          }
+          visited.push(normalizeVisitedUrl_(next));
+          curUrl = next;
+          if (!shouldKeepPostBodyOnRedirect_(response.statusCode)) {
+            curMethod = 'GET';
+            curBody = '';
+          }
+          continue;
+        }
+        return { body: copy.buffer, data: await NetUtil.decodeBody(copy, curUrl), headers: responseHeaders,
+          statusCode: response.statusCode, statusMessage: statusMessage };
+      }
+      throw new Error('Number of redirects hit maximum amount (manual detailed POST follow)');
     } finally {
       try { session.close(); } catch (_error) { /* ignore */ }
     }
